@@ -1,0 +1,61 @@
+{
+  "title": "FLASHIN Operations",
+  "panels": [
+    {
+      "type": "stat",
+      "title": "HTTP Requests",
+      "targets": [
+        {
+          "expr": "sum(rate(flashin_http_requests_total[5m]))"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "HTTP p95 latency",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(flashin_http_request_latency_seconds_bucket[5m])) by (le))"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Webhook failures",
+      "targets": [
+        {
+          "expr": "sum(flashin_webhook_failures_total)"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Payment failures",
+      "targets": [
+        {
+          "expr": "sum(flashin_payment_failures_total)"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "SLA overdue",
+      "targets": [
+        {
+          "expr": "sum(flashin_sla_overdue_total)"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "MoySklad conflicts",
+      "targets": [
+        {
+          "expr": "sum(flashin_moysklad_conflicts_total)"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 1
+}

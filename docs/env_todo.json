@@ -1,0 +1,47 @@
+[
+  {
+    "key": "TELEGRAM_BOT_TOKEN",
+    "why": "BotFather token",
+    "status": "missing_or_default"
+  },
+  {
+    "key": "JWT_SECRET",
+    "why": "long random secret",
+    "status": "missing_or_default"
+  },
+  {
+    "key": "ADMIN_EMAIL",
+    "why": "initial admin login",
+    "status": "missing_or_default"
+  },
+  {
+    "key": "ADMIN_PASSWORD",
+    "why": "initial admin password",
+    "status": "missing_or_default"
+  },
+  {
+    "key": "YOOKASSA_SHOP_ID",
+    "why": "YooKassa shop id",
+    "status": "missing_or_default"
+  },
+  {
+    "key": "YOOKASSA_SECRET_KEY",
+    "why": "YooKassa secret key",
+    "status": "missing_or_default"
+  },
+  {
+    "key": "MOYSKLAD_TOKEN",
+    "why": "MoySklad API token",
+    "status": "missing_or_default"
+  },
+  {
+    "key": "MEILISEARCH_MASTER_KEY",
+    "why": "Meilisearch master key",
+    "status": "missing_or_default"
+  },
+  {
+    "key": "OUTBOX_SIGNING_SECRET",
+    "why": "webhook signing secret",
+    "status": "missing_or_default"
+  }
+]

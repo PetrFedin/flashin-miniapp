@@ -1,0 +1,29 @@
+{
+  "catalog": {
+    "title": "Каталог",
+    "add_to_cart": "В корзину",
+    "price": "Цена"
+  },
+  "cart": {
+    "title": "Корзина",
+    "checkout": "Оформить заказ",
+    "empty": "Ваша корзина пуста",
+    "total": "Итого",
+    "back_to_catalog": "Продолжить покупки"
+  },
+  "profile": {
+    "title": "Профиль",
+    "orders": "Мои заказы",
+    "logout": "Выйти"
+  }
+  ,
+  "common": {
+    "greeting": "Привет"
+  }
+  ,
+  "product": {
+    "buy_now": "Купить сейчас",
+    "add_to_cart": "Добавить в корзину",
+    "back": "Назад"
+  }
+}

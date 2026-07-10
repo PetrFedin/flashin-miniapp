@@ -1,0 +1,18 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Preflight
+        run: python3 scripts/preflight.py
+      - name: Package
+        run: zip -r flashin-miniapp-release.zip . -x "*.git*"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flashin-miniapp-release
+          path: flashin-miniapp-release.zip

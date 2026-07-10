@@ -1,0 +1,22 @@
+# 20 Order Pilot Sheet
+
+- [ ] 01. single item pickup no promo — verify: inventory decrement
+- [ ] 02. single item courier no promo — verify: delivery price
+- [ ] 03. two items pickup — verify: multi item
+- [ ] 04. two items courier — verify: multi item delivery
+- [ ] 05. promo percent pickup — verify: discount
+- [ ] 06. promo percent courier — verify: discount delivery
+- [ ] 07. loyalty redeem — verify: points deducted
+- [ ] 08. loyalty refund — verify: points returned
+- [ ] 09. referral first paid order — verify: reward
+- [ ] 10. payment canceled — verify: reserve released
+- [ ] 11. duplicate webhook — verify: idempotency
+- [ ] 12. wishlist then cart — verify: wishlist
+- [ ] 13. restock subscription — verify: notification
+- [ ] 14. support ticket after order — verify: support
+- [ ] 15. privacy export — verify: json export
+- [ ] 16. fulfillment picking — verify: task created
+- [ ] 17. fulfillment issue — verify: issue marked
+- [ ] 18. SLA overdue test — verify: overdue
+- [ ] 19. MoySklad conflict — verify: conflict visible
+- [ ] 20. slow network mobile — verify: no broken state

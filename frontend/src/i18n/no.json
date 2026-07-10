@@ -1,0 +1,29 @@
+{
+  "catalog": {
+    "title": "Katalog",
+    "add_to_cart": "Legg i handlekurven",
+    "price": "Pris"
+  },
+  "cart": {
+    "title": "Handlekurv",
+    "checkout": "Til kassen",
+    "empty": "Handlekurven din er tom",
+    "total": "Sum",
+    "back_to_catalog": "Fortsett å handle"
+  },
+  "profile": {
+    "title": "Profil",
+    "orders": "Mine bestillinger",
+    "logout": "Logg ut"
+  }
+  ,
+  "common": {
+    "greeting": "Hei"
+  }
+  ,
+  "product": {
+    "buy_now": "Kjøp nå",
+    "add_to_cart": "Legg i handlekurven",
+    "back": "Tilbake"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "version": "v42",
+  "build_sha": "",
+  "created_at": "",
+  "migrations": "alembic upgrade head",
+  "pre_deploy": [
+    "preflight",
+    "backup"
+  ],
+  "post_deploy": [
+    "healthcheck",
+    "e2e_smoke"
+  ],
+  "rollback": "scripts/rollback.sh previous-release.zip backup.sql.gz"
+}

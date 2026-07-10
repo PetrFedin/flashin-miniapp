@@ -1,0 +1,22 @@
+# Live Pilot Runner
+
+- [ ] P01 — Open Mini App in Telegram (critical)
+- [ ] P02 — Open catalog (critical)
+- [ ] P03 — Open product card (critical)
+- [ ] P04 — Add product to cart (critical)
+- [ ] P05 — Apply promo code if available 
+- [ ] P06 — Apply loyalty points if available 
+- [ ] P07 — Apply referral code if available 
+- [ ] P08 — Create checkout (critical)
+- [ ] P09 — Create YooKassa payment (critical)
+- [ ] P10 — Complete test payment (critical)
+- [ ] P11 — Verify payment webhook (critical)
+- [ ] P12 — Verify order paid (critical)
+- [ ] P13 — Verify stock writeoff/reservation (critical)
+- [ ] P14 — Verify fulfillment task (critical)
+- [ ] P15 — Create support ticket 
+- [ ] P16 — Create refund request (critical)
+- [ ] P17 — Approve refund (critical)
+- [ ] P18 — Verify loyalty points returned 
+- [ ] P19 — Verify admin audit trail (critical)
+- [ ] P20 — Verify customer notification 

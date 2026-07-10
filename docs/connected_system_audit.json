@@ -1,0 +1,102 @@
+{
+  "telegram_miniapp": {
+    "ok": true,
+    "missing": [],
+    "files": [
+      "frontend/src/App.js",
+      "bot/main.py",
+      "backend/api/auth.py"
+    ]
+  },
+  "catalog_cart_checkout": {
+    "ok": true,
+    "missing": [],
+    "files": [
+      "backend/api/products.py",
+      "backend/api/cart.py",
+      "backend/api/orders.py",
+      "frontend/src/App.js"
+    ]
+  },
+  "payments_refunds": {
+    "ok": true,
+    "missing": [],
+    "files": [
+      "backend/api/payments.py",
+      "backend/api/returns.py",
+      "backend/api/payment_reconciliation.py"
+    ]
+  },
+  "moysklad": {
+    "ok": true,
+    "missing": [],
+    "files": [
+      "backend/services/moysklad.py",
+      "backend/api/moysklad.py",
+      "backend/api/moysklad_deep_mapping.py"
+    ]
+  },
+  "delivery": {
+    "ok": true,
+    "missing": [],
+    "files": [
+      "backend/api/delivery_providers.py",
+      "backend/api/delivery_quotes.py"
+    ]
+  },
+  "fulfillment_sla": {
+    "ok": true,
+    "missing": [],
+    "files": [
+      "backend/api/fulfillment.py",
+      "backend/jobs/sla_jobs.py"
+    ]
+  },
+  "loyalty_referral_crm": {
+    "ok": true,
+    "missing": [],
+    "files": [
+      "backend/api/loyalty.py",
+      "backend/api/crm.py",
+      "backend/services/loyalty.py"
+    ]
+  },
+  "support_privacy": {
+    "ok": true,
+    "missing": [],
+    "files": [
+      "backend/api/support.py",
+      "backend/api/privacy.py"
+    ]
+  },
+  "media": {
+    "ok": true,
+    "missing": [],
+    "files": [
+      "backend/api/media.py",
+      "backend/jobs/media_jobs.py",
+      "frontend/public/fallback-product.svg"
+    ]
+  },
+  "observability": {
+    "ok": true,
+    "missing": [],
+    "files": [
+      "backend/middleware/metrics.py",
+      "deploy/grafana/dashboards/flashin_operations.json",
+      "deploy/grafana/dashboards/flashin_payments.json",
+      "deploy/grafana/dashboards/flashin_fulfillment.json"
+    ]
+  },
+  "launch_ops": {
+    "ok": true,
+    "missing": [],
+    "files": [
+      "scripts/launch.py",
+      "scripts/preflight.py",
+      "scripts/readiness_gate.py",
+      "scripts/deploy_production.sh",
+      "scripts/rollback.sh"
+    ]
+  }
+}

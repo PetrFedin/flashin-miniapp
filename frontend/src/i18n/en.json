@@ -1,0 +1,29 @@
+{
+  "catalog": {
+    "title": "Catalog",
+    "add_to_cart": "Add to Cart",
+    "price": "Price"
+  },
+  "cart": {
+    "title": "Your Cart",
+    "checkout": "Checkout",
+    "empty": "Your cart is empty",
+    "total": "Total",
+    "back_to_catalog": "Continue shopping"
+  },
+  "profile": {
+    "title": "Profile",
+    "orders": "My Orders",
+    "logout": "Logout"
+  }
+  ,
+  "common": {
+    "greeting": "Hello"
+  }
+  ,
+  "product": {
+    "buy_now": "Buy Now",
+    "add_to_cart": "Add to Cart",
+    "back": "Back"
+  }
+}

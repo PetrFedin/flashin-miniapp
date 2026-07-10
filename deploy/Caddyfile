@@ -1,0 +1,35 @@
+mini.flashin.store {
+    encode gzip zstd
+    reverse_proxy frontend:5173
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        X-Frame-Options "SAMEORIGIN"
+    }
+}
+
+admin.flashin.store {
+    encode gzip zstd
+    reverse_proxy admin:5174
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        X-Frame-Options "DENY"
+    }
+}
+
+api.flashin.store {
+    encode gzip zstd
+    request_body {
+        max_size 20MB
+    }
+    reverse_proxy backend:8000
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        X-Frame-Options "DENY"
+    }
+}

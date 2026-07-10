@@ -1,0 +1,4 @@
+sku,title,slug,price,size,variant_sku,stock_qty,brand,description,currency,category,gender,image_url,color,active
+FLASHIN-BLAZER-001,FLASHIN Black Blazer,flashin-black-blazer,32000,S,FLASHIN-BLAZER-001-S,2,FLASHIN,Black premium blazer,RUB,Jackets,unisex,https://placehold.co/800x1000?text=Blazer,Black,true
+FLASHIN-BLAZER-001,FLASHIN Black Blazer,flashin-black-blazer,32000,M,FLASHIN-BLAZER-001-M,4,FLASHIN,Black premium blazer,RUB,Jackets,unisex,https://placehold.co/800x1000?text=Blazer,Black,true
+FLASHIN-TROUSERS-001,FLASHIN Wide Trousers,flashin-wide-trousers,18000,M,FLASHIN-TROUSERS-001-M,5,FLASHIN,Wide trousers,RUB,Trousers,unisex,https://placehold.co/800x1000?text=Trousers,Black,true

@@ -1,0 +1,20 @@
+{
+  "score": 12,
+  "total": 13,
+  "percent": 92.31,
+  "items": {
+    "env_exists": false,
+    "docker_compose": true,
+    "migrations": true,
+    "legal_offer": true,
+    "legal_privacy": true,
+    "legal_returns": true,
+    "backup_script": true,
+    "restore_script": true,
+    "deploy_script": true,
+    "rollback_script": true,
+    "preflight": true,
+    "e2e_smoke": true,
+    "runbooks": true
+  }
+}

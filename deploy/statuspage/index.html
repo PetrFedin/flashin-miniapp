@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>FLASHIN Status</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 760px; margin: 40px auto; padding: 0 20px; }
+    .ok { color: #0a7f36; }
+    .bad { color: #b00020; }
+    .card { border: 1px solid #eee; border-radius: 16px; padding: 16px; margin: 12px 0; }
+  </style>
+</head>
+<body>
+  <h1>FLASHIN Status</h1>
+  <div class="card">
+    <b>API</b>
+    <p id="api">checking...</p>
+  </div>
+  <script>
+    fetch("/health").then(r => {
+      document.getElementById("api").innerHTML = r.ok ? "<span class='ok'>Operational</span>" : "<span class='bad'>Degraded</span>";
+    }).catch(() => document.getElementById("api").innerHTML = "<span class='bad'>Unavailable</span>");
+  </script>
+</body>
+</html>

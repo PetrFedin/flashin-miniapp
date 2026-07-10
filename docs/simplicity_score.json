@@ -1,0 +1,18 @@
+{
+  "score": 11,
+  "total": 11,
+  "percent": 100.0,
+  "items": {
+    "one_command_launch": true,
+    "simple_wrapper": true,
+    "env_local": true,
+    "env_production": true,
+    "preflight": true,
+    "readiness_gate": true,
+    "integration_check": true,
+    "pilot_sheet": true,
+    "runbook_index": true,
+    "developer_handover": true,
+    "incident_templates": true
+  }
+}

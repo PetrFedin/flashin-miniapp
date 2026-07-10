@@ -1,0 +1,17 @@
+{
+  "version": "v51",
+  "frozen_at": "2026-07-02T21:55:53.588211",
+  "files": {
+    "README.md": "3a16f2a5914985d75b620cc8c061ff4e75ead310537c4fd22a2310f37031e92e",
+    "docker-compose.yml": "1d2e4278d0c61a6302bad07a321e5d57907ef58f4f2ba78e6f21bd402f7e078f",
+    "Dockerfile.backend": "7dbbafdf33a62de1b19e7c6a31d4e050ec6b57c4af9318ad2b9cd698a687a6d2",
+    "Dockerfile.frontend": "5aed5a141dff82953563707fc62d44f1ac4e96a7b97dba154585a1e36d521d64",
+    "Dockerfile.admin": "420558e9ea5f27dafa2703707581aed283e254fcf97dafdcaa7dc359dd820fb2",
+    "Dockerfile.bot": "fd2a7870ec7d2f805bd9f8719def1a3d25f6298c8e86e93b4aa10c181edec800",
+    "backend/main.py": "5e1618bce0505503f15be6f481ef8979207e94dba784ab261b70565c0ac8defe",
+    "backend/models.py": "9f856b724ec700d0680bfa5cb9ee8aa45ec648c4ef21565c2310e58de931361f",
+    "frontend/src/App.js": "ef40653f84b8e4fe8dcfb43b68a0a99bb5b2767f2ea8176624d38bf8bb5be99b",
+    "admin/src/main.jsx": "14aa856886f6c958dbeef3e494d8d1e00d30bc874626ce990ad5e9ed2d8f8aad"
+  },
+  "rule": "Do not change architecture before live pilot. Only fix pilot-blocking bugs."
+}
