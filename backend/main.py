@@ -1,8 +1,13 @@
+import logging
+import time
 from pathlib import Path
+
 import sentry_sdk
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.exc import OperationalError
+
 from .middleware.rate_limit import InMemoryRateLimitMiddleware
 from .middleware.metrics import MetricsMiddleware, metrics_response
 from .middleware.security_headers import SecurityHeadersMiddleware
@@ -50,6 +55,7 @@ from .config import get_settings
 from .database import Base, SessionLocal, engine
 from .seed import bootstrap_admin, seed_products
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 if settings.sentry_dsn:
     sentry_sdk.init(dsn=settings.sentry_dsn, traces_sample_rate=0.1)
@@ -113,17 +119,46 @@ app.include_router(admin_security_router, prefix="/api")
 app.include_router(delivery_quotes_router, prefix="/api")
 
 
+def _bootstrap_database(max_attempts: int = 10, base_delay_seconds: float = 1.0) -> None:
+    """Initialize startup data with retries for transient Docker DNS/database failures."""
+    last_error: OperationalError | None = None
+
+    for attempt in range(1, max_attempts + 1):
+        db = SessionLocal()
+        try:
+            if settings.use_create_all:
+                Base.metadata.create_all(bind=engine)
+            bootstrap_admin(db)
+            if settings.enable_seed:
+                seed_products(db)
+            if attempt > 1:
+                logger.info("Database startup recovered on attempt %s", attempt)
+            return
+        except OperationalError as exc:
+            db.rollback()
+            last_error = exc
+            if attempt == max_attempts:
+                break
+            delay = min(base_delay_seconds * attempt, 5.0)
+            logger.warning(
+                "Database unavailable during startup (attempt %s/%s). Retrying in %.1fs: %s",
+                attempt,
+                max_attempts,
+                delay,
+                exc,
+            )
+            time.sleep(delay)
+        finally:
+            db.close()
+
+    logger.error("Database startup failed after %s attempts", max_attempts)
+    if last_error is not None:
+        raise last_error
+
+
 @app.on_event("startup")
 def on_startup():
-    if settings.use_create_all:
-        Base.metadata.create_all(bind=engine)
-    db = SessionLocal()
-    try:
-        bootstrap_admin(db)
-        if settings.enable_seed:
-            seed_products(db)
-    finally:
-        db.close()
+    _bootstrap_database()
 
 
 @app.get("/metrics")
