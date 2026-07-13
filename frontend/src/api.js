@@ -1,32 +1,78 @@
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+const API_BASE = (import.meta.env.VITE_API_BASE || "http://localhost:8000").replace(/\/$/, "");
+const DEFAULT_TIMEOUT_MS = 15000;
 
 function getToken() {
   return localStorage.getItem("flashin_token");
 }
 
+function clearToken() {
+  localStorage.removeItem("flashin_token");
+}
+
 function headers(auth = true) {
-  const h = { "Content-Type": "application/json" };
+  const result = { "Content-Type": "application/json" };
   const token = getToken();
-  if (auth && token) h.Authorization = `Bearer ${token}`;
-  return h;
+  if (auth && token) result.Authorization = `Bearer ${token}`;
+  return result;
+}
+
+async function readError(res) {
+  try {
+    const data = await res.json();
+    if (typeof data?.detail === "string") return data.detail;
+    if (data?.detail) return JSON.stringify(data.detail);
+    if (typeof data?.message === "string") return data.message;
+  } catch {
+    try {
+      return await res.text();
+    } catch {
+      return "";
+    }
+  }
+  return "";
 }
 
 async function request(path, options = {}) {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: { ...headers(options.auth !== false), ...(options.headers || {}) },
-  });
-  if (!res.ok) {
-    let detail = "";
-    try {
-      const data = await res.json();
-      detail = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
-    } catch {
-      detail = await res.text();
+  const controller = new AbortController();
+  const timeoutMs = options.timeoutMs || DEFAULT_TIMEOUT_MS;
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      signal: options.signal || controller.signal,
+      headers: { ...headers(options.auth !== false), ...(options.headers || {}) },
+    });
+
+    if (res.status === 401 && options.auth !== false) {
+      clearToken();
+      window.dispatchEvent(new CustomEvent("flashin:auth-expired"));
     }
-    throw new Error(detail || `Request failed: ${res.status}`);
+
+    if (!res.ok) {
+      const detail = await readError(res);
+      const error = new Error(detail || `Ошибка запроса: ${res.status}`);
+      error.status = res.status;
+      error.path = path;
+      throw error;
+    }
+
+    if (res.status === 204) return null;
+
+    const contentType = res.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) return res.json();
+    return res.text();
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error("Сервер не ответил вовремя. Проверьте соединение и повторите попытку.");
+    }
+    if (error instanceof TypeError) {
+      throw new Error("Нет связи с сервером. Проверьте интернет-соединение.");
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
   }
-  return res.json();
 }
 
 export async function telegramAuth(initData) {
@@ -37,6 +83,10 @@ export async function telegramAuth(initData) {
   });
   localStorage.setItem("flashin_token", data.access_token);
   return data;
+}
+
+export function logout() {
+  clearToken();
 }
 
 export async function listProducts() {
@@ -66,6 +116,7 @@ export async function checkout(payload) {
   return request("/api/orders/checkout", {
     method: "POST",
     body: JSON.stringify(payload),
+    timeoutMs: 30000,
   });
 }
 
@@ -73,6 +124,7 @@ export async function createPayment(orderId) {
   return request("/api/payments", {
     method: "POST",
     body: JSON.stringify({ order_id: orderId }),
+    timeoutMs: 30000,
   });
 }
 
@@ -81,17 +133,17 @@ export async function trackEvent(eventType, payload = {}) {
     return await request("/api/analytics/events", {
       method: "POST",
       body: JSON.stringify({ event_type: eventType, payload }),
+      timeoutMs: 5000,
     });
   } catch {
     return null;
   }
 }
 
-
 export async function applyPromo(code) {
   return request("/api/cart/promo", {
     method: "POST",
-    body: JSON.stringify({ code }),
+    body: JSON.stringify({ code: code.trim() }),
   });
 }
 
@@ -102,7 +154,7 @@ export async function listOrders() {
 export async function createReturn(orderId, reason) {
   return request("/api/returns", {
     method: "POST",
-    body: JSON.stringify({ order_id: orderId, reason }),
+    body: JSON.stringify({ order_id: orderId, reason: reason.trim() }),
   });
 }
 
@@ -120,7 +172,6 @@ export async function subscribeRestock(variantId) {
   });
 }
 
-
 export async function getRecommendations(productId) {
   return request(`/api/recommendations/${productId}`, { auth: false });
 }
@@ -133,9 +184,8 @@ export async function sizeHelper(payload) {
   });
 }
 
-
 export async function searchProducts(q) {
-  return request(`/api/search/products?q=${encodeURIComponent(q)}`, { auth: false });
+  return request(`/api/search/products?q=${encodeURIComponent(q.trim())}`, { auth: false });
 }
 
 export async function listLooks() {
@@ -150,7 +200,6 @@ export async function myReferralCode() {
   return request("/api/loyalty/referral-code");
 }
 
-
 export async function applyLoyalty(points) {
   return request("/api/cart/loyalty", {
     method: "POST",
@@ -161,10 +210,9 @@ export async function applyLoyalty(points) {
 export async function applyReferral(code) {
   return request("/api/cart/referral", {
     method: "POST",
-    body: JSON.stringify({ code }),
+    body: JSON.stringify({ code: code.trim() }),
   });
 }
-
 
 export async function getProfile() {
   return request("/api/profile");
@@ -173,7 +221,6 @@ export async function getProfile() {
 export async function getTimeline() {
   return request("/api/timeline");
 }
-
 
 export async function createSupportTicket(payload) {
   return request("/api/support/tickets", {
@@ -187,12 +234,21 @@ export async function listSupportTickets() {
 }
 
 export async function exportPrivacyData() {
-  const token = localStorage.getItem("flashin_token");
-  const res = await fetch(`${API_BASE}/api/privacy/export`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) throw new Error(await res.text());
-  return res.text();
+  const token = getToken();
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), 30000);
+
+  try {
+    const res = await fetch(`${API_BASE}/api/privacy/export`, {
+      signal: controller.signal,
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (res.status === 401) clearToken();
+    if (!res.ok) throw new Error((await readError(res)) || "Не удалось выгрузить данные.");
+    return res.text();
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
 }
 
 export async function createPrivacyRequest(requestType) {
