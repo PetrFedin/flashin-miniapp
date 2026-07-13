@@ -13,6 +13,7 @@ import {
   exportPrivacyData,
   getCart,
   getProfile,
+  getRecommendations,
   getTimeline,
   listLooks,
   listOrders,
@@ -21,6 +22,7 @@ import {
   listSupportTickets,
   myLoyalty,
   myReferralCode,
+  removeCartItem,
   searchProducts,
   sizeHelper,
   subscribeRestock,
@@ -44,6 +46,8 @@ export default function App() {
   const [looks, setLooks] = useState([]);
   const [selected, setSelected] = useState(null);
   const [selectedVariantId, setSelectedVariantId] = useState(null);
+  const [activeImageIndex, setActiveImageIndex] = useState(0);
+  const [recommendations, setRecommendations] = useState([]);
   const [cart, setCart] = useState(null);
   const [profile, setProfile] = useState(null);
   const [loyaltyRows, setLoyaltyRows] = useState([]);
@@ -55,6 +59,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [promo, setPromo] = useState("");
   const [referralInput, setReferralInput] = useState("");
   const [loyaltyPoints, setLoyaltyPoints] = useState("");
@@ -93,6 +98,12 @@ export default function App() {
     }
     boot();
   }, [initData]);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(""), 2500);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
 
   useEffect(() => {
     if (!tg?.MainButton) return;
@@ -138,16 +149,35 @@ export default function App() {
     setPrivacyRequests(privacy);
   }
 
-  function openProduct(p) {
+  async function openProduct(p) {
     setSelected(p);
     setSelectedVariantId(p.variants?.find((v) => v.available_qty > 0)?.id || null);
+    setActiveImageIndex(0);
+    setRecommendations([]);
+    setSizeResult(null);
     setView("product");
+    window.scrollTo({ top: 0, behavior: "smooth" });
     trackEvent("product_view", { product_id: p.id });
+
+    try {
+      const rows = await getRecommendations(p.id);
+      setRecommendations(Array.isArray(rows) ? rows.filter((item) => item.id !== p.id) : []);
+    } catch {
+      setRecommendations([]);
+    }
   }
 
   async function handleSearch() {
-    if (!searchQuery.trim()) return setProducts(await listProducts());
-    setProducts(await searchProducts(searchQuery));
+    try {
+      setError("");
+      if (!searchQuery.trim()) {
+        setProducts(await listProducts());
+        return;
+      }
+      setProducts(await searchProducts(searchQuery));
+    } catch (e) {
+      setError(e.message || "Не удалось выполнить поиск");
+    }
   }
 
   async function handleAddSelected() {
@@ -156,9 +186,44 @@ export default function App() {
       setError("");
       const c = await addToCart(selected.id, selectedVariantId, 1);
       setCart(c);
+      setNotice("Товар добавлен в корзину");
       tg?.HapticFeedback?.notificationOccurred?.("success");
     } catch (e) {
       setError(e.message);
+    }
+  }
+
+  async function handleWishlist() {
+    if (!selected) return;
+    try {
+      setError("");
+      await addWishlist(selected.id);
+      setNotice("Товар добавлен в избранное");
+      tg?.HapticFeedback?.notificationOccurred?.("success");
+    } catch (e) {
+      setError(e.message || "Не удалось добавить товар в избранное");
+    }
+  }
+
+  async function handleRestock() {
+    if (!selectedVariantId) return;
+    try {
+      setError("");
+      await subscribeRestock(selectedVariantId);
+      setNotice("Уведомление о поступлении включено");
+    } catch (e) {
+      setError(e.message || "Не удалось включить уведомление");
+    }
+  }
+
+  async function handleRemoveCartItem(itemId) {
+    try {
+      setError("");
+      await removeCartItem(itemId);
+      setCart(await getCart());
+      setNotice("Товар удалён из корзины");
+    } catch (e) {
+      setError(e.message || "Не удалось удалить товар");
     }
   }
 
@@ -186,6 +251,7 @@ export default function App() {
   }
 
   const total = useMemo(() => cart?.total_amount || 0, [cart]);
+  const selectedImages = selected?.images?.length ? selected.images : [{ url: "/fallback-product.svg" }];
 
   return (
     <ErrorBoundary>
@@ -195,7 +261,7 @@ export default function App() {
             <div className="brand">FLASHIN</div>
             {user?.first_name && <div className="hello">Привет, {user.first_name}</div>}
           </div>
-          <select value={language} onChange={(e) => setLanguage(e.target.value)}>
+          <select value={language} onChange={(e) => setLanguage(e.target.value)} aria-label="Язык интерфейса">
             <option value="ru">RU</option>
             <option value="en">EN</option>
             <option value="no">NO</option>
@@ -209,7 +275,8 @@ export default function App() {
           <button onClick={() => setView("looks")}>Looks</button>
         </nav>
 
-        {error && <div className="error">{error}</div>}
+        {error && <div className="error" role="alert">{error}</div>}
+        {notice && <div className="notice" role="status">{notice}</div>}
 
         {loading && <main><SkeletonCard /><SkeletonCard /><SkeletonCard /></main>}
 
@@ -217,9 +284,15 @@ export default function App() {
           <main>
             <h1>{t("catalog", "title")}</h1>
             <div className="search">
-              <input placeholder="Поиск: бренд, категория, артикул" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
+              <input
+                placeholder="Поиск: бренд, категория, артикул"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+              />
               <button className="secondary" onClick={handleSearch}>Найти</button>
             </div>
+            {!products.length && <div className="empty-state">Ничего не найдено. Попробуйте изменить запрос.</div>}
             <div className="grid">
               {products.map((p) => (
                 <button className="product-card" key={p.id} onClick={() => openProduct(p)}>
@@ -235,12 +308,28 @@ export default function App() {
         {!loading && view === "product" && selected && (
           <main>
             <button className="link" onClick={() => setView("catalog")}>← Назад</button>
-            <img className="hero" src={selected.images?.[0]?.url || "/fallback-product.svg"} alt={selected.title} />
+            <div className="gallery">
+              <img className="hero" src={selectedImages[activeImageIndex]?.url || "/fallback-product.svg"} alt={selected.title} />
+              {selectedImages.length > 1 && (
+                <div className="gallery-thumbs" aria-label="Фотографии товара">
+                  {selectedImages.map((image, index) => (
+                    <button
+                      key={`${image.url}-${index}`}
+                      className={activeImageIndex === index ? "gallery-thumb active" : "gallery-thumb"}
+                      onClick={() => setActiveImageIndex(index)}
+                      aria-label={`Открыть фотографию ${index + 1}`}
+                    >
+                      <img src={image.url} alt="" loading="lazy" />
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <h1>{selected.title}</h1>
-            <div className="price">{selected.price.toLocaleString("ru-RU")} {selected.currency}</div>
+            <div className="price product-price">{selected.price.toLocaleString("ru-RU")} {selected.currency}</div>
             <p>{selected.description}</p>
             <div className="sizes">
-              {selected.variants.map((v) => (
+              {selected.variants?.map((v) => (
                 <button key={v.id} disabled={v.available_qty <= 0} className={selectedVariantId === v.id ? "size active" : "size"} onClick={() => setSelectedVariantId(v.id)}>
                   {v.size} · {v.available_qty}
                 </button>
@@ -249,8 +338,8 @@ export default function App() {
             <div className="panel">
               <h3>Помощник размера</h3>
               <div className="search">
-                <input placeholder="Рост" value={sizeForm.height_cm} onChange={e => setSizeForm({ ...sizeForm, height_cm: e.target.value })} />
-                <input placeholder="Вес" value={sizeForm.weight_kg} onChange={e => setSizeForm({ ...sizeForm, weight_kg: e.target.value })} />
+                <input inputMode="numeric" placeholder="Рост" value={sizeForm.height_cm} onChange={e => setSizeForm({ ...sizeForm, height_cm: e.target.value })} />
+                <input inputMode="numeric" placeholder="Вес" value={sizeForm.weight_kg} onChange={e => setSizeForm({ ...sizeForm, weight_kg: e.target.value })} />
               </div>
               <button className="secondary" onClick={async () => setSizeResult(await sizeHelper({
                 height_cm: Number(sizeForm.height_cm) || null,
@@ -262,9 +351,24 @@ export default function App() {
             </div>
             <div className="actions">
               <button className="primary" onClick={handleAddSelected} disabled={!selectedVariantId}>Добавить в корзину</button>
-              <button className="secondary" onClick={() => addWishlist(selected.id)}>В избранное</button>
-              {selectedVariantId && <button className="secondary" onClick={() => subscribeRestock(selectedVariantId)}>Уведомить о поступлении</button>}
+              <button className="secondary" onClick={handleWishlist}>В избранное</button>
+              {selectedVariantId && <button className="secondary" onClick={handleRestock}>Уведомить о поступлении</button>}
             </div>
+
+            {recommendations.length > 0 && (
+              <section className="recommendations">
+                <h2>С этим товаром смотрят</h2>
+                <div className="recommendation-row">
+                  {recommendations.slice(0, 8).map((item) => (
+                    <button className="recommendation-card" key={item.id} onClick={() => openProduct(item)}>
+                      <img src={item.images?.[0]?.url || "/fallback-product.svg"} alt={item.title} loading="lazy" />
+                      <span>{item.title}</span>
+                      <b>{item.price?.toLocaleString("ru-RU")} {item.currency}</b>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
           </main>
         )}
 
@@ -272,11 +376,14 @@ export default function App() {
           <main>
             <button className="link" onClick={() => setView("catalog")}>← {t("cart", "back_to_catalog")}</button>
             <h1>{t("cart", "title")}</h1>
-            {!cart?.items?.length && <p>{t("cart", "empty")}</p>}
+            {!cart?.items?.length && <div className="empty-state">{t("cart", "empty")}</div>}
             {cart?.items?.map((item) => (
               <div className="cart-line" key={item.id}>
                 <div><b>{item.title}</b><div>Размер: {item.size} · {item.quantity}</div></div>
-                <div>{(item.price * item.quantity).toLocaleString("ru-RU")} RUB</div>
+                <div className="cart-line-end">
+                  <div>{(item.price * item.quantity).toLocaleString("ru-RU")} RUB</div>
+                  <button className="remove-button" onClick={() => handleRemoveCartItem(item.id)}>Удалить</button>
+                </div>
               </div>
             ))}
             {cart?.items?.length > 0 && (
@@ -286,7 +393,7 @@ export default function App() {
                   <button className="secondary" onClick={async () => setCart(await applyPromo(promo))}>Применить</button>
                 </div>
                 <div className="promo">
-                  <input placeholder="Баллы к списанию" value={loyaltyPoints} onChange={(e) => setLoyaltyPoints(e.target.value)} />
+                  <input inputMode="numeric" placeholder="Баллы к списанию" value={loyaltyPoints} onChange={(e) => setLoyaltyPoints(e.target.value)} />
                   <button className="secondary" onClick={async () => setCart(await applyLoyalty(Number(loyaltyPoints)))}>Списать</button>
                 </div>
                 <div className="promo">
@@ -305,8 +412,8 @@ export default function App() {
           <main>
             <button className="link" onClick={() => setView("cart")}>← Корзина</button>
             <h1>Оформление</h1>
-            <input placeholder="Имя" value={checkoutForm.name} onChange={(e) => setCheckoutForm({ ...checkoutForm, name: e.target.value })} />
-            <input placeholder="Телефон" value={checkoutForm.phone} onChange={(e) => setCheckoutForm({ ...checkoutForm, phone: e.target.value })} />
+            <input autoComplete="name" placeholder="Имя" value={checkoutForm.name} onChange={(e) => setCheckoutForm({ ...checkoutForm, name: e.target.value })} />
+            <input autoComplete="tel" inputMode="tel" placeholder="Телефон" value={checkoutForm.phone} onChange={(e) => setCheckoutForm({ ...checkoutForm, phone: e.target.value })} />
             <select value={checkoutForm.delivery_type} onChange={(e) => setCheckoutForm({ ...checkoutForm, delivery_type: e.target.value })}>
               <option value="pickup">Самовывоз</option>
               <option value="courier">Курьер</option>
@@ -319,7 +426,7 @@ export default function App() {
         {!loading && view === "orders" && (
           <main>
             <h1>Мои заказы</h1>
-            {!orders.length && <p>Заказов пока нет.</p>}
+            {!orders.length && <div className="empty-state">Заказов пока нет.</div>}
             {orders.map((order) => (
               <div className="order-card" key={order.id}>
                 <b>Заказ #{order.id}</b>
@@ -340,7 +447,7 @@ export default function App() {
         {!loading && view === "looks" && (
           <main>
             <h1>Looks</h1>
-            {!looks.length && <p>Пока нет готовых образов.</p>}
+            {!looks.length && <div className="empty-state">Пока нет готовых образов.</div>}
             {looks.map((look) => (
               <div className="order-card" key={look.id}>
                 <b>{look.title}</b>
