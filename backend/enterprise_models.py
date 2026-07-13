@@ -6,6 +6,41 @@ from sqlalchemy.orm import Mapped, mapped_column
 from .database import Base
 
 
+class ProductVersion(Base):
+    __tablename__ = "product_versions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), index=True)
+    version_number: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(32), default="draft", index=True)
+    snapshot_json: Mapped[str] = mapped_column(Text, default="{}")
+    change_note: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("admin_users.id"), nullable=True)
+    reviewed_by: Mapped[int | None] = mapped_column(ForeignKey("admin_users.id"), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class BulkEditJob(Base):
+    __tablename__ = "bulk_edit_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    entity_type: Mapped[str] = mapped_column(String(64), default="product", index=True)
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    operation: Mapped[str] = mapped_column(String(64), index=True)
+    filter_json: Mapped[str] = mapped_column(Text, default="{}")
+    changes_json: Mapped[str] = mapped_column(Text, default="{}")
+    total_count: Mapped[int] = mapped_column(Integer, default=0)
+    processed_count: Mapped[int] = mapped_column(Integer, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, default=0)
+    error_json: Mapped[str] = mapped_column(Text, default="[]")
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("admin_users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class Supplier(Base):
     __tablename__ = "suppliers"
 
