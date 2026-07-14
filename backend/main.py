@@ -52,6 +52,7 @@ from .api.moysklad_deep_mapping import router as moysklad_deep_mapping_router
 from .api.admin_security import router as admin_security_router
 from .api.delivery_quotes import router as delivery_quotes_router
 from .api.enterprise import router as enterprise_router
+from .api.telegram_commerce import router as telegram_commerce_router
 from .config import get_settings
 from .database import Base, SessionLocal, engine
 from .seed import bootstrap_admin, seed_products
@@ -119,6 +120,7 @@ app.include_router(moysklad_deep_mapping_router, prefix="/api")
 app.include_router(admin_security_router, prefix="/api")
 app.include_router(delivery_quotes_router, prefix="/api")
 app.include_router(enterprise_router, prefix="/api")
+app.include_router(telegram_commerce_router, prefix="/api")
 
 
 def _bootstrap_database(max_attempts: int = 10, base_delay_seconds: float = 1.0) -> None:
