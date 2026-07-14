@@ -37,9 +37,23 @@ import messages_no from "./i18n/no.json";
 import { useTelegram } from "./hooks/useTelegram";
 
 const translations = { en: messages_en, ru: messages_ru, no: messages_no };
+const ROOT_VIEWS = new Set(["catalog", "wishlist", "orders", "looks", "profile"]);
+
+function parseLaunchTarget(startParam, search) {
+  const params = new URLSearchParams(search);
+  const productId = params.get("product");
+  if (productId) return { type: "product", id: productId };
+
+  if (!startParam) return null;
+  if (startParam.startsWith("product_")) return { type: "product", id: startParam.slice(8) };
+  if (["cart", "wishlist", "orders", "looks", "profile"].includes(startParam)) {
+    return { type: "view", view: startParam };
+  }
+  return null;
+}
 
 export default function App() {
-  const { tg, initData, user } = useTelegram();
+  const { tg, initData, user, launchContext } = useTelegram();
   const [language, setLanguage] = useState("ru");
   const [view, setView] = useState("catalog");
   const [products, setProducts] = useState([]);
@@ -71,6 +85,15 @@ export default function App() {
   const wishlistIds = useMemo(() => new Set(wishlist.map((item) => item.id)), [wishlist]);
   const total = useMemo(() => cart?.total_amount || 0, [cart]);
 
+  function navigate(nextView) {
+    setView(nextView);
+    if (nextView !== "product") {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("product");
+      window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    }
+  }
+
   useEffect(() => {
     async function boot() {
       try {
@@ -85,11 +108,14 @@ export default function App() {
         setLooks(l);
         setWishlist(w);
 
-        const params = new URLSearchParams(window.location.search);
-        const productId = params.get("product");
-        if (productId) {
-          const found = p.find((x) => String(x.id) === String(productId));
+        const target = parseLaunchTarget(launchContext.startParam, window.location.search);
+        if (target?.type === "product") {
+          const found = p.find((x) => String(x.id) === String(target.id));
           if (found) openProduct(found);
+        } else if (target?.type === "view") {
+          if (target.view === "orders") setOrders(await listOrders());
+          if (target.view === "profile") await loadProfileData();
+          setView(target.view);
         }
       } catch (e) {
         setError(e.message || "Ошибка загрузки");
@@ -98,14 +124,24 @@ export default function App() {
       }
     }
     boot();
-  }, [initData]);
+  }, [initData, launchContext.startParam]);
 
   useEffect(() => {
     if (!tg?.MainButton) return;
     const add = () => handleAddSelected();
-    const cartOpen = () => setView("cart");
+    const cartOpen = () => navigate("cart");
     const submit = () => handleCheckout();
 
+    tg.MainButton.offClick?.(add);
+    tg.MainButton.offClick?.(cartOpen);
+    tg.MainButton.offClick?.(submit);
+
+    if (view === "checkout") {
+      tg.MainButton.setText("Создать заказ");
+      tg.MainButton.show();
+      tg.MainButton.onClick(submit);
+      return () => tg.MainButton.offClick(submit);
+    }
     if (view === "product" && selectedVariantId) {
       tg.MainButton.setText("Добавить в корзину");
       tg.MainButton.show();
@@ -118,14 +154,36 @@ export default function App() {
       tg.MainButton.onClick(cartOpen);
       return () => tg.MainButton.offClick(cartOpen);
     }
-    if (view === "checkout") {
-      tg.MainButton.setText("Создать заказ");
-      tg.MainButton.show();
-      tg.MainButton.onClick(submit);
-      return () => tg.MainButton.offClick(submit);
-    }
     tg.MainButton.hide();
   }, [tg, view, cart, selectedVariantId, checkoutForm]);
+
+  useEffect(() => {
+    if (!tg?.BackButton) return;
+
+    const goBack = () => {
+      tg.HapticFeedback?.impactOccurred?.("light");
+      if (view === "checkout") return navigate("cart");
+      if (view === "cart" || view === "product") return navigate("catalog");
+      if (!ROOT_VIEWS.has(view)) return navigate("catalog");
+      navigate("catalog");
+    };
+
+    if (view === "catalog") {
+      tg.BackButton.hide();
+      return undefined;
+    }
+
+    tg.BackButton.show();
+    tg.BackButton.onClick(goBack);
+    return () => tg.BackButton.offClick(goBack);
+  }, [tg, view]);
+
+  useEffect(() => {
+    if (!tg) return;
+    if (view === "checkout" && checkoutForm.name) tg.enableClosingConfirmation?.();
+    else tg.disableClosingConfirmation?.();
+    return () => tg.disableClosingConfirmation?.();
+  }, [tg, view, checkoutForm.name]);
 
   async function loadProfileData() {
     const [p, loyalty, ref, tl, tickets, privacy] = await Promise.all([
@@ -148,7 +206,20 @@ export default function App() {
     setSelected(product);
     setSelectedVariantId(product.variants?.find((variant) => variant.available_qty > 0)?.id || null);
     setView("product");
-    trackEvent("product_view", { product_id: product.id });
+    const url = new URL(window.location.href);
+    url.searchParams.set("product", product.id);
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    trackEvent("product_view", { product_id: product.id, source: launchContext.startParam ? "telegram_deep_link" : "catalog" });
+  }
+
+  function shareProduct(product) {
+    const productUrl = new URL(window.location.origin + window.location.pathname);
+    productUrl.searchParams.set("product", product.id);
+    const text = `${product.title} — ${product.price.toLocaleString("ru-RU")} ${product.currency}`;
+    const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(productUrl.toString())}&text=${encodeURIComponent(text)}`;
+    tg?.HapticFeedback?.impactOccurred?.("light");
+    tg?.openTelegramLink?.(shareUrl);
+    trackEvent("product_share", { product_id: product.id, channel: "telegram" });
   }
 
   async function handleSearch() {
@@ -195,12 +266,17 @@ export default function App() {
     try {
       setError("");
       if (!checkoutForm.name || !checkoutForm.phone) return setError("Заполните имя и телефон.");
+      tg?.MainButton?.showProgress?.(true);
       const order = await checkout(checkoutForm);
       const payment = await createPayment(order.id);
       if (!payment.confirmation_url) throw new Error("Платёж создан без ссылки оплаты.");
-      window.location.href = payment.confirmation_url;
+      tg?.disableClosingConfirmation?.();
+      tg?.openLink?.(payment.confirmation_url, { try_instant_view: false });
     } catch (e) {
       setError(e.message);
+      tg?.HapticFeedback?.notificationOccurred?.("error");
+    } finally {
+      tg?.MainButton?.hideProgress?.();
     }
   }
 
@@ -208,7 +284,7 @@ export default function App() {
     try {
       setError("");
       await loadProfileData();
-      setView("profile");
+      navigate("profile");
     } catch (e) {
       setError(e.message || "Не удалось загрузить профиль");
     }
@@ -218,7 +294,7 @@ export default function App() {
     try {
       setError("");
       setOrders(await listOrders());
-      setView("orders");
+      navigate("orders");
     } catch (e) {
       setError(e.message || "Не удалось загрузить заказы");
     }
@@ -240,10 +316,10 @@ export default function App() {
         </header>
 
         <nav className="tabs" aria-label="Основная навигация">
-          <button className={view === "catalog" ? "active" : ""} onClick={() => setView("catalog")}>Каталог</button>
-          <button className={view === "wishlist" ? "active" : ""} onClick={() => setView("wishlist")}>Избранное{wishlist.length ? ` · ${wishlist.length}` : ""}</button>
+          <button className={view === "catalog" ? "active" : ""} onClick={() => navigate("catalog")}>Каталог</button>
+          <button className={view === "wishlist" ? "active" : ""} onClick={() => navigate("wishlist")}>Избранное{wishlist.length ? ` · ${wishlist.length}` : ""}</button>
           <button className={view === "orders" ? "active" : ""} onClick={openOrders}>Заказы</button>
-          <button className={view === "looks" ? "active" : ""} onClick={() => setView("looks")}>Looks</button>
+          <button className={view === "looks" ? "active" : ""} onClick={() => navigate("looks")}>Looks</button>
           <button className={view === "profile" ? "active" : ""} onClick={openProfile}>Профиль</button>
         </nav>
 
@@ -280,7 +356,7 @@ export default function App() {
               <div className="empty-state">
                 <b>Здесь пока пусто</b>
                 <p>Сохраняйте понравившиеся модели, чтобы быстро вернуться к ним.</p>
-                <button className="primary" onClick={() => setView("catalog")}>Перейти в каталог</button>
+                <button className="primary" onClick={() => navigate("catalog")}>Перейти в каталог</button>
               </div>
             )}
             <div className="wishlist-list">
@@ -299,7 +375,7 @@ export default function App() {
 
         {!loading && view === "product" && selected && (
           <main>
-            <button className="link" onClick={() => setView("catalog")}>← Назад</button>
+            <button className="link" onClick={() => navigate("catalog")}>← Назад</button>
             <img className="hero" src={selected.images?.[0]?.url || "/fallback-product.svg"} alt={selected.title} />
             <h1>{selected.title}</h1>
             <div className="price">{selected.price.toLocaleString("ru-RU")} {selected.currency}</div>
@@ -323,6 +399,7 @@ export default function App() {
             <div className="actions">
               <button className="primary" onClick={handleAddSelected} disabled={!selectedVariantId}>Добавить в корзину</button>
               <button className="secondary" onClick={() => toggleWishlist(selected)}>{wishlistIds.has(selected.id) ? "Убрать из избранного" : "Добавить в избранное"}</button>
+              <button className="secondary" onClick={() => shareProduct(selected)}>Поделиться в Telegram</button>
               {selectedVariantId && <button className="secondary" onClick={() => subscribeRestock(selectedVariantId)}>Уведомить о поступлении</button>}
             </div>
           </main>
@@ -330,15 +407,15 @@ export default function App() {
 
         {!loading && view === "cart" && (
           <main>
-            <button className="link" onClick={() => setView("catalog")}>← {t("cart", "back_to_catalog")}</button>
+            <button className="link" onClick={() => navigate("catalog")}>← {t("cart", "back_to_catalog")}</button>
             <h1>{t("cart", "title")}</h1>
             {!cart?.items?.length && <p>{t("cart", "empty")}</p>}
             {cart?.items?.map((item) => <div className="cart-line" key={item.id}><div><b>{item.title}</b><div>Размер: {item.size} · {item.quantity}</div></div><div>{(item.price * item.quantity).toLocaleString("ru-RU")} RUB</div></div>)}
-            {cart?.items?.length > 0 && <><div className="promo"><input placeholder="Промокод" value={promo} onChange={(e) => setPromo(e.target.value)} /><button className="secondary" onClick={async () => setCart(await applyPromo(promo))}>Применить</button></div><div className="promo"><input placeholder="Баллы к списанию" value={loyaltyPoints} onChange={(e) => setLoyaltyPoints(e.target.value)} /><button className="secondary" onClick={async () => setCart(await applyLoyalty(Number(loyaltyPoints)))}>Списать</button></div><div className="promo"><input placeholder="Referral-код" value={referralInput} onChange={(e) => setReferralInput(e.target.value)} /><button className="secondary" onClick={async () => setCart(await applyReferral(referralInput))}>Добавить</button></div>{cart?.discount_amount > 0 && <div className="discount">Скидка: {cart.discount_amount.toLocaleString("ru-RU")} RUB</div>}<div className="total">Итого: {(cart?.final_amount || total).toLocaleString("ru-RU")} RUB</div><button className="primary" onClick={() => setView("checkout")}>Оформить заказ</button></>}
+            {cart?.items?.length > 0 && <><div className="promo"><input placeholder="Промокод" value={promo} onChange={(e) => setPromo(e.target.value)} /><button className="secondary" onClick={async () => setCart(await applyPromo(promo))}>Применить</button></div><div className="promo"><input placeholder="Баллы к списанию" value={loyaltyPoints} onChange={(e) => setLoyaltyPoints(e.target.value)} /><button className="secondary" onClick={async () => setCart(await applyLoyalty(Number(loyaltyPoints)))}>Списать</button></div><div className="promo"><input placeholder="Referral-код" value={referralInput} onChange={(e) => setReferralInput(e.target.value)} /><button className="secondary" onClick={async () => setCart(await applyReferral(referralInput))}>Добавить</button></div>{cart?.discount_amount > 0 && <div className="discount">Скидка: {cart.discount_amount.toLocaleString("ru-RU")} RUB</div>}<div className="total">Итого: {(cart?.final_amount || total).toLocaleString("ru-RU")} RUB</div><button className="primary" onClick={() => navigate("checkout")}>Оформить заказ</button></>}
           </main>
         )}
 
-        {!loading && view === "checkout" && <main><button className="link" onClick={() => setView("cart")}>← Корзина</button><h1>Оформление</h1><input placeholder="Имя" value={checkoutForm.name} onChange={(e) => setCheckoutForm({ ...checkoutForm, name: e.target.value })} /><input placeholder="Телефон" value={checkoutForm.phone} onChange={(e) => setCheckoutForm({ ...checkoutForm, phone: e.target.value })} /><select value={checkoutForm.delivery_type} onChange={(e) => setCheckoutForm({ ...checkoutForm, delivery_type: e.target.value })}><option value="pickup">Самовывоз</option><option value="courier">Курьер</option></select><textarea placeholder="Адрес / комментарий" value={checkoutForm.address} onChange={(e) => setCheckoutForm({ ...checkoutForm, address: e.target.value })} /><button className="primary" onClick={handleCheckout}>Перейти к оплате</button></main>}
+        {!loading && view === "checkout" && <main><button className="link" onClick={() => navigate("cart")}>← Корзина</button><h1>Оформление</h1><input placeholder="Имя" value={checkoutForm.name} onChange={(e) => setCheckoutForm({ ...checkoutForm, name: e.target.value })} /><input placeholder="Телефон" value={checkoutForm.phone} onChange={(e) => setCheckoutForm({ ...checkoutForm, phone: e.target.value })} /><select value={checkoutForm.delivery_type} onChange={(e) => setCheckoutForm({ ...checkoutForm, delivery_type: e.target.value })}><option value="pickup">Самовывоз</option><option value="courier">Курьер</option></select><textarea placeholder="Адрес / комментарий" value={checkoutForm.address} onChange={(e) => setCheckoutForm({ ...checkoutForm, address: e.target.value })} /><button className="primary" onClick={handleCheckout}>Перейти к оплате</button></main>}
 
         {!loading && view === "orders" && <main><h1>Мои заказы</h1>{!orders.length && <p>Заказов пока нет.</p>}{orders.map((order) => <div className="order-card" key={order.id}><b>Заказ #{order.id}</b><div>Статус: {order.status}</div><div>Оплата: {order.payment_status}</div><div>Сумма: {order.total_amount.toLocaleString("ru-RU")} {order.currency}</div>{order.payment_status === "paid" && <><input placeholder="Причина возврата" value={returnReason} onChange={(e) => setReturnReason(e.target.value)} /><button className="secondary" onClick={() => createReturn(order.id, returnReason)}>Запросить возврат</button></>}</div>)}</main>}
 
