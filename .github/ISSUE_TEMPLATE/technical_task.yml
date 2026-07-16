@@ -3,7 +3,6 @@ description: Define a bounded engineering, infrastructure, migration, integratio
 title: "[Task]: "
 labels:
   - technical
-authority: false
 body:
   - type: markdown
     attributes:
