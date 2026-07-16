@@ -1,0 +1,233 @@
+name: Technical task
+description: Define a bounded engineering, infrastructure, migration, integration, or operational task
+title: "[Task]: "
+labels:
+  - technical
+authority: false
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for implementation work that has a clear technical scope and acceptance criteria.
+
+        Do not include production secrets, credentials, personal data, payment information, access tokens, database dumps, or confidential third-party documentation.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight checks
+      options:
+        - label: I searched existing issues and pull requests and did not find an equivalent task.
+          required: true
+        - label: The task has a bounded scope and a verifiable outcome.
+          required: true
+        - label: This issue does not contain secrets, credentials, personal data, or confidential production information.
+          required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Technical category
+      multiple: true
+      options:
+        - Backend API
+        - Storefront frontend
+        - Admin frontend
+        - Telegram bot
+        - Authentication and authorization
+        - Database schema or migration
+        - Payments and webhooks
+        - Cart, checkout, orders, returns, or refunds
+        - Inventory and reservations
+        - MoySklad integration
+        - R2 or S3 media storage
+        - Search or indexing
+        - Docker or runtime configuration
+        - Deployment or networking
+        - GitHub Actions or CI
+        - Monitoring, logging, or alerting
+        - Security hardening
+        - Performance or scalability
+        - Data migration or cleanup
+        - Documentation or runbook
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: change_type
+    attributes:
+      label: Change type
+      options:
+        - New implementation
+        - Refactor without intended behavior change
+        - Bug fix
+        - Security fix
+        - Data migration
+        - Infrastructure change
+        - Dependency upgrade
+        - Operational procedure
+        - Removal or deprecation
+    validations:
+      required: true
+
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective
+      description: State the exact technical result this task must deliver and why it is needed.
+      placeholder: Replace ..., introduce ..., remove ..., or migrate ... so that ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: current_state
+    attributes:
+      label: Current state
+      description: Describe the existing implementation, limitation, risk, or operational condition.
+      placeholder: The current system ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: target_state
+    attributes:
+      label: Target state
+      description: Describe the expected state after completion, including externally visible behavior when relevant.
+      placeholder: After completion ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: implementation_scope
+    attributes:
+      label: Implementation scope
+      description: List the files, modules, endpoints, models, services, workflows, or environments expected to change.
+      placeholder: |
+        - backend/api/...
+        - backend/services/...
+        - migrations/...
+        - .github/workflows/...
+    validations:
+      required: true
+
+  - type: textarea
+    id: excluded_scope
+    attributes:
+      label: Explicitly excluded scope
+      description: Define what must not be changed as part of this task.
+      placeholder: This task does not include ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Provide objective, testable conditions that make the task complete.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: tests
+    attributes:
+      label: Test and verification plan
+      description: Specify automated tests, manual checks, CI jobs, migration checks, and production verification.
+      placeholder: |
+        - Unit tests: ...
+        - Integration tests: ...
+        - Manual verification: ...
+        - CI checks: ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: data_impact
+    attributes:
+      label: Database or data impact
+      options:
+        - None
+        - Read-only query change
+        - Backward-compatible schema change
+        - Data migration required
+        - Destructive or irreversible change
+        - Unknown and requires analysis
+    validations:
+      required: true
+
+  - type: textarea
+    id: migration
+    attributes:
+      label: Migration and compatibility plan
+      description: Describe schema migrations, backfills, API compatibility, deployment order, and rollback compatibility. Write "Not applicable" when there is no migration impact.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: security_impact
+    attributes:
+      label: Security or privacy impact
+      options:
+        - None
+        - Authentication or authorization
+        - Payments or refunds
+        - Personal data
+        - Secrets or credentials
+        - Webhooks or external callbacks
+        - Admin privileges or RBAC
+        - Infrastructure exposure
+        - Requires security review
+    validations:
+      required: true
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks and mitigations
+      description: Cover failure modes, data integrity, payment integrity, inventory, security, performance, compatibility, and operational risks.
+      placeholder: Risk ...; mitigation ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: Identify credentials, domains, third-party services, other issues, approvals, schemas, environments, or release prerequisites.
+      placeholder: Depends on ...
+
+  - type: textarea
+    id: rollout
+    attributes:
+      label: Rollout plan
+      description: Describe deployment sequence, feature flags, staged rollout, monitoring, owner actions, and verification.
+      placeholder: Deploy to test, verify ..., deploy to production, monitor ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: rollback
+    attributes:
+      label: Rollback plan
+      description: Explain how to safely revert code, configuration, migrations, and provider changes.
+      placeholder: Revert commit ..., restore ..., disable ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: documentation
+    attributes:
+      label: Documentation and runbook updates
+      description: List README, architecture, deployment, API, operations, or support documentation that must be updated. Write "None" only when justified.
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Include related issues, pull requests, architecture notes, sanitized examples, diagrams, or references.
