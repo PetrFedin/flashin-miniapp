@@ -137,19 +137,6 @@ class WorkflowAction(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
-class FeatureFlag(Base):
-    __tablename__ = "feature_flags"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    key: Mapped[str] = mapped_column(String(128), unique=True, index=True)
-    description: Mapped[str] = mapped_column(Text, default="")
-    enabled: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
-    rollout_percent: Mapped[int] = mapped_column(Integer, default=0)
-    rules_json: Mapped[str] = mapped_column(Text, default="{}")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-
-
 class MediaAssetMetadata(Base):
     __tablename__ = "media_asset_metadata"
     __table_args__ = (UniqueConstraint("media_asset_id", name="uq_media_asset_metadata_asset"),)

@@ -15,4 +15,5 @@ class TelegramFashionEngine:
     """Business logic foundation for FLASHIN Telegram Mini App recommendations.
 
     This layer is intentionally framework independent. It can later be connected
-    to embeddings, LLMs, customer history and catalog analytics
+    to embeddings, LLMs, customer history and catalog analytics.
+    """
