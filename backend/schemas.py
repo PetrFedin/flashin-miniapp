@@ -43,13 +43,20 @@ class ProductOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ProductVariantCreate(BaseModel):
+    size: str = Field(min_length=1)
+    color: str = ""
+    sku: str = Field(min_length=1)
+    stock_qty: int = Field(default=0, ge=0)
+
+
 class ProductCreate(BaseModel):
-    sku: str
-    title: str
-    slug: str
+    sku: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    slug: str = Field(min_length=1)
     brand: str = "FLASHIN"
     description: str = ""
-    price: float
+    price: float = Field(ge=0)
     old_price: float | None = None
     currency: str = "RUB"
     category: str = "Clothing"
@@ -60,7 +67,7 @@ class ProductCreate(BaseModel):
     drop_starts_at: datetime | None = None
     vip_only_until: datetime | None = None
     images: list[str] = Field(default_factory=list)
-    variants: list[dict] = Field(default_factory=list)
+    variants: list[ProductVariantCreate] = Field(default_factory=list)
 
 
 class ProductUpdate(ProductCreate):

@@ -1,0 +1,176 @@
+name: Bug report
+description: Report a reproducible defect in FLASHIN Mini App
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting a defect. Do not include secrets, Telegram bot tokens, payment credentials, access tokens, personal data, production database contents, or real customer information.
+
+        Confirmed or suspected security vulnerabilities must not be reported through this public form. Follow SECURITY.md and contact the repository owner privately.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight checks
+      options:
+        - label: I searched existing open and closed issues and did not find the same defect.
+          required: true
+        - label: I reproduced the defect on the latest relevant branch or release.
+          required: true
+        - label: This report does not contain credentials, secrets, personal data, or real payment information.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      description: Select the environment where the defect occurs.
+      options:
+        - Local development
+        - CI
+        - Test
+        - Staging
+        - Production
+        - Unknown
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Select the primary affected component.
+      multiple: true
+      options:
+        - Storefront frontend
+        - Admin frontend
+        - Backend API
+        - Telegram bot
+        - Telegram Mini App integration
+        - Authentication or authorization
+        - Catalog or product data
+        - Cart or checkout
+        - Payments or refunds
+        - Delivery or pickup
+        - Inventory or reservation
+        - MoySklad integration
+        - R2 or S3 media storage
+        - Database or migrations
+        - Docker or deployment
+        - GitHub Actions or CI
+        - Monitoring or logging
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version, branch, or commit
+      description: Provide the release, branch name, or commit SHA where the defect was reproduced.
+      placeholder: develop / main / v1.0.0 / full commit SHA
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Platform and runtime
+      description: Include operating system, browser or Telegram client, Python or Node.js version, and device when relevant.
+      placeholder: iOS 26 Telegram 12.x; Chrome 140; Python 3.12; Node 22
+    validations:
+      required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Defect summary
+      description: Describe the problem clearly in one or two paragraphs.
+      placeholder: What is broken, where it happens, and why it matters.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Provide the smallest reliable sequence that reproduces the defect.
+      placeholder: |
+        1. Open ...
+        2. Select ...
+        3. Submit ...
+        4. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+      description: State the correct behavior.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: State what happened instead, including exact visible errors when available.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Business severity
+      description: Select the highest justified severity.
+      options:
+        - Critical - production unavailable, payment integrity risk, or widespread data loss
+        - High - core purchase flow blocked for many users
+        - Medium - important function degraded with a workaround
+        - Low - limited defect with minor impact
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Add sanitized logs, screenshots, request IDs, response codes, or stack traces. Remove all secrets and personal data.
+      render: shell
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and frequency
+      description: Explain how often the problem occurs and which users, products, orders, or environments are affected.
+      placeholder: Always / intermittent; all users / one role / one SKU / one payment method.
+    validations:
+      required: true
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Workaround
+      description: Document any safe temporary workaround. Write "None" when no workaround exists.
+    validations:
+      required: true
+
+  - type: textarea
+    id: regression
+    attributes:
+      label: Regression information
+      description: State whether this worked previously and identify the last known good version when known.
+      placeholder: Worked on commit ...; first failed after ...; unknown.
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Include related issues, pull requests, test cases, or non-sensitive supporting information.
