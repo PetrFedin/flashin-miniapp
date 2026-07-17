@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 from datetime import datetime
 from typing import Any, Literal
@@ -13,7 +12,6 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..enterprise_models import (
     BulkEditJob,
-    FeatureFlag,
     MediaAssetMetadata,
     ProductVersion,
     PromotionRule,
@@ -23,7 +21,7 @@ from ..enterprise_models import (
     WorkflowDefinition,
     WorkflowRequest,
 )
-from ..models import MediaAsset, Product
+from ..models import FeatureFlag, MediaAsset, Product
 from ..security import get_current_admin
 from ..services.audit import log_admin_action
 from ..services.rbac import require_permission, require_superadmin
@@ -495,11 +493,9 @@ def workflow_history(request_id: int, admin=Depends(get_current_admin), db: Sess
 
 
 class FeatureFlagIn(BaseModel):
-    key: str = Field(pattern=r"^[a-z0-9_.-]+$", min_length=2, max_length=128)
+    key: str = Field(pattern=r"^[a-z0-9_.-]+$", min_length=2, max_length=120)
     description: str = ""
-    enabled: bool = False
-    rollout_percent: int = Field(default=0, ge=0, le=100)
-    rules: dict[str, Any] = Field(default_factory=dict)
+    enabled: bool = True
 
 
 @router.get("/feature-flags")
@@ -517,8 +513,6 @@ def upsert_feature_flag(payload: FeatureFlagIn, key: str, admin=Depends(get_curr
     db.add(row)
     row.description = payload.description
     row.enabled = payload.enabled
-    row.rollout_percent = payload.rollout_percent
-    row.rules_json = _dump(payload.rules)
     row.updated_at = datetime.utcnow()
     db.flush()
     log_admin_action(db, admin, "feature_flag.upsert", "feature_flag", row.id, {"key": key, "enabled": row.enabled})
@@ -528,19 +522,11 @@ def upsert_feature_flag(payload: FeatureFlagIn, key: str, admin=Depends(get_curr
 
 
 @router.get("/feature-flags/{key}/evaluate")
-def evaluate_feature_flag(key: str, subject_id: str = Query(min_length=1), store_id: str = "default", role: str = "", db: Session = Depends(get_db)):
+def evaluate_feature_flag(key: str, db: Session = Depends(get_db)):
     row = db.query(FeatureFlag).filter(FeatureFlag.key == key).first()
     if not row or not row.enabled:
         return {"key": key, "enabled": False, "reason": "disabled"}
-    rules = _load(row.rules_json, {})
-    if rules.get("stores") and store_id not in rules["stores"]:
-        return {"key": key, "enabled": False, "reason": "store_not_allowed"}
-    if rules.get("roles") and role not in rules["roles"]:
-        return {"key": key, "enabled": False, "reason": "role_not_allowed"}
-    if subject_id in set(rules.get("subjects", [])):
-        return {"key": key, "enabled": True, "reason": "subject_allowlist"}
-    bucket = int(hashlib.sha256(f"{key}:{subject_id}".encode()).hexdigest()[:8], 16) % 100
-    return {"key": key, "enabled": bucket < row.rollout_percent, "reason": "percentage", "bucket": bucket, "rollout_percent": row.rollout_percent}
+    return {"key": key, "enabled": True, "reason": "enabled"}
 
 
 class AssetMetadataIn(BaseModel):
