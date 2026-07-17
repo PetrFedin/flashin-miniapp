@@ -5,12 +5,6 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from backend.api.admin import router as admin_router
-from backend.api.products import router as products_router
-from backend.database import Base, get_db
-from backend.models import AdminUser, Product, ProductImage, ProductVariant
-from backend.security import create_admin_token, hash_password
-
 
 def _registered_routes(router, prefix: str = "") -> set[tuple[str, frozenset[str]]]:
     return {
@@ -20,6 +14,8 @@ def _registered_routes(router, prefix: str = "") -> set[tuple[str, frozenset[str
 
 
 def test_public_products_router_only_registers_read_endpoints():
+    from backend.api.products import router as products_router
+
     routes = _registered_routes(products_router, prefix="/api")
 
     assert ("/api/products", frozenset({"GET"})) in routes
@@ -33,6 +29,11 @@ def test_public_products_router_only_registers_read_endpoints():
 
 @pytest.fixture()
 def admin_api():
+    from backend.api.admin import router as admin_router
+    from backend.database import Base, get_db
+    from backend.models import AdminUser
+    from backend.security import create_admin_token, hash_password
+
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -97,6 +98,8 @@ def _valid_product_payload() -> dict:
 
 
 def test_admin_product_create_requires_authorization(admin_api):
+    from backend.models import Product
+
     client, _, testing_session = admin_api
 
     response = client.post("/api/admin/products", json=_valid_product_payload())
@@ -107,6 +110,8 @@ def test_admin_product_create_requires_authorization(admin_api):
 
 
 def test_authorized_admin_can_create_product_with_images_and_variants(admin_api):
+    from backend.models import Product, ProductImage, ProductVariant
+
     client, token, testing_session = admin_api
 
     response = client.post(
@@ -164,6 +169,8 @@ def test_authorized_admin_can_create_product_with_images_and_variants(admin_api)
     ],
 )
 def test_admin_product_create_rejects_missing_or_invalid_fields(admin_api, payload):
+    from backend.models import Product
+
     client, token, testing_session = admin_api
 
     response = client.post(
