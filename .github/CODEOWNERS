@@ -1,0 +1,9 @@
+# FLASHIN repository ownership
+# Repository owner reviews all production changes by default.
+* @PetrFedin
+
+# Sensitive areas
+/backend/ @PetrFedin
+/.github/ @PetrFedin
+/deploy/ @PetrFedin
+/docker-compose.yml @PetrFedin
