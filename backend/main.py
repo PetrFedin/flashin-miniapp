@@ -54,6 +54,7 @@ from .api.delivery_quotes import router as delivery_quotes_router
 from .api.enterprise import router as enterprise_router
 from .api.telegram_commerce import router as telegram_commerce_router
 from .api.telegram_webhook import router as telegram_webhook_router
+from .api.fashion_ai import router as fashion_ai_router
 from .config import get_settings
 from .database import Base, SessionLocal, engine
 from .seed import bootstrap_admin, seed_products
@@ -123,6 +124,7 @@ app.include_router(delivery_quotes_router, prefix="/api")
 app.include_router(enterprise_router, prefix="/api")
 app.include_router(telegram_commerce_router, prefix="/api")
 app.include_router(telegram_webhook_router, prefix="/api")
+app.include_router(fashion_ai_router, prefix="/api")
 
 
 def _bootstrap_database(max_attempts: int = 10, base_delay_seconds: float = 1.0) -> None:
