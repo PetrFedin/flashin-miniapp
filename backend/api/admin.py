@@ -9,6 +9,7 @@ from ..security import create_admin_token, get_current_admin, hash_password, ver
 from ..services.notifications import queue_order_status
 from ..services.inventory import release_variant, adjust_stock
 from ..services.audit import log_admin_action
+from ..services.rbac import require_permission
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -28,6 +29,7 @@ def admin_products(admin=Depends(get_current_admin), db: Session = Depends(get_d
 
 @router.post("/products", response_model=ProductOut)
 def admin_create_product(payload: ProductCreate, admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    require_permission(db, admin, "products.write")
     product = Product(
         sku=payload.sku,
         title=payload.title,
@@ -52,10 +54,10 @@ def admin_create_product(payload: ProductCreate, admin=Depends(get_current_admin
     for v in payload.variants:
         db.add(ProductVariant(
             product_id=product.id,
-            size=v["size"],
-            color=v.get("color", ""),
-            sku=v["sku"],
-            stock_qty=int(v.get("stock_qty", 0)),
+            size=v.size,
+            color=v.color,
+            sku=v.sku,
+            stock_qty=v.stock_qty,
             reserved_qty=0,
         ))
     db.commit()
