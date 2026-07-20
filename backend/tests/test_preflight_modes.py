@@ -22,12 +22,16 @@ REQUIRED_ENV = {
 }
 
 
-def load_secret_helper():
+def load_secret_helper_module():
     spec = importlib.util.spec_from_file_location("ensure_webhook_secret", SECRET_HELPER)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(module)
-    return module.ensure_webhook_secret
+    return module
+
+
+def load_secret_helper():
+    return load_secret_helper_module().ensure_webhook_secret
 
 
 def load_launcher():
@@ -63,6 +67,16 @@ def write_env(path: Path, **overrides):
     )
 
 
+def write_env_with_webhook_assignment(path: Path, assignment: str):
+    write_env(path)
+    lines = path.read_text(encoding="utf-8").splitlines()
+    lines = [
+        assignment if line.startswith("TELEGRAM_WEBHOOK_SECRET=") else line
+        for line in lines
+    ]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def test_source_only_preflight_does_not_require_env(tmp_path):
     missing_env = tmp_path / "missing.env"
 
@@ -81,18 +95,40 @@ def test_require_env_preflight_rejects_missing_env(tmp_path):
     assert "Missing environment file" in result.stdout
 
 
-def test_require_env_preflight_rejects_placeholder_secret(tmp_path):
+@pytest.mark.parametrize(
+    "assignment",
+    [
+        "TELEGRAM_WEBHOOK_SECRET=replace_with_random_webhook_secret",
+        'TELEGRAM_WEBHOOK_SECRET="replace_with_random_webhook_secret"',
+        "TELEGRAM_WEBHOOK_SECRET='replace_with_random_webhook_secret'",
+        'export TELEGRAM_WEBHOOK_SECRET = "replace_with_random_webhook_secret"',
+    ],
+)
+def test_require_env_preflight_rejects_placeholder_secret(tmp_path, assignment):
     env_path = tmp_path / "placeholder.env"
-    write_env(
-        env_path,
-        TELEGRAM_WEBHOOK_SECRET="replace_with_random_webhook_secret",
-    )
+    write_env_with_webhook_assignment(env_path, assignment)
 
     result = run_preflight("--require-env", "--env-file", env_path)
 
     assert result.returncode == 1
     assert "must be a non-placeholder value" in result.stdout
     assert "replace_with_random_webhook_secret" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    "assignment",
+    [
+        'TELEGRAM_WEBHOOK_SECRET="quoted-real-secret"',
+        "export TELEGRAM_WEBHOOK_SECRET = 'quoted-real-secret'",
+    ],
+)
+def test_require_env_preflight_accepts_quoted_real_secret(tmp_path, assignment):
+    env_path = tmp_path / "quoted-real.env"
+    write_env_with_webhook_assignment(env_path, assignment)
+
+    result = run_preflight("--require-env", "--env-file", env_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_require_env_preflight_accepts_safe_temporary_env(tmp_path):
@@ -133,6 +169,77 @@ def test_installers_generate_secret_and_preserve_real_value(tmp_path):
         strict_preflight = "python3 scripts/preflight.py --require-env"
         assert generator_call in script
         assert script.index(generator_call) < script.index(strict_preflight)
+
+
+@pytest.mark.parametrize(
+    "assignment",
+    [
+        "TELEGRAM_WEBHOOK_SECRET = real-secret",
+        "export TELEGRAM_WEBHOOK_SECRET=real-secret",
+        "TELEGRAM_WEBHOOK_SECRET='real-secret'",
+        'export TELEGRAM_WEBHOOK_SECRET = "real-secret"',
+    ],
+)
+def test_secret_helper_preserves_real_dotenv_forms(tmp_path, assignment):
+    ensure_webhook_secret = load_secret_helper()
+    env_path = tmp_path / ".env"
+    env_path.write_text(f"{assignment}\n", encoding="utf-8")
+
+    assert ensure_webhook_secret(env_path) is False
+    assert env_path.read_text(encoding="utf-8") == f"{assignment}\n"
+
+
+@pytest.mark.parametrize(
+    "assignment",
+    [
+        "TELEGRAM_WEBHOOK_SECRET='replace_with_random_webhook_secret'",
+        'TELEGRAM_WEBHOOK_SECRET="replace_with_random_webhook_secret"',
+        'export TELEGRAM_WEBHOOK_SECRET = "replace_with_random_webhook_secret"',
+        "TELEGRAM_WEBHOOK_SECRET = ''",
+    ],
+)
+def test_secret_helper_replaces_quoted_placeholder_in_place(tmp_path, assignment):
+    helper = load_secret_helper_module()
+    env_path = tmp_path / ".env"
+    env_path.write_text(f"{assignment}\n", encoding="utf-8")
+
+    assert helper.ensure_webhook_secret(env_path) is True
+
+    matches = [
+        match
+        for line in env_path.read_text(encoding="utf-8").splitlines()
+        if (match := helper.parse_dotenv_assignment(line)) is not None
+        and match.group("key") == helper.KEY
+    ]
+    assert len(matches) == 1
+    generated = helper.dotenv_value_for_analysis(matches[0].group("value"))
+    assert generated
+    assert generated not in helper.PLACEHOLDERS
+
+
+def test_secret_helper_cli_does_not_print_old_or_new_secret(tmp_path):
+    helper = load_secret_helper_module()
+    old_value = "replace_with_random_webhook_secret"
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        f'export TELEGRAM_WEBHOOK_SECRET = "{old_value}"\n',
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(SECRET_HELPER), "--env-file", str(env_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    match = helper.parse_dotenv_assignment(
+        env_path.read_text(encoding="utf-8").strip()
+    )
+    new_value = helper.dotenv_value_for_analysis(match.group("value"))
+
+    assert result.returncode == 0
+    assert old_value not in result.stdout + result.stderr
+    assert new_value not in result.stdout + result.stderr
 
 
 @pytest.mark.parametrize("mode", ["local", "production"])

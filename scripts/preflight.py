@@ -3,6 +3,11 @@ import argparse
 import sys
 from pathlib import Path
 
+from ensure_webhook_secret import (
+    dotenv_value_for_analysis,
+    parse_dotenv_assignment,
+)
+
 ROOT = Path(__file__).resolve().parents[1]
 
 REQUIRED_FILES = [
@@ -126,9 +131,11 @@ ENV_TEMPLATES = (
 def read_env(path: Path) -> dict[str, str]:
     values = {}
     for line in path.read_text(encoding="utf-8").splitlines():
-        if "=" in line and not line.strip().startswith("#"):
-            key, value = line.split("=", 1)
-            values[key.strip()] = value.strip()
+        match = parse_dotenv_assignment(line)
+        if match is not None:
+            values[match.group("key")] = dotenv_value_for_analysis(
+                match.group("value")
+            )
     return values
 
 

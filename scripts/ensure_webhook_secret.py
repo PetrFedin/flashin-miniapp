@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import os
+import re
 import secrets
 import stat
 import tempfile
@@ -13,27 +14,69 @@ PLACEHOLDERS = {
     "replace_with_random_webhook_secret",
 }
 KEY = "TELEGRAM_WEBHOOK_SECRET"
+DOTENV_ASSIGNMENT = re.compile(
+    r"^(?:\s*export\s+)?\s*"
+    r"(?P<key>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*"
+    r"(?P<value>.*)$"
+)
+
+
+def parse_dotenv_assignment(line: str):
+    if line.lstrip().startswith("#"):
+        return None
+    return DOTENV_ASSIGNMENT.match(line)
+
+
+def dotenv_value_for_analysis(raw_value: str) -> str:
+    value = raw_value.strip()
+    if len(value) >= 2 and value[0] in {"'", '"'} and value[-1] == value[0]:
+        return value[1:-1]
+    return value
 
 
 def ensure_webhook_secret(env_path: Path) -> bool:
     lines = env_path.read_text(encoding="utf-8").splitlines()
+    assignments = []
     key_index = None
+    key_match = None
     current_value = ""
     for index, line in enumerate(lines):
-        if line.startswith(f"{KEY}="):
-            key_index = index
-            current_value = line.split("=", 1)[1].strip()
-            break
+        match = parse_dotenv_assignment(line)
+        if match is not None and match.group("key") == KEY:
+            assignments.append((index, match))
+
+    if assignments:
+        key_index, key_match = assignments[-1]
+        current_value = dotenv_value_for_analysis(key_match.group("value"))
 
     if current_value not in PLACEHOLDERS:
         return False
 
     secret_value = secrets.token_urlsafe(48)
-    replacement = f"{KEY}={secret_value}"
     if key_index is None:
-        lines.append(replacement)
+        lines.append(f"{KEY}={secret_value}")
     else:
-        lines[key_index] = replacement
+        raw_value = key_match.group("value")
+        stripped_value = raw_value.strip()
+        quote = ""
+        if (
+            len(stripped_value) >= 2
+            and stripped_value[0] in {"'", '"'}
+            and stripped_value[-1] == stripped_value[0]
+        ):
+            quote = stripped_value[0]
+        trailing_whitespace = raw_value[len(raw_value.rstrip()):]
+        value_prefix = lines[key_index][:key_match.start("value")]
+        lines[key_index] = (
+            f"{value_prefix}{quote}{secret_value}{quote}{trailing_whitespace}"
+        )
+        duplicate_indices = {index for index, _ in assignments[:-1]}
+        if duplicate_indices:
+            lines = [
+                line
+                for index, line in enumerate(lines)
+                if index not in duplicate_indices
+            ]
 
     file_mode = stat.S_IMODE(env_path.stat().st_mode)
     descriptor, temporary_name = tempfile.mkstemp(
