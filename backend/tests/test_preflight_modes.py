@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 PREFLIGHT = ROOT / "scripts" / "preflight.py"
 SECRET_HELPER = ROOT / "scripts" / "ensure_webhook_secret.py"
 LAUNCHER = ROOT / "scripts" / "launch.py"
+SCRIPTS_DIR = ROOT / "scripts"
 REQUIRED_ENV = {
     "DATABASE_URL": "sqlite://",
     "TELEGRAM_BOT_TOKEN": "test-bot-token",
@@ -32,6 +33,18 @@ def load_secret_helper_module():
 
 def load_secret_helper():
     return load_secret_helper_module().ensure_webhook_secret
+
+
+def load_preflight_module():
+    spec = importlib.util.spec_from_file_location("flashin_preflight", PREFLIGHT)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.path.insert(0, str(SCRIPTS_DIR))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(SCRIPTS_DIR))
+    return module
 
 
 def load_launcher():
@@ -102,6 +115,12 @@ def test_require_env_preflight_rejects_missing_env(tmp_path):
         'TELEGRAM_WEBHOOK_SECRET="replace_with_random_webhook_secret"',
         "TELEGRAM_WEBHOOK_SECRET='replace_with_random_webhook_secret'",
         'export TELEGRAM_WEBHOOK_SECRET = "replace_with_random_webhook_secret"',
+        "TELEGRAM_WEBHOOK_SECRET=replace_with_random_webhook_secret # rotate",
+        'TELEGRAM_WEBHOOK_SECRET="replace_with_random_webhook_secret" # rotate',
+        "TELEGRAM_WEBHOOK_SECRET='replace_with_random_webhook_secret' # rotate",
+        'export TELEGRAM_WEBHOOK_SECRET = "change-me" # rotate',
+        'TELEGRAM_WEBHOOK_SECRET="" # rotate',
+        "TELEGRAM_WEBHOOK_SECRET= # rotate",
     ],
 )
 def test_require_env_preflight_rejects_placeholder_secret(tmp_path, assignment):
@@ -178,6 +197,10 @@ def test_installers_generate_secret_and_preserve_real_value(tmp_path):
         "export TELEGRAM_WEBHOOK_SECRET=real-secret",
         "TELEGRAM_WEBHOOK_SECRET='real-secret'",
         'export TELEGRAM_WEBHOOK_SECRET = "real-secret"',
+        'TELEGRAM_WEBHOOK_SECRET="real#secret"',
+        "TELEGRAM_WEBHOOK_SECRET='real#secret'",
+        "TELEGRAM_WEBHOOK_SECRET=real#secret",
+        "TELEGRAM_WEBHOOK_SECRET=real-secret # rotate",
     ],
 )
 def test_secret_helper_preserves_real_dotenv_forms(tmp_path, assignment):
@@ -196,12 +219,20 @@ def test_secret_helper_preserves_real_dotenv_forms(tmp_path, assignment):
         'TELEGRAM_WEBHOOK_SECRET="replace_with_random_webhook_secret"',
         'export TELEGRAM_WEBHOOK_SECRET = "replace_with_random_webhook_secret"',
         "TELEGRAM_WEBHOOK_SECRET = ''",
+        "TELEGRAM_WEBHOOK_SECRET=replace_with_random_webhook_secret # rotate",
+        'TELEGRAM_WEBHOOK_SECRET="replace_with_random_webhook_secret" # rotate',
+        "TELEGRAM_WEBHOOK_SECRET='replace_with_random_webhook_secret' # rotate",
+        'export TELEGRAM_WEBHOOK_SECRET = "change-me" # rotate',
+        'TELEGRAM_WEBHOOK_SECRET="" # rotate',
+        "TELEGRAM_WEBHOOK_SECRET= # rotate",
     ],
 )
 def test_secret_helper_replaces_quoted_placeholder_in_place(tmp_path, assignment):
     helper = load_secret_helper_module()
     env_path = tmp_path / ".env"
     env_path.write_text(f"{assignment}\n", encoding="utf-8")
+    original_match = helper.parse_dotenv_assignment(assignment)
+    _, original_comment = helper.split_dotenv_value(original_match.group("value"))
 
     assert helper.ensure_webhook_secret(env_path) is True
 
@@ -215,6 +246,75 @@ def test_secret_helper_replaces_quoted_placeholder_in_place(tmp_path, assignment
     generated = helper.dotenv_value_for_analysis(matches[0].group("value"))
     assert generated
     assert generated not in helper.PLACEHOLDERS
+    _, updated_comment = helper.split_dotenv_value(matches[0].group("value"))
+    assert updated_comment == original_comment
+
+
+def test_secret_helper_removes_duplicate_active_assignment_when_replacing(tmp_path):
+    helper = load_secret_helper_module()
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "TELEGRAM_WEBHOOK_SECRET=change-me\n"
+        'export TELEGRAM_WEBHOOK_SECRET = "replace_with_random_webhook_secret" # rotate\n',
+        encoding="utf-8",
+    )
+
+    assert helper.ensure_webhook_secret(env_path) is True
+
+    matches = [
+        match
+        for line in env_path.read_text(encoding="utf-8").splitlines()
+        if (match := helper.parse_dotenv_assignment(line)) is not None
+        and match.group("key") == helper.KEY
+    ]
+    assert len(matches) == 1
+    assert helper.split_dotenv_value(matches[0].group("value"))[1] == " # rotate"
+
+
+@pytest.mark.parametrize(
+    ("assignment", "expected"),
+    [
+        ("TELEGRAM_WEBHOOK_SECRET=value # comment", "value"),
+        ('TELEGRAM_WEBHOOK_SECRET = "value" # comment', "value"),
+        ("export TELEGRAM_WEBHOOK_SECRET='value' # comment", "value"),
+        ('TELEGRAM_WEBHOOK_SECRET="real#secret"', "real#secret"),
+        ("TELEGRAM_WEBHOOK_SECRET='real#secret'", "real#secret"),
+        ("TELEGRAM_WEBHOOK_SECRET=real#secret", "real#secret"),
+        ("TELEGRAM_WEBHOOK_SECRET=real-secret # rotate", "real-secret"),
+        (
+            "TELEGRAM_WEBHOOK_SECRET=replace_with_random_webhook_secret # rotate",
+            "replace_with_random_webhook_secret",
+        ),
+        (
+            'TELEGRAM_WEBHOOK_SECRET="replace_with_random_webhook_secret" # rotate',
+            "replace_with_random_webhook_secret",
+        ),
+        (
+            "TELEGRAM_WEBHOOK_SECRET='replace_with_random_webhook_secret' # rotate",
+            "replace_with_random_webhook_secret",
+        ),
+        (
+            'export TELEGRAM_WEBHOOK_SECRET = "change-me" # rotate',
+            "change-me",
+        ),
+        ('TELEGRAM_WEBHOOK_SECRET="" # rotate', ""),
+        ("TELEGRAM_WEBHOOK_SECRET= # rotate", ""),
+    ],
+)
+def test_generator_and_preflight_analyze_dotenv_values_identically(
+    tmp_path, assignment, expected
+):
+    helper = load_secret_helper_module()
+    preflight = load_preflight_module()
+    env_path = tmp_path / ".env"
+    env_path.write_text(f"{assignment}\n", encoding="utf-8")
+    match = helper.parse_dotenv_assignment(assignment)
+
+    generator_value = helper.dotenv_value_for_analysis(match.group("value"))
+    preflight_value = preflight.read_env(env_path)[helper.KEY]
+
+    assert generator_value == expected
+    assert preflight_value == expected
 
 
 def test_secret_helper_cli_does_not_print_old_or_new_secret(tmp_path):
@@ -222,7 +322,7 @@ def test_secret_helper_cli_does_not_print_old_or_new_secret(tmp_path):
     old_value = "replace_with_random_webhook_secret"
     env_path = tmp_path / ".env"
     env_path.write_text(
-        f'export TELEGRAM_WEBHOOK_SECRET = "{old_value}"\n',
+        f'export TELEGRAM_WEBHOOK_SECRET = "{old_value}" # rotate\n',
         encoding="utf-8",
     )
 

@@ -16,7 +16,7 @@ PLACEHOLDERS = {
 KEY = "TELEGRAM_WEBHOOK_SECRET"
 DOTENV_ASSIGNMENT = re.compile(
     r"^(?:\s*export\s+)?\s*"
-    r"(?P<key>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*"
+    r"(?P<key>[A-Za-z_][A-Za-z0-9_]*)\s*="
     r"(?P<value>.*)$"
 )
 
@@ -27,8 +27,43 @@ def parse_dotenv_assignment(line: str):
     return DOTENV_ASSIGNMENT.match(line)
 
 
+def split_dotenv_value(raw_value: str) -> tuple[str, str]:
+    quote = None
+    escaped = False
+    for index, character in enumerate(raw_value):
+        if quote is not None:
+            if quote == '"' and character == "\\" and not escaped:
+                escaped = True
+                continue
+            if character == quote and not escaped:
+                quote = None
+            escaped = False
+            continue
+        if character in {"'", '"'}:
+            quote = character
+        elif character == "#":
+            prefix = raw_value[:index]
+            stripped_prefix = prefix.strip()
+            follows_quoted_value = (
+                len(stripped_prefix) >= 2
+                and stripped_prefix[0] in {"'", '"'}
+                and stripped_prefix[-1] == stripped_prefix[0]
+            )
+            follows_whitespace = index > 0 and raw_value[index - 1].isspace()
+            if follows_quoted_value or follows_whitespace:
+                comment_start = index
+                while (
+                    comment_start > 0
+                    and raw_value[comment_start - 1].isspace()
+                ):
+                    comment_start -= 1
+                return raw_value[:comment_start], raw_value[comment_start:]
+    return raw_value, ""
+
+
 def dotenv_value_for_analysis(raw_value: str) -> str:
-    value = raw_value.strip()
+    value_part, _ = split_dotenv_value(raw_value)
+    value = value_part.strip()
     if len(value) >= 2 and value[0] in {"'", '"'} and value[-1] == value[0]:
         return value[1:-1]
     return value
@@ -57,7 +92,8 @@ def ensure_webhook_secret(env_path: Path) -> bool:
         lines.append(f"{KEY}={secret_value}")
     else:
         raw_value = key_match.group("value")
-        stripped_value = raw_value.strip()
+        value_part, inline_comment = split_dotenv_value(raw_value)
+        stripped_value = value_part.strip()
         quote = ""
         if (
             len(stripped_value) >= 2
@@ -65,10 +101,12 @@ def ensure_webhook_secret(env_path: Path) -> bool:
             and stripped_value[-1] == stripped_value[0]
         ):
             quote = stripped_value[0]
-        trailing_whitespace = raw_value[len(raw_value.rstrip()):]
+        leading_whitespace = value_part[: len(value_part) - len(value_part.lstrip())]
+        trailing_whitespace = value_part[len(value_part.rstrip()):]
         value_prefix = lines[key_index][:key_match.start("value")]
         lines[key_index] = (
-            f"{value_prefix}{quote}{secret_value}{quote}{trailing_whitespace}"
+            f"{value_prefix}{leading_whitespace}{quote}{secret_value}{quote}"
+            f"{trailing_whitespace}{inline_comment}"
         )
         duplicate_indices = {index for index, _ in assignments[:-1]}
         if duplicate_indices:
