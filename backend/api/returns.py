@@ -35,10 +35,12 @@ from ..security import get_current_admin
 from ..services.inventory import release_variant
 from ..services.payments import create_yookassa_refund
 from ..services.loyalty import refund_redeemed_points
+from ..services.rbac import require_permission
 
 
 @router.post("/admin/approve")
 async def approve_return(payload: RefundApproveIn, admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    require_permission(db, admin, "refunds.write")
     ret = db.query(ReturnRequest).filter(ReturnRequest.id == payload.return_id).first()
     if not ret:
         raise HTTPException(status_code=404, detail="Return request not found")

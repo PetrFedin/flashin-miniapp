@@ -10,7 +10,7 @@ router = APIRouter(prefix="/business-analytics", tags=["business-analytics"])
 
 @router.get("/summary")
 def summary(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
-    require_permission(db, admin, "orders.read")
+    require_permission(db, admin, "analytics.read")
     paid_orders = db.query(Order).filter(Order.payment_status == "paid").all()
     orders_count = len(paid_orders)
     gmv = sum(o.total_amount for o in paid_orders)

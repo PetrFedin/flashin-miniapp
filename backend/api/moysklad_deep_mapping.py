@@ -12,13 +12,13 @@ router = APIRouter(prefix="/moysklad-deep-mapping", tags=["moysklad-deep-mapping
 
 @router.get("/sku-matches", response_model=list[MoySkladSkuMatchOut])
 def sku_matches(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
-    require_permission(db, admin, "products.read")
+    require_permission(db, admin, "moysklad.read")
     return db.query(MoySkladSkuMatch).order_by(MoySkladSkuMatch.id.desc()).limit(300).all()
 
 
 @router.post("/sku-matches/{match_id}/confirm")
 def confirm(match_id: int, admin=Depends(get_current_admin), db: Session = Depends(get_db)):
-    require_permission(db, admin, "products.write")
+    require_permission(db, admin, "moysklad.write")
     row = db.query(MoySkladSkuMatch).filter(MoySkladSkuMatch.id == match_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Match not found")

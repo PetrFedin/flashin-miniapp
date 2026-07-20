@@ -1,4 +1,5 @@
 import json
+from decimal import Decimal, InvalidOperation
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session, joinedload
 from ..database import get_db
@@ -15,6 +16,27 @@ from ..services.loyalty import add_points, reward_referral_after_first_paid_orde
 from ..services.timeline import add_timeline_event
 
 router = APIRouter(prefix="/payments", tags=["payments"])
+
+
+def _validate_yookassa_payment_binding(payment: Payment, order: Order, provider_payment: dict) -> None:
+    provider_amount = provider_payment.get("amount") or {}
+    provider_metadata = provider_payment.get("metadata") or {}
+    provider_order_id = provider_metadata.get("order_id")
+    try:
+        amount_matches = Decimal(str(provider_amount.get("value"))).quantize(Decimal("0.01")) == Decimal(
+            str(order.total_amount)
+        ).quantize(Decimal("0.01"))
+    except (InvalidOperation, TypeError, ValueError):
+        amount_matches = False
+
+    if (
+        payment.order_id != order.id
+        or provider_payment.get("id") != payment.provider_payment_id
+        or (provider_order_id not in {None, ""} and str(provider_order_id) != str(order.id))
+        or not amount_matches
+        or provider_amount.get("currency") != order.currency
+    ):
+        raise HTTPException(status_code=409, detail="Payment does not match order")
 
 
 @router.post("", response_model=PaymentOut)
@@ -59,7 +81,7 @@ async def yookassa_webhook(request: Request, db: Session = Depends(get_db)):
     metadata = obj.get("metadata") or {}
     order_id = metadata.get("order_id")
 
-    if not payment_id or not order_id or not event:
+    if not payment_id or not event:
         raise HTTPException(status_code=400, detail="Invalid webhook payload")
 
     existing_event = (
@@ -81,15 +103,15 @@ async def yookassa_webhook(request: Request, db: Session = Depends(get_db)):
         db.add(payment_event)
 
     payment = db.query(Payment).filter(Payment.provider_payment_id == payment_id).first()
-    order = db.query(Order).options(joinedload(Order.items), joinedload(Order.customer)).filter(Order.id == int(order_id)).first()
+    if not payment or (order_id not in {None, ""} and str(payment.order_id) != str(order_id)):
+        raise HTTPException(status_code=409, detail="Payment does not match order")
+
+    order = db.query(Order).options(joinedload(Order.items), joinedload(Order.customer)).filter(Order.id == payment.order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
 
-    if not payment:
-        payment = Payment(order_id=order.id, provider="yookassa", provider_payment_id=payment_id, status=obj.get("status", ""), amount=order.total_amount)
-        db.add(payment)
-
     provider_payment = await fetch_yookassa_payment(payment_id)
+    _validate_yookassa_payment_binding(payment, order, provider_payment)
     provider_status = provider_payment.get("status", obj.get("status"))
     payment.status = provider_status
 

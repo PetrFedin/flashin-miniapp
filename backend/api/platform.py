@@ -21,7 +21,7 @@ def public_features(db: Session = Depends(get_db)):
 
 @router.post("/admin/features", response_model=FeatureFlagOut)
 def upsert_feature(payload: FeatureFlagIn, admin=Depends(get_current_admin), db: Session = Depends(get_db)):
-    require_permission(db, admin, "orders.write")
+    require_permission(db, admin, "feature_flags.write")
     row = db.query(FeatureFlag).filter(FeatureFlag.key == payload.key).first()
     if not row:
         row = FeatureFlag(key=payload.key)
@@ -40,7 +40,7 @@ def public_remote_config(db: Session = Depends(get_db)):
 
 @router.post("/admin/remote-config", response_model=RemoteConfigOut)
 def upsert_remote_config(payload: RemoteConfigIn, admin=Depends(get_current_admin), db: Session = Depends(get_db)):
-    require_permission(db, admin, "orders.write")
+    require_permission(db, admin, "remote_config.write")
     row = db.query(RemoteConfig).filter(RemoteConfig.key == payload.key).first()
     if not row:
         row = RemoteConfig(key=payload.key)
@@ -64,7 +64,7 @@ def get_blocks(page_slug: str, db: Session = Depends(get_db)):
 
 @router.post("/admin/cms/pages", response_model=CmsPageOut)
 def upsert_page(payload: CmsPageIn, admin=Depends(get_current_admin), db: Session = Depends(get_db)):
-    require_permission(db, admin, "products.write")
+    require_permission(db, admin, "cms.write")
     row = db.query(CmsPage).filter(CmsPage.slug == payload.slug).first()
     if not row:
         row = CmsPage(slug=payload.slug)
@@ -79,7 +79,7 @@ def upsert_page(payload: CmsPageIn, admin=Depends(get_current_admin), db: Sessio
 
 @router.post("/admin/cms/blocks", response_model=CmsBlockOut)
 def create_block(payload: CmsBlockIn, admin=Depends(get_current_admin), db: Session = Depends(get_db)):
-    require_permission(db, admin, "products.write")
+    require_permission(db, admin, "cms.write")
     row = CmsBlock(
         page_slug=payload.page_slug,
         block_type=payload.block_type,
@@ -96,11 +96,11 @@ def create_block(payload: CmsBlockIn, admin=Depends(get_current_admin), db: Sess
 
 @router.get("/admin/events", response_model=list[BusinessEventOut])
 def list_events(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
-    require_permission(db, admin, "orders.read")
+    require_permission(db, admin, "events.read")
     return db.query(BusinessEvent).order_by(BusinessEvent.created_at.desc()).limit(200).all()
 
 
 @router.get("/admin/audit-trail", response_model=list[AuditTrailOut])
 def list_audit_trail(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
-    require_permission(db, admin, "orders.read")
+    require_permission(db, admin, "audit.read")
     return db.query(AuditTrail).order_by(AuditTrail.created_at.desc()).limit(200).all()

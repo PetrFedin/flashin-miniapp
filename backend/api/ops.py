@@ -7,12 +7,14 @@ from ..models import Cart, Notification, ProductVariant
 from ..schemas import AbandonedCartOut, InventorySnapshotOut
 from ..security import get_current_admin
 from ..services.inventory import snapshot_inventory
+from ..services.rbac import require_permission
 
 router = APIRouter(prefix="/ops", tags=["ops"])
 
 
 @router.get("/abandoned-carts", response_model=list[AbandonedCartOut])
 def abandoned_carts(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    require_permission(db, admin, "operations.read")
     settings = get_settings()
     cutoff = datetime.utcnow() - timedelta(minutes=settings.abandoned_cart_minutes)
     carts = (
@@ -35,6 +37,7 @@ def abandoned_carts(admin=Depends(get_current_admin), db: Session = Depends(get_
 
 @router.post("/abandoned-carts/queue-notifications")
 def queue_abandoned_cart_notifications(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    require_permission(db, admin, "operations.write")
     settings = get_settings()
     cutoff = datetime.utcnow() - timedelta(minutes=settings.abandoned_cart_minutes)
     carts = (
@@ -59,6 +62,7 @@ def queue_abandoned_cart_notifications(admin=Depends(get_current_admin), db: Ses
 
 @router.get("/inventory/low-stock", response_model=list[InventorySnapshotOut])
 def low_stock(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    require_permission(db, admin, "inventory.read")
     settings = get_settings()
     variants = db.query(ProductVariant).all()
     result = []
@@ -77,6 +81,7 @@ def low_stock(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
 
 @router.post("/inventory/snapshot")
 def inventory_snapshot(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    require_permission(db, admin, "inventory.write")
     count = snapshot_inventory(db, source="admin")
     db.commit()
     return {"ok": True, "snapshotted": count}

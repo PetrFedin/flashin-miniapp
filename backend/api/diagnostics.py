@@ -10,5 +10,5 @@ router = APIRouter(prefix="/diagnostics", tags=["diagnostics"])
 
 @router.get("")
 def diagnostics(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
-    require_permission(db, admin, "orders.read")
+    require_permission(db, admin, "diagnostics.read")
     return run_diagnostics(db)

@@ -24,6 +24,7 @@ def admin_login(payload: AdminLoginIn, db: Session = Depends(get_db)):
 
 @router.get("/products", response_model=list[ProductOut])
 def admin_products(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    require_permission(db, admin, "products.read")
     return db.query(Product).options(joinedload(Product.images), joinedload(Product.variants)).order_by(Product.created_at.desc()).all()
 
 
@@ -66,6 +67,7 @@ def admin_create_product(payload: ProductCreate, admin=Depends(get_current_admin
 
 @router.patch("/products/{product_id}/active", response_model=ProductOut)
 def admin_toggle_product(product_id: int, active: bool, admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    require_permission(db, admin, "products.write")
     product = db.query(Product).filter(Product.id == product_id).first()
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
@@ -76,6 +78,7 @@ def admin_toggle_product(product_id: int, active: bool, admin=Depends(get_curren
 
 @router.patch("/variants/{variant_id}/stock")
 def admin_update_stock(variant_id: int, stock_qty: int, reason: str = "manual update", admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    require_permission(db, admin, "inventory.write")
     variant = adjust_stock(db, variant_id, stock_qty, reason=reason, admin_id=admin.id)
     log_admin_action(db, admin, "inventory.adjust", "variant", variant.id, {"stock_qty": stock_qty, "reason": reason})
     db.commit()
@@ -84,11 +87,13 @@ def admin_update_stock(variant_id: int, stock_qty: int, reason: str = "manual up
 
 @router.get("/orders", response_model=list[OrderOut])
 def admin_orders(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    require_permission(db, admin, "orders.read")
     return db.query(Order).options(joinedload(Order.items)).order_by(Order.created_at.desc()).all()
 
 
 @router.patch("/orders/{order_id}", response_model=OrderOut)
 def admin_update_order(order_id: int, payload: OrderStatusUpdate, admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    require_permission(db, admin, "orders.write")
     allowed = {"created", "payment_created", "paid", "assembling", "ready", "shipped", "completed", "cancelled", "refund_requested", "refunded"}
     order = db.query(Order).options(joinedload(Order.items), joinedload(Order.customer)).filter(Order.id == order_id).first()
     if not order:
@@ -113,6 +118,7 @@ def admin_update_order(order_id: int, payload: OrderStatusUpdate, admin=Depends(
 
 @router.post("/promocodes")
 def admin_create_promo(payload: PromoCodeCreate, admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    require_permission(db, admin, "promo.write")
     promo = PromoCode(**payload.model_dump())
     promo.code = promo.code.strip().upper()
     db.add(promo)
@@ -123,11 +129,13 @@ def admin_create_promo(payload: PromoCodeCreate, admin=Depends(get_current_admin
 
 @router.get("/notifications")
 def admin_notifications(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    require_permission(db, admin, "notifications.read")
     return db.query(Notification).order_by(Notification.created_at.desc()).limit(100).all()
 
 
 @router.post("/products/import-csv")
 async def admin_import_products_csv(file: UploadFile = File(...), admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    require_permission(db, admin, "products.write")
     """Import products from CSV.
 
     Required columns:
@@ -194,6 +202,7 @@ async def admin_import_products_csv(file: UploadFile = File(...), admin=Depends(
 
 @router.get("/orders/export-csv")
 def admin_export_orders_csv(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    require_permission(db, admin, "orders.read")
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["order_id", "created_at", "status", "payment_status", "delivery_status", "total_amount", "currency", "customer_id", "delivery_type", "address", "tracking_number"])
@@ -220,6 +229,7 @@ from ..models import AuditLog, MoySkladMappingRule, MoySkladConflict, Customer, 
 
 @router.get("/audit-logs", response_model=list[AuditLogOut])
 def admin_audit_logs(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    require_permission(db, admin, "audit.read")
     return db.query(AuditLog).order_by(AuditLog.created_at.desc()).limit(200).all()
 
 
@@ -266,7 +276,7 @@ def admin_customer_detail(customer_id: int, admin=Depends(get_current_admin), db
 
 @router.post("/moysklad/mapping-rules", response_model=MoySkladMappingRuleOut)
 def create_mapping_rule(payload: MoySkladMappingRuleCreate, admin=Depends(get_current_admin), db: Session = Depends(get_db)):
-    require_permission(db, admin, "products.write")
+    require_permission(db, admin, "moysklad.write")
     rule = MoySkladMappingRule(**payload.model_dump())
     db.add(rule)
     log_admin_action(db, admin, "moysklad.mapping.create", "moysklad_mapping_rule", "", payload.model_dump())
@@ -277,11 +287,11 @@ def create_mapping_rule(payload: MoySkladMappingRuleCreate, admin=Depends(get_cu
 
 @router.get("/moysklad/mapping-rules", response_model=list[MoySkladMappingRuleOut])
 def list_mapping_rules(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
-    require_permission(db, admin, "products.read")
+    require_permission(db, admin, "moysklad.read")
     return db.query(MoySkladMappingRule).order_by(MoySkladMappingRule.id.desc()).all()
 
 
 @router.get("/moysklad/conflicts", response_model=list[MoySkladConflictOut])
 def list_moysklad_conflicts(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
-    require_permission(db, admin, "products.read")
+    require_permission(db, admin, "moysklad.read")
     return db.query(MoySkladConflict).order_by(MoySkladConflict.created_at.desc()).limit(200).all()
