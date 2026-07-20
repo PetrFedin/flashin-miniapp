@@ -24,7 +24,7 @@ from ..enterprise_models import (
 from ..models import FeatureFlag, MediaAsset, Product
 from ..security import get_current_admin
 from ..services.audit import log_admin_action
-from ..services.rbac import require_permission, require_superadmin
+from ..services.rbac import normalize_role, require_permission, require_superadmin
 
 router = APIRouter(prefix="/enterprise", tags=["enterprise"])
 
@@ -463,6 +463,16 @@ def workflow_decision(payload: WorkflowDecisionIn, request_id: int, admin=Depend
         raise HTTPException(status_code=409, detail=f"Workflow already {row.status}")
     definition = db.get(WorkflowDefinition, row.workflow_id)
     steps = _load(definition.steps_json if definition else "[]", [])
+    if payload.action in {"approve", "reject"}:
+        if row.current_step < 0 or row.current_step >= len(steps):
+            raise HTTPException(status_code=409, detail="Workflow current step is invalid")
+        current_step = steps[row.current_step]
+        required_role = str(current_step.get("role", "")).strip()
+        if required_role and normalize_role(admin.role) != normalize_role(required_role):
+            raise HTTPException(status_code=403, detail=f"Workflow step requires role: {required_role}")
+        required_step_permission = str(current_step.get("permission", "")).strip()
+        if required_step_permission:
+            require_permission(db, admin, required_step_permission)
     if payload.action == "reject":
         row.status = "rejected"
     elif payload.action == "cancel":

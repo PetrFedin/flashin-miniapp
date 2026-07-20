@@ -53,7 +53,7 @@ class InvoiceOut(BaseModel):
 
 class PaymentConfirmationIn(BaseModel):
     invoice_payload: str
-    telegram_payment_charge_id: str
+    telegram_payment_charge_id: str = Field(min_length=1, max_length=255)
     provider_payment_charge_id: str = ""
     total_amount: int
     currency: Literal["XTR"] = "XTR"

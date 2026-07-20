@@ -31,8 +31,8 @@ def _bot_api(method: str, payload: dict[str, Any]) -> Any:
 
 
 def _validate_secret(value: str | None) -> None:
-    configured = getattr(settings, "telegram_webhook_secret", "")
-    if configured and not secrets.compare_digest(value or "", configured):
+    configured = settings.telegram_webhook_secret
+    if not configured or not secrets.compare_digest(value or "", configured):
         raise HTTPException(status_code=401, detail="Invalid Telegram webhook secret")
 
 
@@ -56,7 +56,7 @@ def telegram_webhook(
         ).first()
         valid = bool(
             purchase
-            and purchase.status in {"pending", "created"}
+            and purchase.status in {"invoice_created", "pending", "created"}
             and currency == "XTR"
             and total_amount == purchase.stars_amount
         )
@@ -88,10 +88,12 @@ def telegram_webhook(
         if successful_payment.get("total_amount") != purchase.stars_amount:
             raise HTTPException(status_code=409, detail="Stars amount mismatch")
 
+        telegram_payment_charge_id = successful_payment.get("telegram_payment_charge_id")
+        if not isinstance(telegram_payment_charge_id, str) or not telegram_payment_charge_id:
+            raise HTTPException(status_code=409, detail="Telegram payment charge ID is missing")
+
         purchase.status = "paid"
-        purchase.telegram_payment_charge_id = successful_payment.get(
-            "telegram_payment_charge_id", ""
-        )
+        purchase.telegram_payment_charge_id = telegram_payment_charge_id
         purchase.provider_payment_charge_id = successful_payment.get(
             "provider_payment_charge_id", ""
         )

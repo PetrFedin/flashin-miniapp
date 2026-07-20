@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -25,6 +25,21 @@ class TelegramOffer(Base):
 
 class TelegramPurchase(Base):
     __tablename__ = "telegram_purchases"
+    __table_args__ = (
+        Index(
+            "ux_telegram_purchases_payment_charge_nonempty",
+            "telegram_payment_charge_id",
+            unique=True,
+            postgresql_where=text(
+                "telegram_payment_charge_id IS NOT NULL "
+                "AND telegram_payment_charge_id <> ''"
+            ),
+            sqlite_where=text(
+                "telegram_payment_charge_id IS NOT NULL "
+                "AND telegram_payment_charge_id <> ''"
+            ),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), index=True)
@@ -36,7 +51,9 @@ class TelegramPurchase(Base):
     recipient_telegram_id: Mapped[str] = mapped_column(String(64), default="", index=True)
     recipient_username: Mapped[str] = mapped_column(String(255), default="")
     gift_message: Mapped[str] = mapped_column(Text, default="")
-    telegram_payment_charge_id: Mapped[str] = mapped_column(String(255), default="", unique=True)
+    telegram_payment_charge_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, default=None
+    )
     provider_payment_charge_id: Mapped[str] = mapped_column(String(255), default="")
     paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

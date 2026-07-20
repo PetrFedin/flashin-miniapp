@@ -51,6 +51,7 @@ from .api.delivery_providers import router as delivery_providers_router
 from .api.moysklad_deep_mapping import router as moysklad_deep_mapping_router
 from .api.admin_security import router as admin_security_router
 from .api.delivery_quotes import router as delivery_quotes_router
+from .api.catalog_management import router as catalog_management_router
 from .api.enterprise import router as enterprise_router
 from .api.telegram_commerce import router as telegram_commerce_router
 from .api.telegram_webhook import router as telegram_webhook_router
@@ -121,6 +122,7 @@ app.include_router(delivery_providers_router, prefix="/api")
 app.include_router(moysklad_deep_mapping_router, prefix="/api")
 app.include_router(admin_security_router, prefix="/api")
 app.include_router(delivery_quotes_router, prefix="/api")
+app.include_router(catalog_management_router, prefix="/api")
 app.include_router(enterprise_router, prefix="/api")
 app.include_router(telegram_commerce_router, prefix="/api")
 app.include_router(telegram_webhook_router, prefix="/api")

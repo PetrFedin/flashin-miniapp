@@ -3,6 +3,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool, text
 from backend.database import Base
 from backend import models  # noqa
+from backend import enterprise_models, telegram_commerce_models  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:
