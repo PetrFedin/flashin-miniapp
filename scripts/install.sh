@@ -11,7 +11,8 @@ if [ ! -f .env ]; then
   echo "Created .env"
 fi
 
-python3 scripts/preflight.py
+python3 scripts/ensure_webhook_secret.py .env
+python3 scripts/preflight.py --require-env
 
 echo "Building containers..."
 docker compose build

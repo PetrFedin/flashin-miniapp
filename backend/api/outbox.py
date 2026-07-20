@@ -11,13 +11,13 @@ router = APIRouter(prefix="/outbox", tags=["outbox"])
 
 @router.get("", response_model=list[WebhookOutboxOut])
 def list_outbox(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
-    require_permission(db, admin, "orders.read")
+    require_permission(db, admin, "webhooks.read")
     return db.query(WebhookOutbox).order_by(WebhookOutbox.created_at.desc()).limit(200).all()
 
 
 @router.post("/{row_id}/retry")
 def retry_outbox(row_id: int, admin=Depends(get_current_admin), db: Session = Depends(get_db)):
-    require_permission(db, admin, "orders.write")
+    require_permission(db, admin, "webhooks.write")
     row = db.query(WebhookOutbox).filter(WebhookOutbox.id == row_id).first()
     if row:
         row.status = "pending"

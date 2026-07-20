@@ -60,7 +60,7 @@ make rollback RELEASE=previous.zip BACKUP=backups/flashin_xxx.sql.gz
 ## Never deploy without
 
 ```bash
-python scripts/preflight.py
+python3 scripts/preflight.py --require-env
 python scripts/validate_env.py
 make test
 python tests/e2e_smoke.py

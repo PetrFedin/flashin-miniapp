@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
-import os
+import argparse
 import sys
 from pathlib import Path
+
+from ensure_webhook_secret import (
+    dotenv_value_for_analysis,
+    parse_dotenv_assignment,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -12,6 +17,7 @@ REQUIRED_FILES = [
     "Dockerfile.admin",
     "docker-compose.yml",
     "Makefile",
+    ".env.example",
     ".env.local.example",
     ".env.production.example",
     "backend/main.py",
@@ -57,6 +63,8 @@ REQUIRED_FILES = [
     "docs/post_launch/support_handover_pack.md",
     "backend/tests/test_v47_hardening_files.py",
     "backend/alembic/versions/0009_security_payment_delivery_media_hardening.py",
+    "backend/alembic/versions/0010_enterprise_telegram_commerce.py",
+    "backend/alembic/versions/0011_migrate_granular_rbac_permissions.py",
     "deploy/loadtest/k6_webhook_burst.js",
     "deploy/loadtest/k6_catalog_search_checkout.js",
     "deploy/grafana/dashboards/flashin_operations.json",
@@ -87,6 +95,7 @@ REQUIRED_FILES = [
     "scripts/verify_backup.sh",
     "scripts/rollback.sh",
     "scripts/deploy_production.sh",
+    "scripts/ensure_webhook_secret.py",
     "scripts/run_ops_jobs.py",
     "scripts/run_outbox_jobs.py",
     "scripts/run_moysklad_sync.py",
@@ -97,28 +106,91 @@ REQUIRED_FILES = [
     "frontend/public/legal/returns.html",
 ]
 
-missing = [p for p in REQUIRED_FILES if not (ROOT / p).exists()]
-if missing:
-    print("Missing required files:")
-    for p in missing:
-        print(" -", p)
-    sys.exit(1)
+REQUIRED_ENV_KEYS = [
+    "DATABASE_URL",
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_WEBHOOK_SECRET",
+    "JWT_SECRET",
+    "ADMIN_EMAIL",
+    "ADMIN_PASSWORD",
+    "MINI_APP_URL",
+    "API_PUBLIC_URL",
+]
+WEBHOOK_SECRET_PLACEHOLDERS = {
+    "",
+    "change-me",
+    "replace_with_random_webhook_secret",
+}
+ENV_TEMPLATES = (
+    ".env.example",
+    ".env.local.example",
+    ".env.production.example",
+)
 
-env_path = ROOT / ".env"
-if env_path.exists():
-    env = env_path.read_text()
-    required_keys = [
-        "DATABASE_URL",
-        "TELEGRAM_BOT_TOKEN",
-        "JWT_SECRET",
-        "ADMIN_EMAIL",
-        "ADMIN_PASSWORD",
-        "MINI_APP_URL",
-        "API_PUBLIC_URL",
-    ]
-    missing_keys = [k for k in required_keys if f"{k}=" not in env]
+
+def read_env(path: Path) -> dict[str, str]:
+    values = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        match = parse_dotenv_assignment(line)
+        if match is not None:
+            values[match.group("key")] = dotenv_value_for_analysis(
+                match.group("value")
+            )
+    return values
+
+
+def check_repository() -> bool:
+    missing = [path for path in REQUIRED_FILES if not (ROOT / path).exists()]
+    if missing:
+        print("Missing required files:")
+        for path in missing:
+            print(" -", path)
+        return False
+
+    invalid_templates = {}
+    for template_name in ENV_TEMPLATES:
+        template = read_env(ROOT / template_name)
+        missing_keys = [key for key in REQUIRED_ENV_KEYS if key not in template]
+        if missing_keys:
+            invalid_templates[template_name] = missing_keys
+    if invalid_templates:
+        print("Missing required keys in env templates:", invalid_templates)
+        return False
+    return True
+
+
+def check_runtime_env(env_path: Path) -> bool:
+    if not env_path.is_file():
+        print(f"Missing environment file: {env_path}")
+        return False
+
+    env = read_env(env_path)
+    missing_keys = [key for key in REQUIRED_ENV_KEYS if key not in env]
     if missing_keys:
-        print("Missing .env keys:", missing_keys)
-        sys.exit(1)
+        print("Missing environment keys:", missing_keys)
+        return False
 
-print("Preflight OK")
+    if env["TELEGRAM_WEBHOOK_SECRET"] in WEBHOOK_SECRET_PLACEHOLDERS:
+        print("TELEGRAM_WEBHOOK_SECRET must be a non-placeholder value")
+        return False
+    return True
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Validate FLASHIN repository or runtime environment")
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--source-only", action="store_true", help="validate repository files and env templates")
+    mode.add_argument("--require-env", action="store_true", help="also require and validate a runtime env file")
+    parser.add_argument("--env-file", type=Path, default=ROOT / ".env")
+    args = parser.parse_args()
+
+    if not check_repository():
+        return 1
+    if args.require_env and not check_runtime_env(args.env_file):
+        return 1
+    print("Preflight OK")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

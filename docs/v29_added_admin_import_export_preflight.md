@@ -80,7 +80,7 @@ Exports:
 Script:
 
 ```bash
-python scripts/preflight.py
+python3 scripts/preflight.py --require-env
 ```
 
 Checks key project files and `.env` keys.

@@ -7,6 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ENV = ROOT / ".env"
+WEBHOOK_SECRET_HELPER = ROOT / "scripts" / "ensure_webhook_secret.py"
 
 REQUIRED = [
     "DATABASE_URL",
@@ -55,6 +56,23 @@ def write_env_if_missing(mode):
     ENV.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"Created .env from {mode} template")
 
+def ensure_launch_webhook_secret():
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(WEBHOOK_SECRET_HELPER),
+            "--env-file",
+            str(ENV),
+        ],
+        cwd=ROOT,
+    )
+    if result.returncode != 0:
+        sys.exit(result.returncode)
+
+def prepare_env(mode):
+    write_env_if_missing(mode)
+    ensure_launch_webhook_secret()
+
 def validate_minimum_env():
     if not ENV.exists():
         print(".env is missing")
@@ -78,12 +96,12 @@ def main():
     parser.add_argument("--skip-build", action="store_true")
     args = parser.parse_args()
 
-    write_env_if_missing(args.mode)
+    prepare_env(args.mode)
 
     if not validate_minimum_env():
         sys.exit(1)
 
-    run("python3 scripts/preflight.py")
+    run("python3 scripts/preflight.py --require-env")
     run("python3 scripts/validate_env.py", required=False)
 
     if not args.skip_build:

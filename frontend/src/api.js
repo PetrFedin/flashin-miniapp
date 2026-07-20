@@ -87,7 +87,6 @@ export async function trackEvent(eventType, payload = {}) {
   }
 }
 
-
 export async function applyPromo(code) {
   return request("/api/cart/promo", {
     method: "POST",
@@ -106,11 +105,19 @@ export async function createReturn(orderId, reason) {
   });
 }
 
+export async function listWishlist() {
+  return request("/api/wishlist");
+}
+
 export async function addWishlist(productId) {
   return request("/api/wishlist", {
     method: "POST",
     body: JSON.stringify({ product_id: productId }),
   });
+}
+
+export async function removeWishlist(productId) {
+  return request(`/api/wishlist/${productId}`, { method: "DELETE" });
 }
 
 export async function subscribeRestock(variantId) {
@@ -119,7 +126,6 @@ export async function subscribeRestock(variantId) {
     body: JSON.stringify({ variant_id: variantId }),
   });
 }
-
 
 export async function getRecommendations(productId) {
   return request(`/api/recommendations/${productId}`, { auth: false });
@@ -132,7 +138,6 @@ export async function sizeHelper(payload) {
     body: JSON.stringify(payload),
   });
 }
-
 
 export async function searchProducts(q) {
   return request(`/api/search/products?q=${encodeURIComponent(q)}`, { auth: false });
@@ -150,7 +155,6 @@ export async function myReferralCode() {
   return request("/api/loyalty/referral-code");
 }
 
-
 export async function applyLoyalty(points) {
   return request("/api/cart/loyalty", {
     method: "POST",
@@ -165,7 +169,6 @@ export async function applyReferral(code) {
   });
 }
 
-
 export async function getProfile() {
   return request("/api/profile");
 }
@@ -173,7 +176,6 @@ export async function getProfile() {
 export async function getTimeline() {
   return request("/api/timeline");
 }
-
 
 export async function createSupportTicket(payload) {
   return request("/api/support/tickets", {

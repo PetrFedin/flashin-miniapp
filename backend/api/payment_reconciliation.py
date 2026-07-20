@@ -13,13 +13,13 @@ router = APIRouter(prefix="/payment-reconciliation", tags=["payment-reconciliati
 
 @router.get("", response_model=list[PaymentReconciliationOut])
 def list_reconciliation(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
-    require_permission(db, admin, "orders.read")
+    require_permission(db, admin, "payments.reconcile.read")
     return db.query(PaymentReconciliation).order_by(PaymentReconciliation.created_at.desc()).limit(300).all()
 
 
 @router.post("/payments/{payment_id}/check", response_model=PaymentReconciliationOut)
 async def check_payment(payment_id: int, admin=Depends(get_current_admin), db: Session = Depends(get_db)):
-    require_permission(db, admin, "orders.write")
+    require_permission(db, admin, "payments.reconcile.write")
     payment = db.query(Payment).filter(Payment.id == payment_id).first()
     if not payment:
         raise HTTPException(status_code=404, detail="Payment not found")
@@ -34,7 +34,7 @@ async def check_payment(payment_id: int, admin=Depends(get_current_admin), db: S
 
 @router.post("/{row_id}/resolve")
 def resolve(row_id: int, message: str = "", admin=Depends(get_current_admin), db: Session = Depends(get_db)):
-    require_permission(db, admin, "orders.write")
+    require_permission(db, admin, "payments.reconcile.write")
     row = db.query(PaymentReconciliation).filter(PaymentReconciliation.id == row_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Reconciliation row not found")

@@ -4,7 +4,7 @@
 
 - [ ] Latest package is unpacked.
 - [ ] `.env` exists.
-- [ ] `python3 scripts/preflight.py` passes.
+- [ ] `python3 scripts/preflight.py --require-env` passes.
 - [ ] `python3 scripts/validate_env.py` passes.
 - [ ] `python3 scripts/readiness_gate.py` passes.
 - [ ] `make test` passes.

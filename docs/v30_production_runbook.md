@@ -15,7 +15,13 @@ apt install -y docker.io docker-compose-plugin unzip
 unzip flashin-miniapp-v30.zip
 cd flashin-miniapp-v30
 cp .env.example .env
+python3 scripts/ensure_webhook_secret.py --env-file .env
 ```
+
+`TELEGRAM_WEBHOOK_SECRET=replace_with_random_webhook_secret` запрещён. Секрет
+должен быть сгенерирован до запуска `preflight.py --require-env`; команда выше
+не перезаписывает уже установленный реальный секрет. Никогда не публикуйте
+секрет и не добавляйте `.env` в Git.
 
 ## 3. Configure env
 
@@ -24,6 +30,7 @@ Mandatory:
 ```env
 TELEGRAM_BOT_TOKEN=
 BOT_TOKEN=
+TELEGRAM_WEBHOOK_SECRET=<generated, do not publish>
 JWT_SECRET=
 ADMIN_EMAIL=
 ADMIN_PASSWORD=
@@ -48,7 +55,7 @@ MEDIA_PUBLIC_BASE_URL=https://cdn.flashin.store
 ## 4. Preflight
 
 ```bash
-python3 scripts/preflight.py
+python3 scripts/preflight.py --require-env
 ```
 
 ## 5. Start

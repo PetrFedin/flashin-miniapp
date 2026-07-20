@@ -56,7 +56,7 @@ test:
 	docker compose run --rm backend pytest backend/tests
 
 preflight:
-	python3 scripts/preflight.py
+	python3 scripts/preflight.py --require-env
 
 clean:
 	docker compose down -v

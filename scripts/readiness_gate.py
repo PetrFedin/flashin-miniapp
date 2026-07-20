@@ -25,7 +25,7 @@ add("docker_compose_exists", (root / "docker-compose.yml").exists(), True)
 add("migrations_exist", bool(list((root / "backend/alembic/versions").glob("*.py"))), True)
 add("runbook_index_exists", (root / "docs/runbook_index.md").exists(), True)
 
-run("preflight", "python3 scripts/preflight.py", True)
+run("preflight", "python3 scripts/preflight.py --require-env", True)
 run("env_validation", "python3 scripts/validate_env.py", True)
 run("production_readiness_report", "python3 scripts/production_readiness_report.py", False)
 run("e2e_smoke_if_running", "python3 tests/e2e_smoke.py", False)

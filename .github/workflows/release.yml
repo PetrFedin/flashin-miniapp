@@ -9,7 +9,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Preflight
-        run: python3 scripts/preflight.py
+        run: python3 scripts/preflight.py --source-only
       - name: Package
         run: zip -r flashin-miniapp-release.zip . -x "*.git*"
       - uses: actions/upload-artifact@v4

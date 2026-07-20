@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
 import os
-import hashlib
 from backend.database import SessionLocal
 from backend.models import AdminUser
-
-def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode()).hexdigest()
+from backend.security import hash_password
 
 if __name__ == "__main__":
     email = os.getenv("ADMIN_EMAIL", "admin@flashin.store")
@@ -14,7 +11,10 @@ if __name__ == "__main__":
     try:
         user = db.query(AdminUser).filter(AdminUser.email == email).first()
         if user:
-            print({"admin_exists": email})
+            user.password_hash = hash_password(password)
+            user.active = True
+            db.commit()
+            print({"admin_updated": email})
         else:
             db.add(AdminUser(email=email, password_hash=hash_password(password), role="owner", active=True))
             db.commit()

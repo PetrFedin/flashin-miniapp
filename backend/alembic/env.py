@@ -1,8 +1,9 @@
 from logging.config import fileConfig
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, pool, text
 from backend.database import Base
 from backend import models  # noqa
+from backend import enterprise_models, telegram_commerce_models  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:
@@ -19,8 +20,22 @@ def run_migrations_offline():
 
 
 def run_migrations_online():
-    connectable = engine_from_config(config.get_section(config.config_ini_section, {}), prefix="sqlalchemy.", poolclass=pool.NullPool)
+    connectable = engine_from_config(
+        config.get_section(config.config_ini_section, {}),
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
     with connectable.connect() as connection:
+        connection.execute(text("""
+        CREATE TABLE IF NOT EXISTS alembic_version (
+            version_num VARCHAR(128) NOT NULL PRIMARY KEY
+        )
+        """))
+        connection.execute(text("""
+        ALTER TABLE alembic_version
+        ALTER COLUMN version_num TYPE VARCHAR(128)
+        """))
+        connection.commit()
         context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():
             context.run_migrations()

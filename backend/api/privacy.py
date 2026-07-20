@@ -46,13 +46,13 @@ def export_my_data(customer: Customer = Depends(get_current_customer), db: Sessi
 
 @router.get("/admin/requests", response_model=list[PrivacyRequestOut])
 def admin_privacy_requests(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
-    require_permission(db, admin, "customers.read")
+    require_permission(db, admin, "privacy.read")
     return db.query(PrivacyRequest).order_by(PrivacyRequest.created_at.desc()).all()
 
 
 @router.post("/admin/requests/{request_id}/process")
 def admin_process_privacy_request(request_id: int, admin=Depends(get_current_admin), db: Session = Depends(get_db)):
-    require_permission(db, admin, "customers.read")
+    require_permission(db, admin, "privacy.write")
     req = db.query(PrivacyRequest).filter(PrivacyRequest.id == request_id).first()
     if not req:
         raise HTTPException(status_code=404, detail="Privacy request not found")

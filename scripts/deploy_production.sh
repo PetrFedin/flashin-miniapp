@@ -8,7 +8,7 @@ if [ ! -f .env ]; then
   exit 1
 fi
 
-python3 scripts/preflight.py
+python3 scripts/preflight.py --require-env
 
 echo "Building images..."
 docker compose build

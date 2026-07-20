@@ -1,0 +1,190 @@
+name: Feature request
+description: Propose a product, commerce, operational, or technical improvement
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for new capabilities or material improvements. Describe the user problem and measurable outcome before proposing implementation details.
+
+        Do not include secrets, credentials, personal data, production database extracts, real payment information, or confidential third-party documentation.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight checks
+      options:
+        - label: I searched existing issues and pull requests and did not find an equivalent proposal.
+          required: true
+        - label: I described the user or business problem, not only a preferred technical solution.
+          required: true
+        - label: This request does not contain credentials, secrets, personal data, or confidential production information.
+          required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Product area
+      multiple: true
+      options:
+        - Storefront experience
+        - Catalog and merchandising
+        - Product detail page
+        - Search and filters
+        - Wishlist
+        - Cart
+        - Checkout
+        - Delivery
+        - Pickup
+        - Payments
+        - Refunds and returns
+        - Order tracking
+        - Customer profile
+        - Loyalty and promotions
+        - Admin panel
+        - Inventory and reservations
+        - MoySklad integration
+        - Telegram bot
+        - Telegram Mini App integration
+        - Media and R2 or S3
+        - Analytics and reporting
+        - Security and compliance
+        - Infrastructure and deployment
+        - CI and developer experience
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: requester
+    attributes:
+      label: Primary requester or beneficiary
+      options:
+        - Customer
+        - Store administrator
+        - Warehouse or fulfilment operator
+        - Customer support
+        - Marketing or CRM
+        - Merchandising or buying
+        - Finance or accounting
+        - Engineering or operations
+        - Legal or compliance
+        - Multiple groups
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: Explain the current limitation, who experiences it, and why it matters.
+      placeholder: Users cannot ..., which causes ..., affecting ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe the result that should be achieved without prescribing unnecessary implementation details.
+      placeholder: A customer should be able to ... so that ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: scenarios
+    attributes:
+      label: Key user scenarios
+      description: List the main end-to-end scenarios that must work.
+      placeholder: |
+        1. As a customer, I can ...
+        2. As an administrator, I can ...
+        3. When an error occurs, the system ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Provide objective conditions that make the feature complete and testable.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Proposed priority
+      options:
+        - P0 - required to prevent launch or material loss
+        - P1 - required for the next release or pilot
+        - P2 - important improvement with a planned workaround
+        - P3 - useful enhancement or optimization
+    validations:
+      required: true
+
+  - type: textarea
+    id: value
+    attributes:
+      label: Business value and success metrics
+      description: State expected impact and how success will be measured.
+      placeholder: Conversion, payment success, return rate, support contacts, fulfilment time, data accuracy, revenue, cost, or risk reduction.
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Included scope
+      description: List what must be delivered in this issue.
+      placeholder: APIs, UI states, admin controls, notifications, migrations, tests, documentation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: exclusions
+    attributes:
+      label: Explicitly excluded scope
+      description: Define what is not part of this issue to prevent uncontrolled expansion.
+      placeholder: Not included in this phase ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies and integrations
+      description: Identify dependent services, credentials, domains, providers, schemas, legal approvals, or other issues.
+      placeholder: YooKassa test account, MoySklad mapping, R2 bucket, BotFather settings, legal text approval.
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks and constraints
+      description: Describe security, privacy, payment, inventory, performance, migration, operational, or legal risks.
+      placeholder: Risk ...; mitigation ...
+
+  - type: textarea
+    id: design
+    attributes:
+      label: Design or implementation notes
+      description: Add non-binding UX references, API ideas, data model notes, or technical constraints.
+
+  - type: textarea
+    id: rollout
+    attributes:
+      label: Rollout and verification plan
+      description: Describe feature flags, migration, staged rollout, monitoring, pilot checks, and rollback expectations.
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Include related issues, research, screenshots, mockups, or sanitized examples.

@@ -32,7 +32,7 @@ def my_tickets(customer: Customer = Depends(get_current_customer), db: Session =
 
 @router.get("/admin/tickets", response_model=list[SupportTicketOut])
 def admin_tickets(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
-    require_permission(db, admin, "support.write")
+    require_permission(db, admin, "support.read")
     return db.query(SupportTicket).order_by(SupportTicket.created_at.desc()).all()
 
 
