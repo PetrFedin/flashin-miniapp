@@ -97,4 +97,3 @@ def upgrade():
 
 def downgrade():
     """Safe no-op: added grants cannot be distinguished from user-created grants."""
-
