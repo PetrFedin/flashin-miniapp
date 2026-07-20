@@ -44,7 +44,7 @@ def run(cmd):
     res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
     return {"ok": res.returncode == 0, "stdout": res.stdout[-2000:], "stderr": res.stderr[-2000:]}
 
-report["preflight"] = run("python3 scripts/preflight.py")
+report["preflight"] = run("python3 scripts/preflight.py --source-only")
 report["compile"] = run("python3 -m compileall -q backend bot")
 
 Path("docs/audit/package_audit_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

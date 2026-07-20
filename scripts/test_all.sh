@@ -2,7 +2,7 @@
 set -euo pipefail
 
 echo "Running package checks..."
-python3 scripts/preflight.py
+python3 scripts/preflight.py --source-only
 python3 -m compileall -q backend bot
 
 if command -v docker >/dev/null && docker compose version >/dev/null 2>&1; then

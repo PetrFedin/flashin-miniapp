@@ -24,7 +24,7 @@ def run(name, cmd, required=True):
         checks.append({"name": name, "ok": False, "required": required})
         return not required
 
-run("preflight", "python3 scripts/preflight.py")
+run("preflight", "python3 scripts/preflight.py --require-env")
 run("env", "python3 scripts/validate_env.py")
 run("domain", "python3 scripts/check_domains.py", required=False)
 run("r2_s3", "python3 scripts/check_r2_s3.py", required=False)

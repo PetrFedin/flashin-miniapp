@@ -7,7 +7,8 @@ if [ ! -f .env ]; then
   echo "Fill TELEGRAM_BOT_TOKEN, JWT_SECRET and payment/MoySklad settings before public launch."
 fi
 
-python3 scripts/preflight.py
+python3 scripts/ensure_webhook_secret.py .env
+python3 scripts/preflight.py --require-env
 
 docker compose build
 

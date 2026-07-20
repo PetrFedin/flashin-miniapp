@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -7,6 +8,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg2://flashin:flashin@db:5432/flashin"
     cors_origins: str = "http://localhost:5173,http://localhost:5174,https://mini.flashin.store,https://admin.flashin.store"
     telegram_bot_token: str
+    telegram_webhook_secret: str = ""
     jwt_secret: str
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60 * 24 * 30
@@ -88,6 +90,13 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [x.strip() for x in self.cors_origins.split(",") if x.strip()]
+
+    @model_validator(mode="after")
+    def require_production_webhook_secret(self):
+        invalid_values = {"", "change-me", "replace_with_random_webhook_secret"}
+        if self.app_env.lower() == "production" and self.telegram_webhook_secret in invalid_values:
+            raise ValueError("TELEGRAM_WEBHOOK_SECRET is required in production")
+        return self
 
     class Config:
         env_file = ".env"
