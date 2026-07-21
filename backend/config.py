@@ -1,4 +1,6 @@
 from functools import lru_cache
+from urllib.parse import urlparse
+
 from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
@@ -92,10 +94,76 @@ class Settings(BaseSettings):
         return [x.strip() for x in self.cors_origins.split(",") if x.strip()]
 
     @model_validator(mode="after")
-    def require_production_webhook_secret(self):
-        invalid_values = {"", "change-me", "replace_with_random_webhook_secret"}
-        if self.app_env.lower() == "production" and self.telegram_webhook_secret in invalid_values:
-            raise ValueError("TELEGRAM_WEBHOOK_SECRET is required in production")
+    def validate_production_configuration(self):
+        if self.app_env.lower() != "production":
+            return self
+
+        errors: list[str] = []
+        placeholders = {
+            "",
+            "change-me",
+            "change-me-now",
+            "change-me-outbox-secret",
+            "replace_with_random_webhook_secret",
+        }
+
+        required_secrets = {
+            "TELEGRAM_WEBHOOK_SECRET": (self.telegram_webhook_secret, 16),
+            "JWT_SECRET": (self.jwt_secret, 32),
+            "ADMIN_PASSWORD": (self.admin_password, 12),
+            "OUTBOX_SIGNING_SECRET": (self.outbox_signing_secret, 32),
+        }
+        for name, (value, minimum_length) in required_secrets.items():
+            if value.strip().lower() in placeholders or len(value) < minimum_length:
+                errors.append(f"{name} must be a non-default value of at least {minimum_length} characters")
+
+        unsafe_origins = []
+        for origin in self.cors_origin_list:
+            parsed = urlparse(origin)
+            host = (parsed.hostname or "").lower()
+            if origin == "*" or host in {"localhost", "127.0.0.1", "0.0.0.0"}:
+                unsafe_origins.append(origin)
+        if unsafe_origins:
+            errors.append("CORS_ORIGINS must not contain wildcard or local origins in production")
+
+        for name, value in {
+            "MINI_APP_URL": self.mini_app_url,
+            "API_PUBLIC_URL": self.api_public_url,
+            "YOOKASSA_RETURN_URL": self.yookassa_return_url,
+        }.items():
+            if urlparse(value).scheme != "https":
+                errors.append(f"{name} must use HTTPS in production")
+
+        if self.payment_provider.lower() == "yookassa":
+            if not self.yookassa_shop_id.strip():
+                errors.append("YOOKASSA_SHOP_ID is required when YooKassa is enabled")
+            if not self.yookassa_secret_key.strip():
+                errors.append("YOOKASSA_SECRET_KEY is required when YooKassa is enabled")
+
+        if self.meilisearch_enabled and self.meilisearch_master_key.strip().lower() in placeholders:
+            errors.append("MEILISEARCH_MASTER_KEY must be configured when Meilisearch is enabled")
+
+        if self.media_storage.lower() in {"s3", "r2"}:
+            missing_s3 = [
+                name
+                for name, value in {
+                    "S3_BUCKET": self.s3_bucket,
+                    "S3_ACCESS_KEY_ID": self.s3_access_key_id,
+                    "S3_SECRET_ACCESS_KEY": self.s3_secret_access_key,
+                }.items()
+                if not value.strip()
+            ]
+            if missing_s3:
+                errors.append(f"Missing object storage settings: {', '.join(missing_s3)}")
+
+        if self.enable_seed:
+            errors.append("ENABLE_SEED must be disabled in production")
+        if self.use_create_all:
+            errors.append("USE_CREATE_ALL must be disabled in production; use Alembic migrations")
+
+        if errors:
+            raise ValueError("Unsafe production configuration: " + "; ".join(errors))
+
         return self
 
     class Config:
