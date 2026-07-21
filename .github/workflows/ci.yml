@@ -38,7 +38,21 @@ jobs:
         run: python -m compileall -q backend
 
       - name: Run backend tests
-        run: python -m pytest -q backend/tests
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q --tb=short --junitxml=backend-pytest.xml backend/tests | tee backend-pytest.log
+
+      - name: Upload backend test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-report
+          path: |
+            backend-pytest.log
+            backend-pytest.xml
+          if-no-files-found: warn
+          retention-days: 7
 
   frontend:
     name: Frontend build
