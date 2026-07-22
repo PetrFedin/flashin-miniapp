@@ -1,7 +1,7 @@
 from functools import lru_cache
 from urllib.parse import urlparse
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     s3_region: str = "auto"
     s3_access_key_id: str = ""
     s3_secret_access_key: str = ""
+
+    # HTTP safety. Keep above the 10 MB media limit to allow multipart overhead.
+    max_request_body_bytes: int = Field(
+        default=12 * 1024 * 1024,
+        ge=1024,
+        le=100 * 1024 * 1024,
+    )
 
     # v41 platform
     feature_flags_enabled: bool = True
