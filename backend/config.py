@@ -114,8 +114,14 @@ class Settings(BaseSettings):
             "OUTBOX_SIGNING_SECRET": (self.outbox_signing_secret, 32),
         }
         for name, (value, minimum_length) in required_secrets.items():
-            if value.strip().lower() in placeholders or len(value) < minimum_length:
-                errors.append(f"{name} must be a non-default value of at least {minimum_length} characters")
+            stripped_value = value.strip()
+            normalized_value = stripped_value.lower()
+            if not stripped_value:
+                errors.append(f"{name} is required and must be at least {minimum_length} characters")
+            elif normalized_value in placeholders:
+                errors.append(f"{name} must not use a default placeholder value")
+            elif len(value) < minimum_length:
+                errors.append(f"{name} must be at least {minimum_length} characters")
 
         unsafe_origins = []
         for origin in self.cors_origin_list:
