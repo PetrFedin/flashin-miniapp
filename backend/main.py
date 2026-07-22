@@ -11,6 +11,7 @@ from sqlalchemy.exc import OperationalError
 from .middleware.rate_limit import InMemoryRateLimitMiddleware
 from .middleware.metrics import MetricsMiddleware, metrics_response
 from .middleware.security_headers import SecurityHeadersMiddleware
+from .middleware.request_context import RequestContextMiddleware
 from .api.analytics import router as analytics_router
 from .api.auth import router as auth_router
 from .api.cart import router as cart_router
@@ -78,6 +79,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(RequestContextMiddleware)
 
 Path(settings.media_local_dir).mkdir(parents=True, exist_ok=True)
 app.mount("/media", StaticFiles(directory=settings.media_local_dir), name="media")
