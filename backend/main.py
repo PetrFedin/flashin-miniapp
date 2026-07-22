@@ -12,6 +12,7 @@ from .middleware.rate_limit import InMemoryRateLimitMiddleware
 from .middleware.metrics import MetricsMiddleware, metrics_response
 from .middleware.security_headers import SecurityHeadersMiddleware
 from .middleware.request_context import RequestContextMiddleware
+from .middleware.request_body_limit import RequestBodyLimitMiddleware
 from .api.analytics import router as analytics_router
 from .api.auth import router as auth_router
 from .api.cart import router as cart_router
@@ -74,6 +75,12 @@ app.add_middleware(InMemoryRateLimitMiddleware)
 if settings.metrics_enabled:
     app.add_middleware(MetricsMiddleware)
 
+# Added before CORS and request context so the runtime order is:
+# RequestContext -> CORS -> RequestBodyLimit -> remaining application stack.
+app.add_middleware(
+    RequestBodyLimitMiddleware,
+    max_body_bytes=settings.max_request_body_bytes,
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
