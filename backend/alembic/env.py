@@ -1,11 +1,22 @@
+import os
 from logging.config import fileConfig
+
 from alembic import context
 from sqlalchemy import engine_from_config, pool, text
+
 from backend.database import Base
 from backend import models  # noqa
 from backend import enterprise_models, telegram_commerce_models  # noqa: F401
 
 config = context.config
+
+# Keep migrations portable across Docker, CI, staging, and production.
+# Alembic's ConfigParser treats percent signs as interpolation markers,
+# so percent-encoded credentials must be escaped before assignment.
+database_url = os.getenv("DATABASE_URL")
+if database_url:
+    config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
+
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
@@ -14,7 +25,12 @@ target_metadata = Base.metadata
 
 def run_migrations_offline():
     url = config.get_main_option("sqlalchemy.url")
-    context.configure(url=url, target_metadata=target_metadata, literal_binds=True, dialect_opts={"paramstyle": "named"})
+    context.configure(
+        url=url,
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
+    )
     with context.begin_transaction():
         context.run_migrations()
 

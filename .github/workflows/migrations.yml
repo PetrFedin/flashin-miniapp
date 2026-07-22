@@ -1,0 +1,104 @@
+name: Database Migrations
+
+on:
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "backend/alembic/**"
+      - "backend/alembic.ini"
+      - "backend/database.py"
+      - "backend/models.py"
+      - "backend/enterprise_models.py"
+      - "backend/telegram_commerce_models.py"
+      - "backend/requirements.txt"
+      - ".github/workflows/migrations.yml"
+  push:
+    branches: ["main"]
+    paths:
+      - "backend/alembic/**"
+      - "backend/alembic.ini"
+      - "backend/database.py"
+      - "backend/models.py"
+      - "backend/enterprise_models.py"
+      - "backend/telegram_commerce_models.py"
+      - "backend/requirements.txt"
+      - ".github/workflows/migrations.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  migrate:
+    name: Upgrade clean PostgreSQL database
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: flashin_test
+          POSTGRES_USER: flashin
+          POSTGRES_PASSWORD: flashin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U flashin -d flashin_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgresql+psycopg2://flashin:flashin@127.0.0.1:5432/flashin_test
+      TELEGRAM_BOT_TOKEN: ci-placeholder-token
+      TELEGRAM_WEBHOOK_SECRET: ci-placeholder-webhook-secret
+      JWT_SECRET: ci-placeholder-jwt-secret
+      ADMIN_PASSWORD: ci-placeholder-admin-password
+      OUTBOX_SIGNING_SECRET: ci-placeholder-outbox-secret
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install --upgrade pip && pip install -r backend/requirements.txt
+
+      - name: Verify a single Alembic head
+        run: |
+          set -euo pipefail
+          HEAD_COUNT="$(alembic -c backend/alembic.ini heads | wc -l | tr -d ' ')"
+          test "$HEAD_COUNT" = "1"
+
+      - name: Upgrade from an empty database
+        run: alembic -c backend/alembic.ini upgrade head
+
+      - name: Verify database revision matches migration head
+        run: |
+          set -euo pipefail
+          EXPECTED_HEAD="$(alembic -c backend/alembic.ini heads | awk '{print $1}')"
+          CURRENT_HEAD="$(python - <<'PY'
+          import os
+          import psycopg2
+
+          url = os.environ["DATABASE_URL"].replace("postgresql+psycopg2://", "postgresql://", 1)
+          with psycopg2.connect(url) as connection:
+              with connection.cursor() as cursor:
+                  cursor.execute("SELECT version_num FROM alembic_version")
+                  row = cursor.fetchone()
+          if not row:
+              raise SystemExit("alembic_version is empty")
+          print(row[0])
+          PY
+          )"
+          test "$CURRENT_HEAD" = "$EXPECTED_HEAD"
+
+      - name: Verify repeated upgrade is safe
+        run: alembic -c backend/alembic.ini upgrade head
