@@ -110,6 +110,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Prepare Compose environment
+        run: cp .env.local.example .env
+
       - name: Validate Docker Compose configuration
         run: docker compose config --quiet
 
