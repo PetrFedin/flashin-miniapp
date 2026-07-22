@@ -3,6 +3,22 @@ name: Dependency Review
 on:
   pull_request:
     branches: ["main", "integration/sync-develop-to-main"]
+    paths:
+      - "backend/requirements*.txt"
+      - "backend/pyproject.toml"
+      - "backend/poetry.lock"
+      - "backend/Pipfile"
+      - "backend/Pipfile.lock"
+      - "frontend/package.json"
+      - "frontend/package-lock.json"
+      - "frontend/npm-shrinkwrap.json"
+      - "frontend/yarn.lock"
+      - "frontend/pnpm-lock.yaml"
+      - "admin/package.json"
+      - "admin/package-lock.json"
+      - "admin/npm-shrinkwrap.json"
+      - "admin/yarn.lock"
+      - "admin/pnpm-lock.yaml"
 
 permissions:
   contents: read
