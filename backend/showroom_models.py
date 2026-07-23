@@ -47,6 +47,7 @@ class ShowroomAppointment(Base):
     variant_id: Mapped[int | None] = mapped_column(ForeignKey("product_variants.id"), nullable=True, index=True)
     showroom_id: Mapped[int | None] = mapped_column(ForeignKey("showroom_locations.id"), nullable=True, index=True)
     assigned_admin_id: Mapped[int | None] = mapped_column(ForeignKey("admin_users.id"), nullable=True, index=True)
+    linked_order_id: Mapped[int | None] = mapped_column(ForeignKey("orders.id"), nullable=True, index=True)
 
     request_type: Mapped[str] = mapped_column(String(32), default="fitting", index=True)
     status: Mapped[str] = mapped_column(String(32), default="requested", index=True)
@@ -55,6 +56,11 @@ class ShowroomAppointment(Base):
     proposed_start: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     confirmed_start: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     duration_minutes: Mapped[int] = mapped_column(Integer, default=60)
+
+    inventory_reserved: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    inventory_reserved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    inventory_released_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    reservation_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
 
     size: Mapped[str] = mapped_column(String(32), default="")
     color: Mapped[str] = mapped_column(String(64), default="")
@@ -70,6 +76,7 @@ class ShowroomAppointment(Base):
     variant = relationship("ProductVariant")
     showroom = relationship("ShowroomLocation")
     assigned_admin = relationship("AdminUser")
+    linked_order = relationship("Order")
     messages: Mapped[list["ShowroomAppointmentMessage"]] = relationship(
         back_populates="appointment",
         cascade="all, delete-orphan",
