@@ -6,7 +6,7 @@ from sqlalchemy import engine_from_config, pool, text
 
 from backend.database import Base
 from backend import models  # noqa
-from backend import enterprise_models, telegram_commerce_models  # noqa: F401
+from backend import enterprise_models, showroom_models, telegram_commerce_models  # noqa: F401
 
 config = context.config
 
