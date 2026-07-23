@@ -8,6 +8,17 @@ ROLE_ALIASES = {
     "owner": "superadmin",  # backwards compatibility for existing installations
 }
 
+APPOINTMENT_OPERATIONS = {
+    "appointments.read",
+    "appointments.write",
+    "appointments.message",
+}
+
+APPOINTMENT_ADMINISTRATION = APPOINTMENT_OPERATIONS | {
+    "appointments.manage_locations",
+    "appointments.analytics",
+}
+
 DEFAULT_PERMISSIONS = {
     "superadmin": {"*"},
     "admin": {
@@ -53,6 +64,7 @@ DEFAULT_PERMISSIONS = {
         "remote_config.write",
         "cms.write",
         "events.read",
+        *APPOINTMENT_ADMINISTRATION,
     },
     "catalog_manager": {
         "products.read",
@@ -86,6 +98,7 @@ DEFAULT_PERMISSIONS = {
         "crm.read",
         "notifications.read",
         "privacy.read",
+        *APPOINTMENT_OPERATIONS,
     },
     "marketing": {
         "products.read",
@@ -96,6 +109,35 @@ DEFAULT_PERMISSIONS = {
         "crm.write",
         "analytics.read",
         "notifications.read",
+        "appointments.analytics",
+    },
+    "showroom_manager": {
+        "products.read",
+        "inventory.read",
+        "orders.read",
+        "customers.read",
+        "crm.read",
+        "crm.write",
+        "notifications.read",
+        *APPOINTMENT_ADMINISTRATION,
+    },
+    "clienteling": {
+        "products.read",
+        "inventory.read",
+        "orders.read",
+        "customers.read",
+        "crm.read",
+        "crm.write",
+        "notifications.read",
+        *APPOINTMENT_OPERATIONS,
+    },
+    "stylist": {
+        "products.read",
+        "inventory.read",
+        "customers.read",
+        "crm.read",
+        "notifications.read",
+        *APPOINTMENT_OPERATIONS,
     },
     # Kept for existing users created by older releases.
     "manager": {
@@ -141,6 +183,7 @@ DEFAULT_PERMISSIONS = {
         "remote_config.write",
         "cms.write",
         "events.read",
+        *APPOINTMENT_ADMINISTRATION,
     },
 }
 
@@ -151,6 +194,9 @@ MANAGEABLE_ROLES = {
     "warehouse",
     "support",
     "marketing",
+    "showroom_manager",
+    "clienteling",
+    "stylist",
 }
 
 
