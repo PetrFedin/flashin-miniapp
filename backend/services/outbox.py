@@ -1,18 +1,22 @@
 import json
 from datetime import datetime, timedelta
+
 from sqlalchemy.orm import Session
+
 from ..models import WebhookDestination, WebhookOutbox
 
 
 def enqueue_webhook(db: Session, destination: str, event_type: str, payload: dict) -> None:
-    db.add(WebhookOutbox(
-        destination=destination,
-        event_type=event_type,
-        payload=json.dumps(payload, ensure_ascii=False),
-        status="pending",
-        attempts=0,
-        next_attempt_at=datetime.utcnow(),
-    ))
+    db.add(
+        WebhookOutbox(
+            destination=destination,
+            event_type=event_type,
+            payload=json.dumps(payload, ensure_ascii=False, default=str),
+            status="pending",
+            attempts=0,
+            next_attempt_at=datetime.utcnow(),
+        )
+    )
 
 
 def schedule_retry(row: WebhookOutbox, error: str) -> None:
@@ -22,13 +26,29 @@ def schedule_retry(row: WebhookOutbox, error: str) -> None:
     row.next_attempt_at = datetime.utcnow() + timedelta(minutes=min(60, 2 ** row.attempts))
 
 
+def event_subscription_matches(subscription: str, event_type: str) -> bool:
+    normalized = (subscription or "*").strip()
+    if normalized == "*":
+        return True
+    if normalized.endswith(".*"):
+        return event_type.startswith(normalized[:-1])
+    return normalized == event_type
+
 
 def enqueue_event_for_destinations(db: Session, event_type: str, payload: dict) -> int:
-    destinations = db.query(WebhookDestination).filter(WebhookDestination.active == True).all()
-    count = 0
-    for dest in destinations:
-        if dest.event_type not in {"*", event_type}:
+    destinations = (
+        db.query(WebhookDestination)
+        .filter(WebhookDestination.active.is_(True))
+        .order_by(WebhookDestination.id)
+        .all()
+    )
+    queued_urls: set[str] = set()
+    for destination in destinations:
+        if not event_subscription_matches(destination.event_type, event_type):
             continue
-        enqueue_webhook(db, dest.url, event_type, payload)
-        count += 1
-    return count
+        destination_url = destination.url.strip()
+        if not destination_url or destination_url in queued_urls:
+            continue
+        enqueue_webhook(db, destination_url, event_type, payload)
+        queued_urls.add(destination_url)
+    return len(queued_urls)
