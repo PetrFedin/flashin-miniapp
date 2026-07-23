@@ -58,6 +58,7 @@ from .api.enterprise import router as enterprise_router
 from .api.telegram_commerce import router as telegram_commerce_router
 from .api.telegram_webhook import router as telegram_webhook_router
 from .api.fashion_ai import router as fashion_ai_router
+from .api.showroom import router as showroom_router
 from .config import get_settings
 from .database import Base, SessionLocal, engine
 from .error_handlers import register_error_handlers
@@ -68,7 +69,7 @@ settings = get_settings()
 if settings.sentry_dsn:
     sentry_sdk.init(dsn=settings.sentry_dsn, traces_sample_rate=0.1)
 
-app = FastAPI(title="FLASHIN Mini App Backend v52")
+app = FastAPI(title="FLASHIN Mini App Backend v53")
 register_error_handlers(app)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(InMemoryRateLimitMiddleware)
@@ -138,6 +139,7 @@ app.include_router(enterprise_router, prefix="/api")
 app.include_router(telegram_commerce_router, prefix="/api")
 app.include_router(telegram_webhook_router, prefix="/api")
 app.include_router(fashion_ai_router, prefix="/api")
+app.include_router(showroom_router, prefix="/api")
 
 
 def _bootstrap_database(max_attempts: int = 10, base_delay_seconds: float = 1.0) -> None:
@@ -189,4 +191,4 @@ def metrics():
 
 @app.get("/")
 def root():
-    return {"message": "FLASHIN Mini App API v52", "env": settings.app_env}
+    return {"message": "FLASHIN Mini App API v53", "env": settings.app_env}
