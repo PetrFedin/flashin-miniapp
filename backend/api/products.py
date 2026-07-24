@@ -1,7 +1,7 @@
 from collections import defaultdict
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, joinedload
 
 from ..config import get_settings
@@ -13,12 +13,25 @@ router = APIRouter(prefix="/products", tags=["products"])
 settings = get_settings()
 
 
+def _clean_text(value: str | None) -> str:
+    return (value or "").strip()
+
+
+def _safe_available_qty(variant: ProductVariant) -> int:
+    stock_qty = max(int(variant.stock_qty or 0), 0)
+    reserved_qty = max(int(variant.reserved_qty or 0), 0)
+    return max(stock_qty - reserved_qty, 0)
+
+
 def _load_active_product(db: Session, *, product_id: int | None = None, slug: str | None = None) -> Product:
+    if product_id is None and not slug:
+        raise HTTPException(status_code=400, detail="Product identifier is required")
+
     query = db.query(Product).options(joinedload(Product.images), joinedload(Product.variants))
     query = query.filter(Product.active.is_(True))
     if product_id is not None:
         query = query.filter(Product.id == product_id)
-    if slug is not None:
+    if slug:
         query = query.filter(Product.slug == slug)
     product = query.first()
     if not product:
@@ -27,29 +40,31 @@ def _load_active_product(db: Session, *, product_id: int | None = None, slug: st
 
 
 def _discount_percent(product: Product) -> int:
-    if not product.old_price or product.old_price <= product.price or product.old_price <= 0:
+    price = float(product.price or 0)
+    old_price = float(product.old_price or 0)
+    if price <= 0 or old_price <= price:
         return 0
-    return round((product.old_price - product.price) / product.old_price * 100)
+    return max(0, min(round((old_price - price) / old_price * 100), 100))
 
 
 def _commerce_card(product: Product) -> dict:
-    images = sorted(product.images, key=lambda image: image.sort_order)
-    variants = sorted(product.variants, key=lambda variant: (variant.color or "", variant.size or ""))
+    images = sorted(product.images or [], key=lambda image: image.sort_order or 0)
+    variants = sorted(product.variants or [], key=lambda variant: (_clean_text(variant.color), _clean_text(variant.size)))
 
     colors: dict[str, dict] = defaultdict(lambda: {"sizes": [], "available_qty": 0})
     total_available = 0
     for variant in variants:
-        available = variant.available_qty
+        available = _safe_available_qty(variant)
         total_available += available
-        color_name = variant.color.strip() or "Основной"
+        color_name = _clean_text(variant.color) or "Основной"
         colors[color_name]["available_qty"] += available
         colors[color_name]["sizes"].append(
             {
                 "variant_id": variant.id,
                 "sku": variant.sku,
                 "size": variant.size,
-                "stock_qty": variant.stock_qty,
-                "reserved_qty": variant.reserved_qty,
+                "stock_qty": max(int(variant.stock_qty or 0), 0),
+                "reserved_qty": max(int(variant.reserved_qty or 0), 0),
                 "available_qty": available,
                 "available": available > 0,
             }
@@ -65,21 +80,23 @@ def _commerce_card(product: Product) -> dict:
         for color, data in colors.items()
     ]
 
-    product_url = f"{settings.mini_app_url.rstrip('/')}/product/{product.slug}"
-    startapp = quote(f"product_{product.id}")
-    telegram_deep_link = f"https://t.me/share/url?url={quote(product_url)}&text={quote(product.title)}"
+    product_title = _clean_text(product.title)
+    product_slug = _clean_text(product.slug)
+    product_url = f"{settings.mini_app_url.rstrip('/')}/product/{quote(product_slug, safe='')}"
+    startapp = f"product_{product.id}"
+    telegram_deep_link = f"https://t.me/share/url?url={quote(product_url, safe='')}&text={quote(product_title, safe='')}"
 
     low_stock = 0 < total_available <= 3
     sold_out = total_available <= 0
     discount_percent = _discount_percent(product)
     completeness_checks = {
-        "title": bool(product.title.strip()),
-        "description": len(product.description.strip()) >= 80,
-        "price": product.price > 0,
+        "title": bool(product_title),
+        "description": len(_clean_text(product.description)) >= 80,
+        "price": float(product.price or 0) > 0,
         "images": len(images) >= 3,
         "variants": bool(variants),
-        "sizes": len({variant.size for variant in variants if variant.size}) >= 1,
-        "colors": len({variant.color for variant in variants if variant.color}) >= 1,
+        "sizes": bool({_clean_text(variant.size) for variant in variants if _clean_text(variant.size)}),
+        "colors": bool({_clean_text(variant.color) for variant in variants if _clean_text(variant.color)}),
     }
     completeness_score = round(sum(completeness_checks.values()) / len(completeness_checks) * 100)
 
@@ -132,7 +149,7 @@ def _commerce_card(product: Product) -> dict:
             "selection_required": bool(variants),
         },
         "purchase": {
-            "can_add_to_cart": not sold_out,
+            "can_add_to_cart": bool(variants) and not sold_out,
             "requires_variant": bool(variants),
             "supports_promo_code": True,
             "supports_loyalty_points": True,
@@ -163,14 +180,20 @@ def list_products(
 ):
     query = db.query(Product).options(joinedload(Product.images), joinedload(Product.variants)).filter(Product.active.is_(True))
     if brand:
-        query = query.filter(Product.brand.ilike(f"%{brand}%"))
+        query = query.filter(Product.brand.ilike(f"%{brand.strip()}%"))
     if category:
-        query = query.filter(Product.category == category)
-    if q:
-        query = query.filter(Product.title.ilike(f"%{q}%"))
+        query = query.filter(Product.category == category.strip())
+    if q and q.strip():
+        search_term = q.strip()
+        query = query.filter(Product.title.ilike(f"%{search_term}%"))
     products = query.order_by(Product.created_at.desc()).all()
     if size:
-        products = [p for p in products if any(v.size == size and v.available_qty > 0 for v in p.variants)]
+        normalized_size = size.strip().casefold()
+        products = [
+            product
+            for product in products
+            if any(_clean_text(variant.size).casefold() == normalized_size and _safe_available_qty(variant) > 0 for variant in product.variants)
+        ]
     return products
 
 
@@ -195,9 +218,11 @@ def get_product_by_slug(slug: str, db: Session = Depends(get_db)):
     return _load_active_product(db, slug=slug)
 
 
-@router.post("", response_model=ProductOut)
+@router.post("", response_model=ProductOut, status_code=status.HTTP_201_CREATED)
 def create_product(payload: ProductCreate, db: Session = Depends(get_db)):
-    # Keep public create only for local bootstrap; hide behind admin in production.
+    if settings.app_env.lower() in {"production", "prod"}:
+        raise HTTPException(status_code=403, detail="Public product creation is disabled in production")
+
     product = Product(
         sku=payload.sku,
         title=payload.title,
@@ -226,7 +251,7 @@ def create_product(payload: ProductCreate, db: Session = Depends(get_db)):
                 size=variant["size"],
                 color=variant.get("color", ""),
                 sku=variant["sku"],
-                stock_qty=int(variant.get("stock_qty", 0)),
+                stock_qty=max(int(variant.get("stock_qty", 0)), 0),
                 reserved_qty=0,
             )
         )
