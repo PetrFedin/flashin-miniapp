@@ -1,14 +1,22 @@
 from sqlalchemy.orm import Session
+
 from .config import get_settings
 from .models import AdminUser, Product, ProductImage, ProductVariant, PromoCode
-from .security import hash_password
+from .security import hash_password, password_needs_rehash, verify_password
 
 
 def bootstrap_admin(db: Session) -> None:
     settings = get_settings()
     existing = db.query(AdminUser).filter(AdminUser.email == settings.admin_email).first()
     if existing:
+        if (
+            password_needs_rehash(existing.password_hash)
+            and verify_password(settings.admin_password, existing.password_hash)
+        ):
+            existing.password_hash = hash_password(settings.admin_password)
+            db.commit()
         return
+
     admin = AdminUser(
         email=settings.admin_email,
         password_hash=hash_password(settings.admin_password),
@@ -52,8 +60,24 @@ def seed_products(db: Session) -> None:
         db.flush()
         for idx, url in enumerate(data["images"]):
             db.add(ProductImage(product_id=product.id, url=url, sort_order=idx))
-        for v in data["variants"]:
-            db.add(ProductVariant(product_id=product.id, size=v["size"], sku=v["sku"], stock_qty=v["stock_qty"]))
+        for variant in data["variants"]:
+            db.add(
+                ProductVariant(
+                    product_id=product.id,
+                    size=variant["size"],
+                    sku=variant["sku"],
+                    stock_qty=variant["stock_qty"],
+                )
+            )
     if not db.query(PromoCode).filter(PromoCode.code == "FLASH10").first():
-        db.add(PromoCode(code="FLASH10", discount_type="percent", discount_value=10, min_amount=1000, max_uses=100, active=True))
+        db.add(
+            PromoCode(
+                code="FLASH10",
+                discount_type="percent",
+                discount_value=10,
+                min_amount=1000,
+                max_uses=100,
+                active=True,
+            )
+        )
     db.commit()
