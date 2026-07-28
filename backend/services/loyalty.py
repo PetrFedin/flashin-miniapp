@@ -27,6 +27,20 @@ def _finite_number(value: float, field: str) -> float:
     return number
 
 
+def _locked_profile(db: Session, customer_id: int, create: bool = False) -> CrmProfile | None:
+    profile = (
+        db.query(CrmProfile)
+        .filter(CrmProfile.customer_id == customer_id)
+        .with_for_update()
+        .first()
+    )
+    if not profile and create:
+        profile = CrmProfile(customer_id=customer_id, segment="new", loyalty_points=0)
+        db.add(profile)
+        db.flush()
+    return profile
+
+
 def add_points(
     db: Session,
     customer_id: int,
@@ -38,15 +52,7 @@ def add_points(
     if points_value == 0:
         return
 
-    profile = (
-        db.query(CrmProfile)
-        .filter(CrmProfile.customer_id == customer_id)
-        .with_for_update()
-        .first()
-    )
-    if not profile:
-        raise HTTPException(status_code=409, detail="Loyalty profile not found")
-
+    profile = _locked_profile(db, customer_id, create=True)
     new_balance = _finite_number(profile.loyalty_points, "loyalty balance") + points_value
     if new_balance < 0:
         raise HTTPException(status_code=409, detail="Loyalty balance cannot become negative")
@@ -79,7 +85,6 @@ def ensure_referral_code(db: Session, customer_id: int) -> ReferralCode:
             db.commit()
             db.refresh(referral)
             return referral
-
     raise HTTPException(status_code=503, detail="Could not generate referral code")
 
 
@@ -101,7 +106,6 @@ def apply_referral(db: Session, code: str, new_customer_id: int) -> bool:
 def redeem_points(db: Session, customer_id: int, cart: Cart, points: float) -> Cart:
     settings = get_settings()
     requested_points = _finite_number(points, "loyalty points")
-
     holds = (
         db.query(LoyaltyRedemptionHold)
         .filter(
@@ -120,12 +124,7 @@ def redeem_points(db: Session, customer_id: int, cart: Cart, points: float) -> C
             current_hold.released_at = datetime.utcnow()
         return cart
 
-    profile = (
-        db.query(CrmProfile)
-        .filter(CrmProfile.customer_id == customer_id)
-        .with_for_update()
-        .first()
-    )
+    profile = _locked_profile(db, customer_id)
     if not profile:
         raise HTTPException(status_code=409, detail="Loyalty profile not found")
 
@@ -183,7 +182,6 @@ def attach_referral_to_customer(db: Session, code: str, invited_customer_id: int
     )
     if existing:
         return False
-
     db.add(
         ReferralAttribution(
             referral_code_id=referral.id,
@@ -240,7 +238,6 @@ def create_redemption_hold(
         .with_for_update()
         .first()
     )
-
     if points_value <= 0:
         if hold:
             hold.status = "released"
