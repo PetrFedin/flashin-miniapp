@@ -34,6 +34,8 @@ def _valid_production_env() -> dict[str, str]:
         "MEILISEARCH_ENABLED": "true",
         "MEILISEARCH_MASTER_KEY": "meili-master-key",
         "MOYSKLAD_TOKEN": "moysklad-token",
+        "MOYSKLAD_SYNC_INTERVAL_MINUTES": "30",
+        "SCHEDULER_ENABLED": "true",
         "NOTIFICATION_BATCH_SIZE": "50",
         "NOTIFICATION_POLL_SECONDS": "10",
         "NOTIFICATION_MAX_ATTEMPTS": "5",
@@ -80,3 +82,23 @@ def test_backoff_order_is_rejected(tmp_path):
 
     assert result.returncode == 1
     assert "NOTIFICATION_MAX_BACKOFF_SECONDS must be >=" in result.stdout
+
+
+def test_disabled_production_scheduler_is_rejected(tmp_path):
+    values = _valid_production_env()
+    values["SCHEDULER_ENABLED"] = "false"
+
+    result = _run_validator(tmp_path, values)
+
+    assert result.returncode == 1
+    assert "SCHEDULER_ENABLED must be true in production" in result.stdout
+
+
+def test_moysklad_interval_outside_safe_range_is_rejected(tmp_path):
+    values = _valid_production_env()
+    values["MOYSKLAD_SYNC_INTERVAL_MINUTES"] = "1"
+
+    result = _run_validator(tmp_path, values)
+
+    assert result.returncode == 1
+    assert "MOYSKLAD_SYNC_INTERVAL_MINUTES must be between 5 and 1440" in result.stdout
