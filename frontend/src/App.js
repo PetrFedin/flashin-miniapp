@@ -5,13 +5,16 @@ import {
   applyLoyalty,
   applyPromo,
   applyReferral,
+  cancelOrder,
   checkout,
   createPayment,
   createPrivacyRequest,
   createReturn,
   createSupportTicket,
-  exportPrivacyData,
+  downloadPrivacyData,
   getCart,
+  getOrder,
+  getProduct,
   getProfile,
   getTimeline,
   listLooks,
@@ -19,29 +22,102 @@ import {
   listPrivacyRequests,
   listProducts,
   listSupportTickets,
+  listWishlist,
   myLoyalty,
   myReferralCode,
+  removeCartItem,
+  removeWishlist,
   searchProducts,
   sizeHelper,
   subscribeRestock,
   telegramAuth,
   trackEvent,
+  updateCartItem,
 } from "./api";
 import ErrorBoundary from "./ErrorBoundary";
 import SkeletonCard from "./components/SkeletonCard";
-import messages_en from "./i18n/en.json";
-import messages_ru from "./i18n/ru.json";
-import messages_no from "./i18n/no.json";
 import { useTelegram } from "./hooks/useTelegram";
 
-const translations = { en: messages_en, ru: messages_ru, no: messages_no };
+const ORDER_LABELS = {
+  created: "Заказ создан",
+  payment_created: "Ожидает оплаты",
+  paid: "Оплачен",
+  assembling: "Собирается",
+  ready: "Готов к отправке",
+  shipped: "Передан в доставку",
+  completed: "Доставлен",
+  refund_requested: "Возврат рассматривается",
+  partially_refunded: "Частично возвращён",
+  refunded: "Возвращён",
+  cancelled: "Отменён",
+};
+
+const PAYMENT_LABELS = {
+  pending: "Ожидает создания платежа",
+  payment_created: "Ожидает оплаты",
+  paid: "Оплачено",
+  partially_refunded: "Частичный возврат",
+  refund_processing: "Возврат обрабатывается",
+  refund_pending: "Возврат ожидает подтверждения",
+  refund_review_required: "Возврат требует проверки",
+  refunded: "Возвращено",
+  cancelled: "Отменено",
+};
+
+const DELIVERY_LABELS = {
+  not_started: "Не начата",
+  assembling: "Комплектуется",
+  ready: "Готова",
+  shipped: "В пути",
+  delivered: "Доставлена",
+  cancelled: "Отменена",
+};
+
+function money(value, currency = "RUB") {
+  return new Intl.NumberFormat("ru-RU", {
+    style: "currency",
+    currency,
+    maximumFractionDigits: 2,
+  }).format(Number(value || 0));
+}
+
+function productImage(product) {
+  return product?.images?.[0]?.url || product?.image_url || "/fallback-product.svg";
+}
+
+function ProductCard({ product, onOpen, action }) {
+  return (
+    <article className="product-card">
+      <button className="product-open" onClick={() => onOpen(product)}>
+        <img src={productImage(product)} alt={product.title} loading="lazy" />
+        <span className="title">{product.title}</span>
+        <span className="meta">{product.brand || product.category || "FLASHIN"}</span>
+        <span className="price">{money(product.price, product.currency || "RUB")}</span>
+      </button>
+      {action}
+    </article>
+  );
+}
+
+function StatusRow({ label, value, tone = "neutral" }) {
+  return (
+    <div className="status-row">
+      <span>{label}</span>
+      <b className={`status ${tone}`}>{value}</b>
+    </div>
+  );
+}
+
+function sleep(milliseconds) {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
 
 export default function App() {
   const { tg, initData, user } = useTelegram();
-  const [language, setLanguage] = useState("ru");
   const [view, setView] = useState("catalog");
   const [products, setProducts] = useState([]);
   const [looks, setLooks] = useState([]);
+  const [wishlist, setWishlist] = useState([]);
   const [selected, setSelected] = useState(null);
   const [selectedVariantId, setSelectedVariantId] = useState(null);
   const [cart, setCart] = useState(null);
@@ -54,39 +130,120 @@ export default function App() {
   const [orders, setOrders] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [promo, setPromo] = useState("");
   const [referralInput, setReferralInput] = useState("");
   const [loyaltyPoints, setLoyaltyPoints] = useState("");
-  const [returnReason, setReturnReason] = useState("");
+  const [returnReasons, setReturnReasons] = useState({});
   const [supportForm, setSupportForm] = useState({ subject: "", message: "", order_id: "" });
-  const [sizeForm, setSizeForm] = useState({ height_cm: "", weight_kg: "", usual_size: "", fit_preference: "regular" });
+  const [sizeForm, setSizeForm] = useState({
+    height_cm: "",
+    weight_kg: "",
+    usual_size: "",
+    fit_preference: "regular",
+  });
   const [sizeResult, setSizeResult] = useState(null);
-  const [checkoutForm, setCheckoutForm] = useState({ name: "", phone: "", delivery_type: "pickup", address: "", comment: "" });
+  const [checkoutForm, setCheckoutForm] = useState({
+    name: "",
+    phone: "",
+    delivery_type: "pickup",
+    address: "",
+    comment: "",
+  });
 
-  const t = (section, key) => translations[language]?.[section]?.[key] || key;
+  const selectedVariant = useMemo(
+    () => selected?.variants?.find((variant) => variant.id === selectedVariantId) || null,
+    [selected, selectedVariantId],
+  );
+  const isFavorite = useMemo(
+    () => Boolean(selected && wishlist.some((product) => product.id === selected.id)),
+    [selected, wishlist],
+  );
+  const cartCount = useMemo(
+    () => cart?.items?.reduce((sum, item) => sum + item.quantity, 0) || 0,
+    [cart],
+  );
+
+  function clearMessages() {
+    setError("");
+    setNotice("");
+  }
+
+  async function act(key, operation, successMessage = "") {
+    if (busy) return null;
+    clearMessages();
+    setBusy(key);
+    try {
+      const result = await operation();
+      if (successMessage) setNotice(successMessage);
+      tg?.HapticFeedback?.notificationOccurred?.("success");
+      return result;
+    } catch (operationError) {
+      setError(operationError.message || "Операция не выполнена");
+      tg?.HapticFeedback?.notificationOccurred?.("error");
+      return null;
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function refreshOrders() {
+    const nextOrders = await listOrders();
+    setOrders(nextOrders);
+    return nextOrders;
+  }
+
+  async function resolvePaymentReturn(orderId) {
+    let current = null;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      current = await getOrder(orderId);
+      if (!["pending", "payment_created"].includes(current.payment_status)) break;
+      await sleep(1500);
+    }
+    const nextOrders = await listOrders();
+    setOrders(nextOrders);
+    setView("orders");
+    if (current?.payment_status === "paid") {
+      setNotice(`Заказ #${orderId} оплачен. Статус заказа обновлён.`);
+    } else if (current?.payment_status === "cancelled") {
+      setError(`Оплата заказа #${orderId} отменена.`);
+    } else {
+      setNotice(`Заказ #${orderId} создан. Подтверждение оплаты ещё обрабатывается.`);
+    }
+    window.history.replaceState({}, "", "/");
+  }
 
   useEffect(() => {
     async function boot() {
       try {
         if (!initData) {
-          setError("Откройте приложение внутри Telegram. В браузере авторизация недоступна.");
+          setError("Откройте приложение внутри Telegram: авторизация браузера отключена.");
           return;
         }
         await telegramAuth(initData);
-        const [p, c, l] = await Promise.all([listProducts(), getCart(), listLooks()]);
-        setProducts(p);
-        setCart(c);
-        setLooks(l);
+        const [catalog, activeCart, activeLooks, saved] = await Promise.all([
+          listProducts(),
+          getCart(),
+          listLooks(),
+          listWishlist(),
+        ]);
+        setProducts(catalog);
+        setCart(activeCart);
+        setLooks(activeLooks);
+        setWishlist(saved);
 
         const params = new URLSearchParams(window.location.search);
         const productId = params.get("product");
+        const orderId = params.get("order_id");
         if (productId) {
-          const found = p.find((x) => String(x.id) === String(productId));
-          if (found) openProduct(found);
+          await openProduct({ id: Number(productId) });
+        } else if (orderId && window.location.pathname.includes("payment-result")) {
+          await resolvePaymentReturn(Number(orderId));
         }
-      } catch (e) {
-        setError(e.message || "Ошибка загрузки");
+      } catch (bootError) {
+        setError(bootError.message || "Не удалось загрузить приложение");
       } finally {
         setLoading(false);
       }
@@ -95,97 +252,288 @@ export default function App() {
   }, [initData]);
 
   useEffect(() => {
-    if (!tg?.MainButton) return;
-    const add = () => handleAddSelected();
-    const cartOpen = () => setView("cart");
-    const submit = () => handleCheckout();
+    if (!tg?.BackButton) return undefined;
+    const parent = {
+      product: "catalog",
+      cart: "catalog",
+      checkout: "cart",
+      orders: "catalog",
+      looks: "catalog",
+      profile: "catalog",
+    }[view];
+    if (!parent) {
+      tg.BackButton.hide();
+      return undefined;
+    }
+    const goBack = () => setView(parent);
+    tg.BackButton.show();
+    tg.BackButton.onClick(goBack);
+    return () => tg.BackButton.offClick(goBack);
+  }, [tg, view]);
 
-    if (view === "product" && selectedVariantId) {
-      tg.MainButton.setText("Добавить в корзину");
-      tg.MainButton.show();
-      tg.MainButton.onClick(add);
-      return () => tg.MainButton.offClick(add);
-    }
-    if (view !== "cart" && cart?.items?.length > 0) {
-      tg.MainButton.setText(`Корзина · ${cart.items.length}`);
-      tg.MainButton.show();
-      tg.MainButton.onClick(cartOpen);
-      return () => tg.MainButton.offClick(cartOpen);
-    }
+  useEffect(() => {
+    if (!tg?.MainButton) return undefined;
+    const mainButton = tg.MainButton;
+    const handlers = [];
+    const bind = (text, handler, enabled = true) => {
+      mainButton.setText(text);
+      mainButton.show();
+      enabled ? mainButton.enable() : mainButton.disable();
+      mainButton.onClick(handler);
+      handlers.push(handler);
+    };
+
     if (view === "checkout") {
-      tg.MainButton.setText("Создать заказ");
-      tg.MainButton.show();
-      tg.MainButton.onClick(submit);
-      return () => tg.MainButton.offClick(submit);
+      bind("Перейти к оплате", handleCheckout, !busy);
+    } else if (view === "cart" && cartCount > 0) {
+      bind("Оформить заказ", () => setView("checkout"), !busy);
+    } else if (view === "product" && selectedVariant?.available_qty > 0) {
+      bind("Добавить в корзину", handleAddSelected, !busy);
+    } else if (view !== "cart" && cartCount > 0) {
+      bind(`Корзина · ${cartCount}`, () => setView("cart"), !busy);
+    } else {
+      mainButton.hide();
     }
-    tg.MainButton.hide();
-  }, [tg, view, cart, selectedVariantId, checkoutForm]);
+
+    return () => handlers.forEach((handler) => mainButton.offClick(handler));
+  }, [tg, view, cartCount, selectedVariant, checkoutForm, busy]);
 
   async function loadProfileData() {
-    const [p, loyalty, ref, tl, tickets, privacy] = await Promise.all([
-      getProfile(),
-      myLoyalty(),
-      myReferralCode(),
-      getTimeline(),
-      listSupportTickets(),
-      listPrivacyRequests(),
-    ]);
-    setProfile(p);
+    const [nextProfile, loyalty, nextReferral, nextTimeline, tickets, privacy, saved, nextOrders] =
+      await Promise.all([
+        getProfile(),
+        myLoyalty(),
+        myReferralCode(),
+        getTimeline(),
+        listSupportTickets(),
+        listPrivacyRequests(),
+        listWishlist(),
+        listOrders(),
+      ]);
+    setProfile(nextProfile);
     setLoyaltyRows(loyalty);
-    setReferral(ref);
-    setTimeline(tl);
+    setReferral(nextReferral);
+    setTimeline(nextTimeline);
     setSupportTickets(tickets);
     setPrivacyRequests(privacy);
+    setWishlist(saved);
+    setOrders(nextOrders);
   }
 
-  function openProduct(p) {
-    setSelected(p);
-    setSelectedVariantId(p.variants?.find((v) => v.available_qty > 0)?.id || null);
-    setView("product");
-    trackEvent("product_view", { product_id: p.id });
+  async function openProduct(product) {
+    const result = await act("open-product", async () => {
+      const fullProduct = product?.variants ? product : await getProduct(product.id);
+      setSelected(fullProduct);
+      setSelectedVariantId(fullProduct.variants?.[0]?.id || null);
+      setSizeResult(null);
+      setView("product");
+      trackEvent("product_view", { product_id: fullProduct.id });
+      return fullProduct;
+    });
+    return result;
   }
 
   async function handleSearch() {
-    if (!searchQuery.trim()) return setProducts(await listProducts());
-    setProducts(await searchProducts(searchQuery));
+    await act("search", async () => {
+      const query = searchQuery.trim();
+      setProducts(query ? await searchProducts(query) : await listProducts());
+    });
   }
 
   async function handleAddSelected() {
-    if (!selected || !selectedVariantId) return;
-    try {
-      setError("");
-      const c = await addToCart(selected.id, selectedVariantId, 1);
-      setCart(c);
-      tg?.HapticFeedback?.notificationOccurred?.("success");
-    } catch (e) {
-      setError(e.message);
+    if (!selected || !selectedVariant || selectedVariant.available_qty <= 0) return;
+    const nextCart = await act(
+      "add-to-cart",
+      () => addToCart(selected.id, selectedVariant.id, 1),
+      `${selected.title}, размер ${selectedVariant.size}, добавлен в корзину.`,
+    );
+    if (nextCart) setCart(nextCart);
+  }
+
+  async function handleFavorite() {
+    if (!selected) return;
+    if (isFavorite) {
+      const result = await act(
+        "wishlist",
+        () => removeWishlist(selected.id),
+        `${selected.title} удалён из избранного.`,
+      );
+      if (result) setWishlist((current) => current.filter((product) => product.id !== selected.id));
+    } else {
+      const result = await act(
+        "wishlist",
+        () => addWishlist(selected.id),
+        `${selected.title} сохранён в избранном.`,
+      );
+      if (result) setWishlist((current) => [...current, selected]);
     }
+  }
+
+  async function handleRestock() {
+    if (!selectedVariant || selectedVariant.available_qty > 0) return;
+    await act(
+      "restock",
+      () => subscribeRestock(selectedVariant.id),
+      `Уведомление для размера ${selectedVariant.size} подключено.`,
+    );
+  }
+
+  async function handleCartQuantity(item, quantity) {
+    if (quantity < 1 || quantity > Math.min(item.available_qty, 10)) return;
+    const nextCart = await act(
+      `cart-${item.id}`,
+      () => updateCartItem(item.id, quantity),
+      `Количество ${item.title} обновлено.`,
+    );
+    if (nextCart) setCart(nextCart);
+  }
+
+  async function handleCartRemove(item) {
+    const nextCart = await act(
+      `cart-${item.id}`,
+      () => removeCartItem(item.id),
+      `${item.title} удалён из корзины.`,
+    );
+    if (nextCart) setCart(nextCart);
   }
 
   async function handleCheckout() {
-    try {
-      setError("");
-      if (!checkoutForm.name || !checkoutForm.phone) return setError("Заполните имя и телефон.");
+    if (!checkoutForm.name.trim() || !checkoutForm.phone.trim()) {
+      setError("Укажите имя и телефон получателя.");
+      return;
+    }
+    if (checkoutForm.delivery_type === "courier" && !checkoutForm.address.trim()) {
+      setError("Для курьерской доставки укажите адрес.");
+      return;
+    }
+    await act("checkout", async () => {
       const order = await checkout(checkoutForm);
       const payment = await createPayment(order.id);
-      if (!payment.confirmation_url) throw new Error("Платёж создан без ссылки оплаты.");
-      window.location.href = payment.confirmation_url;
-    } catch (e) {
-      setError(e.message);
-    }
+      if (!payment.confirmation_url) throw new Error("Платёж создан без ссылки на оплату");
+      window.location.assign(payment.confirmation_url);
+    });
   }
 
   async function openProfile() {
-    await loadProfileData();
-    setView("profile");
+    await act("profile", async () => {
+      await loadProfileData();
+      setView("profile");
+    });
   }
 
   async function openOrders() {
-    setOrders(await listOrders());
-    setView("orders");
+    await act("orders", async () => {
+      await refreshOrders();
+      setView("orders");
+    });
   }
 
-  const total = useMemo(() => cart?.total_amount || 0, [cart]);
+  async function handleOrderPayment(order) {
+    await act(`pay-${order.id}`, async () => {
+      const payment = await createPayment(order.id);
+      if (!payment.confirmation_url) throw new Error("Для заказа нет активной ссылки оплаты");
+      window.location.assign(payment.confirmation_url);
+    });
+  }
+
+  async function handleOrderCancel(order) {
+    if (!window.confirm(`Отменить заказ #${order.id}? Резерв товара будет освобождён.`)) return;
+    const updated = await act(
+      `cancel-${order.id}`,
+      () => cancelOrder(order.id),
+      `Заказ #${order.id} отменён, резерв освобождён.`,
+    );
+    if (updated) {
+      setOrders((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      setCart(await getCart());
+    }
+  }
+
+  async function handleReturn(order) {
+    const reason = (returnReasons[order.id] || "").trim();
+    if (reason.length < 5) {
+      setError("Опишите причину возврата минимум в пяти символах.");
+      return;
+    }
+    const result = await act(
+      `return-${order.id}`,
+      () => createReturn(order.id, reason),
+      `Запрос на возврат заказа #${order.id} зарегистрирован.`,
+    );
+    if (result) {
+      setReturnReasons((current) => ({ ...current, [order.id]: "" }));
+      await refreshOrders();
+    }
+  }
+
+  async function handleSupport() {
+    if (supportForm.subject.trim().length < 3 || supportForm.message.trim().length < 5) {
+      setError("Укажите тему и подробно опишите вопрос.");
+      return;
+    }
+    const result = await act(
+      "support",
+      () =>
+        createSupportTicket({
+          subject: supportForm.subject.trim(),
+          message: supportForm.message.trim(),
+          order_id: supportForm.order_id ? Number(supportForm.order_id) : null,
+        }),
+      "Обращение зарегистрировано. Его статус отображается ниже.",
+    );
+    if (result) {
+      setSupportForm({ subject: "", message: "", order_id: "" });
+      setSupportTickets(await listSupportTickets());
+    }
+  }
+
+  async function handlePrivacyExport() {
+    const exported = await act("privacy-export", downloadPrivacyData);
+    if (!exported) return;
+    const url = URL.createObjectURL(exported.blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = exported.filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+    setNotice("Архив персональных данных сформирован и скачан.");
+  }
+
+  async function handlePrivacyRequest(requestType, confirmation, message) {
+    if (confirmation && !window.confirm(confirmation)) return;
+    const result = await act(
+      `privacy-${requestType}`,
+      () => createPrivacyRequest(requestType),
+      message,
+    );
+    if (result) setPrivacyRequests(await listPrivacyRequests());
+  }
+
+  async function handleSizeHelper() {
+    if (!sizeForm.height_cm && !sizeForm.weight_kg && !sizeForm.usual_size.trim()) {
+      setError("Укажите рост, вес или привычный размер.");
+      return;
+    }
+    const result = await act("size", () =>
+      sizeHelper({
+        height_cm: Number(sizeForm.height_cm) || null,
+        weight_kg: Number(sizeForm.weight_kg) || null,
+        usual_size: sizeForm.usual_size.trim() || null,
+        fit_preference: sizeForm.fit_preference,
+      }),
+    );
+    if (result) setSizeResult(result);
+  }
+
+  const canPay = (order) =>
+    ["created", "payment_created"].includes(order.status) &&
+    ["pending", "payment_created"].includes(order.payment_status);
+  const canCancel = (order) => ["created", "payment_created"].includes(order.status);
+  const canReturn = (order) =>
+    ["paid", "partially_refunded"].includes(order.payment_status) &&
+    !["refund_requested", "refunded", "cancelled"].includes(order.status);
 
   return (
     <ErrorBoundary>
@@ -193,108 +541,128 @@ export default function App() {
         <header className="topbar">
           <div>
             <div className="brand">FLASHIN</div>
-            {user?.first_name && <div className="hello">Привет, {user.first_name}</div>}
+            {user?.first_name && <div className="hello">{user.first_name}, ваш личный магазин</div>}
           </div>
-          <select value={language} onChange={(e) => setLanguage(e.target.value)}>
-            <option value="ru">RU</option>
-            <option value="en">EN</option>
-            <option value="no">NO</option>
-          </select>
+          <button className="cart-shortcut" onClick={() => setView("cart")} disabled={!cartCount}>
+            Корзина {cartCount ? `· ${cartCount}` : ""}
+          </button>
         </header>
 
-        <nav className="tabs">
-          <button onClick={() => setView("catalog")}>Каталог</button>
-          <button onClick={openOrders}>Заказы</button>
-          <button onClick={openProfile}>Профиль</button>
-          <button onClick={() => setView("looks")}>Looks</button>
+        <nav className="tabs" aria-label="Основная навигация">
+          <button className={view === "catalog" || view === "product" ? "active" : ""} onClick={() => setView("catalog")}>Каталог</button>
+          <button className={view === "looks" ? "active" : ""} onClick={() => setView("looks")}>Образы</button>
+          <button className={view === "orders" ? "active" : ""} onClick={openOrders}>Заказы</button>
+          <button className={view === "profile" ? "active" : ""} onClick={openProfile}>Профиль</button>
         </nav>
 
-        {error && <div className="error">{error}</div>}
+        {error && <div className="message error" role="alert">{error}<button onClick={() => setError("")}>×</button></div>}
+        {notice && <div className="message success" role="status">{notice}<button onClick={() => setNotice("")}>×</button></div>}
 
         {loading && <main><SkeletonCard /><SkeletonCard /><SkeletonCard /></main>}
 
         {!loading && view === "catalog" && (
           <main>
-            <h1>{t("catalog", "title")}</h1>
+            <div className="section-heading">
+              <div><h1>Каталог</h1><p>Только доступные товары с реальными остатками.</p></div>
+            </div>
             <div className="search">
-              <input placeholder="Поиск: бренд, категория, артикул" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
-              <button className="secondary" onClick={handleSearch}>Найти</button>
+              <input
+                aria-label="Поиск товаров"
+                placeholder="Бренд, категория или артикул"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                onKeyDown={(event) => event.key === "Enter" && handleSearch()}
+              />
+              <button className="secondary compact" onClick={handleSearch} disabled={busy === "search"}>Найти</button>
             </div>
-            <div className="grid">
-              {products.map((p) => (
-                <button className="product-card" key={p.id} onClick={() => openProduct(p)}>
-                  <img src={p.images?.[0]?.url || "/fallback-product.svg"} alt={p.title} loading="lazy" />
-                  <div className="title">{p.title}</div>
-                  <div className="price">{p.price.toLocaleString("ru-RU")} {p.currency}</div>
-                </button>
-              ))}
-            </div>
+            {!products.length ? (
+              <div className="empty-state"><h2>Ничего не найдено</h2><p>Измените запрос или вернитесь ко всему каталогу.</p><button className="secondary" onClick={() => { setSearchQuery(""); handleSearch(); }}>Показать весь каталог</button></div>
+            ) : (
+              <div className="grid">{products.map((product) => <ProductCard key={product.id} product={product} onOpen={openProduct} />)}</div>
+            )}
           </main>
         )}
 
         {!loading && view === "product" && selected && (
           <main>
-            <button className="link" onClick={() => setView("catalog")}>← Назад</button>
-            <img className="hero" src={selected.images?.[0]?.url || "/fallback-product.svg"} alt={selected.title} />
-            <h1>{selected.title}</h1>
-            <div className="price">{selected.price.toLocaleString("ru-RU")} {selected.currency}</div>
-            <p>{selected.description}</p>
+            <button className="link" onClick={() => setView("catalog")}>← Каталог</button>
+            <img className="hero" src={productImage(selected)} alt={selected.title} />
+            <div className="product-heading">
+              <div><div className="meta">{selected.brand} · {selected.category}</div><h1>{selected.title}</h1></div>
+              <div className="price">{money(selected.price, selected.currency)}</div>
+            </div>
+            {selected.description && <p>{selected.description}</p>}
+            <h3>Выберите размер</h3>
             <div className="sizes">
-              {selected.variants.map((v) => (
-                <button key={v.id} disabled={v.available_qty <= 0} className={selectedVariantId === v.id ? "size active" : "size"} onClick={() => setSelectedVariantId(v.id)}>
-                  {v.size} · {v.available_qty}
+              {selected.variants?.map((variant) => (
+                <button
+                  key={variant.id}
+                  className={`${selectedVariantId === variant.id ? "size active" : "size"} ${variant.available_qty <= 0 ? "unavailable" : ""}`}
+                  onClick={() => setSelectedVariantId(variant.id)}
+                >
+                  {variant.size}<small>{variant.available_qty > 0 ? `${variant.available_qty} шт.` : "нет в наличии"}</small>
                 </button>
               ))}
             </div>
+            {!selected.variants?.length && <div className="empty-inline">У товара нет доступных размерных вариантов.</div>}
+
             <div className="panel">
-              <h3>Помощник размера</h3>
-              <div className="search">
-                <input placeholder="Рост" value={sizeForm.height_cm} onChange={e => setSizeForm({ ...sizeForm, height_cm: e.target.value })} />
-                <input placeholder="Вес" value={sizeForm.weight_kg} onChange={e => setSizeForm({ ...sizeForm, weight_kg: e.target.value })} />
+              <h3>Подбор размера</h3>
+              <div className="form-grid">
+                <input inputMode="numeric" placeholder="Рост, см" value={sizeForm.height_cm} onChange={(event) => setSizeForm({ ...sizeForm, height_cm: event.target.value })} />
+                <input inputMode="numeric" placeholder="Вес, кг" value={sizeForm.weight_kg} onChange={(event) => setSizeForm({ ...sizeForm, weight_kg: event.target.value })} />
+                <input placeholder="Обычный размер" value={sizeForm.usual_size} onChange={(event) => setSizeForm({ ...sizeForm, usual_size: event.target.value })} />
+                <select value={sizeForm.fit_preference} onChange={(event) => setSizeForm({ ...sizeForm, fit_preference: event.target.value })}>
+                  <option value="slim">По фигуре</option><option value="regular">Обычная посадка</option><option value="oversize">Свободная посадка</option>
+                </select>
               </div>
-              <button className="secondary" onClick={async () => setSizeResult(await sizeHelper({
-                height_cm: Number(sizeForm.height_cm) || null,
-                weight_kg: Number(sizeForm.weight_kg) || null,
-                usual_size: sizeForm.usual_size || null,
-                fit_preference: sizeForm.fit_preference
-              }))}>Подобрать размер</button>
-              {sizeResult && <p>Рекомендуемый размер: <b>{sizeResult.suggested_size}</b></p>}
+              <button className="secondary" onClick={handleSizeHelper} disabled={busy === "size"}>Получить рекомендацию</button>
+              {sizeResult && <div className="result-card"><span>Рекомендуемый размер</span><b>{sizeResult.suggested_size}</b>{sizeResult.explanation && <p>{sizeResult.explanation}</p>}</div>}
             </div>
+
             <div className="actions">
-              <button className="primary" onClick={handleAddSelected} disabled={!selectedVariantId}>Добавить в корзину</button>
-              <button className="secondary" onClick={() => addWishlist(selected.id)}>В избранное</button>
-              {selectedVariantId && <button className="secondary" onClick={() => subscribeRestock(selectedVariantId)}>Уведомить о поступлении</button>}
+              {selectedVariant?.available_qty > 0 ? (
+                <button className="primary" onClick={handleAddSelected} disabled={busy === "add-to-cart"}>Добавить размер {selectedVariant.size} в корзину</button>
+              ) : selectedVariant ? (
+                <button className="primary" onClick={handleRestock} disabled={busy === "restock"}>Сообщить о поступлении размера {selectedVariant.size}</button>
+              ) : null}
+              <button className="secondary" onClick={handleFavorite} disabled={busy === "wishlist"}>{isFavorite ? "Удалить из избранного" : "Сохранить в избранное"}</button>
             </div>
           </main>
         )}
 
         {!loading && view === "cart" && (
           <main>
-            <button className="link" onClick={() => setView("catalog")}>← {t("cart", "back_to_catalog")}</button>
-            <h1>{t("cart", "title")}</h1>
-            {!cart?.items?.length && <p>{t("cart", "empty")}</p>}
-            {cart?.items?.map((item) => (
-              <div className="cart-line" key={item.id}>
-                <div><b>{item.title}</b><div>Размер: {item.size} · {item.quantity}</div></div>
-                <div>{(item.price * item.quantity).toLocaleString("ru-RU")} RUB</div>
-              </div>
-            ))}
-            {cart?.items?.length > 0 && (
+            <button className="link" onClick={() => setView("catalog")}>← Продолжить покупки</button>
+            <h1>Корзина</h1>
+            {!cart?.items?.length ? (
+              <div className="empty-state"><h2>Корзина пуста</h2><p>Добавьте товар и выберите размер — заказ будет создан только после проверки остатка.</p><button className="primary" onClick={() => setView("catalog")}>Перейти в каталог</button></div>
+            ) : (
               <>
-                <div className="promo">
-                  <input placeholder="Промокод" value={promo} onChange={(e) => setPromo(e.target.value)} />
-                  <button className="secondary" onClick={async () => setCart(await applyPromo(promo))}>Применить</button>
+                <div className="cart-list">
+                  {cart.items.map((item) => (
+                    <div className="cart-item" key={item.id}>
+                      <div><b>{item.title}</b><div className="meta">Размер {item.size} · доступно {item.available_qty}</div><div>{money(item.price * item.quantity)}</div></div>
+                      <div className="quantity-control">
+                        <button onClick={() => handleCartQuantity(item, item.quantity - 1)} disabled={item.quantity <= 1 || busy === `cart-${item.id}`}>−</button>
+                        <b>{item.quantity}</b>
+                        <button onClick={() => handleCartQuantity(item, item.quantity + 1)} disabled={item.quantity >= Math.min(item.available_qty, 10) || busy === `cart-${item.id}`}>+</button>
+                      </div>
+                      <button className="danger-link" onClick={() => handleCartRemove(item)} disabled={busy === `cart-${item.id}`}>Удалить</button>
+                    </div>
+                  ))}
                 </div>
-                <div className="promo">
-                  <input placeholder="Баллы к списанию" value={loyaltyPoints} onChange={(e) => setLoyaltyPoints(e.target.value)} />
-                  <button className="secondary" onClick={async () => setCart(await applyLoyalty(Number(loyaltyPoints)))}>Списать</button>
+                <div className="panel">
+                  <h3>Скидки и бонусы</h3>
+                  <div className="promo"><input placeholder="Промокод" value={promo} onChange={(event) => setPromo(event.target.value)} /><button className="secondary compact" onClick={async () => { const next = await act("promo", () => applyPromo(promo), "Промокод применён."); if (next) setCart(next); }} disabled={!promo.trim() || busy === "promo"}>Применить</button></div>
+                  <div className="promo"><input inputMode="decimal" placeholder="Баллы к списанию" value={loyaltyPoints} onChange={(event) => setLoyaltyPoints(event.target.value)} /><button className="secondary compact" onClick={async () => { const next = await act("loyalty", () => applyLoyalty(Number(loyaltyPoints)), "Баллы зарезервированы для заказа."); if (next) setCart(next); }} disabled={!loyaltyPoints || busy === "loyalty"}>Списать</button></div>
+                  <div className="promo"><input placeholder="Реферальный код" value={referralInput} onChange={(event) => setReferralInput(event.target.value)} /><button className="secondary compact" onClick={async () => { const next = await act("referral", () => applyReferral(referralInput), "Реферальный код связан с заказом."); if (next) setCart(next); }} disabled={!referralInput.trim() || busy === "referral"}>Добавить</button></div>
                 </div>
-                <div className="promo">
-                  <input placeholder="Referral-код" value={referralInput} onChange={(e) => setReferralInput(e.target.value)} />
-                  <button className="secondary" onClick={async () => setCart(await applyReferral(referralInput))}>Добавить</button>
+                <div className="summary">
+                  <StatusRow label="Товары" value={money(cart.total_amount)} />
+                  {cart.discount_amount > 0 && <StatusRow label="Скидка" value={`−${money(cart.discount_amount)}`} tone="success" />}
+                  <div className="summary-total"><span>К оплате без доставки</span><b>{money(cart.final_amount)}</b></div>
                 </div>
-                {cart?.discount_amount > 0 && <div className="discount">Скидка: {cart.discount_amount.toLocaleString("ru-RU")} RUB</div>}
-                <div className="total">Итого: {(cart?.final_amount || total).toLocaleString("ru-RU")} RUB</div>
                 <button className="primary" onClick={() => setView("checkout")}>Оформить заказ</button>
               </>
             )}
@@ -304,77 +672,66 @@ export default function App() {
         {!loading && view === "checkout" && (
           <main>
             <button className="link" onClick={() => setView("cart")}>← Корзина</button>
-            <h1>Оформление</h1>
-            <input placeholder="Имя" value={checkoutForm.name} onChange={(e) => setCheckoutForm({ ...checkoutForm, name: e.target.value })} />
-            <input placeholder="Телефон" value={checkoutForm.phone} onChange={(e) => setCheckoutForm({ ...checkoutForm, phone: e.target.value })} />
-            <select value={checkoutForm.delivery_type} onChange={(e) => setCheckoutForm({ ...checkoutForm, delivery_type: e.target.value })}>
-              <option value="pickup">Самовывоз</option>
-              <option value="courier">Курьер</option>
-            </select>
-            <textarea placeholder="Адрес / комментарий" value={checkoutForm.address} onChange={(e) => setCheckoutForm({ ...checkoutForm, address: e.target.value })} />
-            <button className="primary" onClick={handleCheckout}>Перейти к оплате</button>
+            <h1>Получатель и доставка</h1>
+            <p className="lead">До создания заказа повторно проверим цены, скидки, остатки и доступные баллы.</p>
+            <label>Имя<input autoComplete="name" placeholder="Имя получателя" value={checkoutForm.name} onChange={(event) => setCheckoutForm({ ...checkoutForm, name: event.target.value })} /></label>
+            <label>Телефон<input autoComplete="tel" inputMode="tel" placeholder="+7 999 000-00-00" value={checkoutForm.phone} onChange={(event) => setCheckoutForm({ ...checkoutForm, phone: event.target.value })} /></label>
+            <label>Способ получения<select value={checkoutForm.delivery_type} onChange={(event) => setCheckoutForm({ ...checkoutForm, delivery_type: event.target.value, address: event.target.value === "pickup" ? "" : checkoutForm.address })}><option value="pickup">Самовывоз</option><option value="courier">Курьер</option></select></label>
+            {checkoutForm.delivery_type === "courier" && <label>Адрес<textarea placeholder="Город, улица, дом, квартира" value={checkoutForm.address} onChange={(event) => setCheckoutForm({ ...checkoutForm, address: event.target.value })} /></label>}
+            <label>Комментарий<textarea placeholder="Необязательный комментарий к заказу" value={checkoutForm.comment} onChange={(event) => setCheckoutForm({ ...checkoutForm, comment: event.target.value })} /></label>
+            <button className="primary" onClick={handleCheckout} disabled={busy === "checkout"}>Создать заказ и перейти к оплате</button>
           </main>
         )}
 
         {!loading && view === "orders" && (
           <main>
-            <h1>Мои заказы</h1>
-            {!orders.length && <p>Заказов пока нет.</p>}
-            {orders.map((order) => (
-              <div className="order-card" key={order.id}>
-                <b>Заказ #{order.id}</b>
-                <div>Статус: {order.status}</div>
-                <div>Оплата: {order.payment_status}</div>
-                <div>Сумма: {order.total_amount.toLocaleString("ru-RU")} {order.currency}</div>
-                {order.payment_status === "paid" && (
-                  <>
-                    <input placeholder="Причина возврата" value={returnReason} onChange={(e) => setReturnReason(e.target.value)} />
-                    <button className="secondary" onClick={() => createReturn(order.id, returnReason)}>Запросить возврат</button>
-                  </>
-                )}
-              </div>
+            <div className="section-heading"><div><h1>Мои заказы</h1><p>Оплата, сборка, доставка и возврат в одном сценарии.</p></div><button className="secondary compact" onClick={refreshOrders}>Обновить</button></div>
+            {!orders.length ? (
+              <div className="empty-state"><h2>Заказов пока нет</h2><p>После оформления здесь появятся состав, оплата и доставка.</p><button className="primary" onClick={() => setView("catalog")}>Выбрать товары</button></div>
+            ) : orders.map((order) => (
+              <article className="order-card" key={order.id}>
+                <div className="order-title"><div><div className="meta">Заказ #{order.id}</div><h2>{money(order.total_amount, order.currency)}</h2></div><span className="status neutral">{ORDER_LABELS[order.status] || order.status}</span></div>
+                <StatusRow label="Оплата" value={PAYMENT_LABELS[order.payment_status] || order.payment_status} tone={order.payment_status === "paid" ? "success" : "neutral"} />
+                <StatusRow label="Доставка" value={DELIVERY_LABELS[order.delivery_status] || order.delivery_status} />
+                <StatusRow label="Получение" value={order.delivery_type === "courier" ? "Курьер" : "Самовывоз"} />
+                {order.address && <StatusRow label="Адрес" value={order.address} />}
+                {order.tracking_number && <StatusRow label="Трек-номер" value={order.tracking_number} />}
+                <div className="order-items">{order.items?.map((item) => <div key={item.id}><span>{item.title} · {item.size} × {item.quantity}</span><b>{money(item.price * item.quantity, order.currency)}</b></div>)}</div>
+                <div className="actions horizontal">
+                  {canPay(order) && <button className="primary" onClick={() => handleOrderPayment(order)} disabled={busy === `pay-${order.id}`}>Продолжить оплату</button>}
+                  {canCancel(order) && <button className="secondary" onClick={() => handleOrderCancel(order)} disabled={busy === `cancel-${order.id}`}>Отменить заказ</button>}
+                </div>
+                {canReturn(order) && <div className="return-box"><label>Причина возврата<textarea placeholder="Что необходимо вернуть и почему" value={returnReasons[order.id] || ""} onChange={(event) => setReturnReasons({ ...returnReasons, [order.id]: event.target.value })} /></label><button className="secondary" onClick={() => handleReturn(order)} disabled={busy === `return-${order.id}`}>Зарегистрировать возврат</button></div>}
+              </article>
             ))}
           </main>
         )}
 
         {!loading && view === "looks" && (
           <main>
-            <h1>Looks</h1>
-            {!looks.length && <p>Пока нет готовых образов.</p>}
-            {looks.map((look) => (
-              <div className="order-card" key={look.id}>
-                <b>{look.title}</b>
-                <p>{look.description}</p>
-                <div>ID товаров: {look.product_ids.join(", ")}</div>
-              </div>
+            <div className="section-heading"><div><h1>Готовые образы</h1><p>Каждый элемент связан с доступной карточкой товара.</p></div></div>
+            {!looks.length ? (
+              <div className="empty-state"><h2>Активных образов нет</h2><p>Все товары по-прежнему доступны в каталоге.</p><button className="primary" onClick={() => setView("catalog")}>Открыть каталог</button></div>
+            ) : looks.map((look) => (
+              <section className="look-card" key={look.id}><div className="look-heading"><h2>{look.title}</h2>{look.description && <p>{look.description}</p>}</div><div className="look-products">{look.products.map((product) => <ProductCard key={product.id} product={product} onOpen={openProduct} />)}</div></section>
             ))}
           </main>
         )}
 
         {!loading && view === "profile" && (
           <main>
-            <h1>Профиль</h1>
-            {profile && (
-              <div className="panel">
-                <b>{profile.customer.first_name || profile.customer.username || "Клиент FLASHIN"}</b>
-                <p>Сегмент: {profile.crm?.segment || "new"}</p>
-                <p>Баллы: <b>{profile.loyalty_points}</b></p>
-                <p>Referral: <code>{profile.referral_code}</code></p>
-              </div>
-            )}
-            <h2>История баллов</h2>
-            {loyaltyRows.map(row => <div className="cart-line" key={row.id}><span>{row.reason}</span><b>{row.points_delta}</b></div>)}
-            <h2>Support</h2>
-            <input placeholder="Тема" value={supportForm.subject} onChange={e => setSupportForm({ ...supportForm, subject: e.target.value })} />
-            <textarea placeholder="Сообщение" value={supportForm.message} onChange={e => setSupportForm({ ...supportForm, message: e.target.value })} />
-            <button className="secondary" onClick={async () => { await createSupportTicket({ subject: supportForm.subject, message: supportForm.message, order_id: supportForm.order_id ? Number(supportForm.order_id) : null }); await loadProfileData(); }}>Отправить</button>
-            {supportTickets.map(t => <div className="order-card" key={t.id}><b>{t.subject}</b><div>{t.status}</div><p>{t.message}</p></div>)}
-            <h2>Данные и privacy</h2>
-            <button className="secondary" onClick={async () => alert(await exportPrivacyData())}>Экспортировать данные</button>
-            <button className="secondary" onClick={async () => { await createPrivacyRequest("delete"); await loadProfileData(); }}>Запросить удаление данных</button>
-            {privacyRequests.map(r => <div className="cart-line" key={r.id}><span>{r.request_type}</span><b>{r.status}</b></div>)}
-            <h2>Timeline</h2>
-            {timeline.map(t => <div className="cart-line" key={t.id}><span>{t.title}</span><small>{t.event_type}</small></div>)}
+            <h1>Профиль и сервис</h1>
+            {profile && <div className="panel profile-card"><div><b>{profile.customer.first_name || profile.customer.username || "Клиент FLASHIN"}</b><p>{profile.customer.phone || "Телефон добавится при оформлении заказа"}</p></div><div><span>Баллы</span><b>{profile.loyalty_points}</b></div><div><span>Реферальный код</span><code>{profile.referral_code || referral?.code || "Формируется"}</code></div></div>}
+
+            <section><h2>Избранное</h2>{!wishlist.length ? <p className="muted">Сохранённых товаров нет.</p> : <div className="grid">{wishlist.map((product) => <ProductCard key={product.id} product={product} onOpen={openProduct} action={<button className="danger-link card-action" onClick={async () => { const result = await act(`wishlist-${product.id}`, () => removeWishlist(product.id), `${product.title} удалён из избранного.`); if (result) setWishlist((current) => current.filter((item) => item.id !== product.id)); }}>Удалить</button>} />)}</div>}</section>
+
+            <section><h2>История баллов</h2>{!loyaltyRows.length ? <p className="muted">Операций пока нет.</p> : loyaltyRows.map((row) => <div className="cart-line" key={row.id}><span>{row.reason}</span><b className={row.points_delta >= 0 ? "positive" : "negative"}>{row.points_delta > 0 ? "+" : ""}{row.points_delta}</b></div>)}</section>
+
+            <section><h2>Поддержка</h2><select value={supportForm.order_id} onChange={(event) => setSupportForm({ ...supportForm, order_id: event.target.value })}><option value="">Без привязки к заказу</option>{orders.map((order) => <option key={order.id} value={order.id}>Заказ #{order.id}</option>)}</select><input placeholder="Тема обращения" value={supportForm.subject} onChange={(event) => setSupportForm({ ...supportForm, subject: event.target.value })} /><textarea placeholder="Опишите вопрос и ожидаемый результат" value={supportForm.message} onChange={(event) => setSupportForm({ ...supportForm, message: event.target.value })} /><button className="secondary" onClick={handleSupport} disabled={busy === "support"}>Отправить обращение</button>{supportTickets.map((ticket) => <div className="ticket" key={ticket.id}><div><b>{ticket.subject}</b><p>{ticket.message}</p></div><span className="status neutral">{ticket.status}</span></div>)}</section>
+
+            <section><h2>Персональные данные</h2><p className="muted">Экспорт скачивается файлом. Запросы на отзыв согласий и удаление имеют отслеживаемый статус.</p><div className="actions"><button className="secondary" onClick={handlePrivacyExport} disabled={busy === "privacy-export"}>Скачать мои данные</button><button className="secondary" onClick={() => handlePrivacyRequest("consent_withdrawal", "Отозвать необязательные согласия?", "Запрос на отзыв согласий зарегистрирован.")}>Отозвать необязательные согласия</button><button className="danger" onClick={() => handlePrivacyRequest("delete", "Запросить обезличивание персональных данных? История финансовых операций сохранится по требованиям учёта.", "Запрос на обезличивание зарегистрирован.")}>Запросить удаление данных</button></div>{privacyRequests.map((request) => <div className="cart-line" key={request.id}><span>{request.request_type}</span><b>{request.status}</b></div>)}</section>
+
+            <section><h2>История действий</h2>{!timeline.length ? <p className="muted">Событий пока нет.</p> : timeline.map((event) => <div className="cart-line" key={event.id}><span>{event.title}</span><small>{event.event_type}</small></div>)}</section>
           </main>
         )}
       </div>
