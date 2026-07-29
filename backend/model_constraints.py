@@ -29,6 +29,7 @@ from .models import (
     WebhookDestination,
     WebhookOutbox,
 )
+from .money_model_types import apply_money_model_types
 
 
 def _constraint_names(table) -> set[str]:
@@ -68,6 +69,8 @@ def _partial_unique_index(table, name: str, columns: list, where: str) -> None:
 
 
 def apply_model_constraints() -> None:
+    apply_money_model_types()
+
     _check(ProductVariant.__table__, "ck_product_variants_stock_nonnegative", "stock_qty >= 0")
     _check(ProductVariant.__table__, "ck_product_variants_reserved_nonnegative", "reserved_qty >= 0")
     _check(ProductVariant.__table__, "ck_product_variants_reserved_within_stock", "reserved_qty <= stock_qty")
