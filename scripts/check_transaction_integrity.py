@@ -1,21 +1,27 @@
 #!/usr/bin/env python3
 """Read-only database audit for transactional constraints through revision 0013.
 
-The audit is migration-aware: checks for newer tables are enabled only when all
-of their dependent tables exist. This keeps the pre-migration deploy gate usable
-when upgrading an older production schema, while the post-migration run verifies
-all current constraints.
+The audit is migration-aware: checks introduced by a revision are enabled only
+when that revision is present in the database's Alembic ancestry. This keeps the
+pre-migration deploy gate usable while the post-migration run verifies every
+current constraint.
 """
 
 import argparse
 import json
 import sys
 from collections.abc import Mapping
+from pathlib import Path
 
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import inspect, text
+from sqlalchemy.engine import Connection
 from sqlalchemy.exc import SQLAlchemyError
 
 from backend.database import engine
+
+ROOT = Path(__file__).resolve().parents[1]
 
 BASE_CHECKS: Mapping[str, str] = {
     "invalid_variant_inventory": """
@@ -141,8 +147,9 @@ BASE_CHECKS: Mapping[str, str] = {
     """,
 }
 
-OPTIONAL_CHECK_GROUPS: tuple[tuple[set[str], Mapping[str, str]], ...] = (
+REVISION_CHECK_GROUPS: tuple[tuple[str, set[str], Mapping[str, str]], ...] = (
     (
+        "0012_notification_delivery_retry_state",
         {"notification_delivery_states", "notifications"},
         {
             "negative_notification_delivery_attempts": """
@@ -164,6 +171,7 @@ OPTIONAL_CHECK_GROUPS: tuple[tuple[set[str], Mapping[str, str]], ...] = (
         },
     ),
     (
+        "0013_webhook_outbox_integrity",
         {"webhook_destinations", "webhook_outbox"},
         {
             "invalid_webhook_destinations": """
@@ -210,10 +218,40 @@ class MissingSchemaError(RuntimeError):
         super().__init__("missing tables: " + ", ".join(sorted(missing_tables)))
 
 
-def _enabled_checks(present_tables: set[str]) -> dict[str, str]:
+def _script_directory() -> ScriptDirectory:
+    config = Config(str(ROOT / "backend" / "alembic.ini"))
+    config.set_main_option("script_location", str(ROOT / "backend" / "alembic"))
+    return ScriptDirectory.from_config(config)
+
+
+def _applied_revision_ancestry(connection: Connection, present_tables: set[str]) -> set[str]:
+    if "alembic_version" not in present_tables:
+        return set()
+
+    current_revisions = {
+        str(row[0])
+        for row in connection.execute(text("SELECT version_num FROM alembic_version"))
+        if row[0]
+    }
+    if not current_revisions:
+        return set()
+
+    scripts = _script_directory()
+    applied: set[str] = set()
+    for current_revision in current_revisions:
+        applied.add(current_revision)
+        for revision in scripts.iterate_revisions(current_revision, "base"):
+            applied.add(revision.revision)
+    return applied
+
+
+def _enabled_checks(
+    present_tables: set[str],
+    applied_revisions: set[str],
+) -> dict[str, str]:
     checks = dict(BASE_CHECKS)
-    for required_tables, group_checks in OPTIONAL_CHECK_GROUPS:
-        if required_tables <= present_tables:
+    for required_revision, required_tables, group_checks in REVISION_CHECK_GROUPS:
+        if required_revision in applied_revisions and required_tables <= present_tables:
             checks.update(group_checks)
     return checks
 
@@ -225,8 +263,9 @@ def run_audit() -> dict[str, int]:
         raise MissingSchemaError(missing_tables)
 
     results: dict[str, int] = {}
-    checks = _enabled_checks(present_tables)
     with engine.connect() as connection:
+        applied_revisions = _applied_revision_ancestry(connection, present_tables)
+        checks = _enabled_checks(present_tables, applied_revisions)
         for name, query in checks.items():
             results[name] = int(connection.execute(text(query)).scalar_one())
     return results
