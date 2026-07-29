@@ -20,6 +20,8 @@ REQUIRED_FILES = [
     "backend/alembic/versions/0008_platform_cms_events_media_scheduler.py",
     "backend/alembic/versions/0009_security_payment_delivery_media_hardening.py",
     "backend/alembic/versions/0010_transaction_integrity_constraints.py",
+    "backend/alembic/versions/0011_refund_integrity_and_loyalty_reversals.py",
+    "backend/services/refund_loyalty.py",
     "backend/tests/test_transaction_integrity_metadata.py",
     "frontend/package.json",
     "admin/package.json",
