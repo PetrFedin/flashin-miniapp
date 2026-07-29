@@ -2,7 +2,7 @@ import hashlib
 import json
 import re
 from datetime import datetime
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from sqlalchemy.exc import IntegrityError
@@ -25,23 +25,12 @@ from ..schemas import CheckoutIn, OrderOut
 from ..security import get_current_customer
 from ..services.delivery import calculate_delivery_price
 from ..services.inventory import release_variant, reserve_variant
-from ..services.promos import calculate_discount
+from ..services.pricing import calculate_pricing, money, points
 
 router = APIRouter(prefix="/orders", tags=["orders"])
 
-_MONEY_STEP = Decimal("0.01")
 _IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{16,128}$")
 CANCELLABLE_ORDER_STATUSES = {"created", "payment_created"}
-
-
-def _money(value: object, field: str) -> Decimal:
-    try:
-        amount = Decimal(str(value)).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
-    except (InvalidOperation, TypeError, ValueError):
-        raise HTTPException(status_code=409, detail=f"Invalid {field}")
-    if not amount.is_finite():
-        raise HTTPException(status_code=409, detail=f"Invalid {field}")
-    return amount
 
 
 def _clean_required(value: str, field: str, max_length: int) -> str:
@@ -129,6 +118,7 @@ def _load_locked_active_cart(db: Session, customer_id: int) -> Cart | None:
         .options(
             joinedload(Cart.items).joinedload(CartItem.product),
             joinedload(Cart.items).joinedload(CartItem.variant),
+            joinedload(Cart.promo_code),
         )
         .filter(Cart.id == carts[0].id)
         .first()
@@ -152,24 +142,22 @@ def _validate_cart_for_checkout(cart: Cart) -> None:
         seen_variants.add(item.variant_id)
         if not item.product.active:
             raise HTTPException(status_code=409, detail=f"Product {item.product.title} is unavailable")
-        if _money(item.product.price, "product price") < 0:
+        if money(item.product.price, "product price") < 0:
             raise HTTPException(status_code=409, detail=f"Invalid price for product {item.product.title}")
 
 
-def _lock_and_calculate_promo(db: Session, cart: Cart, subtotal: Decimal) -> tuple[PromoCode | None, Decimal]:
+def _lock_promo(db: Session, cart: Cart) -> PromoCode | None:
     if not cart.promo_code_id:
-        return None, Decimal("0.00")
-
+        return None
     promo = (
         db.query(PromoCode)
         .filter(PromoCode.id == cart.promo_code_id)
         .with_for_update()
         .first()
     )
-    discount = _money(calculate_discount(promo, float(subtotal)), "promo discount")
-    if discount < 0 or discount > subtotal:
-        raise HTTPException(status_code=409, detail="Promo discount is invalid")
-    return promo, discount
+    if not promo:
+        raise HTTPException(status_code=409, detail="Applied promo code no longer exists")
+    return promo
 
 
 def _lock_and_validate_loyalty(
@@ -177,13 +165,11 @@ def _lock_and_validate_loyalty(
     cart: Cart,
     customer_id: int,
     subtotal: Decimal,
-    promo_discount: Decimal,
-) -> tuple[Decimal, Decimal, LoyaltyRedemptionHold | None]:
-    requested_points = _money(cart.loyalty_points_to_redeem or 0, "loyalty points")
-    if requested_points < 0:
-        raise HTTPException(status_code=409, detail="Loyalty points cannot be negative")
+    promo: PromoCode | None,
+) -> tuple[Decimal, LoyaltyRedemptionHold | None]:
+    requested_points = points(cart.loyalty_points_to_redeem or 0)
     if requested_points == 0:
-        return Decimal("0.00"), Decimal("0.00"), None
+        return Decimal("0.0000"), None
 
     profile = (
         db.query(CrmProfile)
@@ -205,22 +191,21 @@ def _lock_and_validate_loyalty(
     )
     current_hold = next((hold for hold in holds if hold.cart_id == cart.id), None)
     other_reserved_points = sum(
-        (_money(hold.points, "reserved loyalty points") for hold in holds if hold.cart_id != cart.id),
-        Decimal("0.00"),
+        (points(hold.points, "reserved loyalty points") for hold in holds if hold.cart_id != cart.id),
+        Decimal("0.0000"),
     )
-    available_points = _money(profile.loyalty_points, "loyalty balance") - other_reserved_points
+    available_points = points(profile.loyalty_points, "loyalty balance") - other_reserved_points
     if requested_points > available_points:
         raise HTTPException(status_code=409, detail="Not enough available loyalty points")
 
     settings = get_settings()
-    point_value = _money(settings.loyalty_point_value_rub, "loyalty point value")
-    loyalty_discount = (requested_points * point_value).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
-    maximum_discount = (
-        subtotal * Decimal(str(settings.loyalty_max_redeem_percent)) / Decimal("100")
-    ).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
-    payable_before_loyalty = subtotal - promo_discount
-    if loyalty_discount > maximum_discount or loyalty_discount > payable_before_loyalty:
-        raise HTTPException(status_code=409, detail="Loyalty redemption exceeds the allowed limit")
+    calculate_pricing(
+        subtotal=subtotal,
+        promo=promo,
+        loyalty_points=requested_points,
+        point_value=settings.loyalty_point_value_rub,
+        max_redeem_percent=settings.loyalty_max_redeem_percent,
+    )
 
     if current_hold:
         current_hold.points = float(requested_points)
@@ -233,7 +218,7 @@ def _lock_and_validate_loyalty(
         )
         db.add(current_hold)
 
-    return requested_points, loyalty_discount, current_hold
+    return requested_points, current_hold
 
 
 @router.post("/checkout", response_model=OrderOut)
@@ -288,34 +273,38 @@ def checkout(
         customer.first_name = name
         customer.phone = phone
 
-        subtotal = sum(
-            (_money(item.product.price, "product price") * item.quantity for item in cart.items),
-            Decimal("0.00"),
-        ).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
+        subtotal = money(
+            sum(
+                (money(item.product.price, "product price") * item.quantity for item in cart.items),
+                Decimal("0.00"),
+            ),
+            "order subtotal",
+        )
         if subtotal <= 0:
             raise HTTPException(status_code=409, detail="Order subtotal must be positive")
 
-        promo, discount = _lock_and_calculate_promo(db, cart, subtotal)
-        loyalty_points, loyalty_discount, loyalty_hold = _lock_and_validate_loyalty(
+        promo = _lock_promo(db, cart)
+        loyalty_points, loyalty_hold = _lock_and_validate_loyalty(
             db,
             cart,
             customer.id,
             subtotal,
-            discount,
+            promo,
         )
-        delivery_price = _money(
+        delivery_price = money(
             calculate_delivery_price(db, delivery_type, address),
             "delivery price",
         )
-        if delivery_price < 0:
-            raise HTTPException(status_code=409, detail="Delivery price cannot be negative")
-
-        final_amount = (subtotal - discount - loyalty_discount + delivery_price).quantize(
-            _MONEY_STEP,
-            rounding=ROUND_HALF_UP,
+        settings = get_settings()
+        pricing = calculate_pricing(
+            subtotal=subtotal,
+            promo=promo,
+            loyalty_points=loyalty_points,
+            point_value=settings.loyalty_point_value_rub,
+            max_redeem_percent=settings.loyalty_max_redeem_percent,
+            delivery_price=delivery_price,
+            require_positive_total=True,
         )
-        if final_amount <= 0:
-            raise HTTPException(status_code=409, detail="Order total must be positive")
 
         order = Order(
             customer_id=customer.id,
@@ -327,12 +316,12 @@ def checkout(
             address=address,
             comment=comment,
             currency="RUB",
-            discount_amount=float(discount),
-            loyalty_points_redeemed=float(loyalty_points),
-            loyalty_discount_amount=float(loyalty_discount),
+            discount_amount=float(pricing.promo_discount),
+            loyalty_points_redeemed=float(pricing.loyalty_points),
+            loyalty_discount_amount=float(pricing.loyalty_discount),
             referral_code=(cart.referral_code or "").strip().upper()[:64],
-            delivery_price=float(delivery_price),
-            total_amount=float(final_amount),
+            delivery_price=float(pricing.delivery_price),
+            total_amount=float(pricing.final_amount),
         )
         db.add(order)
         db.flush()
@@ -348,7 +337,7 @@ def checkout(
                     title=product.title,
                     size=variant.size,
                     quantity=cart_item.quantity,
-                    price=float(_money(product.price, "product price")),
+                    price=float(money(product.price, "product price")),
                 )
             )
 
