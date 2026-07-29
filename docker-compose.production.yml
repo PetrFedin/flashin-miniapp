@@ -1,0 +1,28 @@
+services:
+  db:
+    restart: unless-stopped
+
+  backend:
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  frontend:
+    restart: unless-stopped
+
+  admin:
+    restart: unless-stopped
+
+  bot:
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  notification_worker:
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  scheduler:
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  caddy:
+    restart: unless-stopped
