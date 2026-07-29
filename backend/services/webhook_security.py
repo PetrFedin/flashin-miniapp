@@ -1,13 +1,14 @@
 import ipaddress
+import socket
 from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import HTTPException, Request
 
 from ..config import get_settings
 
-
 _INTERNAL_SCHEME = "internal"
 _MAX_WEBHOOK_URL_LENGTH = 255
+_MAX_RESOLVED_ADDRESSES = 16
 _BLOCKED_HOSTS = {"localhost", "localhost.localdomain", "metadata.google.internal"}
 _BLOCKED_SUFFIXES = (".local", ".internal", ".localhost")
 
@@ -28,11 +29,7 @@ def is_internal_destination(url: str) -> bool:
         return False
 
 
-def _is_public_ip_literal(hostname: str) -> bool:
-    try:
-        address = ipaddress.ip_address(hostname)
-    except ValueError:
-        return True
+def _is_public_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     return not (
         address.is_private
         or address.is_loopback
@@ -41,6 +38,14 @@ def _is_public_ip_literal(hostname: str) -> bool:
         or address.is_reserved
         or address.is_unspecified
     )
+
+
+def _is_public_ip_literal(hostname: str) -> bool:
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return True
+    return _is_public_address(address)
 
 
 def normalize_webhook_url(url: str, *, production: bool | None = None) -> str:
@@ -70,18 +75,57 @@ def normalize_webhook_url(url: str, *, production: bool | None = None) -> str:
     if parsed.fragment:
         raise ValueError("Webhook URL must not contain a fragment")
 
-    hostname = (parsed.hostname or "").strip().lower().rstrip(".")
-    if not hostname:
+    raw_hostname = (parsed.hostname or "").strip().lower().rstrip(".")
+    if not raw_hostname:
         raise ValueError("Webhook URL hostname is required")
+    try:
+        hostname = raw_hostname.encode("idna").decode("ascii")
+    except UnicodeError as exc:
+        raise ValueError("Webhook URL hostname is invalid") from exc
     if hostname in _BLOCKED_HOSTS or hostname.endswith(_BLOCKED_SUFFIXES):
         raise ValueError("Webhook URL hostname is not allowed")
     if not _is_public_ip_literal(hostname):
         raise ValueError("Webhook URL must not target a private or reserved IP address")
 
     default_port = 443 if scheme == "https" else 80
-    netloc = hostname if port in (None, default_port) else f"{hostname}:{port}"
+    netloc_host = f"[{hostname}]" if ":" in hostname else hostname
+    netloc = netloc_host if port in (None, default_port) else f"{netloc_host}:{port}"
     path = parsed.path or "/"
     normalized = urlunsplit((scheme, netloc, path, parsed.query, ""))
     if len(normalized) > _MAX_WEBHOOK_URL_LENGTH:
         raise ValueError("Webhook URL is too long")
     return normalized
+
+
+def resolve_public_webhook_addresses(url: str) -> tuple[str, tuple[str, ...]]:
+    normalized = normalize_webhook_url(url)
+    parsed = urlsplit(normalized)
+    hostname = parsed.hostname or ""
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+
+    try:
+        records = socket.getaddrinfo(
+            hostname,
+            port,
+            family=socket.AF_UNSPEC,
+            type=socket.SOCK_STREAM,
+        )
+    except socket.gaierror as exc:
+        raise ValueError("Webhook hostname could not be resolved") from exc
+
+    addresses: set[str] = set()
+    for record in records:
+        raw_address = record[4][0]
+        try:
+            address = ipaddress.ip_address(raw_address)
+        except ValueError as exc:
+            raise ValueError("Webhook hostname resolved to an invalid address") from exc
+        if not _is_public_address(address):
+            raise ValueError("Webhook hostname resolves to a private or reserved address")
+        addresses.add(str(address))
+        if len(addresses) > _MAX_RESOLVED_ADDRESSES:
+            raise ValueError("Webhook hostname resolves to too many addresses")
+
+    if not addresses:
+        raise ValueError("Webhook hostname has no usable addresses")
+    return normalized, tuple(sorted(addresses))
