@@ -1,22 +1,26 @@
 #!/usr/bin/env python3
-from pathlib import Path
 import secrets
+from pathlib import Path
+
 
 TEMPLATE = Path(".env.production.example") if Path(".env.production.example").exists() else Path(".env.local.example")
 TARGET = Path(".env")
 
+if not TEMPLATE.exists():
+    raise SystemExit("Environment template not found")
+
 defaults = {}
-if TEMPLATE.exists():
-    for line in TEMPLATE.read_text().splitlines():
-        if "=" in line and not line.strip().startswith("#"):
-            k, v = line.split("=", 1)
-            defaults[k] = v
+for line in TEMPLATE.read_text().splitlines():
+    if "=" in line and not line.strip().startswith("#"):
+        key, value = line.split("=", 1)
+        defaults[key] = value
 
 questions = {
     "TELEGRAM_BOT_TOKEN": "Telegram bot token from BotFather",
     "JWT_SECRET": "JWT secret",
     "ADMIN_EMAIL": "Admin email",
     "ADMIN_PASSWORD": "Admin password",
+    "ADMIN_TOTP_ENCRYPTION_KEY": "Separate TOTP encryption key",
     "MINI_APP_URL": "Mini App URL",
     "API_PUBLIC_URL": "API public URL",
     "ADMIN_URL": "Admin URL",
@@ -27,10 +31,19 @@ questions = {
     "OUTBOX_SIGNING_SECRET": "Outbox signing secret",
 }
 
-if "JWT_SECRET" in defaults and not defaults["JWT_SECRET"]:
-    defaults["JWT_SECRET"] = secrets.token_urlsafe(48)
-if "OUTBOX_SIGNING_SECRET" in defaults and not defaults["OUTBOX_SIGNING_SECRET"]:
-    defaults["OUTBOX_SIGNING_SECRET"] = secrets.token_urlsafe(48)
+for generated_key in (
+    "JWT_SECRET",
+    "ADMIN_TOTP_ENCRYPTION_KEY",
+    "OUTBOX_SIGNING_SECRET",
+):
+    if generated_key in defaults and not defaults[generated_key]:
+        defaults[generated_key] = secrets.token_urlsafe(48)
+
+if (
+    defaults.get("ADMIN_TOTP_ENCRYPTION_KEY")
+    and defaults.get("ADMIN_TOTP_ENCRYPTION_KEY") == defaults.get("JWT_SECRET")
+):
+    defaults["ADMIN_TOTP_ENCRYPTION_KEY"] = secrets.token_urlsafe(48)
 
 print("FLASHIN setup wizard")
 print("Press Enter to keep current/default value.")
@@ -39,16 +52,19 @@ print("Secrets are written to .env locally. Do not commit .env.")
 values = dict(defaults)
 for key, prompt in questions.items():
     current = values.get(key, "")
-    masked = "***" if current and any(x in key for x in ["SECRET", "TOKEN", "PASSWORD", "KEY"]) else current
+    masked = "***" if current and any(marker in key for marker in ["SECRET", "TOKEN", "PASSWORD", "KEY"]) else current
     user_value = input(f"{prompt} [{masked}]: ").strip()
     if user_value:
         values[key] = user_value
 
+if values.get("ADMIN_TOTP_ENCRYPTION_KEY") == values.get("JWT_SECRET"):
+    raise SystemExit("ADMIN_TOTP_ENCRYPTION_KEY must differ from JWT_SECRET")
+
 lines = []
 for line in TEMPLATE.read_text().splitlines():
     if "=" in line and not line.strip().startswith("#"):
-        k, _ = line.split("=", 1)
-        lines.append(f"{k}={values.get(k, '')}")
+        key, _ = line.split("=", 1)
+        lines.append(f"{key}={values.get(key, '')}")
     else:
         lines.append(line)
 
