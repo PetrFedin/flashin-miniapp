@@ -4,10 +4,14 @@ export function useTelegram() {
   const [tg, setTg] = useState(null);
   const [user, setUser] = useState(null);
   const [initData, setInitData] = useState("");
+  const [initialized, setInitialized] = useState(false);
 
   useEffect(() => {
-    const webApp = window?.Telegram?.WebApp;
-    if (!webApp) return;
+    const webApp = window?.Telegram?.WebApp || null;
+    if (!webApp) {
+      setInitialized(true);
+      return undefined;
+    }
 
     setTg(webApp);
     setUser(webApp.initDataUnsafe?.user || null);
@@ -16,8 +20,8 @@ export function useTelegram() {
     try {
       webApp.ready();
       webApp.expand();
-    } catch (err) {
-      console.error("Telegram WebApp init failed", err);
+    } catch (error) {
+      console.error("Telegram WebApp init failed", error);
     }
 
     const applyTheme = (theme) => {
@@ -28,9 +32,11 @@ export function useTelegram() {
     applyTheme(webApp.themeParams);
 
     const onThemeChanged = () => applyTheme(webApp.themeParams);
-    webApp.onEvent("themeChanged", onThemeChanged);
-    return () => webApp.offEvent("themeChanged", onThemeChanged);
+    webApp.onEvent?.("themeChanged", onThemeChanged);
+    setInitialized(true);
+
+    return () => webApp.offEvent?.("themeChanged", onThemeChanged);
   }, []);
 
-  return { tg, user, initData };
+  return { tg, user, initData, initialized };
 }
