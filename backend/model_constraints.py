@@ -1,8 +1,8 @@
 """Database constraints that must exist in both create_all and Alembic metadata.
 
-Production applies the same rules through revision 0010. Keeping them in metadata
-prevents local/test databases created with ``Base.metadata.create_all`` from being
-weaker than PostgreSQL production.
+Production applies the same rules through Alembic revisions. Keeping them in
+metadata prevents local/test databases created with ``Base.metadata.create_all``
+from being weaker than PostgreSQL production.
 """
 
 from sqlalchemy import CheckConstraint, Index, UniqueConstraint, text
@@ -25,6 +25,8 @@ from .models import (
     PromoCode,
     ReferralCode,
     ReturnRequest,
+    WebhookDestination,
+    WebhookOutbox,
 )
 
 
@@ -44,6 +46,11 @@ def _check(table, name: str, expression: str) -> None:
 def _unique(table, name: str, *columns: str) -> None:
     if name not in _constraint_names(table):
         table.append_constraint(UniqueConstraint(*columns, name=name))
+
+
+def _index(table, name: str, columns: list) -> None:
+    if name not in _index_names(table):
+        Index(name, *columns)
 
 
 def _partial_unique_index(table, name: str, columns: list, where: str) -> None:
@@ -90,6 +97,13 @@ def apply_model_constraints() -> None:
     _check(ReturnRequest.__table__, "ck_return_requests_refund_nonnegative", "refund_amount >= 0")
     _check(CrmProfile.__table__, "ck_crm_profiles_loyalty_nonnegative", "loyalty_points >= 0")
     _check(LoyaltyRedemptionHold.__table__, "ck_loyalty_holds_points_positive", "points > 0")
+    _check(WebhookOutbox.__table__, "ck_webhook_outbox_attempts_nonnegative", "attempts >= 0")
+    _check(WebhookDestination.__table__, "ck_webhook_destinations_url_nonempty", "length(trim(url)) > 0")
+    _check(
+        WebhookDestination.__table__,
+        "ck_webhook_destinations_event_type_nonempty",
+        "length(trim(event_type)) > 0",
+    )
 
     _unique(
         AdminRolePermission.__table__,
@@ -101,6 +115,22 @@ def apply_model_constraints() -> None:
     _unique(AdminSession.__table__, "uq_admin_sessions_token_hash", "session_token_hash")
     _unique(AdminPasswordReset.__table__, "uq_admin_password_resets_token_hash", "token_hash")
     _unique(ReturnRequest.__table__, "uq_return_requests_order_id", "order_id")
+    _unique(
+        WebhookDestination.__table__,
+        "uq_webhook_destinations_url_event_type",
+        "url",
+        "event_type",
+    )
+
+    _index(
+        WebhookOutbox.__table__,
+        "ix_webhook_outbox_due",
+        [
+            WebhookOutbox.__table__.c.status,
+            WebhookOutbox.__table__.c.next_attempt_at,
+            WebhookOutbox.__table__.c.id,
+        ],
+    )
 
     _partial_unique_index(
         Cart.__table__,
