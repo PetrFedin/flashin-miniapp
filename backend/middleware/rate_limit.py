@@ -13,6 +13,10 @@ _CLEANUP_INTERVAL_REQUESTS = 500
 _MAX_BUCKETS = 50_000
 _ID_SEGMENT = re.compile(r"^(?:\d+|[0-9a-fA-F]{8,}|[0-9a-fA-F-]{32,})$")
 _EXEMPT_PATHS = {"/health", "/ready"}
+_ADMIN_AUTH_ROUTES = {
+    "/api/admin/login",
+    "/api/admin/password-reset/confirm",
+}
 
 
 def _valid_ip(value: str) -> str | None:
@@ -78,9 +82,9 @@ class InMemoryRateLimitMiddleware(BaseHTTPMiddleware):
         if route == "/api/auth/telegram":
             limit = settings.rate_limit_auth_per_minute
             category = "auth"
-        elif route == "/api/admin/login":
+        elif route in _ADMIN_AUTH_ROUTES:
             limit = settings.rate_limit_admin_login_per_minute
-            category = "admin_login"
+            category = "admin_auth"
 
         trust_proxy_headers = settings.app_env.strip().lower() == "production"
         client_ip = _client_ip(request, trust_proxy_headers=trust_proxy_headers)
