@@ -32,6 +32,7 @@ from .api.media import router as media_router
 from .api.moysklad import router as moysklad_router
 from .api.moysklad_deep_mapping import router as moysklad_deep_mapping_router
 from .api.ops import router as ops_router
+from .api.order_cancellation import router as order_cancellation_router
 from .api.orders import router as orders_router
 from .api.outbox import router as outbox_router
 from .api.payment_reconciliation import router as payment_reconciliation_router
@@ -53,6 +54,7 @@ from .api.wishlist import router as wishlist_router
 from .config import get_settings
 from .database import Base, SessionLocal, engine
 from .middleware.admin_order_state_guard import AdminOrderStateGuardMiddleware
+from .middleware.customer_order_cancel_guard import CustomerOrderCancelGuardMiddleware
 from .middleware.metrics import MetricsMiddleware, metrics_response
 from .middleware.rate_limit import InMemoryRateLimitMiddleware
 from .middleware.security_headers import SecurityHeadersMiddleware
@@ -87,6 +89,7 @@ app = FastAPI(
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(InMemoryRateLimitMiddleware)
 app.add_middleware(AdminOrderStateGuardMiddleware)
+app.add_middleware(CustomerOrderCancelGuardMiddleware)
 if settings.metrics_enabled:
     app.add_middleware(MetricsMiddleware)
 
@@ -107,6 +110,7 @@ app.include_router(auth_router, prefix="/api")
 app.include_router(products_router, prefix="/api")
 app.include_router(cart_router, prefix="/api")
 app.include_router(cart_items_router, prefix="/api")
+app.include_router(order_cancellation_router, prefix="/api")
 app.include_router(orders_router, prefix="/api")
 app.include_router(payments_router, prefix="/api")
 app.include_router(analytics_router, prefix="/api")
