@@ -1,6 +1,7 @@
 services:
   db:
     restart: unless-stopped
+    ports: !reset []
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
       POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
@@ -13,13 +14,16 @@ services:
 
   backend:
     restart: unless-stopped
+    ports: !reset []
     stop_grace_period: 30s
 
   frontend:
     restart: unless-stopped
+    ports: !reset []
 
   admin:
     restart: unless-stopped
+    ports: !reset []
 
   bot:
     restart: unless-stopped
@@ -32,6 +36,10 @@ services:
   scheduler:
     restart: unless-stopped
     stop_grace_period: 30s
+
+  meilisearch:
+    restart: unless-stopped
+    ports: !reset []
 
   caddy:
     restart: unless-stopped
