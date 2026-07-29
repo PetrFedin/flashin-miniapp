@@ -75,7 +75,16 @@ def validate_promo_definition(
     status_code: int = 400,
 ) -> tuple[str, Decimal, Decimal, int, int]:
     normalized_type = normalize_promo_type(discount_type, status_code=status_code)
-    value = money(discount_value, "promo discount value", status_code=status_code)
+    if normalized_type == "percent":
+        value = decimal_value(
+            discount_value,
+            "promo discount value",
+            PERCENT_STEP,
+            maximum=HUNDRED,
+            status_code=status_code,
+        )
+    else:
+        value = money(discount_value, "promo discount value", status_code=status_code)
     minimum = money(min_amount, "promo minimum amount", status_code=status_code)
 
     for raw, field in ((max_uses, "promo maximum uses"), (used_count, "promo used count")):
@@ -88,8 +97,6 @@ def validate_promo_definition(
         raise HTTPException(status_code=status_code, detail="Promo discount value must be positive")
     if minimum < 0:
         raise HTTPException(status_code=status_code, detail="Promo minimum amount cannot be negative")
-    if normalized_type == "percent" and value > HUNDRED:
-        raise HTTPException(status_code=status_code, detail="Percent promo cannot exceed 100%")
     if max_uses and used_count > max_uses:
         raise HTTPException(status_code=status_code, detail="Promo usage exceeds its configured limit")
     return normalized_type, value, minimum, max_uses, used_count
@@ -124,8 +131,14 @@ def calculate_discount(promo: PromoCode | None, subtotal: object) -> Decimal:
     if not promo:
         return Decimal("0.00")
     subtotal_value = validate_promo(promo, subtotal)
-    promo_type = normalize_promo_type(promo.discount_type, status_code=409)
-    value = money(promo.discount_value, "promo discount value")
+    promo_type, value, _minimum, _max_uses, _used_count = validate_promo_definition(
+        promo.discount_type,
+        promo.discount_value,
+        promo.min_amount,
+        promo.max_uses,
+        promo.used_count,
+        status_code=409,
+    )
     if promo_type == "percent":
         discount = (subtotal_value * value / HUNDRED).quantize(MONEY_STEP, rounding=ROUND_HALF_UP)
     else:
