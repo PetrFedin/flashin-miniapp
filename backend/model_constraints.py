@@ -138,7 +138,10 @@ def apply_model_constraints() -> None:
             LoyaltyTransaction.__table__.c.order_id,
             LoyaltyTransaction.__table__.c.reason,
         ],
-        "order_id IS NOT NULL AND reason IN ('order_paid', 'loyalty_redeemed', 'referral_reward', 'loyalty_refund')",
+        "order_id IS NOT NULL AND reason IN ("
+        "'order_paid', 'loyalty_redeemed', 'referral_reward', 'loyalty_refund', "
+        "'order_refund_reversal', 'referral_refund_reversal'"
+        ")",
     )
     _partial_unique_index(
         LoyaltyRedemptionHold.__table__,
