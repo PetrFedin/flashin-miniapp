@@ -1,4 +1,5 @@
 from functools import lru_cache
+
 from pydantic_settings import BaseSettings
 
 
@@ -65,6 +66,7 @@ class Settings(BaseSettings):
     moysklad_password: str = ""
     moysklad_default_currency: str = "RUB"
     moysklad_sync_limit: int = 100
+    moysklad_sync_interval_minutes: int = 30
 
     # CDN / analytics
     cdn_public_base_url: str = "https://cdn.flashin.store"
