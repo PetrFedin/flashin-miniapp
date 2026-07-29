@@ -162,8 +162,8 @@ export async function getRecommendations(productId) {
   return request(`/api/recommendations/${productId}`, { auth: false });
 }
 
-export async function sizeHelper(payload) {
-  return request("/api/recommendations/size-helper", {
+export async function sizeHelper(productId, payload) {
+  return request(`/api/recommendations/size-helper/${productId}`, {
     method: "POST",
     auth: false,
     body: JSON.stringify(payload),
