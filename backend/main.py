@@ -60,6 +60,15 @@ from .seed import bootstrap_admin, seed_products
 settings = get_settings()
 is_production = settings.app_env.strip().lower() == "production"
 
+admin_router.routes[:] = [
+    route
+    for route in admin_router.routes
+    if not (
+        getattr(route, "path", "") == "/admin/login"
+        and "POST" in getattr(route, "methods", set())
+    )
+]
+
 if settings.sentry_dsn:
     sentry_sdk.init(
         dsn=settings.sentry_dsn,
