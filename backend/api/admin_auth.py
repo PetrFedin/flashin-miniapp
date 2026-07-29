@@ -1,10 +1,13 @@
-from pydantic import BaseModel, Field
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..database import get_db
-from ..models import AdminTotpSecret, AdminUser
+from ..middleware.rate_limit import _client_ip
+from ..models import AdminPasswordReset, AdminTotpSecret, AdminUser
 from ..schemas import TokenOut
 from ..security import (
     create_admin_token,
@@ -12,16 +15,25 @@ from ..security import (
     password_needs_rehash,
     verify_password,
 )
-from ..middleware.rate_limit import _client_ip
 from ..services.admin_security import (
     create_admin_session,
     is_admin_ip_allowed,
     log_admin_login,
+    revoke_admin_sessions,
+    sha256,
     verify_totp,
 )
 
 router = APIRouter(prefix="/admin", tags=["admin-auth"])
 _DUMMY_PASSWORD_HASH = hash_password("not-a-real-admin-password")
+_COMMON_PASSWORDS = {
+    "password",
+    "password123",
+    "admin",
+    "admin123",
+    "qwerty123",
+    "change-me-now",
+}
 
 
 class AdminSessionLoginIn(BaseModel):
@@ -30,17 +42,50 @@ class AdminSessionLoginIn(BaseModel):
     totp_code: str | None = Field(default=None, max_length=16)
 
 
+class AdminPasswordResetConfirmIn(BaseModel):
+    token: str = Field(min_length=32, max_length=512)
+    new_password: str = Field(min_length=12, max_length=1024)
+
+
+def _request_identity(request: Request) -> tuple[str, str]:
+    settings = get_settings()
+    trust_proxy_headers = settings.app_env.strip().lower() == "production"
+    return (
+        _client_ip(request, trust_proxy_headers=trust_proxy_headers),
+        request.headers.get("user-agent", "")[:2000],
+    )
+
+
+def _validate_new_admin_password(password: str, email: str = "") -> None:
+    lowered = password.lower()
+    if lowered in _COMMON_PASSWORDS:
+        raise HTTPException(status_code=400, detail="New password is too weak")
+    classes = sum(
+        (
+            any(character.islower() for character in password),
+            any(character.isupper() for character in password),
+            any(character.isdigit() for character in password),
+            any(not character.isalnum() for character in password),
+        )
+    )
+    if classes < 3:
+        raise HTTPException(
+            status_code=400,
+            detail="New password must use at least three character classes",
+        )
+    email_local = (email or "").split("@", 1)[0].strip().lower()
+    if len(email_local) >= 4 and email_local in lowered:
+        raise HTTPException(status_code=400, detail="New password must not contain the email name")
+
+
 @router.post("/login", response_model=TokenOut)
 def admin_session_login(
     payload: AdminSessionLoginIn,
     request: Request,
     db: Session = Depends(get_db),
 ):
-    settings = get_settings()
     email = payload.email.strip().lower()
-    trust_proxy_headers = settings.app_env.strip().lower() == "production"
-    ip_address = _client_ip(request, trust_proxy_headers=trust_proxy_headers)
-    user_agent = request.headers.get("user-agent", "")[:2000]
+    ip_address, user_agent = _request_identity(request)
 
     if not is_admin_ip_allowed(db, ip_address):
         log_admin_login(
@@ -117,6 +162,87 @@ def admin_session_login(
         )
         db.commit()
         return TokenOut(access_token=token)
+    except HTTPException:
+        raise
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.post("/password-reset/confirm")
+def confirm_admin_password_reset(
+    payload: AdminPasswordResetConfirmIn,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    ip_address, user_agent = _request_identity(request)
+    if not is_admin_ip_allowed(db, ip_address):
+        log_admin_login(
+            db,
+            "",
+            None,
+            False,
+            "reset_ip_not_allowed",
+            ip_address,
+            user_agent,
+        )
+        db.commit()
+        raise HTTPException(status_code=403, detail="Admin access is not allowed")
+
+    now = datetime.utcnow()
+    try:
+        reset = (
+            db.query(AdminPasswordReset)
+            .filter(
+                AdminPasswordReset.token_hash == sha256(payload.token),
+                AdminPasswordReset.used.is_(False),
+                AdminPasswordReset.expires_at > now,
+            )
+            .with_for_update()
+            .first()
+        )
+        if not reset:
+            log_admin_login(
+                db,
+                "",
+                None,
+                False,
+                "invalid_or_expired_reset_token",
+                ip_address,
+                user_agent,
+            )
+            db.commit()
+            raise HTTPException(status_code=400, detail="Reset token is invalid or expired")
+
+        admin = (
+            db.query(AdminUser)
+            .filter(AdminUser.id == reset.admin_id, AdminUser.active.is_(True))
+            .with_for_update()
+            .first()
+        )
+        if not admin:
+            reset.used = True
+            db.commit()
+            raise HTTPException(status_code=400, detail="Reset token is invalid or expired")
+
+        _validate_new_admin_password(payload.new_password, admin.email)
+        if verify_password(payload.new_password, admin.password_hash):
+            raise HTTPException(status_code=400, detail="New password must be different")
+
+        admin.password_hash = hash_password(payload.new_password)
+        reset.used = True
+        revoked = revoke_admin_sessions(db, admin.id)
+        log_admin_login(
+            db,
+            admin.email,
+            admin.id,
+            True,
+            f"password_reset_success_sessions_revoked_{revoked}",
+            ip_address,
+            user_agent,
+        )
+        db.commit()
+        return {"ok": True}
     except HTTPException:
         raise
     except Exception:
