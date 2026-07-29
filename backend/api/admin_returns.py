@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -18,10 +19,26 @@ def list_admin_returns(
     db: Session = Depends(get_db),
 ):
     require_permission(db, admin, "orders.read")
+
+    refunded_totals = (
+        db.query(
+            ReturnRequest.order_id.label("order_id"),
+            func.coalesce(func.sum(ReturnRequest.refund_amount), 0).label("refunded_total"),
+        )
+        .filter(ReturnRequest.status.in_(["approved", "approved_partial"]))
+        .group_by(ReturnRequest.order_id)
+        .subquery()
+    )
     query = (
-        db.query(ReturnRequest, Order, Customer)
+        db.query(
+            ReturnRequest,
+            Order,
+            Customer,
+            func.coalesce(refunded_totals.c.refunded_total, 0),
+        )
         .join(Order, Order.id == ReturnRequest.order_id)
         .join(Customer, Customer.id == ReturnRequest.customer_id)
+        .outerjoin(refunded_totals, refunded_totals.c.order_id == Order.id)
     )
     normalized_status = (status or "").strip().lower()
     if normalized_status:
@@ -32,23 +49,13 @@ def list_admin_returns(
         .limit(limit)
         .all()
     )
+    zero = refund_money(0, "zero")
     result = []
-    for return_request, order, customer in rows:
-        completed_refunds = (
-            db.query(ReturnRequest)
-            .filter(
-                ReturnRequest.order_id == order.id,
-                ReturnRequest.status.in_(["approved", "approved_partial"]),
-            )
-            .all()
-        )
-        refunded_total = sum(
-            refund_money(item.refund_amount, "stored refund amount")
-            for item in completed_refunds
-        )
+    for return_request, order, customer, raw_refunded_total in rows:
+        refunded_total = refund_money(raw_refunded_total, "refunded total")
         refundable_balance = max(
             refund_money(order.total_amount, "order total") - refunded_total,
-            refund_money(0, "zero"),
+            zero,
         )
         result.append(
             {
