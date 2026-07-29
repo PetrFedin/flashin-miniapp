@@ -12,6 +12,7 @@ from sqlalchemy.pool import StaticPool
 
 from backend import admin_mfa_models  # noqa: F401
 from backend.api.admin_auth import router
+from backend.config import get_settings
 from backend.database import Base, get_db
 from backend.models import AdminSession, AdminTotpSecret, AdminUser
 from backend.security import hash_password
@@ -32,6 +33,10 @@ def _totp_code(secret: str, at_time: int) -> str:
 
 @pytest.fixture()
 def admin_mfa_api(monkeypatch):
+    monkeypatch.setenv("ADMIN_MFA_REQUIRED", "true")
+    monkeypatch.setenv("ADMIN_MFA_SETUP_TOKEN_MINUTES", "10")
+    get_settings.cache_clear()
+
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -67,6 +72,7 @@ def admin_mfa_api(monkeypatch):
 
     Base.metadata.drop_all(bind=engine)
     engine.dispose()
+    get_settings.cache_clear()
 
 
 def _login(client: TestClient, code: str | None = None):
@@ -135,7 +141,7 @@ def test_admin_mfa_setup_and_replay_protection(admin_mfa_api):
         assert db.query(AdminSession).filter(AdminSession.admin_id == admin_id).count() == 2
 
 
-def test_setup_token_cannot_access_normal_admin_session_flow(admin_mfa_api):
+def test_setup_token_cannot_finish_without_enrollment(admin_mfa_api):
     client, _, _, _ = admin_mfa_api
 
     initial_login = _login(client)
@@ -147,4 +153,4 @@ def test_setup_token_cannot_access_normal_admin_session_flow(admin_mfa_api):
         json={"code": "000000"},
     )
 
-    assert response.status_code in {400, 409}
+    assert response.status_code == 409
