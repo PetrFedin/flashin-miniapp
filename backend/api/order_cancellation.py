@@ -11,6 +11,7 @@ from ..models import (
     Payment,
     PromoCode,
 )
+from ..payment_attempt_models import PaymentCreationAttempt
 from ..schemas import OrderOut
 from ..security import get_current_admin, get_current_customer
 from ..services.audit import log_admin_action
@@ -48,7 +49,14 @@ def _cancel_before_payment(db: Session, order: Order) -> None:
         .first()
         is not None
     )
-    if payment_exists:
+    payment_attempt_exists = (
+        db.query(PaymentCreationAttempt.id)
+        .filter(PaymentCreationAttempt.order_id == order.id)
+        .with_for_update()
+        .first()
+        is not None
+    )
+    if payment_exists or payment_attempt_exists:
         raise HTTPException(
             status_code=409,
             detail="Payment flow already exists; reconcile payment or use refund flow",
