@@ -56,8 +56,12 @@ def _estimated_index(height_cm: int | None, weight_kg: int | None) -> int:
 
 
 def _nearest_available(target_index: int, available_sizes: Iterable[str] | None) -> tuple[str, bool]:
+    target = _SIZE_ORDER[target_index]
+    if available_sizes is None:
+        return target, True
+
     normalized_available: set[str] = set()
-    for raw_size in available_sizes or []:
+    for raw_size in available_sizes:
         try:
             normalized = _normalize_size(raw_size)
         except ValueError:
@@ -65,9 +69,10 @@ def _nearest_available(target_index: int, available_sizes: Iterable[str] | None)
         if normalized:
             normalized_available.add(normalized)
 
-    target = _SIZE_ORDER[target_index]
-    if not normalized_available or target in normalized_available:
-        return target, target in normalized_available if normalized_available else True
+    if not normalized_available:
+        return target, False
+    if target in normalized_available:
+        return target, True
 
     nearest = min(
         normalized_available,
@@ -107,10 +112,14 @@ def suggest_size(
     basis.append(f"fit:{normalized_fit}")
     suggested_size, exact_available = _nearest_available(adjusted_index, available_sizes)
 
-    if exact_available:
+    if available_sizes is None:
+        availability_note = "Наличие конкретного товара не учитывалось."
+    elif exact_available:
         availability_note = "Размер присутствует среди доступных вариантов товара."
     else:
-        availability_note = "Ближайший доступный размер выбран вместо рассчитанного базового размера."
+        availability_note = (
+            "Рассчитанный размер отсутствует: показан ближайший доступный вариант либо базовый размер для подписки на поступление."
+        )
 
     return {
         "suggested_size": suggested_size,
