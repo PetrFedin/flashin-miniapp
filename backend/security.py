@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from .config import get_settings
 from .database import get_db
 from .models import AdminUser, Customer
+from .services.admin_security import is_admin_session_active
 
 bearer = HTTPBearer(auto_error=False)
 
@@ -258,4 +259,6 @@ def get_current_admin(
     )
     if not admin:
         raise HTTPException(status_code=401, detail="Admin not found")
+    if not is_admin_session_active(db, admin.id, credentials.credentials):
+        raise HTTPException(status_code=401, detail="Admin session is revoked or unknown")
     return admin
