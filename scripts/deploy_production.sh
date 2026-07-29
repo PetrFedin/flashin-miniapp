@@ -49,8 +49,13 @@ docker compose run --rm backend alembic -c backend/alembic.ini upgrade head
 echo "Verifying transaction integrity after migration..."
 docker compose run --rm backend python scripts/check_transaction_integrity.py
 
-echo "Starting production services..."
-docker compose --profile production up -d backend frontend admin bot caddy
+echo "Starting production services and financial workers..."
+docker compose \
+  --profile production \
+  --profile workers \
+  --profile scheduler \
+  up -d \
+  backend frontend admin bot caddy notification_worker scheduler
 
 echo "Running health checks..."
 backend_healthy=0
@@ -67,6 +72,14 @@ if [ "$backend_healthy" -ne 1 ]; then
   docker compose logs backend
   exit 1
 fi
+
+for service in notification_worker scheduler; do
+  if ! docker compose ps --status running --services | grep -qx "$service"; then
+    echo "$service is not running"
+    docker compose logs "$service"
+    exit 1
+  fi
+done
 
 python3 tests/e2e_smoke.py
 
