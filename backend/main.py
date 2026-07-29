@@ -1,53 +1,56 @@
 from pathlib import Path
+
 import sentry_sdk
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from .middleware.rate_limit import InMemoryRateLimitMiddleware
-from .middleware.metrics import MetricsMiddleware, metrics_response
-from .middleware.security_headers import SecurityHeadersMiddleware
+
+from . import model_constraints as _model_constraints  # noqa: F401
+from .api.admin import router as admin_router
+from .api.admin_security import router as admin_security_router
 from .api.analytics import router as analytics_router
 from .api.auth import router as auth_router
-from .api.cart import router as cart_router
-from .api.currency import router as currency_router
-from .api.health import router as health_router
-from .api.orders import router as orders_router
-from .api.payments import router as payments_router
-from .api.products import router as products_router
-from .api.admin import router as admin_router
-from .api.media import router as media_router
-from .api.returns import router as returns_router
-from .api.wishlist import router as wishlist_router
-from .api.restock import router as restock_router
-from .api.delivery import router as delivery_router
-from .api.ops import router as ops_router
-from .api.support import router as support_router
-from .api.privacy import router as privacy_router
-from .api.outbox import router as outbox_router
-from .api.moysklad import router as moysklad_router
-from .api.crm import router as crm_router
-from .api.recommendations import router as recommendations_router
 from .api.business_analytics import router as business_analytics_router
-from .api.loyalty import router as loyalty_router
 from .api.campaigns import router as campaigns_router
-from .api.search import router as search_router
-from .api.looks import router as looks_router
-from .api.timeline import router as timeline_router
-from .api.reconciliation import router as reconciliation_router
-from .api.fulfillment import router as fulfillment_router
-from .api.webhook_destinations import router as webhook_destinations_router
-from .api.profile import router as profile_router
-from .api.platform import router as platform_router
-from .api.import_export import router as import_export_router
-from .api.v1.router import router as v1_router
-from .api.diagnostics import router as diagnostics_router
-from .api.payment_reconciliation import router as payment_reconciliation_router
+from .api.cart import router as cart_router
+from .api.crm import router as crm_router
+from .api.currency import router as currency_router
+from .api.delivery import router as delivery_router
 from .api.delivery_providers import router as delivery_providers_router
-from .api.moysklad_deep_mapping import router as moysklad_deep_mapping_router
-from .api.admin_security import router as admin_security_router
 from .api.delivery_quotes import router as delivery_quotes_router
+from .api.diagnostics import router as diagnostics_router
+from .api.fulfillment import router as fulfillment_router
+from .api.health import router as health_router
+from .api.import_export import router as import_export_router
+from .api.looks import router as looks_router
+from .api.loyalty import router as loyalty_router
+from .api.media import router as media_router
+from .api.moysklad import router as moysklad_router
+from .api.moysklad_deep_mapping import router as moysklad_deep_mapping_router
+from .api.ops import router as ops_router
+from .api.orders import router as orders_router
+from .api.outbox import router as outbox_router
+from .api.payment_reconciliation import router as payment_reconciliation_router
+from .api.payments import router as payments_router
+from .api.platform import router as platform_router
+from .api.privacy import router as privacy_router
+from .api.products import router as products_router
+from .api.profile import router as profile_router
+from .api.recommendations import router as recommendations_router
+from .api.reconciliation import router as reconciliation_router
+from .api.restock import router as restock_router
+from .api.returns import router as returns_router
+from .api.search import router as search_router
+from .api.support import router as support_router
+from .api.timeline import router as timeline_router
+from .api.v1.router import router as v1_router
+from .api.webhook_destinations import router as webhook_destinations_router
+from .api.wishlist import router as wishlist_router
 from .config import get_settings
 from .database import Base, SessionLocal, engine
+from .middleware.metrics import MetricsMiddleware, metrics_response
+from .middleware.rate_limit import InMemoryRateLimitMiddleware
+from .middleware.security_headers import SecurityHeadersMiddleware
 from .seed import bootstrap_admin, seed_products
 
 settings = get_settings()
