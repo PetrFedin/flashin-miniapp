@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Read-only database audit for transactional constraints through revision 0013."""
+"""Read-only database audit for transactional constraints through revision 0013.
+
+The audit is migration-aware: checks for newer tables are enabled only when all
+of their dependent tables exist. This keeps the pre-migration deploy gate usable
+when upgrading an older production schema, while the post-migration run verifies
+all current constraints.
+"""
 
 import argparse
 import json
@@ -11,7 +17,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from backend.database import engine
 
-CHECKS: Mapping[str, str] = {
+BASE_CHECKS: Mapping[str, str] = {
     "invalid_variant_inventory": """
         SELECT count(*) FROM product_variants
         WHERE stock_qty < 0 OR reserved_qty < 0 OR reserved_qty > stock_qty
@@ -42,22 +48,6 @@ CHECKS: Mapping[str, str] = {
     "negative_refund_amounts": "SELECT count(*) FROM return_requests WHERE refund_amount < 0",
     "negative_loyalty_balances": "SELECT count(*) FROM crm_profiles WHERE loyalty_points < 0",
     "non_positive_loyalty_holds": "SELECT count(*) FROM loyalty_redemption_holds WHERE points <= 0",
-    "negative_notification_delivery_attempts": """
-        SELECT count(*) FROM notification_delivery_states WHERE attempts < 0
-    """,
-    "orphan_notification_delivery_states": """
-        SELECT count(*)
-        FROM notification_delivery_states state
-        LEFT JOIN notifications notification ON notification.id = state.notification_id
-        WHERE notification.id IS NULL
-    """,
-    "invalid_webhook_destinations": """
-        SELECT count(*) FROM webhook_destinations
-        WHERE length(trim(url)) = 0 OR length(trim(event_type)) = 0
-    """,
-    "negative_webhook_outbox_attempts": """
-        SELECT count(*) FROM webhook_outbox WHERE attempts < 0
-    """,
     "duplicate_active_carts": """
         SELECT count(*) FROM (
             SELECT customer_id FROM carts
@@ -121,11 +111,8 @@ CHECKS: Mapping[str, str] = {
             SELECT customer_id, order_id, reason FROM loyalty_transactions
             WHERE order_id IS NOT NULL
               AND reason IN (
-                  'order_paid',
-                  'loyalty_redeemed',
-                  'referral_reward',
-                  'loyalty_refund',
-                  'order_refund_reversal',
+                  'order_paid', 'loyalty_redeemed', 'referral_reward',
+                  'loyalty_refund', 'order_refund_reversal',
                   'referral_refund_reversal'
               )
             GROUP BY customer_id, order_id, reason HAVING count(*) > 1
@@ -152,21 +139,51 @@ CHECKS: Mapping[str, str] = {
             GROUP BY customer_id HAVING count(*) > 1
         ) conflicts
     """,
-    "duplicate_notification_delivery_states": """
-        SELECT count(*) FROM (
-            SELECT notification_id FROM notification_delivery_states
-            GROUP BY notification_id HAVING count(*) > 1
-        ) conflicts
-    """,
-    "duplicate_webhook_destinations": """
-        SELECT count(*) FROM (
-            SELECT url, event_type FROM webhook_destinations
-            GROUP BY url, event_type HAVING count(*) > 1
-        ) conflicts
-    """,
 }
 
-REQUIRED_TABLES = {
+OPTIONAL_CHECK_GROUPS: tuple[tuple[set[str], Mapping[str, str]], ...] = (
+    (
+        {"notification_delivery_states", "notifications"},
+        {
+            "negative_notification_delivery_attempts": """
+                SELECT count(*) FROM notification_delivery_states WHERE attempts < 0
+            """,
+            "orphan_notification_delivery_states": """
+                SELECT count(*)
+                FROM notification_delivery_states state
+                LEFT JOIN notifications notification
+                  ON notification.id = state.notification_id
+                WHERE notification.id IS NULL
+            """,
+            "duplicate_notification_delivery_states": """
+                SELECT count(*) FROM (
+                    SELECT notification_id FROM notification_delivery_states
+                    GROUP BY notification_id HAVING count(*) > 1
+                ) conflicts
+            """,
+        },
+    ),
+    (
+        {"webhook_destinations", "webhook_outbox"},
+        {
+            "invalid_webhook_destinations": """
+                SELECT count(*) FROM webhook_destinations
+                WHERE length(trim(url)) = 0 OR length(trim(event_type)) = 0
+            """,
+            "negative_webhook_outbox_attempts": """
+                SELECT count(*) FROM webhook_outbox WHERE attempts < 0
+            """,
+            "duplicate_webhook_destinations": """
+                SELECT count(*) FROM (
+                    SELECT url, event_type FROM webhook_destinations
+                    GROUP BY url, event_type HAVING count(*) > 1
+                ) conflicts
+            """,
+        },
+    ),
+)
+
+BASE_REQUIRED_TABLES = {
     "admin_password_resets",
     "admin_role_permissions",
     "admin_sessions",
@@ -176,8 +193,6 @@ REQUIRED_TABLES = {
     "fulfillment_tasks",
     "loyalty_redemption_holds",
     "loyalty_transactions",
-    "notification_delivery_states",
-    "notifications",
     "order_items",
     "orders",
     "payment_events",
@@ -186,8 +201,6 @@ REQUIRED_TABLES = {
     "promo_codes",
     "referral_codes",
     "return_requests",
-    "webhook_destinations",
-    "webhook_outbox",
 }
 
 
@@ -197,15 +210,24 @@ class MissingSchemaError(RuntimeError):
         super().__init__("missing tables: " + ", ".join(sorted(missing_tables)))
 
 
+def _enabled_checks(present_tables: set[str]) -> dict[str, str]:
+    checks = dict(BASE_CHECKS)
+    for required_tables, group_checks in OPTIONAL_CHECK_GROUPS:
+        if required_tables <= present_tables:
+            checks.update(group_checks)
+    return checks
+
+
 def run_audit() -> dict[str, int]:
     present_tables = set(inspect(engine).get_table_names())
-    missing_tables = REQUIRED_TABLES - present_tables
+    missing_tables = BASE_REQUIRED_TABLES - present_tables
     if missing_tables:
         raise MissingSchemaError(missing_tables)
 
     results: dict[str, int] = {}
+    checks = _enabled_checks(present_tables)
     with engine.connect() as connection:
-        for name, query in CHECKS.items():
+        for name, query in checks.items():
             results[name] = int(connection.execute(text(query)).scalar_one())
     return results
 
