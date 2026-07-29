@@ -15,6 +15,7 @@ def _safe_production_settings(**overrides):
         "jwt_expire_minutes": 30 * 24 * 60,
         "admin_jwt_expire_minutes": 480,
         "admin_password": "Strong-Admin-Password-2026",
+        "admin_totp_encryption_key": "t" * 48,
         "outbox_signing_secret": "o" * 48,
         "payment_provider": "yookassa",
         "yookassa_shop_id": "shop-123",
@@ -35,6 +36,7 @@ def test_safe_production_configuration_is_accepted():
     assert settings.app_env == "production"
     assert settings.jwt_algorithm == "HS256"
     assert settings.admin_jwt_expire_minutes == 480
+    assert settings.admin_totp_encryption_key != settings.jwt_secret
 
 
 def test_default_production_secrets_are_rejected():
@@ -42,13 +44,25 @@ def test_default_production_secrets_are_rejected():
         _safe_production_settings(
             jwt_secret="test-secret",
             admin_password="change-me-now",
+            admin_totp_encryption_key="change-me",
             outbox_signing_secret="change-me-outbox-secret",
         )
 
     message = str(exc_info.value)
     assert "JWT_SECRET" in message
     assert "ADMIN_PASSWORD" in message
+    assert "ADMIN_TOTP_ENCRYPTION_KEY" in message
     assert "OUTBOX_SIGNING_SECRET" in message
+
+
+def test_totp_encryption_key_must_differ_from_jwt_secret():
+    with pytest.raises(ValidationError) as exc_info:
+        _safe_production_settings(
+            jwt_secret="same-secret-material" * 3,
+            admin_totp_encryption_key="same-secret-material" * 3,
+        )
+
+    assert "must differ from JWT_SECRET" in str(exc_info.value)
 
 
 def test_production_requires_explicit_https_cors_origins():
