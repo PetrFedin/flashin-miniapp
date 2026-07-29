@@ -30,13 +30,7 @@ _MAX_MONEY = Decimal("999999999999999999.99")
 _MAX_REWARD_RATE = Decimal("1000.0000")
 
 
-def _decimal_value(
-    value: object,
-    field: str,
-    step: Decimal,
-    *,
-    maximum: Decimal,
-) -> Decimal:
+def _decimal_value(value: object, field: str, step: Decimal, *, maximum: Decimal) -> Decimal:
     try:
         number = Decimal(str(value)).quantize(step, rounding=ROUND_HALF_UP)
     except (InvalidOperation, TypeError, ValueError):
@@ -62,18 +56,11 @@ def _as_float(value: Decimal) -> float:
     return float(value)
 
 
-def calculate_order_reward_points(
-    total_amount: object,
-    points_per_ruble: object | None = None,
-) -> Decimal:
+def calculate_order_reward_points(total_amount: object, points_per_ruble: object | None = None) -> Decimal:
     total = _money(total_amount, "order total")
     if total < 0:
         raise HTTPException(status_code=409, detail="Order total cannot be negative")
-    raw_rate = (
-        get_settings().loyalty_points_per_ruble
-        if points_per_ruble is None
-        else points_per_ruble
-    )
+    raw_rate = get_settings().loyalty_points_per_ruble if points_per_ruble is None else points_per_ruble
     reward_rate = _rate(raw_rate, "loyalty reward rate")
     if reward_rate < 0 or reward_rate > _MAX_REWARD_RATE:
         raise HTTPException(status_code=500, detail="Loyalty reward rate is misconfigured")
@@ -105,12 +92,7 @@ def add_points(
     if normalized_reason == "order_paid":
         if not order_id:
             raise HTTPException(status_code=409, detail="Paid-order reward requires an order")
-        order = (
-            db.query(Order)
-            .filter(Order.id == order_id)
-            .with_for_update()
-            .first()
-        )
+        order = db.query(Order).filter(Order.id == order_id).with_for_update().first()
         if not order or order.customer_id != customer_id:
             raise HTTPException(status_code=409, detail="Paid-order reward does not match customer")
         successful_payment = (
@@ -124,12 +106,12 @@ def add_points(
         points_value = calculate_order_reward_points(order.total_amount)
     else:
         points_value = _points(points)
+
     if points_value == 0:
         return
 
     profile = _locked_profile(db, customer_id, create=True)
-    new_balance = _points(profile.loyalty_points, "loyalty balance") + points_value
-    new_balance = _points(new_balance, "loyalty balance")
+    new_balance = _points(_points(profile.loyalty_points, "loyalty balance") + points_value, "loyalty balance")
     if new_balance < 0:
         raise HTTPException(status_code=409, detail="Loyalty balance cannot become negative")
 
@@ -150,12 +132,8 @@ def _referral_lock_key(customer_id: int) -> int:
 
 
 def _acquire_referral_lock(db: Session, customer_id: int) -> None:
-    if db.get_bind().dialect.name != "postgresql":
-        return
-    db.execute(
-        text("SELECT pg_advisory_xact_lock(:lock_key)"),
-        {"lock_key": _referral_lock_key(customer_id)},
-    )
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(text("SELECT pg_advisory_xact_lock(:lock_key)"), {"lock_key": _referral_lock_key(customer_id)})
 
 
 def ensure_referral_code(db: Session, customer_id: int) -> ReferralCode:
@@ -223,26 +201,20 @@ def redeem_points(db: Session, customer_id: int, cart: Cart, points: float) -> C
         raise HTTPException(status_code=409, detail="Loyalty profile not found")
 
     other_reserved = sum(
-        (
-            _points(hold.points, "reserved loyalty points")
-            for hold in holds
-            if hold.cart_id != cart.id
-        ),
+        (_points(hold.points, "reserved loyalty points") for hold in holds if hold.cart_id != cart.id),
         Decimal("0"),
     )
-    available_points = _points(profile.loyalty_points, "loyalty balance") - other_reserved
-    available_points = _points(available_points, "available loyalty points")
+    available_points = _points(
+        _points(profile.loyalty_points, "loyalty balance") - other_reserved,
+        "available loyalty points",
+    )
     if requested_points > available_points:
         raise HTTPException(status_code=409, detail="Not enough available loyalty points")
 
-    subtotal = sum(
-        (
-            _money(item.product.price, "product price") * int(item.quantity)
-            for item in cart.items
-        ),
-        Decimal("0"),
+    subtotal = _money(
+        sum((_money(item.product.price, "product price") * int(item.quantity) for item in cart.items), Decimal("0")),
+        "cart subtotal",
     )
-    subtotal = _money(subtotal, "cart subtotal")
     loyalty_limit = _rate(settings.loyalty_max_redeem_percent, "loyalty limit")
     if loyalty_limit < 0 or loyalty_limit > _HUNDRED:
         raise HTTPException(status_code=500, detail="Loyalty limit is misconfigured")
@@ -328,3 +300,126 @@ def reward_referral_after_first_paid_order(db: Session, invited_customer_id: int
     attribution.rewarded_order_id = order_id
     attribution.rewarded_at = datetime.utcnow()
     referral.used_count += 1
+
+
+def create_redemption_hold(
+    db: Session,
+    customer_id: int,
+    cart_id: int,
+    points: float,
+) -> LoyaltyRedemptionHold | None:
+    points_value = _points(points)
+    hold = (
+        db.query(LoyaltyRedemptionHold)
+        .filter(
+            LoyaltyRedemptionHold.customer_id == customer_id,
+            LoyaltyRedemptionHold.cart_id == cart_id,
+            LoyaltyRedemptionHold.status == "reserved",
+        )
+        .with_for_update()
+        .first()
+    )
+    if points_value <= 0:
+        if hold:
+            hold.status = "released"
+            hold.released_at = datetime.utcnow()
+        return None
+    if hold:
+        hold.points = _as_float(points_value)
+        return hold
+
+    hold = LoyaltyRedemptionHold(
+        customer_id=customer_id,
+        cart_id=cart_id,
+        points=_as_float(points_value),
+        status="reserved",
+    )
+    db.add(hold)
+    return hold
+
+
+def mark_redemption_committed(
+    db: Session,
+    customer_id: int,
+    cart_id: int | None,
+    order_id: int,
+    points: float,
+) -> None:
+    points_value = _points(points)
+    if points_value <= 0:
+        return
+
+    committed = (
+        db.query(LoyaltyRedemptionHold)
+        .filter(
+            LoyaltyRedemptionHold.customer_id == customer_id,
+            LoyaltyRedemptionHold.order_id == order_id,
+            LoyaltyRedemptionHold.status == "committed",
+        )
+        .with_for_update()
+        .first()
+    )
+    if committed:
+        return
+
+    query = db.query(LoyaltyRedemptionHold).filter(
+        LoyaltyRedemptionHold.customer_id == customer_id,
+        LoyaltyRedemptionHold.status == "reserved",
+    )
+    if cart_id is not None:
+        query = query.filter(LoyaltyRedemptionHold.cart_id == cart_id)
+    else:
+        query = query.filter(LoyaltyRedemptionHold.order_id == order_id)
+    hold = query.with_for_update().first()
+
+    if hold:
+        hold.status = "committed"
+        hold.order_id = order_id
+        hold.points = _as_float(points_value)
+        return
+
+    db.add(
+        LoyaltyRedemptionHold(
+            customer_id=customer_id,
+            cart_id=cart_id,
+            order_id=order_id,
+            points=_as_float(points_value),
+            status="committed",
+        )
+    )
+
+
+def refund_redeemed_points(db: Session, customer_id: int, order_id: int, points: float) -> None:
+    points_value = _points(points)
+    if points_value <= 0:
+        return
+
+    existing = (
+        db.query(LoyaltyTransaction)
+        .filter(
+            LoyaltyTransaction.customer_id == customer_id,
+            LoyaltyTransaction.order_id == order_id,
+            LoyaltyTransaction.reason == "loyalty_refund",
+        )
+        .with_for_update()
+        .first()
+    )
+    if existing:
+        return
+
+    hold = (
+        db.query(LoyaltyRedemptionHold)
+        .filter(
+            LoyaltyRedemptionHold.customer_id == customer_id,
+            LoyaltyRedemptionHold.order_id == order_id,
+        )
+        .with_for_update()
+        .first()
+    )
+    if hold and hold.status == "refunded":
+        return
+
+    add_points(db, customer_id, _as_float(points_value), "loyalty_refund", order_id)
+    if hold:
+        hold.status = "refunded"
+        hold.released_at = datetime.utcnow()
