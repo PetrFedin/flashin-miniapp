@@ -157,7 +157,7 @@ def get_current_customer(
         raise HTTPException(status_code=401, detail="Invalid token")
 
     customer = db.query(Customer).filter(Customer.id == customer_id).first()
-    if not customer:
+    if not customer or str(customer.telegram_id).startswith("deleted:"):
         raise HTTPException(status_code=401, detail="Customer not found")
     return customer
 
