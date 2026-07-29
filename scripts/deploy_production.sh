@@ -8,6 +8,8 @@ if [ ! -f .env ]; then
   exit 1
 fi
 
+export COMPOSE_FILE="docker-compose.yml:docker-compose.production.yml"
+
 python3 scripts/preflight.py
 
 echo "Building images..."
