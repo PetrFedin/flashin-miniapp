@@ -28,12 +28,12 @@ def test_positive_price_rejects_invalid_value(value):
     assert exc.value.status_code == 400
 
 
-@pytest.mark.parametrize(("value", "expected"), [(0, 0), (5, 5), ("5", 5), ("5.0", 5)])
+@pytest.mark.parametrize(("value", "expected"), [(0, 0), (5, 5), (5.0, 5), ("5", 5)])
 def test_stock_quantity_accepts_non_negative_integer(value, expected):
     assert _stock_quantity(value) == expected
 
 
-@pytest.mark.parametrize("value", [-1, True, 1.5, "1.5", "invalid", None])
+@pytest.mark.parametrize("value", [-1, True, 1.5, "1.5", "5.0", "invalid", None])
 def test_stock_quantity_rejects_invalid_value(value):
     with pytest.raises(HTTPException) as exc:
         _stock_quantity(value)
