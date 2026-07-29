@@ -1,4 +1,5 @@
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+const CHECKOUT_IDEMPOTENCY_STORAGE_KEY = "flashin_checkout_idempotency";
 
 function getToken() {
   return localStorage.getItem("flashin_token");
@@ -33,6 +34,50 @@ async function request(path, options = {}) {
   }
   if (response.status === 204) return null;
   return response.json();
+}
+
+function checkoutPayloadIdentity(payload) {
+  return JSON.stringify({
+    name: String(payload?.name || "").trim(),
+    phone: String(payload?.phone || "").trim(),
+    delivery_type: String(payload?.delivery_type || "").trim().toLowerCase(),
+    address: String(payload?.address || "").trim(),
+    comment: String(payload?.comment || "").trim().slice(0, 2000),
+  });
+}
+
+function newCheckoutIdempotencyKey() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `checkout-${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function checkoutIdempotencyState(payload) {
+  const payloadIdentity = checkoutPayloadIdentity(payload);
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(CHECKOUT_IDEMPOTENCY_STORAGE_KEY) || "null");
+    if (
+      stored
+      && typeof stored.key === "string"
+      && stored.payloadIdentity === payloadIdentity
+    ) {
+      return stored;
+    }
+  } catch {
+    sessionStorage.removeItem(CHECKOUT_IDEMPOTENCY_STORAGE_KEY);
+  }
+
+  const state = { key: newCheckoutIdempotencyKey(), payloadIdentity };
+  sessionStorage.setItem(CHECKOUT_IDEMPOTENCY_STORAGE_KEY, JSON.stringify(state));
+  return state;
+}
+
+function clearCheckoutIdempotencyKey(key) {
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(CHECKOUT_IDEMPOTENCY_STORAGE_KEY) || "null");
+    if (stored?.key === key) sessionStorage.removeItem(CHECKOUT_IDEMPOTENCY_STORAGE_KEY);
+  } catch {
+    sessionStorage.removeItem(CHECKOUT_IDEMPOTENCY_STORAGE_KEY);
+  }
 }
 
 export async function telegramAuth(initData) {
@@ -100,10 +145,14 @@ export async function applyReferral(code) {
 }
 
 export async function checkout(payload) {
-  return request("/api/orders/checkout", {
+  const idempotency = checkoutIdempotencyState(payload);
+  const order = await request("/api/orders/checkout", {
     method: "POST",
+    headers: { "Idempotency-Key": idempotency.key },
     body: JSON.stringify(payload),
   });
+  clearCheckoutIdempotencyKey(idempotency.key);
+  return order;
 }
 
 export async function listOrders() {
