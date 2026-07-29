@@ -91,6 +91,7 @@ def test_create_refund_validates_payment_link_amount_and_currency(monkeypatch):
 
     assert result == {
         "refund_id": "refund-123",
+        "payment_id": "pay-123",
         "status": "succeeded",
         "amount": {"value": "250.40", "currency": "RUB"},
     }
@@ -123,6 +124,28 @@ def test_create_refund_rejects_invalid_provider_contract(monkeypatch, payload, e
         )
 
     assert _error_code(caught.value) == expected_error
+
+
+def test_recovered_refund_requires_expected_refund_and_payment_ids():
+    result = payment_service.validate_yookassa_refund(
+        _refund_payload(status="succeeded"),
+        "pay-123",
+        250.4,
+        "RUB",
+        expected_refund_id="refund-123",
+    )
+    assert result["refund_id"] == "refund-123"
+    assert result["payment_id"] == "pay-123"
+
+    with pytest.raises(HTTPException) as mismatched_refund:
+        payment_service.validate_yookassa_refund(
+            _refund_payload(),
+            "pay-123",
+            250.4,
+            "RUB",
+            expected_refund_id="refund-other",
+        )
+    assert _error_code(mismatched_refund.value) == "refund_id_mismatch"
 
 
 def test_webhook_transition_uses_current_provider_state_not_source_event_name():
