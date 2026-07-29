@@ -2,7 +2,7 @@ import hashlib
 import hmac
 import secrets
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qsl
 
 from fastapi import Depends, HTTPException
@@ -20,6 +20,10 @@ _TELEGRAM_MAX_AGE_SECONDS = 60 * 60 * 24
 _TELEGRAM_CLOCK_SKEW_SECONDS = 5 * 60
 _PASSWORD_SCHEME = "pbkdf2_sha256"
 _PASSWORD_ITERATIONS = 310_000
+_JWT_ISSUER = "flashin-miniapp"
+_JWT_CUSTOMER_AUDIENCE = "flashin-customer"
+_JWT_ADMIN_AUDIENCE = "flashin-admin"
+_JWT_CLOCK_SKEW_SECONDS = 30
 
 
 def verify_telegram_init_data(init_data: str) -> dict:
@@ -74,16 +78,61 @@ def verify_telegram_init_data(init_data: str) -> dict:
     return parsed
 
 
-def create_access_token(customer_id: int) -> str:
-    settings = get_settings()
-    issued_at = datetime.utcnow()
-    expire = issued_at + timedelta(minutes=settings.jwt_expire_minutes)
-    payload = {
-        "sub": str(customer_id),
-        "type": "customer",
-        "iat": issued_at,
-        "exp": expire,
+def _jwt_payload(subject: str, token_type: str, audience: str, expires_minutes: int) -> dict:
+    if expires_minutes <= 0:
+        raise ValueError("JWT expiration must be positive")
+    now = datetime.now(timezone.utc)
+    return {
+        "sub": subject,
+        "type": token_type,
+        "iss": _JWT_ISSUER,
+        "aud": audience,
+        "jti": secrets.token_urlsafe(24),
+        "iat": now,
+        "nbf": now,
+        "exp": now + timedelta(minutes=expires_minutes),
     }
+
+
+def _decode_token(token: str, expected_type: str, audience: str) -> dict:
+    settings = get_settings()
+    try:
+        payload = jwt.decode(
+            token,
+            settings.jwt_secret,
+            algorithms=[settings.jwt_algorithm],
+            audience=audience,
+            issuer=_JWT_ISSUER,
+            options={
+                "verify_aud": True,
+                "verify_iss": True,
+                "verify_exp": True,
+                "verify_nbf": True,
+            },
+        )
+        if payload.get("type") != expected_type:
+            raise JWTError("wrong token type")
+        if not str(payload.get("jti") or "").strip():
+            raise JWTError("missing token id")
+        issued_at = int(payload.get("iat"))
+        now = int(time.time())
+        if issued_at <= 0 or issued_at > now + _JWT_CLOCK_SKEW_SECONDS:
+            raise JWTError("invalid issued-at time")
+    except (JWTError, TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="Invalid token")
+    return payload
+
+
+def create_access_token(customer_id: int) -> str:
+    if customer_id <= 0:
+        raise ValueError("Customer id must be positive")
+    settings = get_settings()
+    payload = _jwt_payload(
+        str(customer_id),
+        "customer",
+        _JWT_CUSTOMER_AUDIENCE,
+        settings.jwt_expire_minutes,
+    )
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
@@ -91,22 +140,19 @@ def get_current_customer(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
     db: Session = Depends(get_db),
 ) -> Customer:
-    settings = get_settings()
-    if not credentials:
+    if not credentials or credentials.scheme.lower() != "bearer":
         raise HTTPException(status_code=401, detail="Bearer token required")
+
+    payload = _decode_token(
+        credentials.credentials,
+        expected_type="customer",
+        audience=_JWT_CUSTOMER_AUDIENCE,
+    )
     try:
-        payload = jwt.decode(
-            credentials.credentials,
-            settings.jwt_secret,
-            algorithms=[settings.jwt_algorithm],
-        )
-        token_type = payload.get("type")
-        if token_type not in {None, "customer"}:
-            raise JWTError("wrong token type")
         customer_id = int(payload.get("sub"))
         if customer_id <= 0:
             raise ValueError("invalid customer id")
-    except (JWTError, TypeError, ValueError):
+    except (TypeError, ValueError):
         raise HTTPException(status_code=401, detail="Invalid token")
 
     customer = db.query(Customer).filter(Customer.id == customer_id).first()
@@ -170,16 +216,16 @@ def password_needs_rehash(password_hash: str) -> bool:
 
 
 def create_admin_token(admin_id: int, role: str) -> str:
+    if admin_id <= 0:
+        raise ValueError("Admin id must be positive")
     settings = get_settings()
-    issued_at = datetime.utcnow()
-    expire = issued_at + timedelta(minutes=settings.jwt_expire_minutes)
-    payload = {
-        "sub": f"admin:{admin_id}",
-        "type": "admin",
-        "role": role,
-        "iat": issued_at,
-        "exp": expire,
-    }
+    payload = _jwt_payload(
+        f"admin:{admin_id}",
+        "admin",
+        _JWT_ADMIN_AUDIENCE,
+        settings.jwt_expire_minutes,
+    )
+    payload["role"] = str(role or "").strip()
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
@@ -187,25 +233,22 @@ def get_current_admin(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
     db: Session = Depends(get_db),
 ) -> AdminUser:
-    settings = get_settings()
-    if not credentials:
+    if not credentials or credentials.scheme.lower() != "bearer":
         raise HTTPException(status_code=401, detail="Admin bearer token required")
+
+    payload = _decode_token(
+        credentials.credentials,
+        expected_type="admin",
+        audience=_JWT_ADMIN_AUDIENCE,
+    )
+    subject = str(payload.get("sub") or "")
+    if not subject.startswith("admin:"):
+        raise HTTPException(status_code=401, detail="Invalid admin token")
     try:
-        payload = jwt.decode(
-            credentials.credentials,
-            settings.jwt_secret,
-            algorithms=[settings.jwt_algorithm],
-        )
-        token_type = payload.get("type")
-        if token_type not in {None, "admin"}:
-            raise JWTError("wrong token type")
-        subject = str(payload.get("sub") or "")
-        if not subject.startswith("admin:"):
-            raise JWTError("not an admin token")
         admin_id = int(subject.split(":", 1)[1])
         if admin_id <= 0:
             raise ValueError("invalid admin id")
-    except (JWTError, TypeError, ValueError):
+    except (TypeError, ValueError):
         raise HTTPException(status_code=401, detail="Invalid admin token")
 
     admin = (
