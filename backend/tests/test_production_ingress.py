@@ -12,13 +12,22 @@ def test_production_fastapi_disables_documentation_routes():
     env.update(
         {
             "APP_ENV": "production",
-            "TELEGRAM_BOT_TOKEN": "test-token",
-            "JWT_SECRET": "test-secret",
+            "TELEGRAM_BOT_TOKEN": "test-bot-token-" + "x" * 32,
+            "JWT_SECRET": "j" * 48,
             "ADMIN_EMAIL": "admin@test.local",
-            "ADMIN_PASSWORD": "test-password",
-            "DATABASE_URL": "postgresql+psycopg2://flashin:flashin@db:5432/flashin",
-            "MINI_APP_URL": "https://mini.flashin.store",
-            "API_PUBLIC_URL": "https://api.flashin.store",
+            "ADMIN_PASSWORD": "Test-Admin-Password-2026",
+            "ADMIN_TOTP_ENCRYPTION_KEY": "t" * 48,
+            "OUTBOX_SIGNING_SECRET": "o" * 48,
+            "DATABASE_URL": "postgresql+psycopg2://app:test-db-password@db:5432/flashin",
+            "CORS_ORIGINS": "https://mini.test.local,https://admin.test.local",
+            "MINI_APP_URL": "https://mini.test.local",
+            "API_PUBLIC_URL": "https://api.test.local",
+            "PAYMENT_PROVIDER": "yookassa",
+            "YOOKASSA_SHOP_ID": "test-shop",
+            "YOOKASSA_SECRET_KEY": "test-payment-credential",
+            "YOOKASSA_RETURN_URL": "https://mini.test.local/payment-result",
+            "ENABLE_SEED": "false",
+            "USE_CREATE_ALL": "false",
             "METRICS_ENABLED": "false",
         }
     )
