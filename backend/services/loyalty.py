@@ -15,6 +15,7 @@ from ..models import (
     CrmProfile,
     LoyaltyRedemptionHold,
     LoyaltyTransaction,
+    Order,
     ReferralAttribution,
     ReferralCode,
 )
@@ -25,6 +26,7 @@ _RATE_STEP = Decimal("0.0001")
 _HUNDRED = Decimal("100")
 _MAX_POINTS = Decimal("9999999999999999.9999")
 _MAX_MONEY = Decimal("999999999999999999.99")
+_MAX_REWARD_RATE = Decimal("1000.0000")
 
 
 def _decimal_value(
@@ -59,6 +61,24 @@ def _as_float(value: Decimal) -> float:
     return float(value)
 
 
+def calculate_order_reward_points(
+    total_amount: object,
+    points_per_ruble: object | None = None,
+) -> Decimal:
+    total = _money(total_amount, "order total")
+    if total < 0:
+        raise HTTPException(status_code=409, detail="Order total cannot be negative")
+    raw_rate = (
+        get_settings().loyalty_points_per_ruble
+        if points_per_ruble is None
+        else points_per_ruble
+    )
+    reward_rate = _rate(raw_rate, "loyalty reward rate")
+    if reward_rate < 0 or reward_rate > _MAX_REWARD_RATE:
+        raise HTTPException(status_code=500, detail="Loyalty reward rate is misconfigured")
+    return _points(total * reward_rate, "order reward points")
+
+
 def _locked_profile(db: Session, customer_id: int, create: bool = False) -> CrmProfile | None:
     profile = (
         db.query(CrmProfile)
@@ -80,7 +100,23 @@ def add_points(
     reason: str,
     order_id: int | None = None,
 ) -> None:
-    points_value = _points(points)
+    normalized_reason = (reason or "").strip()[:255]
+    if normalized_reason == "order_paid":
+        if not order_id:
+            raise HTTPException(status_code=409, detail="Paid-order reward requires an order")
+        order = (
+            db.query(Order)
+            .filter(Order.id == order_id)
+            .with_for_update()
+            .first()
+        )
+        if not order or order.customer_id != customer_id:
+            raise HTTPException(status_code=409, detail="Paid-order reward does not match customer")
+        if order.payment_status not in {"paid", "paid_review_required"}:
+            raise HTTPException(status_code=409, detail="Paid-order reward requires a paid order")
+        points_value = calculate_order_reward_points(order.total_amount)
+    else:
+        points_value = _points(points)
     if points_value == 0:
         return
 
@@ -95,7 +131,7 @@ def add_points(
             customer_id=customer_id,
             order_id=order_id,
             points_delta=_as_float(points_value),
-            reason=(reason or "").strip()[:255],
+            reason=normalized_reason,
         )
     )
     profile.loyalty_points = _as_float(new_balance)
