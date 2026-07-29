@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only database audit for constraints introduced by Alembic revision 0010."""
+"""Read-only database audit for transactional constraints through revision 0011."""
 
 import argparse
 import json
@@ -104,7 +104,14 @@ CHECKS: Mapping[str, str] = {
         SELECT count(*) FROM (
             SELECT customer_id, order_id, reason FROM loyalty_transactions
             WHERE order_id IS NOT NULL
-              AND reason IN ('order_paid', 'loyalty_redeemed', 'referral_reward', 'loyalty_refund')
+              AND reason IN (
+                  'order_paid',
+                  'loyalty_redeemed',
+                  'referral_reward',
+                  'loyalty_refund',
+                  'order_refund_reversal',
+                  'referral_refund_reversal'
+              )
             GROUP BY customer_id, order_id, reason HAVING count(*) > 1
         ) conflicts
     """,
