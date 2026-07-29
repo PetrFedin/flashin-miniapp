@@ -1,3 +1,4 @@
+import math
 from functools import lru_cache
 
 from pydantic import model_validator
@@ -87,6 +88,8 @@ class Settings(BaseSettings):
 
     default_delivery_price: float = 0
     courier_delivery_price: float = 500
+    cdek_delivery_price: float = 700
+    boxberry_delivery_price: float = 650
     pickup_delivery_price: float = 0
 
     enable_seed: bool = False
@@ -127,12 +130,19 @@ class Settings(BaseSettings):
             self.moysklad_sync_interval_minutes,
         ) <= 0:
             raise ValueError("Rate limits and sync limits must be positive")
-        if min(
+
+        delivery_prices = (
             self.default_delivery_price,
             self.courier_delivery_price,
+            self.cdek_delivery_price,
+            self.boxberry_delivery_price,
             self.pickup_delivery_price,
-        ) < 0:
-            raise ValueError("Delivery prices cannot be negative")
+        )
+        if any(
+            not math.isfinite(float(price)) or float(price) < 0 or float(price) > 10_000_000
+            for price in delivery_prices
+        ):
+            raise ValueError("Delivery prices must be finite and between 0 and 10000000")
         if self.media_storage not in {"local", "s3", "r2"}:
             raise ValueError("MEDIA_STORAGE must be local, s3, or r2")
 

@@ -14,6 +14,7 @@ from .models import (
     Cart,
     CartItem,
     CrmProfile,
+    DeliveryShipment,
     FulfillmentTask,
     LoyaltyRedemptionHold,
     LoyaltyTransaction,
@@ -104,6 +105,17 @@ def apply_model_constraints() -> None:
         "ck_webhook_destinations_event_type_nonempty",
         "length(trim(event_type)) > 0",
     )
+    _check(DeliveryShipment.__table__, "ck_delivery_shipments_price_nonnegative", "price >= 0")
+    _check(
+        DeliveryShipment.__table__,
+        "ck_delivery_shipments_provider_nonempty",
+        "length(trim(provider_code)) > 0",
+    )
+    _check(
+        DeliveryShipment.__table__,
+        "ck_delivery_shipments_status_valid",
+        "status IN ('created', 'shipped', 'delivery_failed', 'delivered', 'returned', 'cancelled')",
+    )
 
     _unique(
         AdminRolePermission.__table__,
@@ -112,6 +124,7 @@ def apply_model_constraints() -> None:
         "permission",
     )
     _unique(FulfillmentTask.__table__, "uq_fulfillment_tasks_order_id", "order_id")
+    _unique(DeliveryShipment.__table__, "uq_delivery_shipments_order_id", "order_id")
     _unique(AdminSession.__table__, "uq_admin_sessions_token_hash", "session_token_hash")
     _unique(AdminPasswordReset.__table__, "uq_admin_password_resets_token_hash", "token_hash")
     _unique(
