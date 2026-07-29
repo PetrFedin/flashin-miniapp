@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
+
 from ..database import get_db
 from ..models import CrmProfile, Customer
 from ..schemas import CustomerProfileOut
@@ -11,8 +12,17 @@ router = APIRouter(prefix="/profile", tags=["profile"])
 
 @router.get("", response_model=CustomerProfileOut)
 def my_profile(customer: Customer = Depends(get_current_customer), db: Session = Depends(get_db)):
-    crm = db.query(CrmProfile).filter(CrmProfile.customer_id == customer.id).first()
-    ref = ensure_referral_code(db, customer.id)
+    try:
+        crm = db.query(CrmProfile).filter(CrmProfile.customer_id == customer.id).first()
+        ref = ensure_referral_code(db, customer.id)
+        db.commit()
+        db.refresh(ref)
+        if crm:
+            db.refresh(crm)
+    except Exception:
+        db.rollback()
+        raise
+
     return CustomerProfileOut(
         customer={
             "id": customer.id,
