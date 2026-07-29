@@ -1,3 +1,5 @@
+import ipaddress
+
 import pytest
 from pydantic import ValidationError
 
@@ -25,6 +27,8 @@ def _safe_production_settings(**overrides):
         "meilisearch_enabled": False,
         "enable_seed": False,
         "use_create_all": False,
+        "proxy_trusted_hops": 1,
+        "proxy_trusted_cidrs": "10.0.0.0/8,172.16.0.0/12",
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)
@@ -37,6 +41,11 @@ def test_safe_production_configuration_is_accepted():
     assert settings.jwt_algorithm == "HS256"
     assert settings.admin_jwt_expire_minutes == 480
     assert settings.admin_totp_encryption_key != settings.jwt_secret
+    assert settings.proxy_trusted_hops == 1
+    assert settings.proxy_trusted_networks == (
+        ipaddress.ip_network("10.0.0.0/8"),
+        ipaddress.ip_network("172.16.0.0/12"),
+    )
 
 
 def test_default_production_secrets_are_rejected():
@@ -86,3 +95,59 @@ def test_unsafe_jwt_algorithm_is_rejected_in_every_environment():
             jwt_secret="test-secret",
             jwt_algorithm="none",
         )
+
+
+def test_proxy_hop_count_is_bounded_in_every_environment():
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(
+            _env_file=None,
+            telegram_bot_token="test-token",
+            jwt_secret="test-secret",
+            proxy_trusted_hops=11,
+        )
+
+    assert "PROXY_TRUSTED_HOPS" in str(exc_info.value)
+
+
+def test_invalid_proxy_cidr_is_rejected_in_every_environment():
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(
+            _env_file=None,
+            telegram_bot_token="test-token",
+            jwt_secret="test-secret",
+            proxy_trusted_hops=1,
+            proxy_trusted_cidrs="10.0.0.0/8,not-a-network",
+        )
+
+    assert "PROXY_TRUSTED_CIDRS" in str(exc_info.value)
+
+
+def test_proxy_networks_cannot_be_empty_when_hops_are_trusted():
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(
+            _env_file=None,
+            telegram_bot_token="test-token",
+            jwt_secret="test-secret",
+            proxy_trusted_hops=1,
+            proxy_trusted_cidrs="",
+        )
+
+    assert "PROXY_TRUSTED_CIDRS cannot be empty" in str(exc_info.value)
+
+
+def test_production_rate_limit_requires_at_least_one_proxy_hop():
+    with pytest.raises(ValidationError) as exc_info:
+        _safe_production_settings(proxy_trusted_hops=0, rate_limit_enabled=True)
+
+    assert "PROXY_TRUSTED_HOPS must be at least 1" in str(exc_info.value)
+
+
+def test_production_without_rate_limit_can_disable_proxy_trust():
+    settings = _safe_production_settings(
+        rate_limit_enabled=False,
+        proxy_trusted_hops=0,
+        proxy_trusted_cidrs="",
+    )
+
+    assert settings.proxy_trusted_hops == 0
+    assert settings.proxy_trusted_networks == ()
