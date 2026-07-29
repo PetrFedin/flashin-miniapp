@@ -2,7 +2,6 @@ import json
 from decimal import Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -16,15 +15,18 @@ from ..services.inventory import commit_reserved_to_sold, release_variant
 from ..services.loyalty import add_points, mark_redemption_committed, reward_referral_after_first_paid_order
 from ..services.notifications import queue_order_paid
 from ..services.outbox import enqueue_event_for_destinations, enqueue_webhook
+from ..services.payment_creation import (
+    begin_payment_creation,
+    finalize_payment_creation,
+    load_claim_payment,
+    mark_payment_creation_retry_required,
+)
 from ..services.payments import create_yookassa_payment, fetch_yookassa_payment
 from ..services.timeline import add_timeline_event
 
 router = APIRouter(prefix="/payments", tags=["payments"])
 
 _PROVIDER = "yookassa"
-_REUSABLE_PAYMENT_STATUSES = {"pending", "waiting_for_capture", "succeeded"}
-_PAYMENT_CREATION_ORDER_STATUSES = {"created", "payment_created"}
-_PAYMENT_CREATION_PAYMENT_STATUSES = {"pending", "payment_created"}
 _SETTLED_ORDER_PAYMENT_STATUSES = {
     "paid",
     "paid_review_required",
@@ -163,79 +165,85 @@ async def create_payment(
     customer=Depends(get_current_customer),
     db: Session = Depends(get_db),
 ):
-    provider_payment_id = ""
     try:
-        order = (
-            db.query(Order)
-            .filter(Order.id == payload.order_id, Order.customer_id == customer.id)
-            .with_for_update()
-            .first()
-        )
-        if not order:
-            raise HTTPException(status_code=404, detail="Order not found")
-        if order.status == "cancelled" or order.payment_status == "cancelled":
-            raise HTTPException(status_code=409, detail="Order cancelled")
-        if (
-            order.status not in _PAYMENT_CREATION_ORDER_STATUSES
-            or order.payment_status not in _PAYMENT_CREATION_PAYMENT_STATUSES
-        ):
-            raise HTTPException(status_code=409, detail="Order is not eligible for a new payment")
-        if order.total_amount <= 0:
-            raise HTTPException(status_code=409, detail="Order total must be positive")
-
-        latest_payment = (
-            db.query(Payment)
-            .filter(Payment.order_id == order.id, Payment.provider == _PROVIDER)
-            .order_by(Payment.id.desc())
-            .with_for_update()
-            .first()
-        )
-        if latest_payment and latest_payment.status in _REUSABLE_PAYMENT_STATUSES:
-            return _payment_out(order, latest_payment)
-
-        attempt = (
-            db.query(func.count(Payment.id))
-            .filter(Payment.order_id == order.id, Payment.provider == _PROVIDER)
-            .scalar()
-            or 0
-        ) + 1
-        data = await create_yookassa_payment(
-            order.id,
-            order.total_amount,
-            order.currency,
-            attempt=attempt,
-        )
-        provider_payment_id = data["provider_payment_id"]
-
-        payment = Payment(
-            order_id=order.id,
-            provider=_PROVIDER,
-            provider_payment_id=provider_payment_id,
-            status=data["status"],
-            amount=order.total_amount,
-            confirmation_url=data["confirmation_url"],
-        )
-        db.add(payment)
-        order.payment_status = "payment_created"
-        order.status = "payment_created"
+        claim = begin_payment_creation(db, payload.order_id, customer.id)
         db.commit()
-        return _payment_out(order, payment)
     except HTTPException:
         db.rollback()
         raise
-    except IntegrityError:
+    except IntegrityError as exc:
         db.rollback()
-        if provider_payment_id:
-            existing = (
-                db.query(Payment)
-                .filter(Payment.provider == _PROVIDER, Payment.provider_payment_id == provider_payment_id)
-                .first()
+        raise HTTPException(status_code=409, detail="Payment creation conflicted with another request") from exc
+    except Exception:
+        db.rollback()
+        raise
+
+    if claim.is_existing:
+        order, payment = load_claim_payment(db, claim)
+        return _payment_out(order, payment)
+    if not claim.attempt_id:
+        raise HTTPException(status_code=409, detail="Payment creation attempt was not allocated")
+
+    try:
+        data = await create_yookassa_payment(
+            claim.order_id,
+            claim.amount,
+            claim.currency,
+            attempt=claim.attempt_id,
+        )
+    except HTTPException as exc:
+        try:
+            mark_payment_creation_retry_required(
+                db,
+                claim.attempt_id,
+                "provider_request_failed",
             )
-            if existing and existing.order_id == payload.order_id:
-                order = db.query(Order).filter(Order.id == payload.order_id).first()
-                if order:
-                    return _payment_out(order, existing)
-        raise HTTPException(status_code=409, detail="Payment request was already created")
+            db.commit()
+        except Exception:
+            db.rollback()
+        raise exc
+    except Exception:
+        try:
+            mark_payment_creation_retry_required(
+                db,
+                claim.attempt_id,
+                "unexpected_provider_failure",
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+        raise
+
+    try:
+        order, payment = finalize_payment_creation(
+            db,
+            claim.attempt_id,
+            data["provider_payment_id"],
+            data["status"],
+            data["confirmation_url"],
+        )
+        db.commit()
+        return _payment_out(order, payment)
+    except IntegrityError:
+        # A webhook may have persisted the same provider payment between the
+        # provider response and local finalization. Reload under fresh locks.
+        db.rollback()
+        try:
+            order, payment = finalize_payment_creation(
+                db,
+                claim.attempt_id,
+                data["provider_payment_id"],
+                data["status"],
+                data["confirmation_url"],
+            )
+            db.commit()
+            return _payment_out(order, payment)
+        except Exception:
+            db.rollback()
+            raise
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception:
         db.rollback()
         raise
