@@ -13,11 +13,19 @@ from ..services.refund_state import (
     apply_provider_refund_status,
     provider_refund_amount,
     refund_money,
+    remaining_refundable_amount,
 )
 
 router = APIRouter(prefix="/returns", tags=["returns"])
 
 _FINAL_RETURN_STATUSES = {"approved", "approved_partial"}
+_OPEN_RETURN_STATUSES = {
+    "requested",
+    "processing",
+    "refund_retry_required",
+    "refund_review_required",
+    "refund_pending",
+}
 
 
 def _clean_reason(value: str) -> str:
@@ -47,6 +55,7 @@ def _mark_retry_required(db: Session, return_id: int, order_id: int) -> None:
         if ret and ret.status == "processing":
             ret.status = "refund_retry_required"
         if order and order.payment_status == "refund_processing":
+            order.status = "refund_requested"
             order.payment_status = "refund_pending"
         db.commit()
     except Exception:
@@ -90,19 +99,25 @@ def create_return(
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
 
-        existing = (
+        existing_open = (
             db.query(ReturnRequest)
-            .filter(ReturnRequest.order_id == order.id)
+            .filter(
+                ReturnRequest.order_id == order.id,
+                ReturnRequest.status.in_(_OPEN_RETURN_STATUSES),
+            )
+            .order_by(ReturnRequest.created_at.desc(), ReturnRequest.id.desc())
             .with_for_update()
             .first()
         )
-        if existing:
-            return existing
+        if existing_open:
+            return existing_open
 
         if order.payment_status not in {"paid", "partially_refunded"}:
             raise HTTPException(status_code=409, detail="Only paid orders can be returned")
         if order.status in {"cancelled", "refunded"}:
             raise HTTPException(status_code=409, detail="Order cannot be returned in its current status")
+        if remaining_refundable_amount(db, order) <= 0:
+            raise HTTPException(status_code=409, detail="Order has no refundable balance")
 
         ret = ReturnRequest(
             order_id=order.id,
@@ -120,10 +135,19 @@ def create_return(
         raise
     except IntegrityError:
         db.rollback()
-        existing = db.query(ReturnRequest).filter(ReturnRequest.order_id == payload.order_id).first()
-        if existing and existing.customer_id == customer.id:
-            return existing
-        raise HTTPException(status_code=409, detail="Return request already exists")
+        existing_open = (
+            db.query(ReturnRequest)
+            .filter(
+                ReturnRequest.order_id == payload.order_id,
+                ReturnRequest.customer_id == customer.id,
+                ReturnRequest.status.in_(_OPEN_RETURN_STATUSES),
+            )
+            .order_by(ReturnRequest.created_at.desc(), ReturnRequest.id.desc())
+            .first()
+        )
+        if existing_open:
+            return existing_open
+        raise HTTPException(status_code=409, detail="Return request could not be created")
     except Exception:
         db.rollback()
         raise
@@ -134,7 +158,7 @@ def my_returns(customer: Customer = Depends(get_current_customer), db: Session =
     return (
         db.query(ReturnRequest)
         .filter(ReturnRequest.customer_id == customer.id)
-        .order_by(ReturnRequest.created_at.desc())
+        .order_by(ReturnRequest.created_at.desc(), ReturnRequest.id.desc())
         .all()
     )
 
@@ -194,14 +218,25 @@ async def approve_return(
         if not payment:
             raise HTTPException(status_code=409, detail="No provider payment found for refund")
 
+        remaining_amount = remaining_refundable_amount(
+            db,
+            order,
+            exclude_return_id=ret.id,
+        )
+        default_amount = ret.refund_amount if ret.refund_amount else remaining_amount
         requested_amount = refund_money(
-            payload.amount if payload.amount is not None else (ret.refund_amount or order.total_amount),
+            payload.amount if payload.amount is not None else default_amount,
             "refund amount",
         )
-        order_total = refund_money(order.total_amount, "order total")
-        if requested_amount <= 0 or requested_amount > order_total:
-            raise HTTPException(status_code=409, detail="Refund amount must be positive and not exceed order total")
-        if ret.refund_amount and refund_money(ret.refund_amount, "stored refund amount") != requested_amount:
+        if requested_amount <= 0 or requested_amount > remaining_amount:
+            raise HTTPException(
+                status_code=409,
+                detail="Refund amount must be positive and not exceed remaining refundable balance",
+            )
+        if ret.refund_amount and refund_money(
+            ret.refund_amount,
+            "stored refund amount",
+        ) != requested_amount:
             raise HTTPException(status_code=409, detail="Refund amount is already fixed for this request")
 
         ret.refund_amount = float(requested_amount)
@@ -212,6 +247,7 @@ async def approve_return(
         payment_id = payment.provider_payment_id
         currency = order.currency
         order_id = order.id
+        return_id = ret.id
         db.commit()
     except HTTPException:
         db.rollback()
@@ -234,9 +270,10 @@ async def approve_return(
                 float(requested_amount),
                 currency,
                 order_id,
+                return_id,
             )
     except HTTPException:
-        _mark_retry_required(db, payload.return_id, order_id)
+        _mark_retry_required(db, return_id, order_id)
         raise
 
     provider_refund_id = str(data.get("refund_id") or "").strip()
@@ -248,13 +285,13 @@ async def approve_return(
         if actual_provider_amount != requested_amount:
             raise HTTPException(status_code=409, detail="Provider refund amount does not match approved amount")
     except HTTPException:
-        _mark_review_required(db, payload.return_id, order_id, provider_refund_id)
+        _mark_review_required(db, return_id, order_id, provider_refund_id)
         raise
 
     try:
         ret = (
             db.query(ReturnRequest)
-            .filter(ReturnRequest.id == payload.return_id)
+            .filter(ReturnRequest.id == return_id)
             .with_for_update()
             .first()
         )
