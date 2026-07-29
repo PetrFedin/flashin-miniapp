@@ -41,7 +41,7 @@ def _safe_filename(filename: str | None, fallback: str) -> str:
     return (cleaned or fallback)[:255]
 
 
-def _sanitize_image(content: bytes, declared_content_type: str) -> tuple[bytes, str, str, int, int]:
+def _sanitize_image(content: bytes, declared_content_type: str) -> tuple[bytes, str, str]:
     if declared_content_type not in ALLOWED_CONTENT_TYPES:
         raise ValueError("Only jpeg, png and webp images are allowed")
 
@@ -89,8 +89,6 @@ def _sanitize_image(content: bytes, declared_content_type: str) -> tuple[bytes, 
                     sanitized,
                     _FORMAT_CONTENT_TYPES[actual_format],
                     _FORMAT_EXTENSIONS[actual_format],
-                    image.width,
-                    image.height,
                 )
     except (UnidentifiedImageError, OSError, SyntaxError, Image.DecompressionBombError) as exc:
         raise ValueError("Uploaded file is not a valid image") from exc
@@ -102,10 +100,7 @@ async def save_media(file: UploadFile) -> dict:
     settings = get_settings()
     declared_content_type = (file.content_type or "").split(";", 1)[0].strip().lower()
     content = await _read_limited(file)
-    sanitized, content_type, extension, width, height = _sanitize_image(
-        content,
-        declared_content_type,
-    )
+    sanitized, content_type, extension = _sanitize_image(content, declared_content_type)
     storage_key = f"{uuid.uuid4().hex}{extension}"
 
     if settings.media_storage in {"s3", "r2"}:
@@ -142,8 +137,6 @@ async def save_media(file: UploadFile) -> dict:
         "filename": _safe_filename(file.filename, storage_key),
         "content_type": content_type,
         "size_bytes": len(sanitized),
-        "width": width,
-        "height": height,
     }
 
 
