@@ -468,7 +468,7 @@ export default function App() {
       setError("Укажите рост, вес или привычный размер.");
       return;
     }
-    const result = await act("size", () => sizeHelper({
+    const result = await act("size", () => sizeHelper(selected.id, {
       height_cm: Number(sizeForm.height_cm) || null,
       weight_kg: Number(sizeForm.weight_kg) || null,
       usual_size: sizeForm.usual_size.trim() || null,
