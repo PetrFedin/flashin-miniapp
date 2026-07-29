@@ -166,7 +166,7 @@ def test_manual_adjustment_cannot_hide_reservation_shortage():
     assert _movement_rows(db) == []
 
 
-def test_valid_manual_adjustment_records_adjustment_and_exact_audit_delta():
+def test_valid_manual_adjustment_has_one_authoritative_adjustment_record():
     db = _session()
     _product, variant = _variant(db, stock=10, reserved=4)
     adjust_stock(db, variant.id, 7, "cycle count")
@@ -174,25 +174,20 @@ def test_valid_manual_adjustment_records_adjustment_and_exact_audit_delta():
 
     db.refresh(variant)
     adjustment = db.query(InventoryAdjustment).one()
-    movement = _movement_rows(db)[0]
-    payload = json.loads(movement.payload)
     assert (variant.stock_qty, variant.reserved_qty) == (7, 4)
     assert (adjustment.old_stock_qty, adjustment.new_stock_qty) == (10, 7)
     assert adjustment.reason == "cycle count"
-    assert movement.action == "inventory.adjust"
-    assert payload["stock_delta"] == -3
-    assert payload["reserved_delta"] == 0
+    assert _movement_rows(db) == []
 
 
-def test_noop_manual_adjustment_is_audited_as_an_explicit_decision():
+def test_noop_manual_adjustment_is_recorded_once_as_explicit_decision():
     db = _session()
     _product, variant = _variant(db, stock=10, reserved=4)
     adjust_stock(db, variant.id, 10, "verified count")
     db.commit()
     adjustment = db.query(InventoryAdjustment).one()
-    movement = _movement_rows(db)[0]
     assert adjustment.old_stock_qty == adjustment.new_stock_qty == 10
-    assert json.loads(movement.payload)["stock_delta"] == 0
+    assert _movement_rows(db) == []
 
 
 def test_restock_counts_only_paid_sales_and_uses_available_stock():
