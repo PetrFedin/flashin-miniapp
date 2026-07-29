@@ -75,6 +75,11 @@ def upgrade():
         "length(trim(code)) > 0",
     )
     op.create_check_constraint(
+        "ck_promo_codes_code_normalized",
+        "promo_codes",
+        "code = upper(trim(code))",
+    )
+    op.create_check_constraint(
         "ck_promo_codes_discount_type_valid",
         "promo_codes",
         "discount_type IN ('percent', 'fixed')",
@@ -95,4 +100,5 @@ def downgrade():
     op.drop_constraint("ck_promo_codes_percent_within_100", "promo_codes", type_="check")
     op.drop_constraint("ck_promo_codes_discount_positive", "promo_codes", type_="check")
     op.drop_constraint("ck_promo_codes_discount_type_valid", "promo_codes", type_="check")
+    op.drop_constraint("ck_promo_codes_code_normalized", "promo_codes", type_="check")
     op.drop_constraint("ck_promo_codes_code_nonempty", "promo_codes", type_="check")
