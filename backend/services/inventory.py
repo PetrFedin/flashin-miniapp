@@ -99,7 +99,6 @@ def _record_movement(
     stock_before: int,
     reserved_before: int,
     reason: str,
-    admin_id: int | None = None,
 ) -> None:
     payload = {
         "reason": reason,
@@ -113,7 +112,6 @@ def _record_movement(
     }
     db.add(
         AuditLog(
-            admin_id=admin_id,
             action=f"inventory.{action}",
             entity_type="product_variant",
             entity_id=str(variant.id),
@@ -194,7 +192,6 @@ def adjust_stock(
     if new_stock_qty < variant.reserved_qty:
         raise HTTPException(status_code=409, detail="Stock cannot be lower than reserved quantity")
     old_stock_qty = variant.stock_qty
-    old_reserved_qty = variant.reserved_qty
     variant.stock_qty = new_stock_qty
     db.add(
         InventoryAdjustment(
@@ -204,15 +201,6 @@ def adjust_stock(
             reason=normalized_reason,
             admin_id=admin_id,
         )
-    )
-    _record_movement(
-        db,
-        variant=variant,
-        action="adjust",
-        stock_before=old_stock_qty,
-        reserved_before=old_reserved_qty,
-        reason=normalized_reason,
-        admin_id=admin_id,
     )
     return variant
 
