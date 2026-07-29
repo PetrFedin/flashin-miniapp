@@ -26,13 +26,15 @@ def test_payment_idempotence_key_is_stable_per_attempt():
     assert first != next_attempt
 
 
-def test_refund_idempotence_key_normalizes_amount():
-    first = _refund_idempotence_key("payment-1", 42, 100, "RUB")
-    repeated = _refund_idempotence_key("payment-1", 42, 100.0, "RUB")
-    different_amount = _refund_idempotence_key("payment-1", 42, 101, "RUB")
+def test_refund_idempotence_key_is_stable_per_return_request():
+    first = _refund_idempotence_key("payment-1", 42, 1001, 100, "RUB")
+    repeated = _refund_idempotence_key("payment-1", 42, 1001, 100.0, "RUB")
+    different_amount = _refund_idempotence_key("payment-1", 42, 1001, 101, "RUB")
+    different_return = _refund_idempotence_key("payment-1", 42, 1002, 100, "RUB")
 
     assert first == repeated
     assert first != different_amount
+    assert first != different_return
 
 
 def test_positive_amount_rejects_zero_negative_and_non_finite_values():
