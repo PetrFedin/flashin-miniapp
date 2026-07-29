@@ -59,6 +59,57 @@ def list_notification_delivery(
     return [_serialize(notification, state) for notification, state in rows]
 
 
+@router.post("/failed/requeue")
+def requeue_failed_notifications(
+    limit: int = Query(default=50, ge=1, le=200),
+    admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    require_permission(db, admin, "notifications.retry")
+    try:
+        notifications = (
+            db.query(Notification)
+            .filter(Notification.status == "failed")
+            .order_by(Notification.created_at.asc(), Notification.id.asc())
+            .with_for_update(skip_locked=True)
+            .limit(limit)
+            .all()
+        )
+        reset_at = datetime.utcnow()
+        requeued_ids: list[int] = []
+        for notification in notifications:
+            state = (
+                db.query(NotificationDeliveryState)
+                .filter(NotificationDeliveryState.notification_id == notification.id)
+                .with_for_update()
+                .first()
+            )
+            state = reset_notification_delivery(notification, state, now=reset_at)
+            if state.id is None:
+                db.add(state)
+            requeued_ids.append(notification.id)
+
+        log_admin_action(
+            db,
+            admin,
+            "notification.requeue_batch",
+            "notification",
+            "",
+            {"count": len(requeued_ids), "notification_ids": requeued_ids[:100]},
+        )
+        db.commit()
+        return {"ok": True, "requeued": len(requeued_ids), "notification_ids": requeued_ids}
+    except HTTPException:
+        db.rollback()
+        raise
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Notification retry state changed concurrently") from exc
+    except Exception:
+        db.rollback()
+        raise
+
+
 @router.post("/{notification_id}/requeue")
 def requeue_notification(
     notification_id: int,
@@ -103,57 +154,6 @@ def requeue_notification(
         db.refresh(notification)
         db.refresh(state)
         return _serialize(notification, state)
-    except HTTPException:
-        db.rollback()
-        raise
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(status_code=409, detail="Notification retry state changed concurrently") from exc
-    except Exception:
-        db.rollback()
-        raise
-
-
-@router.post("/failed/requeue")
-def requeue_failed_notifications(
-    limit: int = Query(default=50, ge=1, le=200),
-    admin=Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    require_permission(db, admin, "notifications.retry")
-    try:
-        notifications = (
-            db.query(Notification)
-            .filter(Notification.status == "failed")
-            .order_by(Notification.created_at.asc(), Notification.id.asc())
-            .with_for_update(skip_locked=True)
-            .limit(limit)
-            .all()
-        )
-        reset_at = datetime.utcnow()
-        requeued_ids: list[int] = []
-        for notification in notifications:
-            state = (
-                db.query(NotificationDeliveryState)
-                .filter(NotificationDeliveryState.notification_id == notification.id)
-                .with_for_update()
-                .first()
-            )
-            state = reset_notification_delivery(notification, state, now=reset_at)
-            if state.id is None:
-                db.add(state)
-            requeued_ids.append(notification.id)
-
-        log_admin_action(
-            db,
-            admin,
-            "notification.requeue_batch",
-            "notification",
-            "",
-            {"count": len(requeued_ids), "notification_ids": requeued_ids[:100]},
-        )
-        db.commit()
-        return {"ok": True, "requeued": len(requeued_ids), "notification_ids": requeued_ids}
     except HTTPException:
         db.rollback()
         raise
