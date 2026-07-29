@@ -10,6 +10,7 @@ from . import notification_models as _notification_models  # noqa: F401
 from .api.admin import router as admin_router
 from .api.admin_auth import router as admin_auth_router
 from .api.admin_notifications import router as admin_notifications_router
+from .api.admin_returns import router as admin_returns_router
 from .api.admin_security import router as admin_security_router
 from .api.analytics import router as analytics_router
 from .api.auth import router as auth_router
@@ -117,6 +118,7 @@ app.include_router(analytics_router, prefix="/api")
 app.include_router(admin_auth_router, prefix="/api")
 app.include_router(admin_router, prefix="/api")
 app.include_router(admin_notifications_router, prefix="/api")
+app.include_router(admin_returns_router, prefix="/api")
 app.include_router(media_router, prefix="/api")
 app.include_router(returns_router, prefix="/api")
 app.include_router(wishlist_router, prefix="/api")
