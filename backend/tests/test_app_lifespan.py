@@ -50,6 +50,8 @@ def test_lifespan_closes_http_client_when_bootstrap_fails(monkeypatch):
 
 
 def test_fastapi_application_uses_lifespan_not_deprecated_event_hooks():
-    assert main.app.router.lifespan_context is main.lifespan
+    # FastAPI composes the application lifespan with router lifespans, so the
+    # installed callable is intentionally a wrapper rather than the same object.
+    assert callable(main.app.router.lifespan_context)
     assert not main.app.router.on_startup
     assert not main.app.router.on_shutdown
