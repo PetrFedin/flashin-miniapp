@@ -18,7 +18,19 @@ def _reverse_transaction(
     order_id: int,
     original_reason: str,
     reversal_reason: str,
-) -> dict[str, float]:
+) -> dict[str, float | bool]:
+    original = (
+        db.query(LoyaltyTransaction)
+        .filter(
+            LoyaltyTransaction.customer_id == customer_id,
+            LoyaltyTransaction.order_id == order_id,
+            LoyaltyTransaction.reason == original_reason,
+        )
+        .with_for_update()
+        .first()
+    )
+    target = round(max(float(original.points_delta or 0), 0.0), 2) if original else 0.0
+
     existing = (
         db.query(LoyaltyTransaction)
         .filter(
@@ -30,26 +42,20 @@ def _reverse_transaction(
         .first()
     )
     if existing:
-        reversed_points = abs(float(existing.points_delta or 0))
+        reversed_points = round(abs(float(existing.points_delta or 0)), 2)
         return {
-            "target": reversed_points,
+            "target": target,
             "reversed": reversed_points,
-            "unrecovered": 0.0,
-            "idempotent": 1.0,
+            "unrecovered": round(max(target - reversed_points, 0.0), 2),
+            "idempotent": True,
         }
-
-    original = (
-        db.query(LoyaltyTransaction)
-        .filter(
-            LoyaltyTransaction.customer_id == customer_id,
-            LoyaltyTransaction.order_id == order_id,
-            LoyaltyTransaction.reason == original_reason,
-        )
-        .with_for_update()
-        .first()
-    )
-    if not original or float(original.points_delta or 0) <= 0:
-        return {"target": 0.0, "reversed": 0.0, "unrecovered": 0.0, "idempotent": 0.0}
+    if target <= 0:
+        return {
+            "target": 0.0,
+            "reversed": 0.0,
+            "unrecovered": 0.0,
+            "idempotent": False,
+        }
 
     profile = (
         db.query(CrmProfile)
@@ -62,7 +68,6 @@ def _reverse_transaction(
         db.add(profile)
         db.flush()
 
-    target = round(float(original.points_delta), 2)
     balance = max(float(profile.loyalty_points or 0), 0.0)
     reversed_points = round(min(balance, target), 2)
     unrecovered = round(max(target - reversed_points, 0.0), 2)
@@ -80,7 +85,7 @@ def _reverse_transaction(
         "target": target,
         "reversed": reversed_points,
         "unrecovered": unrecovered,
-        "idempotent": 0.0,
+        "idempotent": False,
     }
 
 
@@ -91,9 +96,13 @@ def apply_full_refund_loyalty(
     order_id: int,
     redeemed_points: float,
 ) -> dict[str, object]:
-    """Restore redeemed points and reverse rewards without allowing a negative balance."""
+    """Reverse earned rewards first, then restore redeemed points.
 
-    refund_redeemed_points(db, customer_id, order_id, redeemed_points)
+    This ordering prevents previously spent reward points from consuming the
+    customer's restored redemption balance. Any reward that cannot be recovered
+    is reported to the admin audit payload instead of pushing the balance below zero.
+    """
+
     customer_reward = _reverse_transaction(
         db,
         customer_id=customer_id,
@@ -102,7 +111,7 @@ def apply_full_refund_loyalty(
         reversal_reason="order_refund_reversal",
     )
 
-    referral_adjustments: list[dict[str, float | int]] = []
+    referral_adjustments: list[dict[str, float | int | bool]] = []
     referral_rewards = (
         db.query(LoyaltyTransaction)
         .filter(
@@ -138,6 +147,8 @@ def apply_full_refund_loyalty(
         attribution.status = "reversed"
         if referral:
             referral.used_count = max(int(referral.used_count or 0) - 1, 0)
+
+    refund_redeemed_points(db, customer_id, order_id, redeemed_points)
 
     return {
         "redeemed_points_restored": round(max(float(redeemed_points or 0), 0.0), 2),
