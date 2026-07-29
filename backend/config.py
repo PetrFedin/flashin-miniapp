@@ -1,3 +1,4 @@
+import ipaddress
 from functools import lru_cache
 
 from pydantic import model_validator
@@ -80,6 +81,9 @@ class Settings(BaseSettings):
     rate_limit_auth_per_minute: int = 20
     rate_limit_admin_login_per_minute: int = 10
     proxy_trusted_hops: int = 1
+    proxy_trusted_cidrs: str = (
+        "127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    )
 
     default_delivery_price: float = 0
     courier_delivery_price: float = 500
@@ -91,6 +95,16 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [value.strip().rstrip("/") for value in self.cors_origins.split(",") if value.strip()]
+
+    @property
+    def proxy_trusted_networks(
+        self,
+    ) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+        return tuple(
+            ipaddress.ip_network(value.strip(), strict=False)
+            for value in self.proxy_trusted_cidrs.split(",")
+            if value.strip()
+        )
 
     @model_validator(mode="after")
     def validate_runtime_configuration(self):
@@ -117,6 +131,12 @@ class Settings(BaseSettings):
             raise ValueError("Rate limits and sync limits must be positive")
         if not 0 <= self.proxy_trusted_hops <= 10:
             raise ValueError("PROXY_TRUSTED_HOPS must be between 0 and 10")
+        try:
+            trusted_networks = self.proxy_trusted_networks
+        except ValueError as exc:
+            raise ValueError("PROXY_TRUSTED_CIDRS must contain valid IPv4 or IPv6 networks") from exc
+        if self.proxy_trusted_hops > 0 and not trusted_networks:
+            raise ValueError("PROXY_TRUSTED_CIDRS cannot be empty when proxy headers are trusted")
         if min(
             self.default_delivery_price,
             self.courier_delivery_price,
@@ -168,6 +188,8 @@ class Settings(BaseSettings):
             errors.append("ENABLE_SEED and USE_CREATE_ALL must be disabled in production")
         if self.rate_limit_enabled and self.proxy_trusted_hops < 1:
             errors.append("PROXY_TRUSTED_HOPS must be at least 1 when production rate limiting is enabled")
+        if self.rate_limit_enabled and not trusted_networks:
+            errors.append("PROXY_TRUSTED_CIDRS is required when production rate limiting is enabled")
 
         origins = self.cors_origin_list
         if not origins or any(origin == "*" or not origin.startswith("https://") for origin in origins):
