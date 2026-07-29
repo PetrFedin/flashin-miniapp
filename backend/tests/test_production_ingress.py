@@ -17,6 +17,8 @@ def test_production_fastapi_disables_documentation_routes():
             "ADMIN_EMAIL": "admin@test.local",
             "ADMIN_PASSWORD": "Test-Admin-Password-2026",
             "ADMIN_TOTP_ENCRYPTION_KEY": "t" * 48,
+            "ADMIN_MFA_REQUIRED": "true",
+            "ADMIN_MFA_SETUP_TOKEN_MINUTES": "10",
             "OUTBOX_SIGNING_SECRET": "o" * 48,
             "DATABASE_URL": "postgresql+psycopg2://app:test-db-password@db:5432/flashin",
             "CORS_ORIGINS": "https://mini.test.local,https://admin.test.local",
