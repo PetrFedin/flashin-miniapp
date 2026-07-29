@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     admin_email: str = "admin@flashin.store"
     admin_password: str = "change-me-now"
     admin_totp_encryption_key: str = ""
+    admin_mfa_required: bool = True
+    admin_mfa_setup_token_minutes: int = 10
 
     payment_provider: str = "yookassa"
     yookassa_shop_id: str = ""
@@ -102,6 +104,8 @@ class Settings(BaseSettings):
             raise ValueError("JWT_EXPIRE_MINUTES must be between 1 and 43200")
         if not 1 <= self.admin_jwt_expire_minutes <= 60 * 24:
             raise ValueError("ADMIN_JWT_EXPIRE_MINUTES must be between 1 and 1440")
+        if not 5 <= self.admin_mfa_setup_token_minutes <= 30:
+            raise ValueError("ADMIN_MFA_SETUP_TOKEN_MINUTES must be between 5 and 30")
         if not 0 <= self.loyalty_max_redeem_percent <= 100:
             raise ValueError("LOYALTY_MAX_REDEEM_PERCENT must be between 0 and 100")
         if self.loyalty_point_value_rub <= 0 or self.loyalty_points_per_ruble < 0:
@@ -149,6 +153,8 @@ class Settings(BaseSettings):
             errors.append("ADMIN_TOTP_ENCRYPTION_KEY must be a unique secret of at least 32 characters")
         elif hmac_compare_secret(self.admin_totp_encryption_key, self.jwt_secret):
             errors.append("ADMIN_TOTP_ENCRYPTION_KEY must differ from JWT_SECRET")
+        if not self.admin_mfa_required:
+            errors.append("ADMIN_MFA_REQUIRED must be true in production")
         if len(self.telegram_bot_token) < 20 or self.telegram_bot_token.strip().lower() in weak_values:
             errors.append("TELEGRAM_BOT_TOKEN is missing or unsafe")
         if len(self.outbox_signing_secret) < 32 or self.outbox_signing_secret.strip().lower() in weak_values:
