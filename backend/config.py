@@ -18,6 +18,7 @@ class Settings(BaseSettings):
 
     admin_email: str = "admin@flashin.store"
     admin_password: str = "change-me-now"
+    admin_totp_encryption_key: str = ""
 
     payment_provider: str = "yookassa"
     yookassa_shop_id: str = ""
@@ -141,6 +142,13 @@ class Settings(BaseSettings):
             errors.append("JWT_SECRET must be a unique secret of at least 32 characters")
         if len(self.admin_password) < 12 or self.admin_password.strip().lower() in weak_values:
             errors.append("ADMIN_PASSWORD must be a strong non-default password")
+        if (
+            len(self.admin_totp_encryption_key) < 32
+            or self.admin_totp_encryption_key.strip().lower() in weak_values
+        ):
+            errors.append("ADMIN_TOTP_ENCRYPTION_KEY must be a unique secret of at least 32 characters")
+        elif hmac_compare_secret(self.admin_totp_encryption_key, self.jwt_secret):
+            errors.append("ADMIN_TOTP_ENCRYPTION_KEY must differ from JWT_SECRET")
         if len(self.telegram_bot_token) < 20 or self.telegram_bot_token.strip().lower() in weak_values:
             errors.append("TELEGRAM_BOT_TOKEN is missing or unsafe")
         if len(self.outbox_signing_secret) < 32 or self.outbox_signing_secret.strip().lower() in weak_values:
@@ -179,6 +187,12 @@ class Settings(BaseSettings):
         if errors:
             raise ValueError("Unsafe production configuration: " + "; ".join(errors))
         return self
+
+
+def hmac_compare_secret(first: str, second: str) -> bool:
+    import hmac
+
+    return hmac.compare_digest((first or "").encode("utf-8"), (second or "").encode("utf-8"))
 
 
 @lru_cache
