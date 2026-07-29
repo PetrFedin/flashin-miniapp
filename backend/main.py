@@ -56,10 +56,22 @@ from .middleware.security_headers import SecurityHeadersMiddleware
 from .seed import bootstrap_admin, seed_products
 
 settings = get_settings()
-if settings.sentry_dsn:
-    sentry_sdk.init(dsn=settings.sentry_dsn, traces_sample_rate=0.1)
+is_production = settings.app_env.strip().lower() == "production"
 
-app = FastAPI(title="FLASHIN Mini App Backend v52")
+if settings.sentry_dsn:
+    sentry_sdk.init(
+        dsn=settings.sentry_dsn,
+        traces_sample_rate=0.1,
+        send_default_pii=False,
+        environment=settings.app_env,
+    )
+
+app = FastAPI(
+    title="FLASHIN Mini App Backend v52",
+    docs_url=None if is_production else "/docs",
+    redoc_url=None if is_production else "/redoc",
+    openapi_url=None if is_production else "/openapi.json",
+)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(InMemoryRateLimitMiddleware)
 if settings.metrics_enabled:
@@ -132,11 +144,13 @@ def on_startup():
         db.close()
 
 
-@app.get("/metrics")
-def metrics():
-    return metrics_response()
+if settings.metrics_enabled:
+
+    @app.get("/metrics", include_in_schema=False)
+    def metrics():
+        return metrics_response()
 
 
-@app.get("/")
+@app.get("/", include_in_schema=not is_production)
 def root():
     return {"message": "FLASHIN Mini App API v52", "env": settings.app_env}
