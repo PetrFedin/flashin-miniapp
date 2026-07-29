@@ -3,6 +3,7 @@ import sys
 from logging.config import fileConfig
 from pathlib import Path
 
+import sqlalchemy as sa
 from alembic import context
 from sqlalchemy import create_engine, pool
 from sqlalchemy.engine import make_url
@@ -44,6 +45,26 @@ def _database_url() -> str:
     return url
 
 
+def _ensure_version_column_capacity(connection) -> None:
+    """Keep Alembic's version table compatible with descriptive revision IDs."""
+    version_table = sa.Table(
+        "alembic_version",
+        sa.MetaData(),
+        sa.Column("version_num", sa.String(128), nullable=False),
+        sa.PrimaryKeyConstraint("version_num", name="alembic_version_pkc"),
+    )
+    version_table.create(connection, checkfirst=True)
+
+    if connection.dialect.name == "postgresql":
+        connection.execute(
+            sa.text(
+                "ALTER TABLE alembic_version "
+                "ALTER COLUMN version_num TYPE VARCHAR(128)"
+            )
+        )
+    connection.commit()
+
+
 def run_migrations_offline():
     context.configure(
         url=_database_url(),
@@ -63,6 +84,7 @@ def run_migrations_online():
         pool_pre_ping=True,
     )
     with connectable.connect() as connection:
+        _ensure_version_column_capacity(connection)
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
