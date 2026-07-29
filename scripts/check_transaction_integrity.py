@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only database audit for transactional constraints through revision 0011."""
+"""Read-only database audit for transactional constraints through revision 0013."""
 
 import argparse
 import json
@@ -42,6 +42,22 @@ CHECKS: Mapping[str, str] = {
     "negative_refund_amounts": "SELECT count(*) FROM return_requests WHERE refund_amount < 0",
     "negative_loyalty_balances": "SELECT count(*) FROM crm_profiles WHERE loyalty_points < 0",
     "non_positive_loyalty_holds": "SELECT count(*) FROM loyalty_redemption_holds WHERE points <= 0",
+    "negative_notification_delivery_attempts": """
+        SELECT count(*) FROM notification_delivery_states WHERE attempts < 0
+    """,
+    "orphan_notification_delivery_states": """
+        SELECT count(*)
+        FROM notification_delivery_states state
+        LEFT JOIN notifications notification ON notification.id = state.notification_id
+        WHERE notification.id IS NULL
+    """,
+    "invalid_webhook_destinations": """
+        SELECT count(*) FROM webhook_destinations
+        WHERE length(trim(url)) = 0 OR length(trim(event_type)) = 0
+    """,
+    "negative_webhook_outbox_attempts": """
+        SELECT count(*) FROM webhook_outbox WHERE attempts < 0
+    """,
     "duplicate_active_carts": """
         SELECT count(*) FROM (
             SELECT customer_id FROM carts
@@ -136,6 +152,18 @@ CHECKS: Mapping[str, str] = {
             GROUP BY customer_id HAVING count(*) > 1
         ) conflicts
     """,
+    "duplicate_notification_delivery_states": """
+        SELECT count(*) FROM (
+            SELECT notification_id FROM notification_delivery_states
+            GROUP BY notification_id HAVING count(*) > 1
+        ) conflicts
+    """,
+    "duplicate_webhook_destinations": """
+        SELECT count(*) FROM (
+            SELECT url, event_type FROM webhook_destinations
+            GROUP BY url, event_type HAVING count(*) > 1
+        ) conflicts
+    """,
 }
 
 REQUIRED_TABLES = {
@@ -148,6 +176,8 @@ REQUIRED_TABLES = {
     "fulfillment_tasks",
     "loyalty_redemption_holds",
     "loyalty_transactions",
+    "notification_delivery_states",
+    "notifications",
     "order_items",
     "orders",
     "payment_events",
@@ -156,6 +186,8 @@ REQUIRED_TABLES = {
     "promo_codes",
     "referral_codes",
     "return_requests",
+    "webhook_destinations",
+    "webhook_outbox",
 }
 
 
