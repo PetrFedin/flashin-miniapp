@@ -32,7 +32,7 @@ class FakeDb:
 
 def test_repository_has_single_current_migration_head():
     assert health._expected_migration_heads() == frozenset(
-        {"0015_checkout_idempotency"}
+        {"0016_admin_totp_replay_state"}
     )
 
 
