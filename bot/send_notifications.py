@@ -1,12 +1,13 @@
 import asyncio
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from aiogram import Bot
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, or_
 from sqlalchemy.orm import sessionmaker
 
 from backend.models import Notification
+from backend.notification_models import NotificationDeliveryState
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
@@ -15,35 +16,89 @@ DATABASE_URL = os.getenv(
 BOT_TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
 BATCH_SIZE = max(1, min(int(os.getenv("NOTIFICATION_BATCH_SIZE", "50")), 200))
 POLL_SECONDS = max(1.0, float(os.getenv("NOTIFICATION_POLL_SECONDS", "10")))
+MAX_ATTEMPTS = max(1, min(int(os.getenv("NOTIFICATION_MAX_ATTEMPTS", "5")), 20))
+INITIAL_BACKOFF_SECONDS = max(5, int(os.getenv("NOTIFICATION_INITIAL_BACKOFF_SECONDS", "30")))
+MAX_BACKOFF_SECONDS = max(
+    INITIAL_BACKOFF_SECONDS,
+    int(os.getenv("NOTIFICATION_MAX_BACKOFF_SECONDS", "3600")),
+)
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
 
-async def send_pending_batch(bot: Bot) -> int:
+def _next_attempt_at(attempts: int) -> datetime:
+    delay = min(INITIAL_BACKOFF_SECONDS * (2 ** max(attempts - 1, 0)), MAX_BACKOFF_SECONDS)
+    return datetime.utcnow() + timedelta(seconds=delay)
+
+
+async def send_pending_batch(bot: Bot) -> dict[str, int]:
     db = SessionLocal()
-    sent = 0
+    result = {"seen": 0, "sent": 0, "retry_scheduled": 0, "failed": 0}
     try:
+        now = datetime.utcnow()
         rows = (
             db.query(Notification)
+            .outerjoin(
+                NotificationDeliveryState,
+                NotificationDeliveryState.notification_id == Notification.id,
+            )
             .filter(Notification.status == "pending")
+            .filter(
+                or_(
+                    NotificationDeliveryState.id.is_(None),
+                    NotificationDeliveryState.next_attempt_at.is_(None),
+                    NotificationDeliveryState.next_attempt_at <= now,
+                )
+            )
+            .filter(
+                or_(
+                    NotificationDeliveryState.id.is_(None),
+                    NotificationDeliveryState.attempts < MAX_ATTEMPTS,
+                )
+            )
             .order_by(Notification.created_at.asc(), Notification.id.asc())
-            .with_for_update(skip_locked=True)
+            .with_for_update(of=Notification, skip_locked=True)
             .limit(BATCH_SIZE)
             .all()
         )
+        result["seen"] = len(rows)
+
         for row in rows:
+            state = (
+                db.query(NotificationDeliveryState)
+                .filter(NotificationDeliveryState.notification_id == row.id)
+                .with_for_update()
+                .first()
+            )
+            if not state:
+                state = NotificationDeliveryState(notification_id=row.id, attempts=0)
+                db.add(state)
+                db.flush()
+
             try:
                 await bot.send_message(chat_id=row.telegram_id, text=row.message)
                 row.status = "sent"
                 row.sent_at = datetime.utcnow()
                 row.error = ""
-                sent += 1
+                db.delete(state)
+                result["sent"] += 1
             except Exception as exc:
-                row.status = "failed"
-                row.error = f"{exc.__class__.__name__}: {exc}"[:2000]
+                state.attempts += 1
+                state.updated_at = datetime.utcnow()
+                state.last_error = f"{exc.__class__.__name__}: {exc}"[:2000]
+                row.error = state.last_error
+                if state.attempts >= MAX_ATTEMPTS:
+                    row.status = "failed"
+                    state.next_attempt_at = None
+                    result["failed"] += 1
+                else:
+                    row.status = "pending"
+                    state.next_attempt_at = _next_attempt_at(state.attempts)
+                    result["retry_scheduled"] += 1
+
         db.commit()
-        return sent
+        return result
     except Exception:
         db.rollback()
         raise
@@ -59,9 +114,9 @@ async def worker() -> None:
     try:
         while True:
             try:
-                sent = await send_pending_batch(bot)
-                if sent:
-                    print({"notifications_sent": sent})
+                result = await send_pending_batch(bot)
+                if result["seen"]:
+                    print(result)
             except Exception as exc:
                 print({"notification_worker_error": exc.__class__.__name__})
             await asyncio.sleep(POLL_SECONDS)
