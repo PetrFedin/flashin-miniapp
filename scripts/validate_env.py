@@ -125,6 +125,8 @@ if is_production:
             "YOOKASSA_SHOP_ID",
             "YOOKASSA_SECRET_KEY",
             "OUTBOX_SIGNING_SECRET",
+            "SCHEDULER_ENABLED",
+            "MOYSKLAD_SYNC_INTERVAL_MINUTES",
             "NOTIFICATION_BATCH_SIZE",
             "NOTIFICATION_POLL_SECONDS",
             "NOTIFICATION_MAX_ATTEMPTS",
@@ -172,6 +174,8 @@ if is_production:
         invalid.append("DATABASE_URL uses development credentials")
     if env.get("POSTGRES_PASSWORD") == "flashin":
         invalid.append("POSTGRES_PASSWORD uses the development password")
+    if not is_true(env.get("SCHEDULER_ENABLED")):
+        invalid.append("SCHEDULER_ENABLED must be true in production")
     if "localhost" in env.get("CORS_ORIGINS", "") or "127.0.0.1" in env.get("CORS_ORIGINS", ""):
         invalid.append("CORS_ORIGINS contains a local address in production")
 
@@ -190,6 +194,7 @@ poll_seconds = validate_float(env, "NOTIFICATION_POLL_SECONDS", 1.0, 3600.0, inv
 max_attempts = validate_int(env, "NOTIFICATION_MAX_ATTEMPTS", 1, 20, invalid)
 initial_backoff = validate_int(env, "NOTIFICATION_INITIAL_BACKOFF_SECONDS", 5, 86400, invalid)
 max_backoff = validate_int(env, "NOTIFICATION_MAX_BACKOFF_SECONDS", 5, 604800, invalid)
+moysklad_interval = validate_int(env, "MOYSKLAD_SYNC_INTERVAL_MINUTES", 5, 1440, invalid)
 if initial_backoff is not None and max_backoff is not None and max_backoff < initial_backoff:
     invalid.append("NOTIFICATION_MAX_BACKOFF_SECONDS must be >= NOTIFICATION_INITIAL_BACKOFF_SECONDS")
 
@@ -210,5 +215,6 @@ print(
         "notification_batch_size": batch_size,
         "notification_poll_seconds": poll_seconds,
         "notification_max_attempts": max_attempts,
+        "moysklad_sync_interval_minutes": moysklad_interval,
     }
 )
