@@ -1,5 +1,4 @@
-import math
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError
@@ -11,22 +10,11 @@ from ..models import Cart, CartItem, Customer, Product, ProductVariant, PromoCod
 from ..schemas import CartAddIn, CartItemOut, CartOut, LoyaltyRedeemIn, PromoApplyIn, ReferralApplyIn
 from ..security import get_current_customer
 from ..services.loyalty import attach_referral_to_customer, redeem_points
-from ..services.promos import calculate_discount
+from ..services.pricing import calculate_pricing, money, points
 
 router = APIRouter(prefix="/cart", tags=["cart"])
 
-_MONEY_STEP = Decimal("0.01")
 _MAX_VARIANT_QUANTITY = 10
-
-
-def _money(value: object, field: str) -> Decimal:
-    try:
-        amount = Decimal(str(value)).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
-    except (InvalidOperation, TypeError, ValueError):
-        raise HTTPException(status_code=409, detail=f"Invalid {field}")
-    if not amount.is_finite():
-        raise HTTPException(status_code=409, detail=f"Invalid {field}")
-    return amount
 
 
 def _active_cart_query(db: Session, customer_id: int):
@@ -80,8 +68,29 @@ def _validate_item(item: CartItem) -> None:
         raise HTTPException(status_code=409, detail=f"Inventory state is invalid for cart item {item.id}")
     if item.variant.available_qty < item.quantity:
         raise HTTPException(status_code=409, detail=f"Not enough stock for cart item {item.id}")
-    if _money(item.product.price, "product price") < 0:
+    if money(item.product.price, "product price") < 0:
         raise HTTPException(status_code=409, detail=f"Product {item.product.title} has invalid price")
+
+
+def _cart_subtotal(cart: Cart, *, excluded_item_id: int | None = None) -> Decimal:
+    subtotal = Decimal("0.00")
+    for item in cart.items:
+        if excluded_item_id is not None and item.id == excluded_item_id:
+            continue
+        _validate_item(item)
+        subtotal += money(item.product.price, "product price") * item.quantity
+    return money(subtotal, "cart subtotal")
+
+
+def _pricing(cart: Cart, subtotal: Decimal | None = None, *, promo=None, loyalty_points=None):
+    settings = get_settings()
+    return calculate_pricing(
+        subtotal=_cart_subtotal(cart) if subtotal is None else subtotal,
+        promo=cart.promo_code if promo is None else promo,
+        loyalty_points=(cart.loyalty_points_to_redeem or 0) if loyalty_points is None else loyalty_points,
+        point_value=settings.loyalty_point_value_rub,
+        max_redeem_percent=settings.loyalty_max_redeem_percent,
+    )
 
 
 def _merge_duplicate_carts(db: Session, carts: list[Cart]) -> Cart:
@@ -160,11 +169,9 @@ def get_or_create_cart(db: Session, customer: Customer) -> Cart:
 
 def serialize_cart(cart: Cart) -> CartOut:
     items: list[CartItemOut] = []
-    subtotal = Decimal("0.00")
     for item in cart.items:
         _validate_item(item)
-        price = _money(item.product.price, "product price")
-        subtotal += price * item.quantity
+        price = money(item.product.price, "product price")
         items.append(
             CartItemOut(
                 id=item.id,
@@ -178,22 +185,13 @@ def serialize_cart(cart: Cart) -> CartOut:
             )
         )
 
-    subtotal = subtotal.quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
-    discount = _money(calculate_discount(cart.promo_code, float(subtotal)), "promo discount") if cart.promo_code else Decimal("0.00")
-    discount = min(max(discount, Decimal("0.00")), subtotal)
-
-    loyalty_points = _money(cart.loyalty_points_to_redeem or 0, "loyalty points")
-    point_value = _money(get_settings().loyalty_point_value_rub, "loyalty point value")
-    loyalty_discount = (loyalty_points * point_value).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
-    loyalty_discount = min(max(loyalty_discount, Decimal("0.00")), subtotal - discount)
-    final_amount = max(subtotal - discount - loyalty_discount, Decimal("0.00"))
-
+    breakdown = _pricing(cart)
     return CartOut(
         id=cart.id,
         items=items,
-        total_amount=float(subtotal),
-        discount_amount=float(discount),
-        final_amount=float(final_amount),
+        total_amount=float(breakdown.subtotal),
+        discount_amount=float(breakdown.promo_discount),
+        final_amount=float(breakdown.final_amount),
         promo_code=cart.promo_code.code if cart.promo_code else None,
     )
 
@@ -208,11 +206,7 @@ def add_item(payload: CartAddIn, customer: Customer = Depends(get_current_custom
     cart = get_or_create_cart(db, customer)
     try:
         _lock_cart(db, cart.id)
-        product = (
-            db.query(Product)
-            .filter(Product.id == payload.product_id, Product.active.is_(True))
-            .first()
-        )
+        product = db.query(Product).filter(Product.id == payload.product_id, Product.active.is_(True)).first()
         if not product:
             raise HTTPException(status_code=404, detail="Product not found")
 
@@ -269,14 +263,28 @@ def remove_item(item_id: int, customer: Customer = Depends(get_current_customer)
     cart = get_or_create_cart(db, customer)
     try:
         _lock_cart(db, cart.id)
-        item = (
-            db.query(CartItem)
-            .filter(CartItem.id == item_id, CartItem.cart_id == cart.id)
-            .with_for_update()
-            .first()
-        )
+        current_cart = _load_cart(db, cart.id)
+        item = next((row for row in current_cart.items if row.id == item_id), None)
         if not item:
             raise HTTPException(status_code=404, detail="Cart item not found")
+
+        proposed_subtotal = _cart_subtotal(current_cart, excluded_item_id=item.id)
+        if proposed_subtotal > 0:
+            try:
+                _pricing(current_cart, proposed_subtotal)
+            except HTTPException as exc:
+                if exc.status_code == 409:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Remove or reduce the applied promo/loyalty redemption before removing this item",
+                    ) from exc
+                raise
+        elif current_cart.promo_code_id or (current_cart.loyalty_points_to_redeem or 0) > 0:
+            raise HTTPException(
+                status_code=409,
+                detail="Remove the applied promo and loyalty redemption before emptying the cart",
+            )
+
         db.delete(item)
         db.commit()
     except HTTPException:
@@ -300,8 +308,7 @@ def apply_promo(payload: PromoApplyIn, customer: Customer = Depends(get_current_
         if not promo:
             raise HTTPException(status_code=404, detail="Promo code not found")
         current_cart = _load_cart(db, cart.id)
-        subtotal = sum(float(_money(item.product.price, "product price")) * item.quantity for item in current_cart.items)
-        calculate_discount(promo, subtotal)
+        _pricing(current_cart, promo=promo)
         current_cart.promo_code_id = promo.id
         db.commit()
     except HTTPException:
@@ -328,18 +335,16 @@ def remove_promo(customer: Customer = Depends(get_current_customer), db: Session
 
 @router.post("/loyalty", response_model=CartOut)
 def apply_loyalty(payload: LoyaltyRedeemIn, customer: Customer = Depends(get_current_customer), db: Session = Depends(get_db)):
-    try:
-        points = float(payload.points)
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=422, detail="Invalid loyalty points")
-    if not math.isfinite(points) or points < 0:
+    requested_points = points(payload.points, status_code=422)
+    if requested_points < 0:
         raise HTTPException(status_code=422, detail="Loyalty points must be non-negative")
 
     cart = get_or_create_cart(db, customer)
     try:
         _lock_cart(db, cart.id)
         current_cart = _load_cart(db, cart.id)
-        redeem_points(db, customer.id, current_cart, points)
+        _pricing(current_cart, loyalty_points=requested_points)
+        redeem_points(db, customer.id, current_cart, float(requested_points))
         db.commit()
     except HTTPException:
         db.rollback()
