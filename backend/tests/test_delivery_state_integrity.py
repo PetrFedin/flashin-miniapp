@@ -28,7 +28,7 @@ def _order(
     delivery_status="ready",
     delivery_price=700.0,
 ):
-    customer = Customer(telegram_id="100200300")
+    customer = Customer(telegram_id=str(100200300 + db.query(Customer).count()))
     db.add(customer)
     db.flush()
     order = Order(
