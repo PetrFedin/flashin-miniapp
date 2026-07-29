@@ -4,7 +4,7 @@ from starlette.responses import JSONResponse
 
 
 class AdminOrderStateGuardMiddleware:
-    """Prevent generic admin edits from bypassing payment and refund workflows."""
+    """Prevent generic admin edits from bypassing payment, refund, and safe cancellation workflows."""
 
     _MAX_BODY_BYTES = 64 * 1024
     _PROVIDER_OWNED_STATUSES = {
@@ -13,6 +13,7 @@ class AdminOrderStateGuardMiddleware:
         "payment_review_required",
         "refund_requested",
         "refunded",
+        "cancelled",
     }
 
     def __init__(self, app):
@@ -56,7 +57,7 @@ class AdminOrderStateGuardMiddleware:
                 status_code=409,
                 content={
                     "detail": (
-                        f"Status {requested_status} is controlled by the payment or refund workflow"
+                        f"Status {requested_status} is controlled by a dedicated payment, refund, or cancellation workflow"
                     )
                 },
             )
