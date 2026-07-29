@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import sys
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 ENV_PATH = Path(".env")
 PLACEHOLDER_VALUES = {
@@ -74,6 +74,30 @@ def validate_float(
     return parsed
 
 
+def validate_database_credentials(env: dict[str, str], invalid: list[str]) -> None:
+    database_url = env.get("DATABASE_URL", "")
+    if not database_url:
+        return
+    parsed = urlparse(database_url)
+    if not parsed.scheme.startswith("postgresql"):
+        invalid.append("DATABASE_URL must use PostgreSQL")
+        return
+
+    url_user = unquote(parsed.username or "")
+    url_password = unquote(parsed.password or "")
+    url_database = unquote(parsed.path.lstrip("/"))
+    url_host = parsed.hostname or ""
+
+    if url_host != "db":
+        invalid.append("DATABASE_URL host must be db for the bundled production Compose deployment")
+    if url_user != env.get("POSTGRES_USER", ""):
+        invalid.append("DATABASE_URL user does not match POSTGRES_USER")
+    if url_password != env.get("POSTGRES_PASSWORD", ""):
+        invalid.append("DATABASE_URL password does not match POSTGRES_PASSWORD")
+    if url_database != env.get("POSTGRES_DB", ""):
+        invalid.append("DATABASE_URL database does not match POSTGRES_DB")
+
+
 if not ENV_PATH.exists():
     print(".env not found")
     sys.exit(1)
@@ -94,6 +118,9 @@ required = [
 if is_production:
     required.extend(
         [
+            "POSTGRES_DB",
+            "POSTGRES_USER",
+            "POSTGRES_PASSWORD",
             "CORS_ORIGINS",
             "YOOKASSA_SHOP_ID",
             "YOOKASSA_SECRET_KEY",
@@ -140,9 +167,11 @@ if is_production:
     if outbox_secret and len(outbox_secret) < 32:
         invalid.append("OUTBOX_SIGNING_SECRET must contain at least 32 characters")
 
-    database_url = env.get("DATABASE_URL", "")
-    if "flashin:flashin@" in database_url:
+    validate_database_credentials(env, invalid)
+    if "flashin:flashin@" in env.get("DATABASE_URL", ""):
         invalid.append("DATABASE_URL uses development credentials")
+    if env.get("POSTGRES_PASSWORD") == "flashin":
+        invalid.append("POSTGRES_PASSWORD uses the development password")
     if "localhost" in env.get("CORS_ORIGINS", "") or "127.0.0.1" in env.get("CORS_ORIGINS", ""):
         invalid.append("CORS_ORIGINS contains a local address in production")
 
