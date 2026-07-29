@@ -1,17 +1,20 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..database import get_db
 from ..middleware.rate_limit import _client_ip
-from ..models import AdminPasswordReset, AdminTotpSecret, AdminUser
+from ..models import AdminPasswordReset, AdminSession, AdminTotpSecret, AdminUser
 from ..schemas import TokenOut
 from ..security import (
+    bearer,
     create_admin_mfa_setup_token,
     create_admin_token,
+    get_current_admin,
     get_current_admin_mfa_setup,
     hash_password,
     password_needs_rehash,
@@ -217,6 +220,51 @@ def admin_session_login(
         db.commit()
         return AdminLoginOut(access_token=token)
     except HTTPException:
+        raise
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.post("/logout", status_code=204)
+def admin_session_logout(
+    response: Response,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    admin: AdminUser = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    if not credentials or credentials.scheme.lower() != "bearer":
+        raise HTTPException(status_code=401, detail="Admin bearer token required")
+
+    try:
+        session = (
+            db.query(AdminSession)
+            .filter(
+                AdminSession.admin_id == admin.id,
+                AdminSession.session_token_hash == sha256(credentials.credentials),
+                AdminSession.revoked.is_(False),
+            )
+            .with_for_update()
+            .first()
+        )
+        if not session:
+            raise HTTPException(status_code=401, detail="Admin session is revoked or unknown")
+        session.revoked = True
+        session.revoked_at = datetime.utcnow()
+        log_admin_login(
+            db,
+            admin.email,
+            admin.id,
+            True,
+            "logout",
+            session.ip_address,
+            session.user_agent,
+        )
+        db.commit()
+        response.headers["Cache-Control"] = "no-store"
+        return response
+    except HTTPException:
+        db.rollback()
         raise
     except Exception:
         db.rollback()
