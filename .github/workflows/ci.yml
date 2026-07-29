@@ -111,6 +111,12 @@ jobs:
         run: cp .env.local.example .env
       - name: Validate base Compose configuration
         run: docker compose config --quiet
+      - name: Validate Caddy configuration
+        run: >-
+          docker run --rm
+          -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro"
+          caddy:2
+          caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
       - name: Docker build
         run: docker compose build
       - name: Validate production Compose isolation
