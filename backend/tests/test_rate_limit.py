@@ -53,10 +53,10 @@ def test_cleanup_removes_expired_buckets():
     middleware = object.__new__(InMemoryRateLimitMiddleware)
     middleware.hits = {
         "expired": deque([1.0]),
-        "active": deque([59.5]),
+        "active": deque([60.5]),
     }
 
-    middleware._cleanup(60.0)
+    middleware._cleanup(61.0)
 
     assert "expired" not in middleware.hits
-    assert list(middleware.hits["active"]) == [59.5]
+    assert list(middleware.hits["active"]) == [60.5]
