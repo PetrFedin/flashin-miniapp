@@ -8,8 +8,8 @@ import httpx
 from fastapi import HTTPException
 
 from ..config import get_settings
+from .http_clients import yookassa_client
 
-_YOOKASSA_API = "https://api.yookassa.ru/v3"
 _TRANSIENT_STATUSES = {429, 500, 502, 503, 504}
 _MAX_ATTEMPTS = 3
 _MONEY_STEP = Decimal("0.01")
@@ -209,18 +209,15 @@ async def _request_yookassa(
     headers = {}
     if idempotence_key:
         headers["Idempotence-Key"] = idempotence_key
-
-    timeout = httpx.Timeout(20.0, connect=5.0)
-    limits = httpx.Limits(max_connections=20, max_keepalive_connections=10)
     last_error: Exception | None = None
 
-    async with httpx.AsyncClient(timeout=timeout, limits=limits) as client:
+    async with yookassa_client() as client:
         for attempt in range(_MAX_ATTEMPTS):
             response: httpx.Response | None = None
             try:
                 response = await client.request(
                     method,
-                    f"{_YOOKASSA_API}{path}",
+                    path,
                     json=payload,
                     headers=headers,
                     auth=(settings.yookassa_shop_id, settings.yookassa_secret_key),
