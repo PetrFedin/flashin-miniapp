@@ -17,6 +17,8 @@ DEFAULT_PERMISSIONS = {
         "notifications.retry",
         "webhooks.read",
         "webhooks.write",
+        "media.write",
+        "security.read",
     },
     "support": {
         "orders.read",
@@ -26,7 +28,12 @@ DEFAULT_PERMISSIONS = {
         "notifications.retry",
         "webhooks.read",
     },
-    "warehouse": {"products.read", "inventory.write", "orders.read"},
+    "warehouse": {
+        "products.read",
+        "inventory.write",
+        "orders.read",
+        "media.write",
+    },
 }
 
 
