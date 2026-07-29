@@ -37,7 +37,8 @@ async def _read_limited(file: UploadFile) -> bytes:
 
 
 def _safe_filename(filename: str | None, fallback: str) -> str:
-    cleaned = Path(filename or "").name.replace("\x00", "").strip()
+    normalized = (filename or "").replace("\\", "/")
+    cleaned = Path(normalized).name.replace("\x00", "").strip()
     return (cleaned or fallback)[:255]
 
 
@@ -90,7 +91,13 @@ def _sanitize_image(content: bytes, declared_content_type: str) -> tuple[bytes, 
                     _FORMAT_CONTENT_TYPES[actual_format],
                     _FORMAT_EXTENSIONS[actual_format],
                 )
-    except (UnidentifiedImageError, OSError, SyntaxError, Image.DecompressionBombError) as exc:
+    except (
+        UnidentifiedImageError,
+        OSError,
+        SyntaxError,
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+    ) as exc:
         raise ValueError("Uploaded file is not a valid image") from exc
     finally:
         Image.MAX_IMAGE_PIXELS = previous_limit
