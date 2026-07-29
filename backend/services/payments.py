@@ -1,6 +1,7 @@
 import asyncio
 import math
 import uuid
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from urllib.parse import quote
 
 import httpx
@@ -11,6 +12,9 @@ from ..config import get_settings
 _YOOKASSA_API = "https://api.yookassa.ru/v3"
 _TRANSIENT_STATUSES = {429, 500, 502, 503, 504}
 _MAX_ATTEMPTS = 3
+_MONEY_STEP = Decimal("0.01")
+_PAYMENT_STATUSES = frozenset({"pending", "waiting_for_capture", "succeeded", "canceled"})
+_REFUND_STATUSES = frozenset({"pending", "succeeded", "canceled"})
 
 
 def _payment_idempotence_key(order_id: int, attempt: int) -> str:
@@ -51,6 +55,134 @@ def _normalize_currency(currency: str) -> str:
     if len(normalized) != 3 or not normalized.isalpha():
         raise HTTPException(status_code=400, detail="Currency must be a three-letter code.")
     return normalized
+
+
+def _provider_identifier(value: object, operation: str) -> str:
+    if not isinstance(value, str):
+        raise HTTPException(
+            status_code=502,
+            detail={"provider": "yookassa", "error": f"invalid_{operation.lower()}_id"},
+        )
+    normalized = value.strip()
+    if not normalized or len(normalized) > 255:
+        raise HTTPException(
+            status_code=502,
+            detail={"provider": "yookassa", "error": f"invalid_{operation.lower()}_id"},
+        )
+    return normalized
+
+
+def _provider_status(value: object, allowed: frozenset[str], operation: str) -> str:
+    if not isinstance(value, str):
+        raise HTTPException(
+            status_code=502,
+            detail={"provider": "yookassa", "error": f"invalid_{operation.lower()}_status"},
+        )
+    normalized = value.strip().lower()
+    if normalized not in allowed:
+        raise HTTPException(
+            status_code=502,
+            detail={"provider": "yookassa", "error": f"invalid_{operation.lower()}_status"},
+        )
+    return normalized
+
+
+def _validate_provider_amount(
+    value: object,
+    expected_amount: float,
+    expected_currency: str,
+    operation: str,
+) -> dict:
+    if not isinstance(value, dict):
+        raise HTTPException(
+            status_code=502,
+            detail={"provider": "yookassa", "error": f"invalid_{operation.lower()}_amount"},
+        )
+
+    try:
+        provider_amount = Decimal(str(value.get("value"))).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
+        local_amount = Decimal(str(expected_amount)).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
+    except (InvalidOperation, TypeError, ValueError):
+        raise HTTPException(
+            status_code=502,
+            detail={"provider": "yookassa", "error": f"invalid_{operation.lower()}_amount"},
+        )
+
+    provider_currency = str(value.get("currency") or "").strip().upper()
+    if (
+        not provider_amount.is_finite()
+        or provider_amount <= 0
+        or provider_amount != local_amount
+        or provider_currency != expected_currency
+    ):
+        raise HTTPException(
+            status_code=502,
+            detail={"provider": "yookassa", "error": f"{operation.lower()}_amount_mismatch"},
+        )
+    return {"value": f"{provider_amount:.2f}", "currency": provider_currency}
+
+
+def _confirmation_url(data: dict) -> str:
+    confirmation = data.get("confirmation")
+    if confirmation is None:
+        return ""
+    if not isinstance(confirmation, dict):
+        raise HTTPException(
+            status_code=502,
+            detail={"provider": "yookassa", "error": "invalid_confirmation"},
+        )
+    value = confirmation.get("confirmation_url", "")
+    if not isinstance(value, str) or len(value) > 2048:
+        raise HTTPException(
+            status_code=502,
+            detail={"provider": "yookassa", "error": "invalid_confirmation"},
+        )
+    return value.strip()
+
+
+def validate_yookassa_refund(
+    data: dict,
+    payment_id: str,
+    amount: float,
+    currency: str,
+    *,
+    expected_refund_id: str | None = None,
+) -> dict:
+    if not isinstance(data, dict):
+        raise HTTPException(
+            status_code=502,
+            detail={"provider": "yookassa", "error": "invalid_refund_payload"},
+        )
+
+    normalized_payment_id = _provider_identifier(payment_id, "Payment")
+    normalized_amount = _validate_positive_amount(amount, "Refund")
+    normalized_currency = _normalize_currency(currency)
+    refund_id = _provider_identifier(data.get("id"), "Refund")
+    if expected_refund_id is not None and refund_id != _provider_identifier(expected_refund_id, "Refund"):
+        raise HTTPException(
+            status_code=502,
+            detail={"provider": "yookassa", "error": "refund_id_mismatch"},
+        )
+
+    status = _provider_status(data.get("status"), _REFUND_STATUSES, "Refund")
+    returned_payment_id = _provider_identifier(data.get("payment_id"), "Payment")
+    if returned_payment_id != normalized_payment_id:
+        raise HTTPException(
+            status_code=502,
+            detail={"provider": "yookassa", "error": "refund_payment_mismatch"},
+        )
+    amount_contract = _validate_provider_amount(
+        data.get("amount"),
+        normalized_amount,
+        normalized_currency,
+        "Refund",
+    )
+    return {
+        "refund_id": refund_id,
+        "payment_id": returned_payment_id,
+        "status": status,
+        "amount": amount_contract,
+    }
 
 
 def _retry_delay(response: httpx.Response | None, attempt: int) -> float:
@@ -159,10 +291,13 @@ async def create_yookassa_payment(order_id: int, amount: float, currency: str, a
         payload=payload,
         idempotence_key=_payment_idempotence_key(order_id, attempt),
     )
+    payment_id = _provider_identifier(data.get("id"), "Payment")
+    status = _provider_status(data.get("status"), _PAYMENT_STATUSES, "Payment")
+    _validate_provider_amount(data.get("amount"), normalized_amount, normalized_currency, "Payment")
     return {
-        "provider_payment_id": data["id"],
-        "status": data["status"],
-        "confirmation_url": data.get("confirmation", {}).get("confirmation_url", ""),
+        "provider_payment_id": payment_id,
+        "status": status,
+        "confirmation_url": _confirmation_url(data),
     }
 
 
@@ -205,11 +340,12 @@ async def create_yookassa_refund(
             normalized_currency,
         ),
     )
-    return {
-        "refund_id": data["id"],
-        "status": data["status"],
-        "amount": data.get("amount", {}),
-    }
+    return validate_yookassa_refund(
+        data,
+        normalized_payment_id,
+        normalized_amount,
+        normalized_currency,
+    )
 
 
 async def fetch_yookassa_refund(refund_id: str) -> dict:

@@ -39,6 +39,8 @@ _SUPPORTED_WEBHOOK_EVENTS = {
     "payment.succeeded",
     "payment.canceled",
 }
+_PROVIDER_PAYMENT_STATUSES = {"pending", "waiting_for_capture", "succeeded", "canceled"}
+_ACTIONABLE_PROVIDER_STATUSES = {"waiting_for_capture", "succeeded", "canceled"}
 _MAX_WEBHOOK_BYTES = 64 * 1024
 
 
@@ -53,7 +55,10 @@ def _payment_out(order: Order, payment: Payment) -> PaymentOut:
 
 
 def _provider_order_id(provider_payment: dict) -> int:
-    raw_order_id = (provider_payment.get("metadata") or {}).get("order_id")
+    metadata = provider_payment.get("metadata")
+    if not isinstance(metadata, dict):
+        raise HTTPException(status_code=409, detail="Provider payment has no valid order reference")
+    raw_order_id = metadata.get("order_id")
     try:
         order_id = int(raw_order_id)
     except (TypeError, ValueError):
@@ -64,7 +69,9 @@ def _provider_order_id(provider_payment: dict) -> int:
 
 
 def _validate_provider_amount(provider_payment: dict, order: Order) -> None:
-    amount = provider_payment.get("amount") or {}
+    amount = provider_payment.get("amount")
+    if not isinstance(amount, dict):
+        raise HTTPException(status_code=409, detail="Provider payment amount is invalid")
     provider_currency = str(amount.get("currency") or "").upper()
     try:
         provider_amount = Decimal(str(amount.get("value"))).quantize(Decimal("0.01"))
@@ -72,8 +79,42 @@ def _validate_provider_amount(provider_payment: dict, order: Order) -> None:
     except (InvalidOperation, TypeError, ValueError):
         raise HTTPException(status_code=409, detail="Provider payment amount is invalid")
 
-    if provider_amount != order_amount or provider_currency != str(order.currency).upper():
+    if (
+        not provider_amount.is_finite()
+        or provider_amount <= 0
+        or provider_amount != order_amount
+        or provider_currency != str(order.currency).upper()
+    ):
         raise HTTPException(status_code=409, detail="Provider payment amount or currency does not match order")
+
+
+def _provider_confirmation_url(provider_payment: dict) -> str:
+    confirmation = provider_payment.get("confirmation")
+    if confirmation is None:
+        return ""
+    if not isinstance(confirmation, dict):
+        raise HTTPException(status_code=409, detail="Provider payment confirmation is invalid")
+    value = confirmation.get("confirmation_url", "")
+    if not isinstance(value, str) or len(value) > 2048:
+        raise HTTPException(status_code=409, detail="Provider payment confirmation is invalid")
+    return value.strip()
+
+
+def _validated_provider_state(provider_payment: dict, requested_payment_id: str) -> tuple[int, str, str]:
+    provider_payment_id = provider_payment.get("id")
+    if not isinstance(provider_payment_id, str) or provider_payment_id.strip() != requested_payment_id:
+        raise HTTPException(status_code=409, detail="Provider returned another payment")
+
+    raw_status = provider_payment.get("status")
+    if not isinstance(raw_status, str):
+        raise HTTPException(status_code=409, detail="Provider payment has no valid status")
+    provider_status = raw_status.strip().lower()
+    if provider_status not in _PROVIDER_PAYMENT_STATUSES:
+        raise HTTPException(status_code=409, detail="Provider payment has no valid status")
+    if provider_status not in _ACTIONABLE_PROVIDER_STATUSES:
+        raise HTTPException(status_code=409, detail="Provider payment is not in an actionable state")
+
+    return _provider_order_id(provider_payment), provider_status, f"payment.{provider_status}"
 
 
 def _parse_webhook_payload(raw_body: bytes) -> tuple[dict, str, dict, str]:
@@ -164,17 +205,15 @@ async def create_payment(
             order.currency,
             attempt=attempt,
         )
-        provider_payment_id = str(data.get("provider_payment_id") or "").strip()
-        if not provider_payment_id or len(provider_payment_id) > 255:
-            raise HTTPException(status_code=502, detail="Payment provider returned an invalid payment id")
+        provider_payment_id = data["provider_payment_id"]
 
         payment = Payment(
             order_id=order.id,
             provider=_PROVIDER,
             provider_payment_id=provider_payment_id,
-            status=str(data.get("status") or "pending")[:64],
+            status=data["status"],
             amount=order.total_amount,
-            confirmation_url=str(data.get("confirmation_url") or "")[:2048],
+            confirmation_url=data["confirmation_url"],
         )
         db.add(payment)
         order.payment_status = "payment_created"
@@ -216,15 +255,15 @@ async def yookassa_webhook(request: Request, db: Session = Depends(get_db)):
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid Content-Length header")
 
-    payload, event, obj, payment_id = _parse_webhook_payload(await request.body())
-    if event not in _SUPPORTED_WEBHOOK_EVENTS:
-        return {"ok": True, "ignored": True, "event": event}
+    payload, source_event, _obj, payment_id = _parse_webhook_payload(await request.body())
+    if source_event not in _SUPPORTED_WEBHOOK_EVENTS:
+        return {"ok": True, "ignored": True, "event": source_event}
 
     provider_payment = await fetch_yookassa_payment(payment_id)
-    provider_order_id = _provider_order_id(provider_payment)
-    provider_status = str(provider_payment.get("status") or obj.get("status") or "").strip()
-    if not provider_status or len(provider_status) > 64:
-        raise HTTPException(status_code=409, detail="Provider payment has no valid status")
+    provider_order_id, provider_status, effective_event = _validated_provider_state(
+        provider_payment,
+        payment_id,
+    )
 
     try:
         order = db.query(Order).filter(Order.id == provider_order_id).with_for_update().first()
@@ -246,20 +285,24 @@ async def yookassa_webhook(request: Request, db: Session = Depends(get_db)):
             .filter(
                 PaymentEvent.provider == _PROVIDER,
                 PaymentEvent.provider_payment_id == payment_id,
-                PaymentEvent.event_type == event,
+                PaymentEvent.event_type == effective_event,
             )
             .with_for_update()
             .first()
         )
         if payment_event and payment_event.processed:
-            return {"ok": True, "idempotent": True}
+            return {"ok": True, "idempotent": True, "provider_status": provider_status}
 
         if not payment_event:
             payment_event = PaymentEvent(
                 provider=_PROVIDER,
                 provider_payment_id=payment_id,
-                event_type=event,
-                raw_payload=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                event_type=effective_event,
+                raw_payload=json.dumps(
+                    {"source_event": source_event, "payload": payload},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
                 processed=False,
             )
             db.add(payment_event)
@@ -271,13 +314,13 @@ async def yookassa_webhook(request: Request, db: Session = Depends(get_db)):
                 provider_payment_id=payment_id,
                 status=provider_status,
                 amount=order.total_amount,
-                confirmation_url=str((provider_payment.get("confirmation") or {}).get("confirmation_url") or "")[:2048],
+                confirmation_url=_provider_confirmation_url(provider_payment),
             )
             db.add(payment)
         else:
             payment.status = provider_status
 
-        if event == "payment.succeeded" and provider_status == "succeeded":
+        if provider_status == "succeeded":
             if order.payment_status in _SETTLED_ORDER_PAYMENT_STATUSES:
                 pass
             elif order.status == "cancelled" or order.payment_status == "cancelled":
@@ -321,7 +364,7 @@ async def yookassa_webhook(request: Request, db: Session = Depends(get_db)):
                 )
                 order.payment_status = "paid"
                 order.status = "paid"
-        elif event == "payment.canceled" and provider_status == "canceled":
+        elif provider_status == "canceled":
             if order.payment_status in _SETTLED_ORDER_PAYMENT_STATUSES:
                 _queue_payment_review(db, order, payment_id, "canceled_after_settlement")
             else:
@@ -333,7 +376,12 @@ async def yookassa_webhook(request: Request, db: Session = Depends(get_db)):
 
         payment_event.processed = True
         db.commit()
-        return {"ok": True}
+        return {
+            "ok": True,
+            "provider_status": provider_status,
+            "source_event": source_event,
+            "effective_event": effective_event,
+        }
     except HTTPException:
         db.rollback()
         raise
@@ -344,13 +392,13 @@ async def yookassa_webhook(request: Request, db: Session = Depends(get_db)):
             .filter(
                 PaymentEvent.provider == _PROVIDER,
                 PaymentEvent.provider_payment_id == payment_id,
-                PaymentEvent.event_type == event,
+                PaymentEvent.event_type == effective_event,
                 PaymentEvent.processed.is_(True),
             )
             .first()
         )
         if existing_event:
-            return {"ok": True, "idempotent": True}
+            return {"ok": True, "idempotent": True, "provider_status": provider_status}
         raise HTTPException(status_code=409, detail="Webhook event is already being processed")
     except Exception:
         db.rollback()
