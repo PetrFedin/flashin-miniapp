@@ -230,6 +230,63 @@ def create_admin_token(admin_id: int, role: str) -> str:
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
+def create_admin_mfa_setup_token(admin: AdminUser) -> str:
+    if not admin or admin.id <= 0:
+        raise ValueError("Administrator is required")
+    settings = get_settings()
+    payload = _jwt_payload(
+        f"admin:{admin.id}",
+        "admin_mfa_setup",
+        _JWT_ADMIN_AUDIENCE,
+        settings.admin_mfa_setup_token_minutes,
+    )
+    payload["credential_version"] = hashlib.sha256(
+        admin.password_hash.encode("utf-8")
+    ).hexdigest()
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
+def _admin_id_from_subject(payload: dict) -> int:
+    subject = str(payload.get("sub") or "")
+    if not subject.startswith("admin:"):
+        raise HTTPException(status_code=401, detail="Invalid admin token")
+    try:
+        admin_id = int(subject.split(":", 1)[1])
+        if admin_id <= 0:
+            raise ValueError("invalid admin id")
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="Invalid admin token")
+    return admin_id
+
+
+def get_current_admin_mfa_setup(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    db: Session = Depends(get_db),
+) -> AdminUser:
+    if not credentials or credentials.scheme.lower() != "bearer":
+        raise HTTPException(status_code=401, detail="MFA setup token required")
+    payload = _decode_token(
+        credentials.credentials,
+        expected_type="admin_mfa_setup",
+        audience=_JWT_ADMIN_AUDIENCE,
+    )
+    admin_id = _admin_id_from_subject(payload)
+    admin = (
+        db.query(AdminUser)
+        .filter(AdminUser.id == admin_id, AdminUser.active.is_(True))
+        .first()
+    )
+    if not admin:
+        raise HTTPException(status_code=401, detail="Administrator not found")
+    expected_version = hashlib.sha256(admin.password_hash.encode("utf-8")).hexdigest()
+    if not hmac.compare_digest(
+        str(payload.get("credential_version") or ""),
+        expected_version,
+    ):
+        raise HTTPException(status_code=401, detail="MFA setup token is stale")
+    return admin
+
+
 def get_current_admin(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
     db: Session = Depends(get_db),
@@ -242,15 +299,7 @@ def get_current_admin(
         expected_type="admin",
         audience=_JWT_ADMIN_AUDIENCE,
     )
-    subject = str(payload.get("sub") or "")
-    if not subject.startswith("admin:"):
-        raise HTTPException(status_code=401, detail="Invalid admin token")
-    try:
-        admin_id = int(subject.split(":", 1)[1])
-        if admin_id <= 0:
-            raise ValueError("invalid admin id")
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=401, detail="Invalid admin token")
+    admin_id = _admin_id_from_subject(payload)
 
     admin = (
         db.query(AdminUser)

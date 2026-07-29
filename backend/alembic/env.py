@@ -14,6 +14,7 @@ if str(_REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPOSITORY_ROOT))
 
 from backend import (  # noqa: E402,F401
+    admin_mfa_models,
     checkout_idempotency_models,
     model_constraints,
     models,

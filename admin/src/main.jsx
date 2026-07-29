@@ -24,6 +24,11 @@ function App() {
   const [token, setToken] = useState(localStorage.getItem("admin_token") || "");
   const [email, setEmail] = useState("admin@flashin.store");
   const [password, setPassword] = useState("");
+  const [totpCode, setTotpCode] = useState("");
+  const [mfaSetupToken, setMfaSetupToken] = useState("");
+  const [mfaSecret, setMfaSecret] = useState("");
+  const [mfaSetupUri, setMfaSetupUri] = useState("");
+  const [mfaSetupCode, setMfaSetupCode] = useState("");
   const [products, setProducts] = useState([]);
   const [orders, setOrders] = useState([]);
   const [promocode, setPromocode] = useState({ code: "", discount_type: "percent", discount_value: 10, min_amount: 0 });
@@ -64,18 +69,70 @@ function App() {
   const [webhookForm, setWebhookForm] = useState({ name: "", url: "", event_type: "order.paid", active: true, signing_secret: "" });
   const [mappingForm, setMappingForm] = useState({ source_field: "size", source_value: "", target_field: "size", target_value: "", active: true });
 
+  function finishLogin(accessToken) {
+    localStorage.setItem("admin_token", accessToken);
+    setToken(accessToken);
+    setPassword("");
+    setTotpCode("");
+    setMfaSetupToken("");
+    setMfaSecret("");
+    setMfaSetupUri("");
+    setMfaSetupCode("");
+  }
+
   async function login() {
     try {
       setError("");
       const res = await fetch(`${API}/api/admin/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, totp_code: totpCode || null }),
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
-      localStorage.setItem("admin_token", data.access_token);
-      setToken(data.access_token);
+      if (data.mfa_setup_required) {
+        setMfaSetupToken(data.setup_token);
+        setPassword("");
+        setTotpCode("");
+        return;
+      }
+      if (!data.access_token) throw new Error("Сервер не выдал административную сессию");
+      finishLogin(data.access_token);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function startMfaSetup() {
+    try {
+      setError("");
+      const res = await fetch(`${API}/api/admin/mfa/setup/start`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${mfaSetupToken}` },
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      setMfaSecret(data.secret_once);
+      setMfaSetupUri(data.otpauth_uri);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function confirmMfaSetup() {
+    try {
+      setError("");
+      const res = await fetch(`${API}/api/admin/mfa/setup/confirm`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${mfaSetupToken}`,
+        },
+        body: JSON.stringify({ code: mfaSetupCode }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      finishLogin(data.access_token);
     } catch (e) {
       setError(e.message);
     }
@@ -210,44 +267,43 @@ function App() {
     setPromocode({ code: "", discount_type: "percent", discount_value: 10, min_amount: 0 });
   }
 
+  async function uploadImage(file) {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch(`${API}/api/media/upload`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${localStorage.getItem("admin_token")}` },
+      body: form,
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const asset = await res.json();
+    setProductForm({ ...productForm, images: [...productForm.images, asset.url] });
+  }
 
-async function uploadImage(file) {
-  const form = new FormData();
-  form.append("file", file);
-  const res = await fetch(`${API}/api/media/upload`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${localStorage.getItem("admin_token")}` },
-    body: form,
-  });
-  if (!res.ok) throw new Error(await res.text());
-  const asset = await res.json();
-  setProductForm({ ...productForm, images: [...productForm.images, asset.url] });
-}
-
-async function createProduct() {
-  await api("/api/admin/products", {
-    method: "POST",
-    body: JSON.stringify({
-      ...productForm,
-      price: Number(productForm.price),
-      variants: productForm.variants.map(v => ({ ...v, stock_qty: Number(v.stock_qty) }))
-    }),
-  });
-  setProductForm({
-    sku: "",
-    title: "",
-    slug: "",
-    brand: "FLASHIN",
-    description: "",
-    price: 0,
-    currency: "RUB",
-    category: "Clothing",
-    gender: "unisex",
-    images: [],
-    variants: [{ size: "M", sku: "", stock_qty: 1, color: "" }]
-  });
-  await load();
-}
+  async function createProduct() {
+    await api("/api/admin/products", {
+      method: "POST",
+      body: JSON.stringify({
+        ...productForm,
+        price: Number(productForm.price),
+        variants: productForm.variants.map(v => ({ ...v, stock_qty: Number(v.stock_qty) }))
+      }),
+    });
+    setProductForm({
+      sku: "",
+      title: "",
+      slug: "",
+      brand: "FLASHIN",
+      description: "",
+      price: 0,
+      currency: "RUB",
+      category: "Clothing",
+      gender: "unisex",
+      images: [],
+      variants: [{ size: "M", sku: "", stock_qty: 1, color: "" }]
+    });
+    await load();
+  }
 
   async function importCsv(file) {
     const form = new FormData();
@@ -262,11 +318,43 @@ async function createProduct() {
   }
 
   if (!token) {
+    if (mfaSetupToken) {
+      return <main className="login">
+        <h1>Настройка двухфакторной защиты</h1>
+        {error && <div className="error">{error}</div>}
+        {!mfaSecret && <>
+          <p>Для доступа к FLASHIN Admin необходимо подключить приложение-аутентификатор.</p>
+          <button onClick={startMfaSetup}>Создать секрет TOTP</button>
+        </>}
+        {mfaSecret && <>
+          <p>Добавьте аккаунт в Google Authenticator, 1Password, Microsoft Authenticator или другом TOTP-приложении.</p>
+          <label>Секрет показывается один раз</label>
+          <input value={mfaSecret} readOnly />
+          {mfaSetupUri && <a href={mfaSetupUri}>Открыть в приложении-аутентификаторе</a>}
+          <input
+            value={mfaSetupCode}
+            onChange={e => setMfaSetupCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+            placeholder="6-значный код"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+          />
+          <button onClick={confirmMfaSetup} disabled={mfaSetupCode.length !== 6}>Подтвердить и войти</button>
+        </>}
+      </main>;
+    }
+
     return <main className="login">
       <h1>FLASHIN Admin</h1>
       {error && <div className="error">{error}</div>}
-      <input value={email} onChange={e => setEmail(e.target.value)} placeholder="email" />
-      <input value={password} onChange={e => setPassword(e.target.value)} placeholder="password" type="password" />
+      <input value={email} onChange={e => setEmail(e.target.value)} placeholder="email" autoComplete="username" />
+      <input value={password} onChange={e => setPassword(e.target.value)} placeholder="password" type="password" autoComplete="current-password" />
+      <input
+        value={totpCode}
+        onChange={e => setTotpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+        placeholder="Код TOTP (если уже настроен)"
+        inputMode="numeric"
+        autoComplete="one-time-code"
+      />
       <button onClick={login}>Войти</button>
     </main>;
   }
@@ -291,79 +379,77 @@ async function createProduct() {
       <button onClick={createPromo}>Создать</button>
     </section>
 
+    <section>
+      <h2>Создать товар</h2>
+      <div className="form-grid">
+        <input placeholder="SKU" value={productForm.sku} onChange={e => setProductForm({ ...productForm, sku: e.target.value })} />
+        <input placeholder="Название" value={productForm.title} onChange={e => setProductForm({ ...productForm, title: e.target.value })} />
+        <input placeholder="slug" value={productForm.slug} onChange={e => setProductForm({ ...productForm, slug: e.target.value })} />
+        <input placeholder="brand" value={productForm.brand} onChange={e => setProductForm({ ...productForm, brand: e.target.value })} />
+        <input type="number" placeholder="Цена" value={productForm.price} onChange={e => setProductForm({ ...productForm, price: e.target.value })} />
+        <input placeholder="Категория" value={productForm.category} onChange={e => setProductForm({ ...productForm, category: e.target.value })} />
+      </div>
+      <textarea placeholder="Описание" value={productForm.description} onChange={e => setProductForm({ ...productForm, description: e.target.value })} />
+      <h3>Фото</h3>
+      <input type="file" accept="image/*" onChange={(e) => e.target.files?.[0] && uploadImage(e.target.files[0])} />
+      <div className="image-list">{productForm.images.map(url => <img key={url} src={url} />)}</div>
+      <h3>Размеры</h3>
+      {productForm.variants.map((v, idx) => <div className="form-grid" key={idx}>
+        <input placeholder="Размер" value={v.size} onChange={e => {
+          const variants = [...productForm.variants]; variants[idx].size = e.target.value; setProductForm({ ...productForm, variants });
+        }} />
+        <input placeholder="SKU размера" value={v.sku} onChange={e => {
+          const variants = [...productForm.variants]; variants[idx].sku = e.target.value; setProductForm({ ...productForm, variants });
+        }} />
+        <input placeholder="Цвет" value={v.color} onChange={e => {
+          const variants = [...productForm.variants]; variants[idx].color = e.target.value; setProductForm({ ...productForm, variants });
+        }} />
+        <input type="number" placeholder="Остаток" value={v.stock_qty} onChange={e => {
+          const variants = [...productForm.variants]; variants[idx].stock_qty = e.target.value; setProductForm({ ...productForm, variants });
+        }} />
+      </div>)}
+      <button onClick={() => setProductForm({ ...productForm, variants: [...productForm.variants, { size: "", sku: "", stock_qty: 1, color: "" }] })}>Добавить размер</button>
+      <button onClick={createProduct}>Создать товар</button>
+    </section>
 
-<section>
-  <h2>Создать товар</h2>
-  <div className="form-grid">
-    <input placeholder="SKU" value={productForm.sku} onChange={e => setProductForm({ ...productForm, sku: e.target.value })} />
-    <input placeholder="Название" value={productForm.title} onChange={e => setProductForm({ ...productForm, title: e.target.value })} />
-    <input placeholder="slug" value={productForm.slug} onChange={e => setProductForm({ ...productForm, slug: e.target.value })} />
-    <input placeholder="brand" value={productForm.brand} onChange={e => setProductForm({ ...productForm, brand: e.target.value })} />
-    <input type="number" placeholder="Цена" value={productForm.price} onChange={e => setProductForm({ ...productForm, price: e.target.value })} />
-    <input placeholder="Категория" value={productForm.category} onChange={e => setProductForm({ ...productForm, category: e.target.value })} />
-  </div>
-  <textarea placeholder="Описание" value={productForm.description} onChange={e => setProductForm({ ...productForm, description: e.target.value })} />
-  <h3>Фото</h3>
-  <input type="file" accept="image/*" onChange={(e) => e.target.files?.[0] && uploadImage(e.target.files[0])} />
-  <div className="image-list">{productForm.images.map(url => <img key={url} src={url} />)}</div>
-  <h3>Размеры</h3>
-  {productForm.variants.map((v, idx) => <div className="form-grid" key={idx}>
-    <input placeholder="Размер" value={v.size} onChange={e => {
-      const variants = [...productForm.variants]; variants[idx].size = e.target.value; setProductForm({ ...productForm, variants });
-    }} />
-    <input placeholder="SKU размера" value={v.sku} onChange={e => {
-      const variants = [...productForm.variants]; variants[idx].sku = e.target.value; setProductForm({ ...productForm, variants });
-    }} />
-    <input placeholder="Цвет" value={v.color} onChange={e => {
-      const variants = [...productForm.variants]; variants[idx].color = e.target.value; setProductForm({ ...productForm, variants });
-    }} />
-    <input type="number" placeholder="Остаток" value={v.stock_qty} onChange={e => {
-      const variants = [...productForm.variants]; variants[idx].stock_qty = e.target.value; setProductForm({ ...productForm, variants });
-    }} />
-  </div>)}
-  <button onClick={() => setProductForm({ ...productForm, variants: [...productForm.variants, { size: "", sku: "", stock_qty: 1, color: "" }] })}>Добавить размер</button>
-  <button onClick={createProduct}>Создать товар</button>
-</section>
+    <section>
+      <h2>Операционный контроль</h2>
+      <button onClick={queueAbandoned}>Поставить уведомления по брошенным корзинам</button>
+      <button onClick={snapshotInventory}>Сделать снимок остатков</button>
+      <h3>Низкие остатки</h3>
+      <div className="table">
+        {lowStock.map(x => <div className="row" key={x.variant_id}>
+          <b>{x.product_title}</b>
+          <span>{x.sku}</span>
+          <span>stock {x.stock_qty}</span>
+          <span>reserved {x.reserved_qty}</span>
+          <span>available {x.available_qty}</span>
+        </div>)}
+      </div>
+      <h3>Брошенные корзины</h3>
+      <div className="table">
+        {abandonedCarts.map(x => <div className="row" key={x.cart_id}>
+          <b>Cart #{x.cart_id}</b>
+          <span>User {x.customer_id}</span>
+          <span>{x.telegram_id}</span>
+          <span>{x.items_count} items</span>
+          <span>{x.total_amount}</span>
+        </div>)}
+      </div>
+    </section>
 
-
-<section>
-  <h2>Операционный контроль</h2>
-  <button onClick={queueAbandoned}>Поставить уведомления по брошенным корзинам</button>
-  <button onClick={snapshotInventory}>Сделать снимок остатков</button>
-  <h3>Низкие остатки</h3>
-  <div className="table">
-    {lowStock.map(x => <div className="row" key={x.variant_id}>
-      <b>{x.product_title}</b>
-      <span>{x.sku}</span>
-      <span>stock {x.stock_qty}</span>
-      <span>reserved {x.reserved_qty}</span>
-      <span>available {x.available_qty}</span>
-    </div>)}
-  </div>
-  <h3>Брошенные корзины</h3>
-  <div className="table">
-    {abandonedCarts.map(x => <div className="row" key={x.cart_id}>
-      <b>Cart #{x.cart_id}</b>
-      <span>User {x.customer_id}</span>
-      <span>{x.telegram_id}</span>
-      <span>{x.items_count} items</span>
-      <span>{x.total_amount}</span>
-    </div>)}
-  </div>
-</section>
-
-<section>
-  <h2>Audit log</h2>
-  <div className="table">
-    {auditLogs.slice(0, 30).map(x => <div className="row" key={x.id}>
-      <b>{x.action}</b>
-      <span>{x.entity_type}</span>
-      <span>{x.entity_id}</span>
-      <span>admin {x.admin_id}</span>
-      <span>{x.payload}</span>
-    </div>)}
-  </div>
-</section>
+    <section>
+      <h2>Audit log</h2>
+      <div className="table">
+        {auditLogs.slice(0, 30).map(x => <div className="row" key={x.id}>
+          <b>{x.action}</b>
+          <span>{x.entity_type}</span>
+          <span>{x.entity_id}</span>
+          <span>admin {x.admin_id}</span>
+          <span>{x.payload}</span>
+        </div>)}
+      </div>
+    </section>
 
     <section>
       <h2>Товары</h2>

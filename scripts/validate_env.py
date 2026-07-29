@@ -127,6 +127,8 @@ if is_production:
             "YOOKASSA_SECRET_KEY",
             "OUTBOX_SIGNING_SECRET",
             "ADMIN_TOTP_ENCRYPTION_KEY",
+            "ADMIN_MFA_REQUIRED",
+            "ADMIN_MFA_SETUP_TOKEN_MINUTES",
             "SCHEDULER_ENABLED",
             "MOYSKLAD_SYNC_INTERVAL_MINUTES",
             "NOTIFICATION_BATCH_SIZE",
@@ -179,6 +181,8 @@ if is_production:
         )
     ):
         invalid.append("ADMIN_TOTP_ENCRYPTION_KEY must differ from JWT_SECRET")
+    if not is_true(env.get("ADMIN_MFA_REQUIRED")):
+        invalid.append("ADMIN_MFA_REQUIRED must be true in production")
 
     outbox_secret = env.get("OUTBOX_SIGNING_SECRET", "")
     if outbox_secret and len(outbox_secret) < 32:
@@ -210,6 +214,7 @@ max_attempts = validate_int(env, "NOTIFICATION_MAX_ATTEMPTS", 1, 20, invalid)
 initial_backoff = validate_int(env, "NOTIFICATION_INITIAL_BACKOFF_SECONDS", 5, 86400, invalid)
 max_backoff = validate_int(env, "NOTIFICATION_MAX_BACKOFF_SECONDS", 5, 604800, invalid)
 moysklad_interval = validate_int(env, "MOYSKLAD_SYNC_INTERVAL_MINUTES", 5, 1440, invalid)
+mfa_setup_minutes = validate_int(env, "ADMIN_MFA_SETUP_TOKEN_MINUTES", 5, 30, invalid)
 if initial_backoff is not None and max_backoff is not None and max_backoff < initial_backoff:
     invalid.append("NOTIFICATION_MAX_BACKOFF_SECONDS must be >= NOTIFICATION_INITIAL_BACKOFF_SECONDS")
 
@@ -231,5 +236,6 @@ print(
         "notification_poll_seconds": poll_seconds,
         "notification_max_attempts": max_attempts,
         "moysklad_sync_interval_minutes": moysklad_interval,
+        "admin_mfa_setup_token_minutes": mfa_setup_minutes,
     }
 )

@@ -16,6 +16,8 @@ def _safe_production_settings(**overrides):
         "admin_jwt_expire_minutes": 480,
         "admin_password": "Strong-Admin-Password-2026",
         "admin_totp_encryption_key": "t" * 48,
+        "admin_mfa_required": True,
+        "admin_mfa_setup_token_minutes": 10,
         "outbox_signing_secret": "o" * 48,
         "payment_provider": "yookassa",
         "yookassa_shop_id": "shop-123",
@@ -37,6 +39,8 @@ def test_safe_production_configuration_is_accepted():
     assert settings.jwt_algorithm == "HS256"
     assert settings.admin_jwt_expire_minutes == 480
     assert settings.admin_totp_encryption_key != settings.jwt_secret
+    assert settings.admin_mfa_required is True
+    assert settings.admin_mfa_setup_token_minutes == 10
 
 
 def test_default_production_secrets_are_rejected():
@@ -63,6 +67,25 @@ def test_totp_encryption_key_must_differ_from_jwt_secret():
         )
 
     assert "must differ from JWT_SECRET" in str(exc_info.value)
+
+
+def test_production_requires_admin_mfa():
+    with pytest.raises(ValidationError) as exc_info:
+        _safe_production_settings(admin_mfa_required=False)
+
+    assert "ADMIN_MFA_REQUIRED must be true" in str(exc_info.value)
+
+
+def test_mfa_setup_token_lifetime_is_bounded_in_every_environment():
+    for minutes in (4, 31):
+        with pytest.raises(ValidationError) as exc_info:
+            Settings(
+                _env_file=None,
+                telegram_bot_token="test-token",
+                jwt_secret="test-secret",
+                admin_mfa_setup_token_minutes=minutes,
+            )
+        assert "ADMIN_MFA_SETUP_TOKEN_MINUTES" in str(exc_info.value)
 
 
 def test_production_requires_explicit_https_cors_origins():

@@ -7,11 +7,13 @@ import secrets
 import struct
 import time
 from datetime import datetime, timedelta
+from urllib.parse import quote
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from sqlalchemy.orm import Session
 
+from ..admin_mfa_models import AdminTotpReplayState
 from ..config import get_settings
 from ..models import (
     AdminIpAllowlist,
@@ -156,17 +158,32 @@ def create_password_reset(db: Session, admin: AdminUser) -> str:
     return token
 
 
+def generate_totp_secret() -> str:
+    return base64.b32encode(secrets.token_bytes(20)).decode("ascii").rstrip("=")
+
+
 def normalize_totp_secret(secret: str) -> str:
     normalized = "".join((secret or "").strip().upper().split())
     if len(normalized) < 16 or len(normalized) > 128:
         raise ValueError("Invalid TOTP secret length")
+    padding = "=" * ((8 - len(normalized) % 8) % 8)
     try:
-        decoded = base64.b32decode(normalized, casefold=True)
+        decoded = base64.b32decode(normalized + padding, casefold=True)
     except (binascii.Error, ValueError) as exc:
         raise ValueError("Invalid TOTP secret") from exc
     if len(decoded) < 10:
         raise ValueError("Invalid TOTP secret")
     return normalized
+
+
+def totp_provisioning_uri(secret: str, email: str) -> str:
+    normalized = normalize_totp_secret(secret)
+    label = quote(f"FLASHIN:{(email or '').strip().lower()}", safe="")
+    issuer = quote("FLASHIN", safe="")
+    return (
+        f"otpauth://totp/{label}?secret={normalized}&issuer={issuer}"
+        "&algorithm=SHA1&digits=6&period=30"
+    )
 
 
 def _totp_aad(admin_id: int) -> bytes:
@@ -223,22 +240,23 @@ def decrypt_totp_secret(admin_id: int, stored_secret: str) -> str:
         raise ValueError("TOTP secret cannot be decrypted") from exc
 
 
-def verify_totp(
+def match_totp_counter(
     secret: str,
     code: str,
     *,
     at_time: int | None = None,
     window: int = 1,
     step_seconds: int = 30,
-) -> bool:
+) -> int | None:
     normalized_secret = normalize_totp_secret(secret)
     normalized_code = (code or "").strip()
     if len(normalized_code) != 6 or not normalized_code.isdigit():
-        return False
+        return None
     if window < 0 or window > 2 or step_seconds < 15:
-        return False
+        return None
 
-    key = base64.b32decode(normalized_secret, casefold=True)
+    padding = "=" * ((8 - len(normalized_secret) % 8) % 8)
+    key = base64.b32decode(normalized_secret + padding, casefold=True)
     current_time = int(time.time() if at_time is None else at_time)
     counter = current_time // step_seconds
 
@@ -255,8 +273,44 @@ def verify_totp(
         value = struct.unpack(">I", digest[index : index + 4])[0] & 0x7FFFFFFF
         candidate = f"{value % 1_000_000:06d}"
         if hmac.compare_digest(candidate, normalized_code):
-            return True
-    return False
+            return candidate_counter
+    return None
+
+
+def verify_totp(
+    secret: str,
+    code: str,
+    *,
+    at_time: int | None = None,
+    window: int = 1,
+    step_seconds: int = 30,
+) -> bool:
+    return (
+        match_totp_counter(
+            secret,
+            code,
+            at_time=at_time,
+            window=window,
+            step_seconds=step_seconds,
+        )
+        is not None
+    )
+
+
+def verify_stored_totp_counter(
+    admin_id: int,
+    stored_secret: str,
+    code: str,
+    *,
+    at_time: int | None = None,
+    window: int = 1,
+) -> int | None:
+    return match_totp_counter(
+        decrypt_totp_secret(admin_id, stored_secret),
+        code,
+        at_time=at_time,
+        window=window,
+    )
 
 
 def verify_stored_totp(
@@ -267,12 +321,38 @@ def verify_stored_totp(
     at_time: int | None = None,
     window: int = 1,
 ) -> bool:
-    return verify_totp(
-        decrypt_totp_secret(admin_id, stored_secret),
-        code,
-        at_time=at_time,
-        window=window,
+    return (
+        verify_stored_totp_counter(
+            admin_id,
+            stored_secret,
+            code,
+            at_time=at_time,
+            window=window,
+        )
+        is not None
     )
+
+
+def consume_totp_counter(db: Session, admin_id: int, counter: int) -> bool:
+    row = (
+        db.query(AdminTotpReplayState)
+        .filter(AdminTotpReplayState.admin_id == admin_id)
+        .with_for_update()
+        .first()
+    )
+    if row and counter <= row.last_used_counter:
+        return False
+    if row:
+        row.last_used_counter = counter
+        row.updated_at = datetime.utcnow()
+    else:
+        db.add(
+            AdminTotpReplayState(
+                admin_id=admin_id,
+                last_used_counter=counter,
+            )
+        )
+    return True
 
 
 def upgrade_totp_secret_encryption(row: AdminTotpSecret) -> bool:
@@ -305,6 +385,15 @@ def set_totp_secret(
     else:
         row.secret = encrypted_secret
         row.enabled = enabled
+
+    replay_state = (
+        db.query(AdminTotpReplayState)
+        .filter(AdminTotpReplayState.admin_id == admin_id)
+        .with_for_update()
+        .first()
+    )
+    if replay_state:
+        db.delete(replay_state)
     if enabled:
         revoke_admin_sessions(db, admin_id)
     return row
