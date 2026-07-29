@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
@@ -6,18 +7,47 @@ from sqlalchemy.orm import Session
 from ..models import WebhookDestination, WebhookOutbox
 from .webhook_security import is_internal_destination, normalize_webhook_url
 
-
 _MAX_OUTBOX_ATTEMPTS = 10
+_MAX_WEBHOOK_BODY_BYTES = 256 * 1024
+_EVENT_TYPE_RE = re.compile(r"^[A-Za-z0-9_.:-]+$")
 
 
-def enqueue_webhook(db: Session, destination: str, event_type: str, payload: dict) -> bool:
+def _serialize_payload(payload: dict | list) -> str:
+    if not isinstance(payload, (dict, list)):
+        raise ValueError("Webhook payload must be a JSON object or array")
+    try:
+        serialized = json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Webhook payload is not valid JSON") from exc
+    if len(serialized.encode("utf-8")) > _MAX_WEBHOOK_BODY_BYTES:
+        raise ValueError("Webhook payload is too large")
+    return serialized
+
+
+def _normalize_event_type(event_type: str) -> str:
+    normalized = (event_type or "").strip()
+    if not normalized or len(normalized) > 120 or not _EVENT_TYPE_RE.fullmatch(normalized):
+        raise ValueError("Webhook event type is invalid")
+    return normalized
+
+
+def enqueue_webhook(
+    db: Session,
+    destination: str,
+    event_type: str,
+    payload: dict | list,
+) -> bool:
     raw_destination = (destination or "").strip()
     if is_internal_destination(raw_destination):
         return False
 
-    normalized_event_type = (event_type or "").strip()[:120]
-    if not normalized_event_type:
-        raise ValueError("Webhook event type is required")
+    normalized_event_type = _normalize_event_type(event_type)
+    serialized_payload = _serialize_payload(payload)
 
     try:
         normalized_destination = normalize_webhook_url(raw_destination)
@@ -26,7 +56,7 @@ def enqueue_webhook(db: Session, destination: str, event_type: str, payload: dic
             WebhookOutbox(
                 destination=raw_destination[:255],
                 event_type=normalized_event_type,
-                payload=json.dumps(payload, ensure_ascii=False),
+                payload=serialized_payload,
                 status="failed",
                 attempts=_MAX_OUTBOX_ATTEMPTS,
                 last_error=str(exc)[:2000],
@@ -39,7 +69,7 @@ def enqueue_webhook(db: Session, destination: str, event_type: str, payload: dic
         WebhookOutbox(
             destination=normalized_destination,
             event_type=normalized_event_type,
-            payload=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            payload=serialized_payload,
             status="pending",
             attempts=0,
             next_attempt_at=datetime.utcnow(),
@@ -56,10 +86,13 @@ def schedule_retry(row: WebhookOutbox, error: str) -> None:
         row.next_attempt_at = None
         return
     row.status = "pending"
-    row.next_attempt_at = datetime.utcnow() + timedelta(minutes=min(60, 2 ** row.attempts))
+    row.next_attempt_at = datetime.utcnow() + timedelta(
+        minutes=min(60, 2 ** row.attempts)
+    )
 
 
-def enqueue_event_for_destinations(db: Session, event_type: str, payload: dict) -> int:
+def enqueue_event_for_destinations(db: Session, event_type: str, payload: dict | list) -> int:
+    normalized_event_type = _normalize_event_type(event_type)
     destinations = (
         db.query(WebhookDestination)
         .filter(WebhookDestination.active.is_(True))
@@ -68,8 +101,13 @@ def enqueue_event_for_destinations(db: Session, event_type: str, payload: dict) 
     )
     count = 0
     for destination in destinations:
-        if destination.event_type not in {"*", event_type}:
+        if destination.event_type not in {"*", normalized_event_type}:
             continue
-        if enqueue_webhook(db, destination.url, event_type, payload):
+        if enqueue_webhook(
+            db,
+            destination.url,
+            normalized_event_type,
+            payload,
+        ):
             count += 1
     return count
