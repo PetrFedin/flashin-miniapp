@@ -3,6 +3,7 @@ from pathlib import Path
 import sentry_sdk
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
 
 from . import model_constraints as _model_constraints  # noqa: F401
@@ -64,14 +65,44 @@ from .seed import bootstrap_admin, seed_products
 settings = get_settings()
 is_production = settings.app_env.strip().lower() == "production"
 
-admin_router.routes[:] = [
-    route
-    for route in admin_router.routes
-    if not (
-        getattr(route, "path", "") == "/admin/login"
+
+def _is_admin_login_route(route, path: str) -> bool:
+    return (
+        getattr(route, "path", "") == path
         and "POST" in getattr(route, "methods", set())
     )
-]
+
+
+def _remove_legacy_admin_login_route() -> None:
+    legacy_routes = [
+        route
+        for route in admin_router.routes
+        if _is_admin_login_route(route, "/admin/login")
+    ]
+    if len(legacy_routes) != 1:
+        raise RuntimeError(
+            "Expected exactly one legacy /admin/login route before application assembly"
+        )
+    admin_router.routes[:] = [
+        route for route in admin_router.routes if route not in legacy_routes
+    ]
+
+
+def _assert_secure_admin_login_route(app: FastAPI) -> None:
+    login_routes = [
+        route
+        for route in app.routes
+        if isinstance(route, APIRoute)
+        and _is_admin_login_route(route, "/api/admin/login")
+    ]
+    if len(login_routes) != 1:
+        raise RuntimeError("Application must expose exactly one POST /api/admin/login route")
+    endpoint_module = getattr(login_routes[0].endpoint, "__module__", "")
+    if endpoint_module != "backend.api.admin_auth":
+        raise RuntimeError("POST /api/admin/login must be handled by backend.api.admin_auth")
+
+
+_remove_legacy_admin_login_route()
 
 if settings.sentry_dsn:
     sentry_sdk.init(
@@ -150,6 +181,8 @@ app.include_router(delivery_providers_router, prefix="/api")
 app.include_router(moysklad_deep_mapping_router, prefix="/api")
 app.include_router(admin_security_router, prefix="/api")
 app.include_router(delivery_quotes_router, prefix="/api")
+
+_assert_secure_admin_login_route(app)
 
 
 @app.on_event("startup")
