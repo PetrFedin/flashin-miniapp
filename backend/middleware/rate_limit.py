@@ -2,6 +2,7 @@ import ipaddress
 import re
 import time
 from collections import defaultdict, deque
+from collections.abc import Iterable
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
@@ -18,30 +19,94 @@ _ADMIN_AUTH_ROUTES = {
     "/api/admin/password-reset/confirm",
 }
 
+IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
+IPNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
 
-def _valid_ip(value: str) -> str | None:
+
+def _parse_ip(value: str) -> IPAddress | None:
     candidate = (value or "").strip()
     if not candidate:
         return None
     try:
-        return str(ipaddress.ip_address(candidate))
+        return ipaddress.ip_address(candidate)
     except ValueError:
         return None
 
 
-def _client_ip(request, *, trust_proxy_headers: bool) -> str:
-    direct_ip = _valid_ip(request.client.host if request.client else "") or "unknown"
-    if not trust_proxy_headers:
+def _valid_ip(value: str) -> str | None:
+    parsed = _parse_ip(value)
+    return str(parsed) if parsed is not None else None
+
+
+def _ip_in_networks(ip: IPAddress, networks: Iterable[IPNetwork]) -> bool:
+    return any(ip.version == network.version and ip in network for network in networks)
+
+
+def _parse_forwarded_chain(value: str) -> list[IPAddress] | None:
+    raw_values = value.split(",")
+    if not raw_values or any(not raw.strip() for raw in raw_values):
+        return None
+
+    chain: list[IPAddress] = []
+    for raw in raw_values:
+        parsed = _parse_ip(raw)
+        if parsed is None:
+            return None
+        chain.append(parsed)
+    return chain
+
+
+def _client_ip(
+    request,
+    *,
+    trusted_hops: int = 0,
+    trusted_networks: Iterable[IPNetwork] = (),
+    trust_proxy_headers: bool | None = None,
+) -> str:
+    """Resolve the rate-limit identity without trusting arbitrary headers.
+
+    ``trusted_hops`` counts proxy addresses from the right-hand side of the
+    request path, including the direct socket peer. Proxy headers are used only
+    when every trusted hop belongs to an explicitly configured trusted network.
+    Invalid or incomplete chains fail closed to the direct socket address.
+
+    ``trust_proxy_headers`` is retained for backward compatibility with older
+    tests and callers. Setting it to ``False`` disables proxy handling; setting
+    it to ``True`` enables one trusted hop when ``trusted_hops`` is omitted.
+    """
+
+    direct = _parse_ip(request.client.host if request.client else "")
+    direct_ip = str(direct) if direct is not None else "unknown"
+
+    if trust_proxy_headers is False:
+        return direct_ip
+    if trust_proxy_headers is True and trusted_hops == 0:
+        trusted_hops = 1
+
+    networks = tuple(trusted_networks)
+    if trusted_hops <= 0 or direct is None or not networks:
+        return direct_ip
+    if not _ip_in_networks(direct, networks):
         return direct_ip
 
     forwarded = request.headers.get("x-forwarded-for", "")
     if forwarded:
-        valid_chain = [ip for raw in forwarded.split(",") if (ip := _valid_ip(raw))]
-        if valid_chain:
-            return valid_chain[-1]
+        forwarded_chain = _parse_forwarded_chain(forwarded)
+        if forwarded_chain is None or len(forwarded_chain) < trusted_hops:
+            return direct_ip
 
-    real_ip = _valid_ip(request.headers.get("x-real-ip", ""))
-    return real_ip or direct_ip
+        full_chain = [*forwarded_chain, direct]
+        trusted_proxy_chain = full_chain[-trusted_hops:]
+        if not all(_ip_in_networks(proxy_ip, networks) for proxy_ip in trusted_proxy_chain):
+            return direct_ip
+
+        return str(full_chain[-trusted_hops - 1])
+
+    if trusted_hops != 1:
+        return direct_ip
+
+    real_ip = _parse_ip(request.headers.get("x-real-ip", ""))
+    return str(real_ip) if real_ip is not None else direct_ip
 
 
 def _route_bucket(path: str) -> str:
@@ -56,10 +121,9 @@ def _route_bucket(path: str) -> str:
 class InMemoryRateLimitMiddleware(BaseHTTPMiddleware):
     """Per-process sliding-window limiter with bounded memory.
 
-    Production traffic is expected to reach the backend only through the
-    isolated reverse proxy. In production, the proxy-provided client IP is
-    therefore used; development keeps direct socket addressing to prevent
-    header spoofing.
+    Proxy-provided client addresses are accepted only through the configured
+    number of trusted proxy hops and trusted CIDR networks. Development and any
+    untrusted direct peer use the socket address, preventing header spoofing.
     """
 
     def __init__(self, app):
@@ -86,8 +150,16 @@ class InMemoryRateLimitMiddleware(BaseHTTPMiddleware):
             limit = settings.rate_limit_admin_login_per_minute
             category = "admin_auth"
 
-        trust_proxy_headers = settings.app_env.strip().lower() == "production"
-        client_ip = _client_ip(request, trust_proxy_headers=trust_proxy_headers)
+        trusted_hops = (
+            settings.proxy_trusted_hops
+            if settings.app_env.strip().lower() == "production"
+            else 0
+        )
+        client_ip = _client_ip(
+            request,
+            trusted_hops=trusted_hops,
+            trusted_networks=settings.proxy_trusted_networks,
+        )
         key = f"{category}:{client_ip}:{request.method.upper()}:{route}"
 
         now = time.monotonic()
