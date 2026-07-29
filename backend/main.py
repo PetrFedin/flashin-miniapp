@@ -50,6 +50,7 @@ from .api.webhook_destinations import router as webhook_destinations_router
 from .api.wishlist import router as wishlist_router
 from .config import get_settings
 from .database import Base, SessionLocal, engine
+from .middleware.admin_order_state_guard import AdminOrderStateGuardMiddleware
 from .middleware.metrics import MetricsMiddleware, metrics_response
 from .middleware.rate_limit import InMemoryRateLimitMiddleware
 from .middleware.security_headers import SecurityHeadersMiddleware
@@ -74,6 +75,7 @@ app = FastAPI(
 )
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(InMemoryRateLimitMiddleware)
+app.add_middleware(AdminOrderStateGuardMiddleware)
 if settings.metrics_enabled:
     app.add_middleware(MetricsMiddleware)
 
