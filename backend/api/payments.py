@@ -23,6 +23,17 @@ router = APIRouter(prefix="/payments", tags=["payments"])
 
 _PROVIDER = "yookassa"
 _REUSABLE_PAYMENT_STATUSES = {"pending", "waiting_for_capture", "succeeded"}
+_PAYMENT_CREATION_ORDER_STATUSES = {"created", "payment_created"}
+_PAYMENT_CREATION_PAYMENT_STATUSES = {"pending", "payment_created"}
+_SETTLED_ORDER_PAYMENT_STATUSES = {
+    "paid",
+    "paid_review_required",
+    "refund_processing",
+    "refund_pending",
+    "refund_review_required",
+    "partially_refunded",
+    "refunded",
+}
 _SUPPORTED_WEBHOOK_EVENTS = {
     "payment.waiting_for_capture",
     "payment.succeeded",
@@ -90,6 +101,21 @@ def _parse_webhook_payload(raw_body: bytes) -> tuple[dict, str, dict, str]:
     return payload, event, obj, payment_id
 
 
+def _queue_payment_review(db: Session, order: Order, payment_id: str, reason: str) -> None:
+    payload = {
+        "order_id": order.id,
+        "provider_payment_id": payment_id,
+        "reason": reason,
+    }
+    emit_event(db, "payment.review_required", "order", order.id, payload)
+    enqueue_webhook(
+        db,
+        "internal://payment-review-required",
+        "payment.review_required",
+        payload,
+    )
+
+
 @router.post("", response_model=PaymentOut)
 async def create_payment(
     payload: PaymentCreate,
@@ -106,10 +132,13 @@ async def create_payment(
         )
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
-        if order.payment_status == "paid":
-            raise HTTPException(status_code=409, detail="Order already paid")
-        if order.status == "cancelled":
+        if order.status == "cancelled" or order.payment_status == "cancelled":
             raise HTTPException(status_code=409, detail="Order cancelled")
+        if (
+            order.status not in _PAYMENT_CREATION_ORDER_STATUSES
+            or order.payment_status not in _PAYMENT_CREATION_PAYMENT_STATUSES
+        ):
+            raise HTTPException(status_code=409, detail="Order is not eligible for a new payment")
         if order.total_amount <= 0:
             raise HTTPException(status_code=409, detail="Order total must be positive")
 
@@ -249,24 +278,12 @@ async def yookassa_webhook(request: Request, db: Session = Depends(get_db)):
             payment.status = provider_status
 
         if event == "payment.succeeded" and provider_status == "succeeded":
-            if order.payment_status == "paid":
+            if order.payment_status in _SETTLED_ORDER_PAYMENT_STATUSES:
                 pass
             elif order.status == "cancelled" or order.payment_status == "cancelled":
                 order.payment_status = "paid_review_required"
                 order.status = "payment_review_required"
-                emit_event(
-                    db,
-                    "payment.review_required",
-                    "order",
-                    order.id,
-                    {"order_id": order.id, "provider_payment_id": payment_id, "reason": "paid_after_cancel"},
-                )
-                enqueue_webhook(
-                    db,
-                    "internal://payment-review-required",
-                    "payment.review_required",
-                    {"order_id": order.id, "provider_payment_id": payment_id, "reason": "paid_after_cancel"},
-                )
+                _queue_payment_review(db, order, payment_id, "paid_after_cancel")
             else:
                 for item in order.items:
                     commit_reserved_to_sold(db, item.variant_id, item.quantity)
@@ -305,7 +322,9 @@ async def yookassa_webhook(request: Request, db: Session = Depends(get_db)):
                 order.payment_status = "paid"
                 order.status = "paid"
         elif event == "payment.canceled" and provider_status == "canceled":
-            if order.payment_status != "paid":
+            if order.payment_status in _SETTLED_ORDER_PAYMENT_STATUSES:
+                _queue_payment_review(db, order, payment_id, "canceled_after_settlement")
+            else:
                 if order.payment_status != "cancelled":
                     for item in order.items:
                         release_variant(db, item.variant_id, item.quantity)
