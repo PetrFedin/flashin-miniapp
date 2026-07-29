@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     admin_email: str = "admin@flashin.store"
     admin_password: str = "change-me-now"
     admin_totp_encryption_key: str = ""
-    admin_mfa_required: bool = True
+    admin_mfa_required: bool = False
     admin_mfa_setup_token_minutes: int = 10
 
     payment_provider: str = "yookassa"
