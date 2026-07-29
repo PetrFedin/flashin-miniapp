@@ -15,6 +15,8 @@ from ..models import (
     CrmProfile,
     LoyaltyRedemptionHold,
     LoyaltyTransaction,
+    Order,
+    Payment,
     ReferralAttribution,
     ReferralCode,
 )
@@ -25,15 +27,10 @@ _RATE_STEP = Decimal("0.0001")
 _HUNDRED = Decimal("100")
 _MAX_POINTS = Decimal("9999999999999999.9999")
 _MAX_MONEY = Decimal("999999999999999999.99")
+_MAX_REWARD_RATE = Decimal("1000.0000")
 
 
-def _decimal_value(
-    value: object,
-    field: str,
-    step: Decimal,
-    *,
-    maximum: Decimal,
-) -> Decimal:
+def _decimal_value(value: object, field: str, step: Decimal, *, maximum: Decimal) -> Decimal:
     try:
         number = Decimal(str(value)).quantize(step, rounding=ROUND_HALF_UP)
     except (InvalidOperation, TypeError, ValueError):
@@ -59,6 +56,17 @@ def _as_float(value: Decimal) -> float:
     return float(value)
 
 
+def calculate_order_reward_points(total_amount: object, points_per_ruble: object | None = None) -> Decimal:
+    total = _money(total_amount, "order total")
+    if total < 0:
+        raise HTTPException(status_code=409, detail="Order total cannot be negative")
+    raw_rate = get_settings().loyalty_points_per_ruble if points_per_ruble is None else points_per_ruble
+    reward_rate = _rate(raw_rate, "loyalty reward rate")
+    if reward_rate < 0 or reward_rate > _MAX_REWARD_RATE:
+        raise HTTPException(status_code=500, detail="Loyalty reward rate is misconfigured")
+    return _points(total * reward_rate, "order reward points")
+
+
 def _locked_profile(db: Session, customer_id: int, create: bool = False) -> CrmProfile | None:
     profile = (
         db.query(CrmProfile)
@@ -80,13 +88,30 @@ def add_points(
     reason: str,
     order_id: int | None = None,
 ) -> None:
-    points_value = _points(points)
+    normalized_reason = (reason or "").strip()[:255]
+    if normalized_reason == "order_paid":
+        if not order_id:
+            raise HTTPException(status_code=409, detail="Paid-order reward requires an order")
+        order = db.query(Order).filter(Order.id == order_id).with_for_update().first()
+        if not order or order.customer_id != customer_id:
+            raise HTTPException(status_code=409, detail="Paid-order reward does not match customer")
+        successful_payment = (
+            db.query(Payment)
+            .filter(Payment.order_id == order_id, Payment.status == "succeeded")
+            .with_for_update()
+            .first()
+        )
+        if not successful_payment:
+            raise HTTPException(status_code=409, detail="Paid-order reward requires a successful payment")
+        points_value = calculate_order_reward_points(order.total_amount)
+    else:
+        points_value = _points(points)
+
     if points_value == 0:
         return
 
     profile = _locked_profile(db, customer_id, create=True)
-    new_balance = _points(profile.loyalty_points, "loyalty balance") + points_value
-    new_balance = _points(new_balance, "loyalty balance")
+    new_balance = _points(_points(profile.loyalty_points, "loyalty balance") + points_value, "loyalty balance")
     if new_balance < 0:
         raise HTTPException(status_code=409, detail="Loyalty balance cannot become negative")
 
@@ -95,7 +120,7 @@ def add_points(
             customer_id=customer_id,
             order_id=order_id,
             points_delta=_as_float(points_value),
-            reason=(reason or "").strip()[:255],
+            reason=normalized_reason,
         )
     )
     profile.loyalty_points = _as_float(new_balance)
@@ -107,12 +132,8 @@ def _referral_lock_key(customer_id: int) -> int:
 
 
 def _acquire_referral_lock(db: Session, customer_id: int) -> None:
-    if db.get_bind().dialect.name != "postgresql":
-        return
-    db.execute(
-        text("SELECT pg_advisory_xact_lock(:lock_key)"),
-        {"lock_key": _referral_lock_key(customer_id)},
-    )
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(text("SELECT pg_advisory_xact_lock(:lock_key)"), {"lock_key": _referral_lock_key(customer_id)})
 
 
 def ensure_referral_code(db: Session, customer_id: int) -> ReferralCode:
@@ -180,26 +201,20 @@ def redeem_points(db: Session, customer_id: int, cart: Cart, points: float) -> C
         raise HTTPException(status_code=409, detail="Loyalty profile not found")
 
     other_reserved = sum(
-        (
-            _points(hold.points, "reserved loyalty points")
-            for hold in holds
-            if hold.cart_id != cart.id
-        ),
+        (_points(hold.points, "reserved loyalty points") for hold in holds if hold.cart_id != cart.id),
         Decimal("0"),
     )
-    available_points = _points(profile.loyalty_points, "loyalty balance") - other_reserved
-    available_points = _points(available_points, "available loyalty points")
+    available_points = _points(
+        _points(profile.loyalty_points, "loyalty balance") - other_reserved,
+        "available loyalty points",
+    )
     if requested_points > available_points:
         raise HTTPException(status_code=409, detail="Not enough available loyalty points")
 
-    subtotal = sum(
-        (
-            _money(item.product.price, "product price") * int(item.quantity)
-            for item in cart.items
-        ),
-        Decimal("0"),
+    subtotal = _money(
+        sum((_money(item.product.price, "product price") * int(item.quantity) for item in cart.items), Decimal("0")),
+        "cart subtotal",
     )
-    subtotal = _money(subtotal, "cart subtotal")
     loyalty_limit = _rate(settings.loyalty_max_redeem_percent, "loyalty limit")
     if loyalty_limit < 0 or loyalty_limit > _HUNDRED:
         raise HTTPException(status_code=500, detail="Loyalty limit is misconfigured")
