@@ -28,15 +28,14 @@ def _serialize_look(look: Look, ordered_products: list[Product]) -> LookDetailOu
 
 
 def _load_look_products(db: Session, look_id: int) -> list[Product]:
-    rows = (
-        db.query(LookItem, Product)
-        .join(Product, Product.id == LookItem.product_id)
+    return (
+        db.query(Product)
+        .join(LookItem, LookItem.product_id == Product.id)
         .options(joinedload(Product.images), joinedload(Product.variants))
         .filter(LookItem.look_id == look_id, Product.active.is_(True))
         .order_by(LookItem.sort_order.asc(), LookItem.id.asc())
         .all()
     )
-    return [product for _, product in rows]
 
 
 @router.get("", response_model=list[LookDetailOut])
