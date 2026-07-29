@@ -21,7 +21,8 @@ from ..services.admin_security import (
     log_admin_login,
     revoke_admin_sessions,
     sha256,
-    verify_totp,
+    upgrade_totp_secret_encryption,
+    verify_stored_totp,
 )
 
 router = APIRouter(prefix="/admin", tags=["admin-auth"])
@@ -130,7 +131,11 @@ def admin_session_login(
         )
         if totp and totp.enabled:
             try:
-                totp_valid = verify_totp(totp.secret, payload.totp_code or "")
+                totp_valid = verify_stored_totp(
+                    admin.id,
+                    totp.secret,
+                    payload.totp_code or "",
+                )
             except ValueError:
                 totp_valid = False
             if not totp_valid:
@@ -145,6 +150,7 @@ def admin_session_login(
                 )
                 db.commit()
                 raise HTTPException(status_code=401, detail="Invalid admin credentials")
+            upgrade_totp_secret_encryption(totp)
 
         if password_needs_rehash(admin.password_hash):
             admin.password_hash = hash_password(payload.password)
