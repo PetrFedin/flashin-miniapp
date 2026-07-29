@@ -5,6 +5,8 @@ from backend.models import (
     PaymentEvent,
     ProductVariant,
     ReturnRequest,
+    WebhookDestination,
+    WebhookOutbox,
 )
 
 
@@ -42,3 +44,19 @@ def test_return_request_is_unique_per_order_and_provider_refund():
     assert "ck_return_requests_refund_nonnegative" in constraints
     assert "uq_return_requests_order_id" in constraints
     assert "uq_return_requests_provider_refund_id" in indexes
+
+
+def test_webhook_destination_constraints_are_registered():
+    constraints = _constraint_names(WebhookDestination.__table__)
+
+    assert "uq_webhook_destinations_url_event_type" in constraints
+    assert "ck_webhook_destinations_url_nonempty" in constraints
+    assert "ck_webhook_destinations_event_type_nonempty" in constraints
+
+
+def test_webhook_outbox_constraints_and_due_index_are_registered():
+    constraints = _constraint_names(WebhookOutbox.__table__)
+    indexes = _index_names(WebhookOutbox.__table__)
+
+    assert "ck_webhook_outbox_attempts_nonnegative" in constraints
+    assert "ix_webhook_outbox_due" in indexes
