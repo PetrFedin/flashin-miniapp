@@ -1,23 +1,125 @@
-def suggest_size(height_cm: int | None, weight_kg: int | None, usual_size: str | None, fit_preference: str = "regular") -> dict:
-    if usual_size:
-        base = usual_size.upper()
-    elif height_cm and weight_kg:
-        if weight_kg < 60:
-            base = "S"
-        elif weight_kg < 78:
-            base = "M"
-        elif weight_kg < 92:
-            base = "L"
-        else:
-            base = "XL"
+from collections.abc import Iterable
+
+_SIZE_ORDER = ["XS", "S", "M", "L", "XL", "XXL"]
+_NUMERIC_SIZE_MAP = {
+    "40": "XS",
+    "42": "XS",
+    "44": "S",
+    "46": "M",
+    "48": "L",
+    "50": "XL",
+    "52": "XXL",
+    "54": "XXL",
+    "56": "XXL",
+}
+_FIT_ADJUSTMENT = {"slim": -1, "regular": 0, "oversize": 1}
+
+
+def _normalize_size(value: str | None) -> str | None:
+    normalized = str(value or "").strip().upper().replace(" ", "")
+    if not normalized:
+        return None
+    normalized = _NUMERIC_SIZE_MAP.get(normalized, normalized)
+    if normalized not in _SIZE_ORDER:
+        raise ValueError("Usual size must be XS, S, M, L, XL, XXL or a Russian size from 40 to 56")
+    return normalized
+
+
+def _validate_measurements(height_cm: int | None, weight_kg: int | None) -> None:
+    if height_cm is not None and not 140 <= height_cm <= 210:
+        raise ValueError("Height must be between 140 and 210 cm")
+    if weight_kg is not None and not 40 <= weight_kg <= 180:
+        raise ValueError("Weight must be between 40 and 180 kg")
+
+
+def _estimated_index(height_cm: int | None, weight_kg: int | None) -> int:
+    if weight_kg is None:
+        raise ValueError("Weight is required when usual size is not provided")
+
+    if weight_kg < 58:
+        index = 1
+    elif weight_kg < 72:
+        index = 2
+    elif weight_kg < 87:
+        index = 3
+    elif weight_kg < 104:
+        index = 4
     else:
-        base = "M"
+        index = 5
 
-    order = ["XS", "S", "M", "L", "XL", "XXL"]
-    idx = order.index(base) if base in order else 2
-    if fit_preference == "oversize":
-        idx = min(idx + 1, len(order) - 1)
-    if fit_preference == "slim":
-        idx = max(idx - 1, 0)
+    if height_cm is not None:
+        if height_cm <= 164 and weight_kg < 90:
+            index -= 1
+        elif height_cm >= 190 and weight_kg >= 72:
+            index += 1
+    return max(0, min(index, len(_SIZE_ORDER) - 1))
 
-    return {"suggested_size": order[idx], "confidence": "medium", "note": "Use as helper only; confirm with garment measurements."}
+
+def _nearest_available(target_index: int, available_sizes: Iterable[str] | None) -> tuple[str, bool]:
+    normalized_available: set[str] = set()
+    for raw_size in available_sizes or []:
+        try:
+            normalized = _normalize_size(raw_size)
+        except ValueError:
+            continue
+        if normalized:
+            normalized_available.add(normalized)
+
+    target = _SIZE_ORDER[target_index]
+    if not normalized_available or target in normalized_available:
+        return target, target in normalized_available if normalized_available else True
+
+    nearest = min(
+        normalized_available,
+        key=lambda size: (abs(_SIZE_ORDER.index(size) - target_index), _SIZE_ORDER.index(size)),
+    )
+    return nearest, False
+
+
+def suggest_size(
+    height_cm: int | None,
+    weight_kg: int | None,
+    usual_size: str | None,
+    fit_preference: str = "regular",
+    available_sizes: Iterable[str] | None = None,
+) -> dict:
+    _validate_measurements(height_cm, weight_kg)
+    normalized_fit = str(fit_preference or "regular").strip().lower()
+    if normalized_fit not in _FIT_ADJUSTMENT:
+        raise ValueError("Fit preference must be slim, regular or oversize")
+
+    normalized_usual_size = _normalize_size(usual_size)
+    basis: list[str] = []
+    if normalized_usual_size:
+        base_index = _SIZE_ORDER.index(normalized_usual_size)
+        confidence = "medium"
+        basis.append(f"usual_size:{normalized_usual_size}")
+    else:
+        base_index = _estimated_index(height_cm, weight_kg)
+        confidence = "low"
+        basis.append(f"height_cm:{height_cm}" if height_cm is not None else "height:not_provided")
+        basis.append(f"weight_kg:{weight_kg}")
+
+    adjusted_index = max(
+        0,
+        min(base_index + _FIT_ADJUSTMENT[normalized_fit], len(_SIZE_ORDER) - 1),
+    )
+    basis.append(f"fit:{normalized_fit}")
+    suggested_size, exact_available = _nearest_available(adjusted_index, available_sizes)
+
+    if exact_available:
+        availability_note = "Размер присутствует среди доступных вариантов товара."
+    else:
+        availability_note = "Ближайший доступный размер выбран вместо рассчитанного базового размера."
+
+    return {
+        "suggested_size": suggested_size,
+        "base_size": _SIZE_ORDER[adjusted_index],
+        "confidence": confidence,
+        "exact_available": exact_available,
+        "basis": basis,
+        "note": (
+            f"{availability_note} Рекомендация является ориентиром: "
+            "для окончательного выбора необходимо сверить замеры конкретного изделия."
+        ),
+    }
