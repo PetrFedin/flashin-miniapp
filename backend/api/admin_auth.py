@@ -262,7 +262,7 @@ def admin_session_logout(
         )
         db.commit()
         response.headers["Cache-Control"] = "no-store"
-        return response
+        return None
     except HTTPException:
         db.rollback()
         raise
