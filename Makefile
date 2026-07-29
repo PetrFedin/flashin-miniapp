@@ -1,18 +1,19 @@
-.PHONY: help init build up down logs migrate health workers search monitoring backup restore test preflight clean
+.PHONY: help init build up down logs migrate health workers search monitoring backup restore test preflight clean deploy-prod rollback verify-backup seed-admin validate-env openapi release-notes diagnostics setup-wizard check-integrations readiness pilot-sheet readiness-gate loadtest performance-budget security-audit media-jobs loadtest-catalog loadtest-webhooks real-e2e grafana-dashboards simple-start launch-local launch-production connected-audit simplicity-score env-todo pilot-runner release-pack release-freeze pilot-evidence package-audit test-all transaction-integrity
 
 help:
-	@echo "FLASHIN v40 commands:"
-	@echo "  make init        - first local bootstrap"
-	@echo "  make build       - build containers"
-	@echo "  make up          - start app"
-	@echo "  make down        - stop app"
-	@echo "  make migrate     - run Alembic migrations"
-	@echo "  make health      - check health"
-	@echo "  make workers     - run worker profile"
-	@echo "  make search      - start Meilisearch"
-	@echo "  make monitoring  - start Prometheus/Grafana"
-	@echo "  make test        - run backend tests"
-	@echo "  make backup      - backup PostgreSQL"
+	@echo "FLASHIN commands:"
+	@echo "  make init                  - first local bootstrap"
+	@echo "  make build                 - build containers"
+	@echo "  make up                    - start app"
+	@echo "  make down                  - stop app"
+	@echo "  make migrate               - run Alembic migrations"
+	@echo "  make transaction-integrity - read-only database integrity audit"
+	@echo "  make health                - check health"
+	@echo "  make workers               - run worker profile"
+	@echo "  make search                - start Meilisearch"
+	@echo "  make monitoring            - start Prometheus/Grafana"
+	@echo "  make test                  - run backend tests"
+	@echo "  make backup                - backup PostgreSQL"
 
 init:
 	./scripts/bootstrap.sh
@@ -31,6 +32,9 @@ logs:
 
 migrate:
 	./scripts/migrate.sh
+
+transaction-integrity:
+	docker compose run --rm backend python scripts/check_transaction_integrity.py
 
 health:
 	./scripts/healthcheck.sh
