@@ -13,34 +13,53 @@ def _load_module():
     return module
 
 
-def test_base_schema_does_not_require_future_tables():
+def test_base_schema_does_not_require_future_revisions():
     module = _load_module()
 
-    checks = module._enabled_checks(set(module.BASE_REQUIRED_TABLES))
+    checks = module._enabled_checks(set(module.BASE_REQUIRED_TABLES), set())
 
     assert "invalid_variant_inventory" in checks
     assert "negative_notification_delivery_attempts" not in checks
     assert "duplicate_webhook_destinations" not in checks
 
 
-def test_notification_checks_enable_only_when_group_is_complete():
+def test_notification_checks_require_table_group_and_revision():
     module = _load_module()
-    tables = set(module.BASE_REQUIRED_TABLES) | {"notification_delivery_states"}
+    tables = set(module.BASE_REQUIRED_TABLES) | {
+        "notification_delivery_states",
+        "notifications",
+    }
 
-    incomplete_checks = module._enabled_checks(tables)
-    complete_checks = module._enabled_checks(tables | {"notifications"})
+    before_revision = module._enabled_checks(tables, set())
+    after_revision = module._enabled_checks(
+        tables,
+        {"0012_notification_delivery_retry_state"},
+    )
 
-    assert "duplicate_notification_delivery_states" not in incomplete_checks
-    assert "duplicate_notification_delivery_states" in complete_checks
-    assert "orphan_notification_delivery_states" in complete_checks
+    assert "duplicate_notification_delivery_states" not in before_revision
+    assert "duplicate_notification_delivery_states" in after_revision
+    assert "orphan_notification_delivery_states" in after_revision
 
 
-def test_webhook_checks_enable_after_webhook_tables_exist():
+def test_webhook_checks_do_not_block_cleanup_migration():
     module = _load_module()
-    tables = set(module.BASE_REQUIRED_TABLES) | {"webhook_destinations", "webhook_outbox"}
+    tables = set(module.BASE_REQUIRED_TABLES) | {
+        "webhook_destinations",
+        "webhook_outbox",
+    }
 
-    checks = module._enabled_checks(tables)
+    before_revision = module._enabled_checks(
+        tables,
+        {"0012_notification_delivery_retry_state"},
+    )
+    after_revision = module._enabled_checks(
+        tables,
+        {
+            "0012_notification_delivery_retry_state",
+            "0013_webhook_outbox_integrity",
+        },
+    )
 
-    assert "invalid_webhook_destinations" in checks
-    assert "negative_webhook_outbox_attempts" in checks
-    assert "duplicate_webhook_destinations" in checks
+    assert "duplicate_webhook_destinations" not in before_revision
+    assert "duplicate_webhook_destinations" in after_revision
+    assert "negative_webhook_outbox_attempts" in after_revision
