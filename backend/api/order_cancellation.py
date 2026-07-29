@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from ..database import get_db
 from ..models import (
@@ -24,7 +24,7 @@ router = APIRouter(tags=["order-cancellation"])
 def _load_order(db: Session, order_id: int, customer_id: int | None = None) -> Order | None:
     query = (
         db.query(Order)
-        .options(joinedload(Order.items), joinedload(Order.customer))
+        .options(selectinload(Order.items), selectinload(Order.customer))
         .filter(Order.id == order_id)
     )
     if customer_id is not None:
