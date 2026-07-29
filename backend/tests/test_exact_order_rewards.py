@@ -36,7 +36,7 @@ def _paid_order(db, total=100.01):
         provider="yookassa",
         provider_payment_id=f"pay-reward-{order.id}",
         status="succeeded",
-        amount=total,
+        amount=total if total > 0 else 0.01,
     )
     db.add(payment)
     db.commit()
@@ -113,9 +113,6 @@ def test_invalid_reward_rate_fails_closed(rate):
 def test_zero_total_creates_no_reward_transaction(monkeypatch):
     db = _session()
     customer, order = _paid_order(db, total=0)
-    payment = db.query(Payment).filter(Payment.order_id == order.id).one()
-    payment.amount = 0.01
-    db.commit()
     monkeypatch.setattr(
         loyalty,
         "get_settings",
