@@ -24,6 +24,7 @@ from .models import (
     ProductVariant,
     PromoCode,
     ReferralCode,
+    ReturnRequest,
 )
 
 
@@ -86,6 +87,7 @@ def apply_model_constraints() -> None:
     )
 
     _check(Payment.__table__, "ck_payments_amount_positive", "amount > 0")
+    _check(ReturnRequest.__table__, "ck_return_requests_refund_nonnegative", "refund_amount >= 0")
     _check(CrmProfile.__table__, "ck_crm_profiles_loyalty_nonnegative", "loyalty_points >= 0")
     _check(LoyaltyRedemptionHold.__table__, "ck_loyalty_holds_points_positive", "points > 0")
 
@@ -98,6 +100,7 @@ def apply_model_constraints() -> None:
     _unique(FulfillmentTask.__table__, "uq_fulfillment_tasks_order_id", "order_id")
     _unique(AdminSession.__table__, "uq_admin_sessions_token_hash", "session_token_hash")
     _unique(AdminPasswordReset.__table__, "uq_admin_password_resets_token_hash", "token_hash")
+    _unique(ReturnRequest.__table__, "uq_return_requests_order_id", "order_id")
 
     _partial_unique_index(
         Cart.__table__,
@@ -120,6 +123,12 @@ def apply_model_constraints() -> None:
             PaymentEvent.__table__.c.event_type,
         ],
         "provider_payment_id <> '' AND event_type <> ''",
+    )
+    _partial_unique_index(
+        ReturnRequest.__table__,
+        "uq_return_requests_provider_refund_id",
+        [ReturnRequest.__table__.c.provider_refund_id],
+        "provider_refund_id <> ''",
     )
     _partial_unique_index(
         LoyaltyTransaction.__table__,
