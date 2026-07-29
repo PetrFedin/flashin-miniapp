@@ -16,6 +16,8 @@ _EXEMPT_PATHS = {"/health", "/ready"}
 _ADMIN_AUTH_ROUTES = {
     "/api/admin/login",
     "/api/admin/password-reset/confirm",
+    "/api/admin/mfa/setup/start",
+    "/api/admin/mfa/setup/confirm",
 }
 
 
@@ -29,14 +31,18 @@ def _valid_ip(value: str) -> str | None:
         return None
 
 
-def _client_ip(request, *, trust_proxy_headers: bool) -> str:
+def _client_ip(request, *, trust_proxy_headers: bool = False) -> str:
     direct_ip = _valid_ip(request.client.host if request.client else "") or "unknown"
     if not trust_proxy_headers:
         return direct_ip
 
     forwarded = request.headers.get("x-forwarded-for", "")
     if forwarded:
-        valid_chain = [ip for raw in forwarded.split(",") if (ip := _valid_ip(raw))]
+        valid_chain = [
+            parsed
+            for part in forwarded.split(",")
+            if (parsed := _valid_ip(part)) is not None
+        ]
         if valid_chain:
             return valid_chain[-1]
 
@@ -56,10 +62,9 @@ def _route_bucket(path: str) -> str:
 class InMemoryRateLimitMiddleware(BaseHTTPMiddleware):
     """Per-process sliding-window limiter with bounded memory.
 
-    Production traffic is expected to reach the backend only through the
-    isolated reverse proxy. In production, the proxy-provided client IP is
-    therefore used; development keeps direct socket addressing to prevent
-    header spoofing.
+    Production client identity uses the address appended by the isolated reverse
+    proxy. Development ignores proxy-provided headers so direct clients cannot
+    select arbitrary buckets.
     """
 
     def __init__(self, app):
@@ -86,8 +91,10 @@ class InMemoryRateLimitMiddleware(BaseHTTPMiddleware):
             limit = settings.rate_limit_admin_login_per_minute
             category = "admin_auth"
 
-        trust_proxy_headers = settings.app_env.strip().lower() == "production"
-        client_ip = _client_ip(request, trust_proxy_headers=trust_proxy_headers)
+        client_ip = _client_ip(
+            request,
+            trust_proxy_headers=settings.app_env.strip().lower() == "production",
+        )
         key = f"{category}:{client_ip}:{request.method.upper()}:{route}"
 
         now = time.monotonic()
