@@ -32,14 +32,18 @@ services:
   notification_worker:
     restart: unless-stopped
     stop_grace_period: 30s
+    profiles: !reset []
 
   scheduler:
     restart: unless-stopped
     stop_grace_period: 30s
+    profiles: !reset []
 
   meilisearch:
     restart: unless-stopped
     ports: !reset []
+    profiles: !reset []
 
   caddy:
     restart: unless-stopped
+    profiles: !reset []
