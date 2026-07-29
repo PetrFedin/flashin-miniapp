@@ -23,6 +23,12 @@ router = APIRouter(prefix="/payments", tags=["payments"])
 
 _PROVIDER = "yookassa"
 _REUSABLE_PAYMENT_STATUSES = {"pending", "waiting_for_capture", "succeeded"}
+_SUPPORTED_WEBHOOK_EVENTS = {
+    "payment.waiting_for_capture",
+    "payment.succeeded",
+    "payment.canceled",
+}
+_MAX_WEBHOOK_BYTES = 64 * 1024
 
 
 def _payment_out(order: Order, payment: Payment) -> PaymentOut:
@@ -57,6 +63,31 @@ def _validate_provider_amount(provider_payment: dict, order: Order) -> None:
 
     if provider_amount != order_amount or provider_currency != str(order.currency).upper():
         raise HTTPException(status_code=409, detail="Provider payment amount or currency does not match order")
+
+
+def _parse_webhook_payload(raw_body: bytes) -> tuple[dict, str, dict, str]:
+    if not raw_body:
+        raise HTTPException(status_code=400, detail="Empty webhook payload")
+    if len(raw_body) > _MAX_WEBHOOK_BYTES:
+        raise HTTPException(status_code=413, detail="Webhook payload is too large")
+
+    try:
+        payload = json.loads(raw_body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Webhook payload must be an object")
+
+    event = str(payload.get("event") or "").strip()
+    if not event or len(event) > 120:
+        raise HTTPException(status_code=400, detail="Invalid webhook event")
+
+    raw_object = payload.get("object")
+    obj = raw_object if isinstance(raw_object, dict) else {}
+    payment_id = str(obj.get("id") or "").strip()
+    if event in _SUPPORTED_WEBHOOK_EVENTS and (not payment_id or len(payment_id) > 255):
+        raise HTTPException(status_code=400, detail="Invalid webhook payment id")
+    return payload, event, obj, payment_id
 
 
 @router.post("", response_model=PaymentOut)
@@ -105,16 +136,16 @@ async def create_payment(
             attempt=attempt,
         )
         provider_payment_id = str(data.get("provider_payment_id") or "").strip()
-        if not provider_payment_id:
-            raise HTTPException(status_code=502, detail="Payment provider returned no payment id")
+        if not provider_payment_id or len(provider_payment_id) > 255:
+            raise HTTPException(status_code=502, detail="Payment provider returned an invalid payment id")
 
         payment = Payment(
             order_id=order.id,
             provider=_PROVIDER,
             provider_payment_id=provider_payment_id,
-            status=str(data.get("status") or "pending"),
+            status=str(data.get("status") or "pending")[:64],
             amount=order.total_amount,
-            confirmation_url=str(data.get("confirmation_url") or ""),
+            confirmation_url=str(data.get("confirmation_url") or "")[:2048],
         )
         db.add(payment)
         order.payment_status = "payment_created"
@@ -144,22 +175,27 @@ async def create_payment(
 
 @router.post("/webhook/yookassa")
 async def yookassa_webhook(request: Request, db: Session = Depends(get_db)):
-    try:
-        payload = await request.json()
-    except (ValueError, json.JSONDecodeError):
-        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type and content_type != "application/json":
+        raise HTTPException(status_code=415, detail="Webhook content type must be application/json")
 
-    event = str(payload.get("event") or "").strip()
-    obj = payload.get("object") or {}
-    payment_id = str(obj.get("id") or "").strip()
-    if not payment_id or not event:
-        raise HTTPException(status_code=400, detail="Invalid webhook payload")
+    raw_content_length = request.headers.get("content-length", "").strip()
+    if raw_content_length:
+        try:
+            if int(raw_content_length) > _MAX_WEBHOOK_BYTES:
+                raise HTTPException(status_code=413, detail="Webhook payload is too large")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid Content-Length header")
+
+    payload, event, obj, payment_id = _parse_webhook_payload(await request.body())
+    if event not in _SUPPORTED_WEBHOOK_EVENTS:
+        return {"ok": True, "ignored": True, "event": event}
 
     provider_payment = await fetch_yookassa_payment(payment_id)
     provider_order_id = _provider_order_id(provider_payment)
     provider_status = str(provider_payment.get("status") or obj.get("status") or "").strip()
-    if not provider_status:
-        raise HTTPException(status_code=409, detail="Provider payment has no status")
+    if not provider_status or len(provider_status) > 64:
+        raise HTTPException(status_code=409, detail="Provider payment has no valid status")
 
     try:
         order = db.query(Order).filter(Order.id == provider_order_id).with_for_update().first()
@@ -206,7 +242,7 @@ async def yookassa_webhook(request: Request, db: Session = Depends(get_db)):
                 provider_payment_id=payment_id,
                 status=provider_status,
                 amount=order.total_amount,
-                confirmation_url=str((provider_payment.get("confirmation") or {}).get("confirmation_url") or ""),
+                confirmation_url=str((provider_payment.get("confirmation") or {}).get("confirmation_url") or "")[:2048],
             )
             db.add(payment)
         else:
