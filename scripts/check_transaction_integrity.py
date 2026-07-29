@@ -6,7 +6,7 @@ import json
 import sys
 from collections.abc import Mapping
 
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from backend.database import engine
@@ -117,8 +117,38 @@ CHECKS: Mapping[str, str] = {
     """,
 }
 
+REQUIRED_TABLES = {
+    "admin_password_resets",
+    "admin_role_permissions",
+    "admin_sessions",
+    "cart_items",
+    "carts",
+    "crm_profiles",
+    "fulfillment_tasks",
+    "loyalty_redemption_holds",
+    "loyalty_transactions",
+    "order_items",
+    "orders",
+    "payment_events",
+    "payments",
+    "product_variants",
+    "promo_codes",
+    "referral_codes",
+}
+
+
+class MissingSchemaError(RuntimeError):
+    def __init__(self, missing_tables: set[str]):
+        self.missing_tables = missing_tables
+        super().__init__("missing tables: " + ", ".join(sorted(missing_tables)))
+
 
 def run_audit() -> dict[str, int]:
+    present_tables = set(inspect(engine).get_table_names())
+    missing_tables = REQUIRED_TABLES - present_tables
+    if missing_tables:
+        raise MissingSchemaError(missing_tables)
+
     results: dict[str, int] = {}
     with engine.connect() as connection:
         for name, query in CHECKS.items():
@@ -129,10 +159,29 @@ def run_audit() -> dict[str, int]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    parser.add_argument(
+        "--allow-missing-schema",
+        action="store_true",
+        help="Return success when this is a first deploy and application tables do not exist yet",
+    )
     args = parser.parse_args()
 
     try:
         results = run_audit()
+    except MissingSchemaError as exc:
+        payload = {
+            "ok": args.allow_missing_schema,
+            "skipped": args.allow_missing_schema,
+            "reason": "missing_schema",
+            "missing_tables": sorted(exc.missing_tables),
+        }
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        elif args.allow_missing_schema:
+            print("Transaction integrity audit skipped: first deploy schema is not present yet")
+        else:
+            print(f"Transaction integrity audit failed: {exc}", file=sys.stderr)
+        return 0 if args.allow_missing_schema else 2
     except SQLAlchemyError as exc:
         payload = {"ok": False, "error": str(exc.__class__.__name__)}
         if args.json:
