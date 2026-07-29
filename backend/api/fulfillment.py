@@ -108,10 +108,13 @@ def update_task_item(
 ):
     require_permission(db, admin, "orders.write")
     normalized_status = status.strip().lower()
+    normalized_issue = issue.strip()
     if normalized_status not in {"to_pick", "picked", "issue"}:
         raise HTTPException(status_code=400, detail="Unsupported picklist item status")
-    if normalized_status == "issue" and len(issue.strip()) < 5:
+    if normalized_status == "issue" and len(normalized_issue) < 5:
         raise HTTPException(status_code=400, detail="Picklist issue requires a meaningful comment")
+    if normalized_status == "to_pick" and picked_qty != 0:
+        raise HTTPException(status_code=409, detail="To-pick status requires zero picked quantity")
 
     try:
         item = (
@@ -122,6 +125,19 @@ def update_task_item(
         )
         if not item:
             raise HTTPException(status_code=404, detail="Fulfillment task item not found")
+        task = (
+            db.query(FulfillmentTask)
+            .filter(FulfillmentTask.id == item.task_id)
+            .with_for_update()
+            .first()
+        )
+        if not task:
+            raise HTTPException(status_code=409, detail="Picklist item is linked to a missing task")
+        if task.status not in {"picking", "blocked"}:
+            raise HTTPException(
+                status_code=409,
+                detail="Picklist can be changed only while fulfillment is picking or blocked",
+            )
         order_item = (
             db.query(OrderItem)
             .filter(OrderItem.id == item.order_item_id)
@@ -137,7 +153,7 @@ def update_task_item(
 
         item.picked_qty = picked_qty
         item.status = normalized_status
-        item.issue = issue.strip()[:2000]
+        item.issue = normalized_issue[:2000] if normalized_status == "issue" else ""
         db.commit()
         return {
             "ok": True,
