@@ -103,6 +103,25 @@ function App() {
     }
   }
 
+  async function logout() {
+    const currentToken = localStorage.getItem("admin_token");
+    try {
+      setError("");
+      if (currentToken) {
+        const res = await fetch(`${API}/api/admin/logout`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${currentToken}` },
+        });
+        if (!res.ok && res.status !== 401) throw new Error(await res.text());
+      }
+    } catch (e) {
+      setError(`Сервер не подтвердил отзыв сессии: ${e.message}`);
+    } finally {
+      localStorage.removeItem("admin_token");
+      setToken("");
+    }
+  }
+
   async function startMfaSetup() {
     try {
       setError("");
@@ -362,7 +381,7 @@ function App() {
   return <main>
     <header>
       <h1>FLASHIN Admin</h1>
-      <button onClick={() => { localStorage.removeItem("admin_token"); setToken(""); }}>Выйти</button>
+      <button onClick={logout}>Выйти</button>
     </header>
     {error && <div className="error">{error}</div>}
 
