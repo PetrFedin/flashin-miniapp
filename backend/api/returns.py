@@ -7,7 +7,11 @@ from ..models import Customer, Order, Payment, ReturnRequest
 from ..schemas import RefundApproveIn, ReturnCreate, ReturnOut
 from ..security import get_current_admin, get_current_customer
 from ..services.audit import log_admin_action
-from ..services.payments import create_yookassa_refund, fetch_yookassa_refund
+from ..services.payments import (
+    create_yookassa_refund,
+    fetch_yookassa_refund,
+    validate_yookassa_refund,
+)
 from ..services.rbac import require_permission
 from ..services.refund_state import (
     apply_provider_refund_status,
@@ -259,11 +263,13 @@ async def approve_return(
     try:
         if existing_refund_id:
             provider_refund = await fetch_yookassa_refund(existing_refund_id)
-            data = {
-                "refund_id": existing_refund_id,
-                "status": str(provider_refund.get("status") or ""),
-                "amount": provider_refund.get("amount") or {},
-            }
+            data = validate_yookassa_refund(
+                provider_refund,
+                payment_id,
+                float(requested_amount),
+                currency,
+                expected_refund_id=existing_refund_id,
+            )
         else:
             data = await create_yookassa_refund(
                 payment_id,
