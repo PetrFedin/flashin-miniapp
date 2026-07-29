@@ -39,6 +39,7 @@ CHECKS: Mapping[str, str] = {
            OR (max_uses > 0 AND used_count > max_uses)
     """,
     "non_positive_payments": "SELECT count(*) FROM payments WHERE amount <= 0",
+    "negative_refund_amounts": "SELECT count(*) FROM return_requests WHERE refund_amount < 0",
     "negative_loyalty_balances": "SELECT count(*) FROM crm_profiles WHERE loyalty_points < 0",
     "non_positive_loyalty_holds": "SELECT count(*) FROM loyalty_redemption_holds WHERE points <= 0",
     "duplicate_active_carts": """
@@ -60,6 +61,19 @@ CHECKS: Mapping[str, str] = {
             SELECT provider, provider_payment_id, event_type FROM payment_events
             WHERE provider_payment_id <> '' AND event_type <> ''
             GROUP BY provider, provider_payment_id, event_type HAVING count(*) > 1
+        ) conflicts
+    """,
+    "duplicate_order_returns": """
+        SELECT count(*) FROM (
+            SELECT order_id FROM return_requests
+            GROUP BY order_id HAVING count(*) > 1
+        ) conflicts
+    """,
+    "duplicate_provider_refunds": """
+        SELECT count(*) FROM (
+            SELECT provider_refund_id FROM return_requests
+            WHERE provider_refund_id <> ''
+            GROUP BY provider_refund_id HAVING count(*) > 1
         ) conflicts
     """,
     "duplicate_admin_permissions": """
@@ -134,6 +148,7 @@ REQUIRED_TABLES = {
     "product_variants",
     "promo_codes",
     "referral_codes",
+    "return_requests",
 }
 
 
