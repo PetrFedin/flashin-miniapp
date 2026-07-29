@@ -31,6 +31,7 @@ router = APIRouter(prefix="/orders", tags=["orders"])
 
 _IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{16,128}$")
 CANCELLABLE_ORDER_STATUSES = {"created", "payment_created"}
+_money = money
 
 
 def _clean_required(value: str, field: str, max_length: int) -> str:
