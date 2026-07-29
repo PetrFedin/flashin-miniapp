@@ -52,8 +52,7 @@ def _normalize_float(table: str, column: str) -> None:
             f"""
             UPDATE {table}
             SET {column} = 0
-            WHERE {column} IS NULL
-               OR {column} = 'NaN'::double precision
+            WHERE {column} = 'NaN'::double precision
                OR {column} = 'Infinity'::double precision
                OR {column} = '-Infinity'::double precision
             """
@@ -68,7 +67,6 @@ def _to_numeric(table: str, column: str, precision: int, scale: int) -> None:
         column,
         existing_type=sa.Float(),
         type_=sa.Numeric(precision=precision, scale=scale),
-        existing_nullable=True,
         postgresql_using=f"round({column}::numeric, {scale})",
     )
 
@@ -79,7 +77,6 @@ def _to_float(table: str, column: str, precision: int, scale: int) -> None:
         column,
         existing_type=sa.Numeric(precision=precision, scale=scale),
         type_=sa.Float(),
-        existing_nullable=True,
         postgresql_using=f"{column}::double precision",
     )
 
