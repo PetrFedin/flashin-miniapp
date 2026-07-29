@@ -5,47 +5,107 @@ on:
     branches: ["main", "master"]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   backend:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: flashin
+          POSTGRES_PASSWORD: flashin
+          POSTGRES_DB: flashin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U flashin -d flashin"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg2://flashin:flashin@127.0.0.1:5432/flashin
+      TELEGRAM_BOT_TOKEN: test-token
+      BOT_TOKEN: test-token
+      JWT_SECRET: test-secret
+      ADMIN_EMAIL: admin@test.local
+      ADMIN_PASSWORD: test-password
+      MINI_APP_URL: http://localhost:5173
+      API_PUBLIC_URL: http://localhost:8000
+      ADMIN_URL: http://localhost:5174
+      USE_CREATE_ALL: "false"
+      ENABLE_SEED: "false"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
       - name: Install backend dependencies
         run: pip install -r backend/requirements.txt
-      - name: Compile backend
-        run: python -m compileall backend
-      - name: Run tests
-        run: pytest backend/tests
+      - name: Compile backend and bot
+        run: python -m compileall -q backend bot
+      - name: Require one Alembic head
+        run: |
+          set -euo pipefail
+          alembic -c backend/alembic.ini heads | tee /tmp/alembic-heads.txt
+          test "$(grep -c '(head)' /tmp/alembic-heads.txt)" -eq 1
+      - name: Apply database migrations
+        run: alembic -c backend/alembic.ini upgrade head
+      - name: Verify migration state
+        run: alembic -c backend/alembic.ini current
+      - name: Run backend tests
+        run: pytest -q backend/tests
 
   frontend:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package.json
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm install --no-audit --no-fund
       - name: Build frontend
         working-directory: frontend
-        run: npm install && npm run build
+        run: npm run build
 
   admin:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: admin/package.json
+      - name: Install admin dependencies
+        working-directory: admin
+        run: npm install --no-audit --no-fund
       - name: Build admin
         working-directory: admin
-        run: npm install && npm run build
+        run: npm run build
 
   docker:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     needs: [backend, frontend, admin]
     steps:
       - uses: actions/checkout@v4
+      - name: Validate Compose configuration
+        run: docker compose config --quiet
       - name: Docker build
         run: docker compose build
