@@ -17,12 +17,21 @@ def _payment_idempotence_key(order_id: int, attempt: int) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"flashin:yookassa:payment:{order_id}:{attempt}"))
 
 
-def _refund_idempotence_key(payment_id: str, order_id: int, amount: float, currency: str) -> str:
+def _refund_idempotence_key(
+    payment_id: str,
+    order_id: int,
+    refund_request_id: int,
+    amount: float,
+    currency: str,
+) -> str:
     normalized_amount = f"{amount:.2f}"
     return str(
         uuid.uuid5(
             uuid.NAMESPACE_URL,
-            f"flashin:yookassa:refund:{payment_id}:{order_id}:{normalized_amount}:{currency}",
+            (
+                "flashin:yookassa:refund:"
+                f"{payment_id}:{order_id}:{refund_request_id}:{normalized_amount}:{currency}"
+            ),
         )
     )
 
@@ -34,6 +43,13 @@ def _validate_positive_amount(amount: float, operation: str) -> float:
         raise HTTPException(status_code=400, detail=f"{operation} amount must be numeric.")
     if not math.isfinite(normalized) or normalized <= 0:
         raise HTTPException(status_code=400, detail=f"{operation} amount must be positive.")
+    return normalized
+
+
+def _normalize_currency(currency: str) -> str:
+    normalized = str(currency or "").strip().upper()
+    if len(normalized) != 3 or not normalized.isalpha():
+        raise HTTPException(status_code=400, detail="Currency must be a three-letter code.")
     return normalized
 
 
@@ -123,11 +139,12 @@ async def _request_yookassa(
 
 async def create_yookassa_payment(order_id: int, amount: float, currency: str, attempt: int = 1) -> dict:
     normalized_amount = _validate_positive_amount(amount, "Payment")
+    normalized_currency = _normalize_currency(currency)
     if attempt < 1:
         raise HTTPException(status_code=500, detail="Invalid payment attempt.")
 
     payload = {
-        "amount": {"value": f"{normalized_amount:.2f}", "currency": currency},
+        "amount": {"value": f"{normalized_amount:.2f}", "currency": normalized_currency},
         "capture": True,
         "confirmation": {
             "type": "redirect",
@@ -156,16 +173,25 @@ async def fetch_yookassa_payment(payment_id: str) -> dict:
     return await _request_yookassa("GET", f"/payments/{quote(normalized_payment_id, safe='')}")
 
 
-async def create_yookassa_refund(payment_id: str, amount: float, currency: str, order_id: int) -> dict:
+async def create_yookassa_refund(
+    payment_id: str,
+    amount: float,
+    currency: str,
+    order_id: int,
+    refund_request_id: int,
+) -> dict:
     normalized_payment_id = str(payment_id or "").strip()
     if not normalized_payment_id:
         raise HTTPException(status_code=400, detail="Payment id is required.")
+    if order_id <= 0 or refund_request_id <= 0:
+        raise HTTPException(status_code=400, detail="Order and return request ids are required.")
     normalized_amount = _validate_positive_amount(amount, "Refund")
+    normalized_currency = _normalize_currency(currency)
 
     payload = {
         "payment_id": normalized_payment_id,
-        "amount": {"value": f"{normalized_amount:.2f}", "currency": currency},
-        "description": f"FLASHIN refund for order #{order_id}",
+        "amount": {"value": f"{normalized_amount:.2f}", "currency": normalized_currency},
+        "description": f"FLASHIN refund #{refund_request_id} for order #{order_id}",
     }
     data = await _request_yookassa(
         "POST",
@@ -174,8 +200,9 @@ async def create_yookassa_refund(payment_id: str, amount: float, currency: str, 
         idempotence_key=_refund_idempotence_key(
             normalized_payment_id,
             order_id,
+            refund_request_id,
             normalized_amount,
-            currency,
+            normalized_currency,
         ),
     )
     return {
