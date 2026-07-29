@@ -1,9 +1,12 @@
 from functools import lru_cache
 
-from pydantic_settings import BaseSettings
+from pydantic import model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
     app_env: str = "development"
     database_url: str = "postgresql+psycopg2://flashin:flashin@db:5432/flashin"
     cors_origins: str = "http://localhost:5173,http://localhost:5174,https://mini.flashin.store,https://admin.flashin.store"
@@ -11,6 +14,7 @@ class Settings(BaseSettings):
     jwt_secret: str
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60 * 24 * 30
+    admin_jwt_expire_minutes: int = 8 * 60
 
     admin_email: str = "admin@flashin.store"
     admin_password: str = "change-me-now"
@@ -32,7 +36,6 @@ class Settings(BaseSettings):
     s3_access_key_id: str = ""
     s3_secret_access_key: str = ""
 
-    # v41 platform
     feature_flags_enabled: bool = True
     scheduler_enabled: bool = False
     media_generate_webp: bool = True
@@ -40,26 +43,23 @@ class Settings(BaseSettings):
     media_thumbnail_width: int = 480
     recommendation_personal_limit: int = 12
     import_export_dir: str = "exports"
-    # Fulfillment / SLA
+
     order_paid_to_assembling_sla_minutes: int = 120
     order_assembling_to_ready_sla_minutes: int = 1440
 
-    # Outbox signing
     outbox_signing_secret: str = "change-me-outbox-secret"
-    # Search
+
     meilisearch_enabled: bool = False
     meilisearch_url: str = "http://meilisearch:7700"
     meilisearch_master_key: str = "change-me"
     meilisearch_products_index: str = "products"
 
-    # Referral and loyalty
     referral_cookie_days: int = 30
     loyalty_max_redeem_percent: float = 30
     loyalty_point_value_rub: float = 1.0
 
-    # Metrics
     metrics_enabled: bool = True
-    # MoySklad integration
+
     moysklad_base_url: str = "https://api.moysklad.ru/api/remap/1.2"
     moysklad_token: str = ""
     moysklad_login: str = ""
@@ -68,7 +68,6 @@ class Settings(BaseSettings):
     moysklad_sync_limit: int = 100
     moysklad_sync_interval_minutes: int = 30
 
-    # CDN / analytics
     cdn_public_base_url: str = "https://cdn.flashin.store"
     loyalty_points_per_ruble: float = 0.01
     sentry_dsn: str = ""
@@ -89,10 +88,97 @@ class Settings(BaseSettings):
 
     @property
     def cors_origin_list(self) -> list[str]:
-        return [x.strip() for x in self.cors_origins.split(",") if x.strip()]
+        return [value.strip().rstrip("/") for value in self.cors_origins.split(",") if value.strip()]
 
-    class Config:
-        env_file = ".env"
+    @model_validator(mode="after")
+    def validate_runtime_configuration(self):
+        algorithm = self.jwt_algorithm.strip().upper()
+        if algorithm not in {"HS256", "HS384", "HS512"}:
+            raise ValueError("JWT_ALGORITHM must be HS256, HS384, or HS512")
+        self.jwt_algorithm = algorithm
+
+        if not 1 <= self.jwt_expire_minutes <= 60 * 24 * 30:
+            raise ValueError("JWT_EXPIRE_MINUTES must be between 1 and 43200")
+        if not 1 <= self.admin_jwt_expire_minutes <= 60 * 24:
+            raise ValueError("ADMIN_JWT_EXPIRE_MINUTES must be between 1 and 1440")
+        if not 0 <= self.loyalty_max_redeem_percent <= 100:
+            raise ValueError("LOYALTY_MAX_REDEEM_PERCENT must be between 0 and 100")
+        if self.loyalty_point_value_rub <= 0 or self.loyalty_points_per_ruble < 0:
+            raise ValueError("Loyalty rates must be valid")
+        if min(
+            self.rate_limit_per_minute,
+            self.rate_limit_auth_per_minute,
+            self.rate_limit_admin_login_per_minute,
+            self.moysklad_sync_limit,
+            self.moysklad_sync_interval_minutes,
+        ) <= 0:
+            raise ValueError("Rate limits and sync limits must be positive")
+        if min(
+            self.default_delivery_price,
+            self.courier_delivery_price,
+            self.pickup_delivery_price,
+        ) < 0:
+            raise ValueError("Delivery prices cannot be negative")
+        if self.media_storage not in {"local", "s3", "r2"}:
+            raise ValueError("MEDIA_STORAGE must be local, s3, or r2")
+
+        if self.app_env.strip().lower() != "production":
+            return self
+
+        errors: list[str] = []
+        weak_values = {
+            "",
+            "change-me",
+            "change-me-now",
+            "change-this-before-launch",
+            "replace_with_long_random_secret",
+            "replace_with_botfather_token",
+            "test-secret",
+            "test-token",
+        }
+
+        if len(self.jwt_secret) < 32 or self.jwt_secret.strip().lower() in weak_values:
+            errors.append("JWT_SECRET must be a unique secret of at least 32 characters")
+        if len(self.admin_password) < 12 or self.admin_password.strip().lower() in weak_values:
+            errors.append("ADMIN_PASSWORD must be a strong non-default password")
+        if len(self.telegram_bot_token) < 20 or self.telegram_bot_token.strip().lower() in weak_values:
+            errors.append("TELEGRAM_BOT_TOKEN is missing or unsafe")
+        if len(self.outbox_signing_secret) < 32 or self.outbox_signing_secret.strip().lower() in weak_values:
+            errors.append("OUTBOX_SIGNING_SECRET must be at least 32 characters")
+        if self.payment_provider != "yookassa":
+            errors.append("PAYMENT_PROVIDER must be yookassa")
+        if not self.yookassa_shop_id.strip() or not self.yookassa_secret_key.strip():
+            errors.append("YooKassa credentials are required")
+        if not self.yookassa_return_url.startswith("https://"):
+            errors.append("YOOKASSA_RETURN_URL must use HTTPS")
+        if "flashin:flashin@" in self.database_url.lower():
+            errors.append("DATABASE_URL still uses the default database password")
+        if self.enable_seed or self.use_create_all:
+            errors.append("ENABLE_SEED and USE_CREATE_ALL must be disabled in production")
+
+        origins = self.cors_origin_list
+        if not origins or any(origin == "*" or not origin.startswith("https://") for origin in origins):
+            errors.append("CORS_ORIGINS must contain explicit HTTPS origins")
+
+        if self.media_storage in {"s3", "r2"}:
+            required_storage_values = (
+                self.s3_endpoint_url,
+                self.s3_bucket,
+                self.s3_access_key_id,
+                self.s3_secret_access_key,
+            )
+            if any(not value.strip() for value in required_storage_values):
+                errors.append("S3/R2 storage credentials are incomplete")
+
+        if self.meilisearch_enabled and (
+            not self.meilisearch_master_key.strip()
+            or self.meilisearch_master_key.strip().lower() in weak_values
+        ):
+            errors.append("MEILISEARCH_MASTER_KEY is missing or unsafe")
+
+        if errors:
+            raise ValueError("Unsafe production configuration: " + "; ".join(errors))
+        return self
 
 
 @lru_cache
