@@ -1,7 +1,10 @@
+import os
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import create_engine, pool
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 
 from backend import model_constraints, models, notification_models  # noqa: F401
 from backend.database import Base
@@ -13,10 +16,26 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
+def _database_url() -> str:
+    """Use the same runtime database URL as the application.
+
+    The value in alembic.ini is only a local fallback. Production migrations
+    must never silently connect with the development credentials embedded in
+    that file.
+    """
+    url = (os.getenv("DATABASE_URL") or config.get_main_option("sqlalchemy.url") or "").strip()
+    if not url:
+        raise RuntimeError("DATABASE_URL is required for migrations")
+    try:
+        make_url(url)
+    except ArgumentError as exc:
+        raise RuntimeError("DATABASE_URL is invalid") from exc
+    return url
+
+
 def run_migrations_offline():
-    url = config.get_main_option("sqlalchemy.url")
     context.configure(
-        url=url,
+        url=_database_url(),
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -27,10 +46,10 @@ def run_migrations_offline():
 
 
 def run_migrations_online():
-    connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
+    connectable = create_engine(
+        _database_url(),
         poolclass=pool.NullPool,
+        pool_pre_ping=True,
     )
     with connectable.connect() as connection:
         context.configure(
