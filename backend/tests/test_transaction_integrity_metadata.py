@@ -4,6 +4,7 @@ from backend.models import (
     Payment,
     PaymentEvent,
     ProductVariant,
+    ReturnRequest,
 )
 
 
@@ -32,3 +33,12 @@ def test_provider_payment_id_is_unique():
 
 def test_payment_event_is_unique():
     assert "uq_payment_events_provider_event" in _index_names(PaymentEvent.__table__)
+
+
+def test_return_request_is_unique_per_order_and_provider_refund():
+    constraints = _constraint_names(ReturnRequest.__table__)
+    indexes = _index_names(ReturnRequest.__table__)
+
+    assert "ck_return_requests_refund_nonnegative" in constraints
+    assert "uq_return_requests_order_id" in constraints
+    assert "uq_return_requests_provider_refund_id" in indexes
