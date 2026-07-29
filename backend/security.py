@@ -223,7 +223,7 @@ def create_admin_token(admin_id: int, role: str) -> str:
         f"admin:{admin_id}",
         "admin",
         _JWT_ADMIN_AUDIENCE,
-        settings.jwt_expire_minutes,
+        settings.admin_jwt_expire_minutes,
     )
     payload["role"] = str(role or "").strip()
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
