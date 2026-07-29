@@ -1,7 +1,10 @@
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
+from backend.api.outbox import _reset_for_retry
 from backend.services.outbox import enqueue_webhook, schedule_retry
 from backend.services.webhook_security import (
     is_internal_destination,
@@ -66,3 +69,36 @@ def test_retry_becomes_terminal_after_attempt_limit():
     assert row.status == "failed"
     assert row.next_attempt_at is None
     assert row.last_error == "provider failed"
+
+
+def test_failed_outbox_row_is_fully_reset_for_retry():
+    row = SimpleNamespace(
+        destination="https://hooks.example.com/events",
+        status="failed",
+        attempts=10,
+        last_error="provider failed",
+        next_attempt_at=None,
+    )
+    now = datetime.utcnow()
+
+    _reset_for_retry(row, now)
+
+    assert row.status == "pending"
+    assert row.attempts == 0
+    assert row.last_error == ""
+    assert row.next_attempt_at == now
+
+
+def test_sent_outbox_row_cannot_be_retried():
+    row = SimpleNamespace(
+        destination="https://hooks.example.com/events",
+        status="sent",
+        attempts=1,
+        last_error="",
+        next_attempt_at=None,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _reset_for_retry(row, datetime.utcnow())
+
+    assert exc_info.value.status_code == 409
