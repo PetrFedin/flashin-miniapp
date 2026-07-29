@@ -88,8 +88,6 @@ def _require_order_ready_for_shipment(order: Order) -> None:
         raise HTTPException(status_code=409, detail="Only a paid order can be shipped")
     if order.status != "ready" or order.delivery_status != "ready":
         raise HTTPException(status_code=409, detail="Order must be ready before shipment creation")
-    if order.status in {"cancelled", "refunded", "refund_requested"}:
-        raise HTTPException(status_code=409, detail="Order cannot be shipped in its current state")
 
 
 def create_shipment(
@@ -116,6 +114,11 @@ def create_shipment(
         .first()
     )
     if existing and existing.status != "cancelled":
+        if existing.provider_code != normalized_provider:
+            raise HTTPException(
+                status_code=409,
+                detail="Order already has a shipment with another provider",
+            )
         return existing
 
     _require_order_ready_for_shipment(order)
