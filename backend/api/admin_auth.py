@@ -20,6 +20,10 @@ from ..security import (
     password_needs_rehash,
     verify_password,
 )
+from ..services.admin_login_lockout import (
+    acquire_admin_login_locks,
+    admin_login_retry_after,
+)
 from ..services.admin_security import (
     consume_totp_counter,
     create_admin_session,
@@ -138,6 +142,25 @@ def admin_session_login(
     ip_address, user_agent = _require_allowed_admin_ip(db, request)
 
     try:
+        acquire_admin_login_locks(db, email, ip_address)
+        retry_after = admin_login_retry_after(db, email, ip_address)
+        if retry_after > 0:
+            log_admin_login(
+                db,
+                email,
+                None,
+                False,
+                "login_locked",
+                ip_address,
+                user_agent,
+            )
+            db.commit()
+            raise HTTPException(
+                status_code=429,
+                detail="Too many admin login attempts",
+                headers={"Retry-After": str(retry_after)},
+            )
+
         admin = (
             db.query(AdminUser)
             .filter(AdminUser.email == email, AdminUser.active.is_(True))
