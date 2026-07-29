@@ -107,7 +107,15 @@ jobs:
     needs: [backend, frontend, admin]
     steps:
       - uses: actions/checkout@v4
-      - name: Validate Compose configuration
+      - name: Prepare local Compose environment
+        run: cp .env.local.example .env
+      - name: Validate base Compose configuration
         run: docker compose config --quiet
       - name: Docker build
         run: docker compose build
+      - name: Validate production Compose isolation
+        run: |
+          cp .env.production.example .env
+          export COMPOSE_FILE="docker-compose.yml:docker-compose.production.yml"
+          docker compose config --quiet
+          python3 scripts/check_production_compose.py
