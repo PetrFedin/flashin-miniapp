@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     admin_totp_encryption_key: str = ""
     admin_mfa_required: bool = False
     admin_mfa_setup_token_minutes: int = 10
+    admin_login_max_failures: int = 5
+    admin_login_failure_window_minutes: int = 15
+    admin_login_lockout_minutes: int = 15
 
     payment_provider: str = "yookassa"
     yookassa_shop_id: str = ""
@@ -106,6 +109,12 @@ class Settings(BaseSettings):
             raise ValueError("ADMIN_JWT_EXPIRE_MINUTES must be between 1 and 1440")
         if not 5 <= self.admin_mfa_setup_token_minutes <= 30:
             raise ValueError("ADMIN_MFA_SETUP_TOKEN_MINUTES must be between 5 and 30")
+        if not 3 <= self.admin_login_max_failures <= 20:
+            raise ValueError("ADMIN_LOGIN_MAX_FAILURES must be between 3 and 20")
+        if not 1 <= self.admin_login_failure_window_minutes <= 60 * 24:
+            raise ValueError("ADMIN_LOGIN_FAILURE_WINDOW_MINUTES must be between 1 and 1440")
+        if not 1 <= self.admin_login_lockout_minutes <= 60 * 24:
+            raise ValueError("ADMIN_LOGIN_LOCKOUT_MINUTES must be between 1 and 1440")
         if not 0 <= self.loyalty_max_redeem_percent <= 100:
             raise ValueError("LOYALTY_MAX_REDEEM_PERCENT must be between 0 and 100")
         if self.loyalty_point_value_rub <= 0 or self.loyalty_points_per_ruble < 0:
