@@ -7,7 +7,7 @@ from sqlalchemy.orm import sessionmaker
 
 from backend import model_constraints  # noqa: F401
 from backend.database import Base
-from backend.models import Cart, CartItem, CrmProfile, Customer, Product, ProductVariant
+from backend.models import Cart, CartItem, CrmProfile, Customer, LoyaltyTransaction, Product, ProductVariant
 from backend.services import loyalty
 
 
@@ -28,10 +28,11 @@ def _customer_with_profile(db, points=0):
 
 
 def _cart_with_item(db, customer, price=0.10, quantity=3):
+    product_count = db.query(Product).count()
     product = Product(
-        sku=f"PRODUCT-{db.query(Product).count()}",
+        sku=f"PRODUCT-{product_count}",
         title="Decimal product",
-        slug=f"decimal-product-{db.query(Product).count()}",
+        slug=f"decimal-product-{product_count}",
         brand="FLASHIN",
         price=price,
         currency="RUB",
@@ -53,7 +54,14 @@ def _cart_with_item(db, customer, price=0.10, quantity=3):
     cart = Cart(customer_id=customer.id, status="active")
     db.add(cart)
     db.flush()
-    db.add(CartItem(cart_id=cart.id, variant_id=variant.id, quantity=quantity))
+    db.add(
+        CartItem(
+            cart_id=cart.id,
+            product_id=product.id,
+            variant_id=variant.id,
+            quantity=quantity,
+        )
+    )
     db.commit()
     return db.query(Cart).filter(Cart.id == cart.id).one()
 
@@ -68,9 +76,9 @@ def test_fractional_point_additions_are_quantized_before_accumulation():
 
     profile = db.query(CrmProfile).filter(CrmProfile.customer_id == customer.id).one()
     assert profile.loyalty_points == pytest.approx(0.001)
-    deltas = [row.points_delta for row in profile.transactions] if hasattr(profile, "transactions") else []
-    assert db.query(loyalty.LoyaltyTransaction).count() == 10
-    assert deltas == [] or sum(deltas) == pytest.approx(0.001)
+    deltas = [row.points_delta for row in db.query(LoyaltyTransaction).all()]
+    assert len(deltas) == 10
+    assert sum(deltas) == pytest.approx(0.001)
 
 
 def test_loyalty_balance_cannot_become_negative_after_exact_rounding():
