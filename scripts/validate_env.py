@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import hmac
 import sys
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -125,6 +126,7 @@ if is_production:
             "YOOKASSA_SHOP_ID",
             "YOOKASSA_SECRET_KEY",
             "OUTBOX_SIGNING_SECRET",
+            "ADMIN_TOTP_ENCRYPTION_KEY",
             "SCHEDULER_ENABLED",
             "MOYSKLAD_SYNC_INTERVAL_MINUTES",
             "NOTIFICATION_BATCH_SIZE",
@@ -165,6 +167,19 @@ admin_password = env.get("ADMIN_PASSWORD", "")
 if admin_password and len(admin_password) < 12:
     invalid.append("ADMIN_PASSWORD must contain at least 12 characters")
 if is_production:
+    totp_encryption_key = env.get("ADMIN_TOTP_ENCRYPTION_KEY", "")
+    if totp_encryption_key and len(totp_encryption_key) < 32:
+        invalid.append("ADMIN_TOTP_ENCRYPTION_KEY must contain at least 32 characters")
+    if (
+        totp_encryption_key
+        and jwt_secret
+        and hmac.compare_digest(
+            totp_encryption_key.encode("utf-8"),
+            jwt_secret.encode("utf-8"),
+        )
+    ):
+        invalid.append("ADMIN_TOTP_ENCRYPTION_KEY must differ from JWT_SECRET")
+
     outbox_secret = env.get("OUTBOX_SIGNING_SECRET", "")
     if outbox_secret and len(outbox_secret) < 32:
         invalid.append("OUTBOX_SIGNING_SECRET must contain at least 32 characters")
