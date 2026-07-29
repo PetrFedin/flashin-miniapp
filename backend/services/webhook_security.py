@@ -7,6 +7,7 @@ from ..config import get_settings
 
 
 _INTERNAL_SCHEME = "internal"
+_MAX_WEBHOOK_URL_LENGTH = 255
 _BLOCKED_HOSTS = {"localhost", "localhost.localdomain", "metadata.google.internal"}
 _BLOCKED_SUFFIXES = (".local", ".internal", ".localhost")
 
@@ -46,7 +47,7 @@ def normalize_webhook_url(url: str, *, production: bool | None = None) -> str:
     raw = (url or "").strip()
     if not raw:
         raise ValueError("Webhook URL is required")
-    if len(raw) > 2048:
+    if len(raw) > _MAX_WEBHOOK_URL_LENGTH:
         raise ValueError("Webhook URL is too long")
 
     try:
@@ -80,4 +81,7 @@ def normalize_webhook_url(url: str, *, production: bool | None = None) -> str:
     default_port = 443 if scheme == "https" else 80
     netloc = hostname if port in (None, default_port) else f"{hostname}:{port}"
     path = parsed.path or "/"
-    return urlunsplit((scheme, netloc, path, parsed.query, ""))
+    normalized = urlunsplit((scheme, netloc, path, parsed.query, ""))
+    if len(normalized) > _MAX_WEBHOOK_URL_LENGTH:
+        raise ValueError("Webhook URL is too long")
+    return normalized
