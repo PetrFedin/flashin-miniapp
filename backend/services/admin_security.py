@@ -8,8 +8,11 @@ import struct
 import time
 from datetime import datetime, timedelta
 
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from sqlalchemy.orm import Session
 
+from ..config import get_settings
 from ..models import (
     AdminIpAllowlist,
     AdminLoginEvent,
@@ -18,6 +21,9 @@ from ..models import (
     AdminTotpSecret,
     AdminUser,
 )
+
+_TOTP_ENCRYPTED_PREFIX = "enc:v1:"
+_TOTP_NONCE_BYTES = 12
 
 
 def sha256(value: str) -> str:
@@ -163,6 +169,60 @@ def normalize_totp_secret(secret: str) -> str:
     return normalized
 
 
+def _totp_aad(admin_id: int) -> bytes:
+    if admin_id <= 0:
+        raise ValueError("Invalid administrator id")
+    return f"flashin:admin-totp:{admin_id}:v1".encode("utf-8")
+
+
+def _totp_encryption_key() -> bytes:
+    settings = get_settings()
+    material = (settings.admin_totp_encryption_key or "").strip()
+    if not material:
+        if settings.app_env.strip().lower() == "production":
+            raise ValueError("TOTP encryption key is not configured")
+        material = settings.jwt_secret
+    if len(material) < 8:
+        raise ValueError("TOTP encryption key is too short")
+    return hashlib.sha256(material.encode("utf-8")).digest()
+
+
+def is_totp_secret_encrypted(secret: str) -> bool:
+    return str(secret or "").startswith(_TOTP_ENCRYPTED_PREFIX)
+
+
+def encrypt_totp_secret(admin_id: int, secret: str) -> str:
+    normalized = normalize_totp_secret(secret)
+    nonce = secrets.token_bytes(_TOTP_NONCE_BYTES)
+    ciphertext = AESGCM(_totp_encryption_key()).encrypt(
+        nonce,
+        normalized.encode("ascii"),
+        _totp_aad(admin_id),
+    )
+    encoded = base64.urlsafe_b64encode(nonce + ciphertext).decode("ascii")
+    return f"{_TOTP_ENCRYPTED_PREFIX}{encoded}"
+
+
+def decrypt_totp_secret(admin_id: int, stored_secret: str) -> str:
+    raw = str(stored_secret or "")
+    if not is_totp_secret_encrypted(raw):
+        return normalize_totp_secret(raw)
+
+    encoded = raw[len(_TOTP_ENCRYPTED_PREFIX) :]
+    try:
+        blob = base64.urlsafe_b64decode(encoded.encode("ascii"))
+        if len(blob) <= _TOTP_NONCE_BYTES:
+            raise ValueError("Encrypted TOTP secret is truncated")
+        plaintext = AESGCM(_totp_encryption_key()).decrypt(
+            blob[:_TOTP_NONCE_BYTES],
+            blob[_TOTP_NONCE_BYTES:],
+            _totp_aad(admin_id),
+        )
+        return normalize_totp_secret(plaintext.decode("ascii"))
+    except (binascii.Error, UnicodeError, InvalidTag, ValueError) as exc:
+        raise ValueError("TOTP secret cannot be decrypted") from exc
+
+
 def verify_totp(
     secret: str,
     code: str,
@@ -199,13 +259,36 @@ def verify_totp(
     return False
 
 
+def verify_stored_totp(
+    admin_id: int,
+    stored_secret: str,
+    code: str,
+    *,
+    at_time: int | None = None,
+    window: int = 1,
+) -> bool:
+    return verify_totp(
+        decrypt_totp_secret(admin_id, stored_secret),
+        code,
+        at_time=at_time,
+        window=window,
+    )
+
+
+def upgrade_totp_secret_encryption(row: AdminTotpSecret) -> bool:
+    if is_totp_secret_encrypted(row.secret):
+        return False
+    row.secret = encrypt_totp_secret(row.admin_id, row.secret)
+    return True
+
+
 def set_totp_secret(
     db: Session,
     admin_id: int,
     secret: str,
     enabled: bool = False,
 ) -> AdminTotpSecret:
-    normalized_secret = normalize_totp_secret(secret)
+    encrypted_secret = encrypt_totp_secret(admin_id, secret)
     row = (
         db.query(AdminTotpSecret)
         .filter(AdminTotpSecret.admin_id == admin_id)
@@ -215,12 +298,12 @@ def set_totp_secret(
     if not row:
         row = AdminTotpSecret(
             admin_id=admin_id,
-            secret=normalized_secret,
+            secret=encrypted_secret,
             enabled=enabled,
         )
         db.add(row)
     else:
-        row.secret = normalized_secret
+        row.secret = encrypted_secret
         row.enabled = enabled
     if enabled:
         revoke_admin_sessions(db, admin_id)
