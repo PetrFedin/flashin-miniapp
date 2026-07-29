@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from . import model_constraints as _model_constraints  # noqa: F401
 from . import notification_models as _notification_models  # noqa: F401
 from .api.admin import router as admin_router
+from .api.admin_auth import router as admin_auth_router
 from .api.admin_notifications import router as admin_notifications_router
 from .api.admin_security import router as admin_security_router
 from .api.analytics import router as analytics_router
@@ -98,6 +99,7 @@ app.include_router(cart_router, prefix="/api")
 app.include_router(orders_router, prefix="/api")
 app.include_router(payments_router, prefix="/api")
 app.include_router(analytics_router, prefix="/api")
+app.include_router(admin_auth_router, prefix="/api")
 app.include_router(admin_router, prefix="/api")
 app.include_router(admin_notifications_router, prefix="/api")
 app.include_router(media_router, prefix="/api")
