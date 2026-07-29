@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import sentry_sdk
@@ -61,6 +62,7 @@ from .middleware.metrics import MetricsMiddleware, metrics_response
 from .middleware.rate_limit import InMemoryRateLimitMiddleware
 from .middleware.security_headers import SecurityHeadersMiddleware
 from .seed import bootstrap_admin, seed_products
+from .services.http_clients import close_http_clients, start_http_clients
 
 settings = get_settings()
 is_production = settings.app_env.strip().lower() == "production"
@@ -102,6 +104,34 @@ def _assert_secure_admin_login_route(app: FastAPI) -> None:
         raise RuntimeError("POST /api/admin/login must be handled by backend.api.admin_auth")
 
 
+def on_startup() -> None:
+    """Run synchronous database bootstrap tasks.
+
+    Kept as a public function for management scripts and focused tests. The
+    application invokes it through the FastAPI lifespan instead of the
+    deprecated startup-event decorator.
+    """
+    if settings.use_create_all:
+        Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+    try:
+        bootstrap_admin(db)
+        if settings.enable_seed:
+            seed_products(db)
+    finally:
+        db.close()
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    start_http_clients()
+    try:
+        on_startup()
+        yield
+    finally:
+        await close_http_clients()
+
+
 _remove_legacy_admin_login_route()
 
 if settings.sentry_dsn:
@@ -117,6 +147,7 @@ app = FastAPI(
     docs_url=None if is_production else "/docs",
     redoc_url=None if is_production else "/redoc",
     openapi_url=None if is_production else "/openapi.json",
+    lifespan=lifespan,
 )
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(InMemoryRateLimitMiddleware)
@@ -183,20 +214,6 @@ app.include_router(admin_security_router, prefix="/api")
 app.include_router(delivery_quotes_router, prefix="/api")
 
 _assert_secure_admin_login_route(app)
-
-
-@app.on_event("startup")
-def on_startup():
-    if settings.use_create_all:
-        Base.metadata.create_all(bind=engine)
-    db = SessionLocal()
-    try:
-        bootstrap_admin(db)
-        if settings.enable_seed:
-            seed_products(db)
-    finally:
-        db.close()
-
 
 if settings.metrics_enabled:
 
