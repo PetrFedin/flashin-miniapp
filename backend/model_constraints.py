@@ -114,7 +114,6 @@ def apply_model_constraints() -> None:
     _unique(FulfillmentTask.__table__, "uq_fulfillment_tasks_order_id", "order_id")
     _unique(AdminSession.__table__, "uq_admin_sessions_token_hash", "session_token_hash")
     _unique(AdminPasswordReset.__table__, "uq_admin_password_resets_token_hash", "token_hash")
-    _unique(ReturnRequest.__table__, "uq_return_requests_order_id", "order_id")
     _unique(
         WebhookDestination.__table__,
         "uq_webhook_destinations_url_event_type",
