@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import os
 import sys
 from pathlib import Path
 
@@ -16,15 +15,21 @@ REQUIRED_FILES = [
     ".env.production.example",
     "backend/main.py",
     "backend/models.py",
+    "backend/model_constraints.py",
     "backend/alembic/versions/0001_initial_production.py",
+    "backend/alembic/versions/0008_platform_cms_events_media_scheduler.py",
+    "backend/alembic/versions/0009_security_payment_delivery_media_hardening.py",
+    "backend/alembic/versions/0010_transaction_integrity_constraints.py",
+    "backend/tests/test_transaction_integrity_metadata.py",
     "frontend/package.json",
     "admin/package.json",
     "bot/main.py",
     "scripts/bootstrap.sh",
     "scripts/migrate.sh",
     "scripts/healthcheck.sh",
+    "scripts/check_transaction_integrity.py",
+    "scripts/deploy_production.sh",
     "deploy/k8s/backend-deployment.yaml",
-    "backend/alembic/versions/0008_platform_cms_events_media_scheduler.py",
     "backend/services/media_pipeline.py",
     "backend/services/event_dispatcher.py",
     "backend/api/import_export.py",
@@ -56,7 +61,6 @@ REQUIRED_FILES = [
     "docs/templates/bug_report_template.md",
     "docs/post_launch/support_handover_pack.md",
     "backend/tests/test_v47_hardening_files.py",
-    "backend/alembic/versions/0009_security_payment_delivery_media_hardening.py",
     "deploy/loadtest/k6_webhook_burst.js",
     "deploy/loadtest/k6_catalog_search_checkout.js",
     "deploy/grafana/dashboards/flashin_operations.json",
@@ -86,7 +90,6 @@ REQUIRED_FILES = [
     "scripts/seed_admin.py",
     "scripts/verify_backup.sh",
     "scripts/rollback.sh",
-    "scripts/deploy_production.sh",
     "scripts/run_ops_jobs.py",
     "scripts/run_outbox_jobs.py",
     "scripts/run_moysklad_sync.py",
@@ -97,11 +100,11 @@ REQUIRED_FILES = [
     "frontend/public/legal/returns.html",
 ]
 
-missing = [p for p in REQUIRED_FILES if not (ROOT / p).exists()]
+missing = [path for path in REQUIRED_FILES if not (ROOT / path).exists()]
 if missing:
     print("Missing required files:")
-    for p in missing:
-        print(" -", p)
+    for path in missing:
+        print(" -", path)
     sys.exit(1)
 
 env_path = ROOT / ".env"
@@ -116,7 +119,7 @@ if env_path.exists():
         "MINI_APP_URL",
         "API_PUBLIC_URL",
     ]
-    missing_keys = [k for k in required_keys if f"{k}=" not in env]
+    missing_keys = [key for key in required_keys if f"{key}=" not in env]
     if missing_keys:
         print("Missing .env keys:", missing_keys)
         sys.exit(1)
