@@ -9,15 +9,14 @@ from ..models import Customer, Order, Payment, ReturnRequest
 from ..schemas import RefundApproveIn, ReturnCreate, ReturnOut
 from ..security import get_current_admin, get_current_customer
 from ..services.audit import log_admin_action
-from ..services.loyalty import refund_redeemed_points
 from ..services.payments import create_yookassa_refund, fetch_yookassa_refund
 from ..services.rbac import require_permission
+from ..services.refund_loyalty import apply_full_refund_loyalty
 
 router = APIRouter(prefix="/returns", tags=["returns"])
 
 _MONEY_STEP = Decimal("0.01")
 _FINAL_RETURN_STATUSES = {"approved", "approved_partial"}
-_REFUND_PENDING_STATUSES = {"processing", "refund_pending", "refund_retry_required"}
 
 
 def _money(value: object, field: str) -> Decimal:
@@ -59,32 +58,70 @@ def _refund_response(ret: ReturnRequest, provider_status: str, *, idempotent: bo
     }
 
 
+def _mark_retry_required(db: Session, return_id: int, order_id: int) -> None:
+    try:
+        ret = db.query(ReturnRequest).filter(ReturnRequest.id == return_id).with_for_update().first()
+        order = db.query(Order).filter(Order.id == order_id).with_for_update().first()
+        if ret and ret.status == "processing":
+            ret.status = "refund_retry_required"
+        if order and order.payment_status == "refund_processing":
+            order.payment_status = "refund_pending"
+        db.commit()
+    except Exception:
+        db.rollback()
+
+
+def _mark_review_required(
+    db: Session,
+    return_id: int,
+    order_id: int,
+    provider_refund_id: str,
+) -> None:
+    try:
+        ret = db.query(ReturnRequest).filter(ReturnRequest.id == return_id).with_for_update().first()
+        order = db.query(Order).filter(Order.id == order_id).with_for_update().first()
+        if ret:
+            if provider_refund_id and not ret.provider_refund_id:
+                ret.provider_refund_id = provider_refund_id
+            ret.status = "refund_review_required"
+        if order:
+            order.status = "refund_requested"
+            order.payment_status = "refund_review_required"
+        db.commit()
+    except Exception:
+        db.rollback()
+
+
 def _apply_provider_refund_status(
     db: Session,
     ret: ReturnRequest,
     order: Order,
     provider_status: str,
-) -> None:
+) -> dict[str, object]:
     normalized_status = provider_status.strip().lower()
     if normalized_status == "succeeded":
         full_refund = _money(ret.refund_amount, "refund amount") == _money(order.total_amount, "order total")
         ret.status = "approved" if full_refund else "approved_partial"
         order.status = "refunded" if full_refund else "partially_refunded"
         order.payment_status = "refunded" if full_refund else "partially_refunded"
-        refund_redeemed_points(
-            db,
-            order.customer_id,
-            order.id,
-            order.loyalty_points_redeemed,
-        )
-    elif normalized_status == "canceled":
+        if full_refund:
+            return apply_full_refund_loyalty(
+                db,
+                customer_id=order.customer_id,
+                order_id=order.id,
+                redeemed_points=order.loyalty_points_redeemed,
+            )
+        return {"policy": "no_automatic_loyalty_adjustment_for_partial_refund"}
+    if normalized_status == "canceled":
         ret.status = "failed"
         order.status = "refund_requested"
         order.payment_status = "paid"
-    else:
-        ret.status = "refund_pending"
-        order.status = "refund_requested"
-        order.payment_status = "refund_pending"
+        return {}
+
+    ret.status = "refund_pending"
+    order.status = "refund_requested"
+    order.payment_status = "refund_pending"
+    return {}
 
 
 @router.post("", response_model=ReturnOut)
@@ -180,6 +217,7 @@ async def approve_return(
             "paid",
             "refund_processing",
             "refund_pending",
+            "refund_review_required",
             "partially_refunded",
         }:
             raise HTTPException(status_code=409, detail="Order is not eligible for refund")
@@ -248,25 +286,20 @@ async def approve_return(
                 order_id,
             )
     except HTTPException:
-        try:
-            ret = db.query(ReturnRequest).filter(ReturnRequest.id == payload.return_id).with_for_update().first()
-            order = db.query(Order).filter(Order.id == order_id).with_for_update().first()
-            if ret and ret.status == "processing":
-                ret.status = "refund_retry_required"
-            if order and order.payment_status == "refund_processing":
-                order.payment_status = "refund_pending"
-            db.commit()
-        except Exception:
-            db.rollback()
+        _mark_retry_required(db, payload.return_id, order_id)
         raise
 
     provider_refund_id = str(data.get("refund_id") or "").strip()
-    provider_status = str(data.get("status") or "").strip()
-    if not provider_refund_id or not provider_status:
-        raise HTTPException(status_code=502, detail="Payment provider returned an invalid refund")
-    provider_amount = _provider_refund_amount(data, currency)
-    if provider_amount != requested_amount:
-        raise HTTPException(status_code=409, detail="Provider refund amount does not match approved amount")
+    try:
+        provider_status = str(data.get("status") or "").strip()
+        if not provider_refund_id or not provider_status:
+            raise HTTPException(status_code=502, detail="Payment provider returned an invalid refund")
+        provider_amount = _provider_refund_amount(data, currency)
+        if provider_amount != requested_amount:
+            raise HTTPException(status_code=409, detail="Provider refund amount does not match approved amount")
+    except HTTPException:
+        _mark_review_required(db, payload.return_id, order_id, provider_refund_id)
+        raise
 
     try:
         ret = (
@@ -284,7 +317,7 @@ async def approve_return(
             raise HTTPException(status_code=409, detail="Stored refund amount changed during processing")
 
         ret.provider_refund_id = provider_refund_id
-        _apply_provider_refund_status(db, ret, order, provider_status)
+        loyalty_adjustments = _apply_provider_refund_status(db, ret, order, provider_status)
         log_admin_action(
             db,
             admin,
@@ -296,6 +329,7 @@ async def approve_return(
                 "refund_id": provider_refund_id,
                 "refund_amount": float(requested_amount),
                 "provider_status": provider_status,
+                "loyalty_adjustments": loyalty_adjustments,
             },
         )
         db.commit()
