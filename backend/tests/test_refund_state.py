@@ -1,3 +1,4 @@
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
@@ -19,7 +20,15 @@ def _order(total=1000.0):
 
 
 def _return(amount=1000.0):
-    return SimpleNamespace(refund_amount=amount, status="processing")
+    return SimpleNamespace(id=73, refund_amount=amount, status="processing")
+
+
+def _no_previous_refunds(monkeypatch):
+    monkeypatch.setattr(
+        refund_state,
+        "completed_refund_total",
+        lambda db, order_id, exclude_return_id=None: Decimal("0.00"),
+    )
 
 
 def test_refund_money_rejects_non_finite_values():
@@ -47,6 +56,7 @@ def test_provider_refund_amount_validates_currency():
 
 def test_full_refund_applies_loyalty_reversal(monkeypatch):
     called = {}
+    _no_previous_refunds(monkeypatch)
 
     def fake_apply(db, *, customer_id, order_id, redeemed_points):
         called.update(
@@ -66,10 +76,16 @@ def test_full_refund_applies_loyalty_reversal(monkeypatch):
     assert order.status == "refunded"
     assert order.payment_status == "refunded"
     assert called == {"customer_id": 7, "order_id": 42, "redeemed_points": 100.0}
-    assert result == {"ok": True}
+    assert result == {
+        "cumulative_refund_amount": 1000.0,
+        "remaining_refundable_amount": 0.0,
+        "ok": True,
+    }
 
 
 def test_partial_refund_does_not_silently_recalculate_loyalty(monkeypatch):
+    _no_previous_refunds(monkeypatch)
+
     def fail_if_called(*args, **kwargs):
         raise AssertionError("full-refund loyalty handler must not run")
 
@@ -82,14 +98,18 @@ def test_partial_refund_does_not_silently_recalculate_loyalty(monkeypatch):
     assert ret.status == "approved_partial"
     assert order.status == "partially_refunded"
     assert order.payment_status == "partially_refunded"
-    assert result["policy"] == "no_automatic_loyalty_adjustment_for_partial_refund"
+    assert result["cumulative_refund_amount"] == 250.0
+    assert result["remaining_refundable_amount"] == 750.0
+    assert result["policy"] == "loyalty_adjusted_only_after_full_cumulative_refund"
 
 
-def test_canceled_and_pending_refunds_preserve_reconcilable_states():
+def test_canceled_and_pending_refunds_preserve_reconcilable_states(monkeypatch):
+    _no_previous_refunds(monkeypatch)
     canceled_order = _order()
     canceled_return = _return()
     refund_state.apply_provider_refund_status(object(), canceled_return, canceled_order, "canceled")
     assert canceled_return.status == "failed"
+    assert canceled_order.status == "refund_requested"
     assert canceled_order.payment_status == "paid"
 
     pending_order = _order()
