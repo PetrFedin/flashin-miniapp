@@ -67,6 +67,10 @@ def _validate_existing_data() -> None:
         "payments contain non-positive amounts",
     )
     _assert_empty(
+        "SELECT count(*) FROM return_requests WHERE refund_amount < 0",
+        "return requests contain negative refund amounts",
+    )
+    _assert_empty(
         "SELECT count(*) FROM crm_profiles WHERE loyalty_points < 0",
         "CRM profiles contain negative loyalty balances",
     )
@@ -110,6 +114,29 @@ def _validate_existing_data() -> None:
         ) conflicts
         """,
         "payment webhook events are duplicated",
+    )
+    _assert_empty(
+        """
+        SELECT count(*) FROM (
+            SELECT order_id
+            FROM return_requests
+            GROUP BY order_id
+            HAVING count(*) > 1
+        ) conflicts
+        """,
+        "orders have duplicate return requests",
+    )
+    _assert_empty(
+        """
+        SELECT count(*) FROM (
+            SELECT provider_refund_id
+            FROM return_requests
+            WHERE provider_refund_id <> ''
+            GROUP BY provider_refund_id
+            HAVING count(*) > 1
+        ) conflicts
+        """,
+        "provider refund IDs are duplicated",
     )
     _assert_empty(
         """
@@ -268,6 +295,11 @@ def upgrade():
     )
     op.create_check_constraint("ck_payments_amount_positive", "payments", "amount > 0")
     op.create_check_constraint(
+        "ck_return_requests_refund_nonnegative",
+        "return_requests",
+        "refund_amount >= 0",
+    )
+    op.create_check_constraint(
         "ck_crm_profiles_loyalty_nonnegative",
         "crm_profiles",
         "loyalty_points >= 0",
@@ -298,6 +330,11 @@ def upgrade():
         "admin_password_resets",
         ["token_hash"],
     )
+    op.create_unique_constraint(
+        "uq_return_requests_order_id",
+        "return_requests",
+        ["order_id"],
+    )
 
     op.create_index(
         "uq_carts_one_active_per_customer",
@@ -319,6 +356,13 @@ def upgrade():
         ["provider", "provider_payment_id", "event_type"],
         unique=True,
         postgresql_where=sa.text("provider_payment_id <> '' AND event_type <> ''"),
+    )
+    op.create_index(
+        "uq_return_requests_provider_refund_id",
+        "return_requests",
+        ["provider_refund_id"],
+        unique=True,
+        postgresql_where=sa.text("provider_refund_id <> ''"),
     )
     op.create_index(
         "uq_loyalty_transactions_order_reason",
@@ -360,10 +404,12 @@ def downgrade():
     op.drop_index("uq_loyalty_holds_order", table_name="loyalty_redemption_holds")
     op.drop_index("uq_loyalty_holds_reserved_cart", table_name="loyalty_redemption_holds")
     op.drop_index("uq_loyalty_transactions_order_reason", table_name="loyalty_transactions")
+    op.drop_index("uq_return_requests_provider_refund_id", table_name="return_requests")
     op.drop_index("uq_payment_events_provider_event", table_name="payment_events")
     op.drop_index("uq_payments_provider_payment_id", table_name="payments")
     op.drop_index("uq_carts_one_active_per_customer", table_name="carts")
 
+    op.drop_constraint("uq_return_requests_order_id", "return_requests", type_="unique")
     op.drop_constraint("uq_admin_password_resets_token_hash", "admin_password_resets", type_="unique")
     op.drop_constraint("uq_admin_sessions_token_hash", "admin_sessions", type_="unique")
     op.drop_constraint("uq_fulfillment_tasks_order_id", "fulfillment_tasks", type_="unique")
@@ -375,6 +421,7 @@ def downgrade():
 
     op.drop_constraint("ck_loyalty_holds_points_positive", "loyalty_redemption_holds", type_="check")
     op.drop_constraint("ck_crm_profiles_loyalty_nonnegative", "crm_profiles", type_="check")
+    op.drop_constraint("ck_return_requests_refund_nonnegative", "return_requests", type_="check")
     op.drop_constraint("ck_payments_amount_positive", "payments", type_="check")
     op.drop_constraint("ck_promo_codes_usage_within_limit", "promo_codes", type_="check")
     op.drop_constraint("ck_promo_codes_used_count_nonnegative", "promo_codes", type_="check")
