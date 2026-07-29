@@ -79,6 +79,7 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = 120
     rate_limit_auth_per_minute: int = 20
     rate_limit_admin_login_per_minute: int = 10
+    proxy_trusted_hops: int = 1
 
     default_delivery_price: float = 0
     courier_delivery_price: float = 500
@@ -114,6 +115,8 @@ class Settings(BaseSettings):
             self.moysklad_sync_interval_minutes,
         ) <= 0:
             raise ValueError("Rate limits and sync limits must be positive")
+        if not 0 <= self.proxy_trusted_hops <= 10:
+            raise ValueError("PROXY_TRUSTED_HOPS must be between 0 and 10")
         if min(
             self.default_delivery_price,
             self.courier_delivery_price,
@@ -163,6 +166,8 @@ class Settings(BaseSettings):
             errors.append("DATABASE_URL still uses the default database password")
         if self.enable_seed or self.use_create_all:
             errors.append("ENABLE_SEED and USE_CREATE_ALL must be disabled in production")
+        if self.rate_limit_enabled and self.proxy_trusted_hops < 1:
+            errors.append("PROXY_TRUSTED_HOPS must be at least 1 when production rate limiting is enabled")
 
         origins = self.cors_origin_list
         if not origins or any(origin == "*" or not origin.startswith("https://") for origin in origins):
