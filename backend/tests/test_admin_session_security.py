@@ -28,7 +28,7 @@ class FakeDb:
         return FakeQuery(self.admin)
 
 
-def test_new_admin_login_route_is_registered_before_legacy_route():
+def test_only_protected_admin_login_route_is_registered():
     matching = [
         route
         for route in app.routes
@@ -36,7 +36,7 @@ def test_new_admin_login_route_is_registered_before_legacy_route():
         and "POST" in getattr(route, "methods", set())
     ]
 
-    assert len(matching) >= 2
+    assert len(matching) == 1
     assert matching[0].endpoint.__name__ == "admin_session_login"
 
 
