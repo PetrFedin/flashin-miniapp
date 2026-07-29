@@ -1,18 +1,24 @@
 import os
+import sys
 from logging.config import fileConfig
+from pathlib import Path
 
 from alembic import context
 from sqlalchemy import create_engine, pool
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
-from backend import (  # noqa: F401
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPOSITORY_ROOT))
+
+from backend import (  # noqa: E402,F401
     checkout_idempotency_models,
     model_constraints,
     models,
     notification_models,
 )
-from backend.database import Base
+from backend.database import Base  # noqa: E402
 
 config = context.config
 if config.config_file_name is not None:
