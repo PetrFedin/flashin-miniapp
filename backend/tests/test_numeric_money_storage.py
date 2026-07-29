@@ -3,7 +3,8 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import Numeric, inspect, text
 
-from backend.database import engine
+from backend import model_constraints  # noqa: F401
+from backend.database import Base, engine
 
 
 _MONEY_COLUMNS = {
@@ -37,6 +38,24 @@ _POINT_COLUMNS = {
 
 def _columns(table: str):
     return {column["name"]: column for column in inspect(engine).get_columns(table)}
+
+
+def test_sqlalchemy_metadata_uses_fixed_precision_without_changing_json_contract():
+    for table, names in _MONEY_COLUMNS.items():
+        for name in names:
+            column_type = Base.metadata.tables[table].c[name].type
+            assert isinstance(column_type, Numeric)
+            assert column_type.precision == 20
+            assert column_type.scale == 2
+            assert column_type.asdecimal is False
+
+    for table, names in _POINT_COLUMNS.items():
+        for name in names:
+            column_type = Base.metadata.tables[table].c[name].type
+            assert isinstance(column_type, Numeric)
+            assert column_type.precision == 20
+            assert column_type.scale == 4
+            assert column_type.asdecimal is False
 
 
 @pytest.mark.skipif(engine.dialect.name != "postgresql", reason="PostgreSQL migration contract")
