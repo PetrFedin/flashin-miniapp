@@ -15,6 +15,7 @@ python3 scripts/preflight.py
 
 echo "Validating production Compose configuration..."
 docker compose config --quiet
+python3 scripts/check_production_compose.py
 
 echo "Building images..."
 docker compose build
@@ -79,10 +80,10 @@ docker compose \
   up -d \
   db backend frontend admin bot caddy notification_worker scheduler meilisearch
 
-echo "Waiting for backend..."
+echo "Waiting for backend inside Docker network..."
 backend_healthy=0
 for _ in $(seq 1 90); do
-  if curl -fsS http://localhost:8000/health >/dev/null; then
+  if docker compose exec -T backend curl -fsS http://localhost:8000/health >/dev/null 2>&1; then
     backend_healthy=1
     echo "Backend healthy"
     break
@@ -95,10 +96,10 @@ if [ "$backend_healthy" -ne 1 ]; then
   exit 1
 fi
 
-echo "Waiting for Meilisearch..."
+echo "Waiting for Meilisearch inside Docker network..."
 search_healthy=0
 for _ in $(seq 1 60); do
-  if curl -fsS http://localhost:7700/health >/dev/null; then
+  if docker compose exec -T backend curl -fsS http://meilisearch:7700/health >/dev/null 2>&1; then
     search_healthy=1
     echo "Meilisearch healthy"
     break
@@ -122,6 +123,7 @@ for service in db backend frontend admin bot caddy notification_worker scheduler
   fi
 done
 
-python3 tests/e2e_smoke.py
+echo "Running internal smoke checks..."
+docker compose exec -T backend python scripts/container_smoke.py
 
 echo "Deploy completed"
