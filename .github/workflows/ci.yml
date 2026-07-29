@@ -51,8 +51,10 @@ jobs:
           cache-dependency-path: backend/requirements.txt
       - name: Install backend dependencies
         run: pip install -r backend/requirements.txt
-      - name: Compile backend and bot
-        run: python -m compileall -q backend bot
+      - name: Compile Python sources
+        run: python -m compileall -q backend bot scripts
+      - name: Validate shell scripts
+        run: find scripts -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
       - name: Require one Alembic head
         run: |
           set -euo pipefail
