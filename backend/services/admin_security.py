@@ -232,6 +232,7 @@ def decrypt_totp_secret(admin_id: int, stored_secret: str) -> str:
             raise ValueError("Encrypted TOTP secret is truncated")
         plaintext = AESGCM(_totp_encryption_key()).decrypt(
             blob[:_TOTP_NONCE_BYTES],
+            blob[_TOTP_NONCE_BYTES:],
             _totp_aad(admin_id),
         )
         return normalize_totp_secret(plaintext.decode("ascii"))
