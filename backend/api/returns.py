@@ -1,5 +1,3 @@
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -11,22 +9,15 @@ from ..security import get_current_admin, get_current_customer
 from ..services.audit import log_admin_action
 from ..services.payments import create_yookassa_refund, fetch_yookassa_refund
 from ..services.rbac import require_permission
-from ..services.refund_loyalty import apply_full_refund_loyalty
+from ..services.refund_state import (
+    apply_provider_refund_status,
+    provider_refund_amount,
+    refund_money,
+)
 
 router = APIRouter(prefix="/returns", tags=["returns"])
 
-_MONEY_STEP = Decimal("0.01")
 _FINAL_RETURN_STATUSES = {"approved", "approved_partial"}
-
-
-def _money(value: object, field: str) -> Decimal:
-    try:
-        amount = Decimal(str(value)).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
-    except (InvalidOperation, TypeError, ValueError):
-        raise HTTPException(status_code=400, detail=f"Invalid {field}")
-    if not amount.is_finite():
-        raise HTTPException(status_code=400, detail=f"Invalid {field}")
-    return amount
 
 
 def _clean_reason(value: str) -> str:
@@ -36,15 +27,6 @@ def _clean_reason(value: str) -> str:
     if len(reason) > 2000:
         raise HTTPException(status_code=400, detail="Return reason is too long")
     return reason
-
-
-def _provider_refund_amount(provider_refund: dict, currency: str) -> Decimal:
-    amount = provider_refund.get("amount") or {}
-    provider_currency = str(amount.get("currency") or "").upper()
-    provider_amount = _money(amount.get("value"), "provider refund amount")
-    if provider_currency != str(currency).upper():
-        raise HTTPException(status_code=409, detail="Provider refund currency does not match order")
-    return provider_amount
 
 
 def _refund_response(ret: ReturnRequest, provider_status: str, *, idempotent: bool = False) -> dict:
@@ -90,38 +72,6 @@ def _mark_review_required(
         db.commit()
     except Exception:
         db.rollback()
-
-
-def _apply_provider_refund_status(
-    db: Session,
-    ret: ReturnRequest,
-    order: Order,
-    provider_status: str,
-) -> dict[str, object]:
-    normalized_status = provider_status.strip().lower()
-    if normalized_status == "succeeded":
-        full_refund = _money(ret.refund_amount, "refund amount") == _money(order.total_amount, "order total")
-        ret.status = "approved" if full_refund else "approved_partial"
-        order.status = "refunded" if full_refund else "partially_refunded"
-        order.payment_status = "refunded" if full_refund else "partially_refunded"
-        if full_refund:
-            return apply_full_refund_loyalty(
-                db,
-                customer_id=order.customer_id,
-                order_id=order.id,
-                redeemed_points=order.loyalty_points_redeemed,
-            )
-        return {"policy": "no_automatic_loyalty_adjustment_for_partial_refund"}
-    if normalized_status == "canceled":
-        ret.status = "failed"
-        order.status = "refund_requested"
-        order.payment_status = "paid"
-        return {}
-
-    ret.status = "refund_pending"
-    order.status = "refund_requested"
-    order.payment_status = "refund_pending"
-    return {}
 
 
 @router.post("", response_model=ReturnOut)
@@ -244,14 +194,14 @@ async def approve_return(
         if not payment:
             raise HTTPException(status_code=409, detail="No provider payment found for refund")
 
-        requested_amount = _money(
+        requested_amount = refund_money(
             payload.amount if payload.amount is not None else (ret.refund_amount or order.total_amount),
             "refund amount",
         )
-        order_total = _money(order.total_amount, "order total")
+        order_total = refund_money(order.total_amount, "order total")
         if requested_amount <= 0 or requested_amount > order_total:
             raise HTTPException(status_code=409, detail="Refund amount must be positive and not exceed order total")
-        if ret.refund_amount and _money(ret.refund_amount, "stored refund amount") != requested_amount:
+        if ret.refund_amount and refund_money(ret.refund_amount, "stored refund amount") != requested_amount:
             raise HTTPException(status_code=409, detail="Refund amount is already fixed for this request")
 
         ret.refund_amount = float(requested_amount)
@@ -294,8 +244,8 @@ async def approve_return(
         provider_status = str(data.get("status") or "").strip()
         if not provider_refund_id or not provider_status:
             raise HTTPException(status_code=502, detail="Payment provider returned an invalid refund")
-        provider_amount = _provider_refund_amount(data, currency)
-        if provider_amount != requested_amount:
+        actual_provider_amount = provider_refund_amount(data, currency)
+        if actual_provider_amount != requested_amount:
             raise HTTPException(status_code=409, detail="Provider refund amount does not match approved amount")
     except HTTPException:
         _mark_review_required(db, payload.return_id, order_id, provider_refund_id)
@@ -313,11 +263,11 @@ async def approve_return(
             raise HTTPException(status_code=409, detail="Refund state disappeared during processing")
         if ret.provider_refund_id and ret.provider_refund_id != provider_refund_id:
             raise HTTPException(status_code=409, detail="Return request is linked to another provider refund")
-        if _money(ret.refund_amount, "stored refund amount") != requested_amount:
+        if refund_money(ret.refund_amount, "stored refund amount") != requested_amount:
             raise HTTPException(status_code=409, detail="Stored refund amount changed during processing")
 
         ret.provider_refund_id = provider_refund_id
-        loyalty_adjustments = _apply_provider_refund_status(db, ret, order, provider_status)
+        loyalty_adjustments = apply_provider_refund_status(db, ret, order, provider_status)
         log_admin_action(
             db,
             admin,
