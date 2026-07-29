@@ -1,9 +1,14 @@
+import hashlib
+import json
+import re
 from datetime import datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Response
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
+from ..checkout_idempotency_models import CheckoutIdempotency
 from ..config import get_settings
 from ..database import get_db
 from ..models import (
@@ -25,6 +30,7 @@ from ..services.promos import calculate_discount
 router = APIRouter(prefix="/orders", tags=["orders"])
 
 _MONEY_STEP = Decimal("0.01")
+_IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{16,128}$")
 CANCELLABLE_ORDER_STATUSES = {"created", "payment_created"}
 
 
@@ -45,6 +51,64 @@ def _clean_required(value: str, field: str, max_length: int) -> str:
     if len(cleaned) > max_length:
         raise HTTPException(status_code=400, detail=f"{field} is too long")
     return cleaned
+
+
+def _clean_idempotency_key(value: str) -> str:
+    key = (value or "").strip()
+    if not _IDEMPOTENCY_KEY_PATTERN.fullmatch(key):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Idempotency-Key must be 16-128 characters and contain only "
+                "letters, digits, dot, underscore, colon, or hyphen"
+            ),
+        )
+    return key
+
+
+def _checkout_fingerprint(payload: CheckoutIn) -> str:
+    normalized = {
+        "name": (payload.name or "").strip(),
+        "phone": (payload.phone or "").strip(),
+        "delivery_type": (payload.delivery_type or "").strip().lower(),
+        "address": (payload.address or "").strip(),
+        "comment": (payload.comment or "").strip()[:2000],
+    }
+    canonical = json.dumps(
+        normalized,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _load_customer_order(db: Session, order_id: int, customer_id: int) -> Order:
+    order = (
+        db.query(Order)
+        .options(joinedload(Order.items))
+        .filter(Order.id == order_id, Order.customer_id == customer_id)
+        .first()
+    )
+    if not order:
+        raise HTTPException(status_code=409, detail="Idempotent checkout references a missing order")
+    return order
+
+
+def _validate_idempotency_record(
+    db: Session,
+    record: CheckoutIdempotency,
+    fingerprint: str,
+    customer_id: int,
+) -> Order:
+    if record.request_fingerprint != fingerprint:
+        raise HTTPException(
+            status_code=409,
+            detail="Idempotency-Key was already used with different checkout data",
+        )
+    if not record.order_id:
+        raise HTTPException(status_code=409, detail="Checkout request is already in progress")
+    return _load_customer_order(db, record.order_id, customer_id)
 
 
 def _load_locked_active_cart(db: Session, customer_id: int) -> Cart | None:
@@ -175,10 +239,37 @@ def _lock_and_validate_loyalty(
 @router.post("/checkout", response_model=OrderOut)
 def checkout(
     payload: CheckoutIn,
+    response: Response,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
     customer: Customer = Depends(get_current_customer),
     db: Session = Depends(get_db),
 ):
+    clean_key = _clean_idempotency_key(idempotency_key)
+    fingerprint = _checkout_fingerprint(payload)
+
     try:
+        existing = (
+            db.query(CheckoutIdempotency)
+            .filter(
+                CheckoutIdempotency.customer_id == customer.id,
+                CheckoutIdempotency.idempotency_key == clean_key,
+            )
+            .with_for_update()
+            .first()
+        )
+        if existing:
+            order = _validate_idempotency_record(db, existing, fingerprint, customer.id)
+            response.headers["Idempotency-Replayed"] = "true"
+            return order
+
+        idempotency = CheckoutIdempotency(
+            customer_id=customer.id,
+            idempotency_key=clean_key,
+            request_fingerprint=fingerprint,
+        )
+        db.add(idempotency)
+        db.flush()
+
         cart = _load_locked_active_cart(db, customer.id)
         if not cart:
             raise HTTPException(status_code=409, detail="No active cart available for checkout")
@@ -266,20 +357,32 @@ def checkout(
         if loyalty_hold:
             loyalty_hold.order_id = order.id
         cart.status = "converted"
+        idempotency.order_id = order.id
         db.commit()
+
+        response.headers["Idempotency-Replayed"] = "false"
+        return _load_customer_order(db, order.id, customer.id)
     except HTTPException:
         db.rollback()
         raise
+    except IntegrityError:
+        db.rollback()
+        existing = (
+            db.query(CheckoutIdempotency)
+            .filter(
+                CheckoutIdempotency.customer_id == customer.id,
+                CheckoutIdempotency.idempotency_key == clean_key,
+            )
+            .first()
+        )
+        if existing:
+            order = _validate_idempotency_record(db, existing, fingerprint, customer.id)
+            response.headers["Idempotency-Replayed"] = "true"
+            return order
+        raise HTTPException(status_code=409, detail="Checkout request conflicted with another update")
     except Exception:
         db.rollback()
         raise
-
-    return (
-        db.query(Order)
-        .options(joinedload(Order.items))
-        .filter(Order.id == order.id, Order.customer_id == customer.id)
-        .first()
-    )
 
 
 @router.get("", response_model=list[OrderOut])

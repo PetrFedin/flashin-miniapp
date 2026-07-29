@@ -32,7 +32,7 @@ class FakeDb:
 
 def test_repository_has_single_current_migration_head():
     assert health._expected_migration_heads() == frozenset(
-        {"0013_webhook_outbox_integrity"}
+        {"0015_checkout_idempotency"}
     )
 
 

@@ -18,6 +18,7 @@ def _valid_production_env() -> dict[str, str]:
         "JWT_SECRET": "j" * 48,
         "ADMIN_EMAIL": "admin@flashin.store",
         "ADMIN_PASSWORD": "admin-password-2026",
+        "ADMIN_TOTP_ENCRYPTION_KEY": "t" * 48,
         "MINI_APP_URL": "https://mini.flashin.store",
         "API_PUBLIC_URL": "https://api.flashin.store",
         "ADMIN_URL": "https://admin.flashin.store",

@@ -31,6 +31,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
+      PYTHONPATH: ${{ github.workspace }}
       DATABASE_URL: postgresql+psycopg2://flashin:flashin@127.0.0.1:5432/flashin
       TELEGRAM_BOT_TOKEN: test-token
       BOT_TOKEN: test-token
@@ -65,7 +66,7 @@ jobs:
       - name: Verify migration state
         run: alembic -c backend/alembic.ini current
       - name: Run backend tests
-        run: pytest -q backend/tests
+        run: python -m pytest -q backend/tests
 
   frontend:
     runs-on: ubuntu-latest
