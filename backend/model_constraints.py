@@ -1,0 +1,160 @@
+"""Database constraints that must exist in both create_all and Alembic metadata.
+
+Production applies the same rules through revision 0010. Keeping them in metadata
+prevents local/test databases created with ``Base.metadata.create_all`` from being
+weaker than PostgreSQL production.
+"""
+
+from sqlalchemy import CheckConstraint, Index, UniqueConstraint, text
+
+from .models import (
+    AdminPasswordReset,
+    AdminRolePermission,
+    AdminSession,
+    Cart,
+    CartItem,
+    CrmProfile,
+    FulfillmentTask,
+    LoyaltyRedemptionHold,
+    LoyaltyTransaction,
+    Order,
+    OrderItem,
+    Payment,
+    PaymentEvent,
+    ProductVariant,
+    PromoCode,
+    ReferralCode,
+)
+
+
+def _constraint_names(table) -> set[str]:
+    return {constraint.name for constraint in table.constraints if constraint.name}
+
+
+def _index_names(table) -> set[str]:
+    return {index.name for index in table.indexes if index.name}
+
+
+def _check(table, name: str, expression: str) -> None:
+    if name not in _constraint_names(table):
+        table.append_constraint(CheckConstraint(expression, name=name))
+
+
+def _unique(table, name: str, *columns: str) -> None:
+    if name not in _constraint_names(table):
+        table.append_constraint(UniqueConstraint(*columns, name=name))
+
+
+def _partial_unique_index(table, name: str, columns: list, where: str) -> None:
+    if name in _index_names(table):
+        return
+    predicate = text(where)
+    Index(
+        name,
+        *columns,
+        unique=True,
+        postgresql_where=predicate,
+        sqlite_where=predicate,
+    )
+
+
+def apply_model_constraints() -> None:
+    _check(ProductVariant.__table__, "ck_product_variants_stock_nonnegative", "stock_qty >= 0")
+    _check(ProductVariant.__table__, "ck_product_variants_reserved_nonnegative", "reserved_qty >= 0")
+    _check(ProductVariant.__table__, "ck_product_variants_reserved_within_stock", "reserved_qty <= stock_qty")
+
+    _check(CartItem.__table__, "ck_cart_items_quantity_positive", "quantity > 0")
+    _check(CartItem.__table__, "ck_cart_items_quantity_limit", "quantity <= 10")
+
+    _check(OrderItem.__table__, "ck_order_items_quantity_positive", "quantity > 0")
+    _check(OrderItem.__table__, "ck_order_items_price_nonnegative", "price >= 0")
+
+    _check(Order.__table__, "ck_orders_total_nonnegative", "total_amount >= 0")
+    _check(Order.__table__, "ck_orders_delivery_nonnegative", "delivery_price >= 0")
+    _check(Order.__table__, "ck_orders_discount_nonnegative", "discount_amount >= 0")
+    _check(Order.__table__, "ck_orders_loyalty_points_nonnegative", "loyalty_points_redeemed >= 0")
+    _check(Order.__table__, "ck_orders_loyalty_discount_nonnegative", "loyalty_discount_amount >= 0")
+
+    _check(PromoCode.__table__, "ck_promo_codes_discount_nonnegative", "discount_value >= 0")
+    _check(PromoCode.__table__, "ck_promo_codes_min_amount_nonnegative", "min_amount >= 0")
+    _check(PromoCode.__table__, "ck_promo_codes_max_uses_nonnegative", "max_uses >= 0")
+    _check(PromoCode.__table__, "ck_promo_codes_used_count_nonnegative", "used_count >= 0")
+    _check(
+        PromoCode.__table__,
+        "ck_promo_codes_usage_within_limit",
+        "max_uses = 0 OR used_count <= max_uses",
+    )
+
+    _check(Payment.__table__, "ck_payments_amount_positive", "amount > 0")
+    _check(CrmProfile.__table__, "ck_crm_profiles_loyalty_nonnegative", "loyalty_points >= 0")
+    _check(LoyaltyRedemptionHold.__table__, "ck_loyalty_holds_points_positive", "points > 0")
+
+    _unique(
+        AdminRolePermission.__table__,
+        "uq_admin_role_permissions_role_permission",
+        "role",
+        "permission",
+    )
+    _unique(FulfillmentTask.__table__, "uq_fulfillment_tasks_order_id", "order_id")
+    _unique(AdminSession.__table__, "uq_admin_sessions_token_hash", "session_token_hash")
+    _unique(AdminPasswordReset.__table__, "uq_admin_password_resets_token_hash", "token_hash")
+
+    _partial_unique_index(
+        Cart.__table__,
+        "uq_carts_one_active_per_customer",
+        [Cart.__table__.c.customer_id],
+        "status = 'active'",
+    )
+    _partial_unique_index(
+        Payment.__table__,
+        "uq_payments_provider_payment_id",
+        [Payment.__table__.c.provider, Payment.__table__.c.provider_payment_id],
+        "provider_payment_id <> ''",
+    )
+    _partial_unique_index(
+        PaymentEvent.__table__,
+        "uq_payment_events_provider_event",
+        [
+            PaymentEvent.__table__.c.provider,
+            PaymentEvent.__table__.c.provider_payment_id,
+            PaymentEvent.__table__.c.event_type,
+        ],
+        "provider_payment_id <> '' AND event_type <> ''",
+    )
+    _partial_unique_index(
+        LoyaltyTransaction.__table__,
+        "uq_loyalty_transactions_order_reason",
+        [
+            LoyaltyTransaction.__table__.c.customer_id,
+            LoyaltyTransaction.__table__.c.order_id,
+            LoyaltyTransaction.__table__.c.reason,
+        ],
+        "order_id IS NOT NULL AND reason IN ('order_paid', 'loyalty_redeemed', 'referral_reward', 'loyalty_refund')",
+    )
+    _partial_unique_index(
+        LoyaltyRedemptionHold.__table__,
+        "uq_loyalty_holds_reserved_cart",
+        [
+            LoyaltyRedemptionHold.__table__.c.customer_id,
+            LoyaltyRedemptionHold.__table__.c.cart_id,
+        ],
+        "cart_id IS NOT NULL AND status = 'reserved'",
+    )
+    _partial_unique_index(
+        LoyaltyRedemptionHold.__table__,
+        "uq_loyalty_holds_order",
+        [
+            LoyaltyRedemptionHold.__table__.c.customer_id,
+            LoyaltyRedemptionHold.__table__.c.order_id,
+        ],
+        "order_id IS NOT NULL AND status IN ('committed', 'refunded')",
+    )
+    _partial_unique_index(
+        ReferralCode.__table__,
+        "uq_referral_codes_one_active_per_customer",
+        [ReferralCode.__table__.c.customer_id],
+        "active = true",
+    )
+
+
+apply_model_constraints()
