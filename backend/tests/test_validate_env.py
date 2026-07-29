@@ -19,6 +19,8 @@ def _valid_production_env() -> dict[str, str]:
         "ADMIN_EMAIL": "admin@flashin.store",
         "ADMIN_PASSWORD": "admin-password-2026",
         "ADMIN_TOTP_ENCRYPTION_KEY": "t" * 48,
+        "ADMIN_MFA_REQUIRED": "true",
+        "ADMIN_MFA_SETUP_TOKEN_MINUTES": "10",
         "MINI_APP_URL": "https://mini.flashin.store",
         "API_PUBLIC_URL": "https://api.flashin.store",
         "ADMIN_URL": "https://admin.flashin.store",
@@ -93,6 +95,26 @@ def test_disabled_production_scheduler_is_rejected(tmp_path):
 
     assert result.returncode == 1
     assert "SCHEDULER_ENABLED must be true in production" in result.stdout
+
+
+def test_disabled_production_admin_mfa_is_rejected(tmp_path):
+    values = _valid_production_env()
+    values["ADMIN_MFA_REQUIRED"] = "false"
+
+    result = _run_validator(tmp_path, values)
+
+    assert result.returncode == 1
+    assert "ADMIN_MFA_REQUIRED must be true in production" in result.stdout
+
+
+def test_admin_mfa_setup_token_lifetime_outside_safe_range_is_rejected(tmp_path):
+    values = _valid_production_env()
+    values["ADMIN_MFA_SETUP_TOKEN_MINUTES"] = "60"
+
+    result = _run_validator(tmp_path, values)
+
+    assert result.returncode == 1
+    assert "ADMIN_MFA_SETUP_TOKEN_MINUTES must be between 5 and 30" in result.stdout
 
 
 def test_moysklad_interval_outside_safe_range_is_rejected(tmp_path):
