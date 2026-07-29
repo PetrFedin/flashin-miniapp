@@ -19,6 +19,7 @@ DEFAULT_PERMISSIONS = {
         "webhooks.write",
         "media.write",
         "security.read",
+        "privacy.read",
     },
     "support": {
         "orders.read",
