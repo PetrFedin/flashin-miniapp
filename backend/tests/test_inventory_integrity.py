@@ -61,7 +61,17 @@ def _variant(db, *, stock=10, reserved=0):
     return product, variant
 
 
-def _order_item(db, product, variant, *, quantity, created_at, order_status, payment_status):
+def _order_item(
+    db,
+    product,
+    variant,
+    *,
+    quantity,
+    created_at,
+    order_status,
+    payment_status,
+    delivery_status="not_started",
+):
     customer = Customer(telegram_id=f"inventory-customer-{db.query(Customer).count() + 1}")
     db.add(customer)
     db.flush()
@@ -69,6 +79,7 @@ def _order_item(db, product, variant, *, quantity, created_at, order_status, pay
         customer_id=customer.id,
         status=order_status,
         payment_status=payment_status,
+        delivery_status=delivery_status,
         total_amount=quantity * 100.0,
         currency="RUB",
         created_at=created_at,
@@ -196,10 +207,28 @@ def test_restock_counts_only_paid_sales_and_uses_available_stock():
     period_start = datetime(2026, 1, 1, 0, 0, 0)
     period_end = datetime(2026, 1, 2, 23, 59, 59)
     _order_item(db, product, variant, quantity=4, created_at=datetime(2026, 1, 1, 12), order_status="paid", payment_status="paid")
-    _order_item(db, product, variant, quantity=2, created_at=datetime(2026, 1, 2, 12), order_status="completed", payment_status="partially_refunded")
+    _order_item(
+        db,
+        product,
+        variant,
+        quantity=2,
+        created_at=datetime(2026, 1, 2, 12),
+        order_status="partially_refunded",
+        payment_status="partially_refunded",
+        delivery_status="delivered",
+    )
     _order_item(db, product, variant, quantity=100, created_at=datetime(2026, 1, 1, 13), order_status="created", payment_status="pending")
-    _order_item(db, product, variant, quantity=100, created_at=datetime(2026, 1, 1, 14), order_status="cancelled", payment_status="paid")
-    _order_item(db, product, variant, quantity=100, created_at=datetime(2026, 1, 2, 14), order_status="refunded", payment_status="paid")
+    _order_item(db, product, variant, quantity=100, created_at=datetime(2026, 1, 1, 14), order_status="cancelled", payment_status="cancelled")
+    _order_item(
+        db,
+        product,
+        variant,
+        quantity=100,
+        created_at=datetime(2026, 1, 2, 14),
+        order_status="refunded",
+        payment_status="refunded",
+        delivery_status="delivered",
+    )
 
     row = restock_inventory(db, period_start, period_end, lead_time_days=2, safety_stock_days=1)[0]
     assert row["sold_count"] == 6

@@ -72,7 +72,12 @@ def test_shipment_uses_charged_order_price_and_is_idempotent():
 
 def test_shipment_requires_paid_ready_order():
     db = _session()
-    unpaid = _order(db, payment_status="pending")
+    unpaid = _order(
+        db,
+        status="created",
+        payment_status="pending",
+        delivery_status="not_started",
+    )
     with pytest.raises(HTTPException) as unpaid_error:
         create_shipment(db, unpaid.id, "courier")
     assert unpaid_error.value.status_code == 409
