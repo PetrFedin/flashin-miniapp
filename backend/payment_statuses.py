@@ -22,9 +22,29 @@ REUSABLE_PROVIDER_PAYMENT_STATUSES = frozenset(
 )
 REFUNDABLE_PROVIDER_PAYMENT_STATUSES = frozenset({SUCCEEDED_PROVIDER_PAYMENT_STATUS})
 
+WAITING_FOR_CAPTURE_PAYMENT_EVENT = "payment.waiting_for_capture"
+SUCCEEDED_PAYMENT_EVENT = "payment.succeeded"
+CANCELED_PAYMENT_EVENT = "payment.canceled"
+UNRESOLVED_PAYMENT_EVENT = "payment.unresolved"
+
+ACTIONABLE_PAYMENT_EVENT_TYPES = frozenset(
+    {
+        WAITING_FOR_CAPTURE_PAYMENT_EVENT,
+        SUCCEEDED_PAYMENT_EVENT,
+        CANCELED_PAYMENT_EVENT,
+    }
+)
+PERSISTED_PAYMENT_EVENT_TYPES = frozenset(
+    {
+        *ACTIONABLE_PAYMENT_EVENT_TYPES,
+        UNRESOLVED_PAYMENT_EVENT,
+    }
+)
+
 
 def sql_values(values: frozenset[str]) -> str:
     return ", ".join(f"'{value}'" for value in sorted(values))
 
 
 PROVIDER_PAYMENT_STATUS_SQL = sql_values(PROVIDER_PAYMENT_STATUSES)
+PERSISTED_PAYMENT_EVENT_TYPE_SQL = sql_values(PERSISTED_PAYMENT_EVENT_TYPES)
