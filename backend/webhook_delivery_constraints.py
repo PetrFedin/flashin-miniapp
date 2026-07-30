@@ -21,6 +21,7 @@ from .webhook_statuses import (
 )
 
 _EVENT_TYPE_RE = re.compile(r"^[a-z0-9_.:-]+$")
+_MAX_ERROR_LENGTH = 2000
 
 
 def _constraint_names(table) -> set[str]:
@@ -51,13 +52,16 @@ def _canonical_payload(value: object) -> str:
         raise HTTPException(status_code=400, detail="Webhook payload must be valid JSON") from exc
     if not isinstance(parsed, (dict, list)):
         raise HTTPException(status_code=400, detail="Webhook payload must be a JSON object or array")
-    serialized = json.dumps(
-        parsed,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    )
+    try:
+        serialized = json.dumps(
+            parsed,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Webhook payload contains invalid numbers") from exc
     if len(serialized.encode("utf-8")) > MAX_WEBHOOK_BODY_BYTES:
         raise HTTPException(status_code=400, detail="Webhook payload is too large")
     return serialized
@@ -100,7 +104,9 @@ def _normalize_outbox_before_write(_mapper, _connection, target: WebhookOutbox) 
         raise HTTPException(status_code=400, detail="Webhook destination is invalid")
     event_type = _normalize_event_type(target.event_type, wildcard=False)
     payload = _canonical_payload(target.payload)
-    last_error = str(target.last_error or "").strip()[:2000]
+    last_error = str(target.last_error or "").strip()
+    if len(last_error) > _MAX_ERROR_LENGTH:
+        raise HTTPException(status_code=400, detail="Webhook error is too long")
 
     if status in {PENDING_WEBHOOK_STATUS, SENT_WEBHOOK_STATUS}:
         try:
@@ -145,8 +151,18 @@ def apply_webhook_delivery_constraints() -> None:
     )
     _check(
         WebhookDestination.__table__,
+        "ck_webhook_destinations_url_length",
+        "length(url) BETWEEN 1 AND 255",
+    )
+    _check(
+        WebhookDestination.__table__,
         "ck_webhook_destinations_event_type_normalized",
         "event_type = lower(trim(event_type))",
+    )
+    _check(
+        WebhookDestination.__table__,
+        "ck_webhook_destinations_event_type_length",
+        "length(event_type) BETWEEN 1 AND 120",
     )
     _check(
         WebhookDestination.__table__,
@@ -166,8 +182,23 @@ def apply_webhook_delivery_constraints() -> None:
     )
     _check(
         WebhookOutbox.__table__,
+        "ck_webhook_outbox_event_type_length",
+        "length(event_type) BETWEEN 1 AND 120",
+    )
+    _check(
+        WebhookOutbox.__table__,
         "ck_webhook_outbox_payload_nonempty",
         "length(trim(payload)) > 0",
+    )
+    _check(
+        WebhookOutbox.__table__,
+        "ck_webhook_outbox_payload_size",
+        f"length(payload) <= {MAX_WEBHOOK_BODY_BYTES}",
+    )
+    _check(
+        WebhookOutbox.__table__,
+        "ck_webhook_outbox_error_size",
+        f"length(last_error) <= {_MAX_ERROR_LENGTH}",
     )
     _check(
         WebhookOutbox.__table__,
