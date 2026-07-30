@@ -4,17 +4,9 @@ from starlette.responses import JSONResponse
 
 
 class AdminOrderStateGuardMiddleware:
-    """Prevent generic admin edits from bypassing payment, refund, and safe cancellation workflows."""
+    """Prevent generic admin edits from bypassing dedicated order workflows."""
 
     _MAX_BODY_BYTES = 64 * 1024
-    _PROVIDER_OWNED_STATUSES = {
-        "payment_created",
-        "paid",
-        "payment_review_required",
-        "refund_requested",
-        "refunded",
-        "cancelled",
-    }
 
     def __init__(self, app):
         self.app = app
@@ -48,16 +40,18 @@ class AdminOrderStateGuardMiddleware:
             await self.app(scope, self._replay(raw_body), send)
             return
 
-        requested_status = ""
-        if isinstance(payload, dict):
-            requested_status = str(payload.get("status") or "").strip().lower()
+        requested_status = None
+        if isinstance(payload, dict) and "status" in payload:
+            raw_status = payload.get("status")
+            requested_status = str(raw_status or "").strip().lower()
 
-        if requested_status in self._PROVIDER_OWNED_STATUSES:
+        if requested_status:
             response = JSONResponse(
                 status_code=409,
                 content={
                     "detail": (
-                        f"Status {requested_status} is controlled by a dedicated payment, refund, or cancellation workflow"
+                        "Order status is controlled by dedicated payment, fulfillment, "
+                        "delivery, refund, or safe-cancellation workflows"
                     )
                 },
             )
