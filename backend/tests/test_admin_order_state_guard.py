@@ -74,16 +74,28 @@ def test_blocks_every_generic_admin_order_status_override(status):
     assert forwarded == b""
 
 
-def test_allows_delivery_and_tracking_updates_without_order_status():
-    payload = {"delivery_status": "shipped", "tracking_number": "TRACK-1"}
+@pytest.mark.parametrize(
+    "payload, field",
+    [
+        ({"delivery_status": "shipped"}, "delivery_status"),
+        ({"tracking_number": "TRACK-1"}, "tracking_number"),
+        (
+            {"delivery_status": "delivered", "tracking_number": "TRACK-2"},
+            "delivery_status",
+        ),
+    ],
+)
+def test_blocks_shipment_owned_fields_on_generic_admin_patch(payload, field):
     sent, forwarded = _run("/api/admin/orders/42", payload)
 
-    assert sent[0]["status"] == 204
-    assert json.loads(forwarded) == payload
+    assert sent[0]["status"] == 409
+    response_body = json.loads(sent[1]["body"])
+    assert field in response_body["managed_fields"]
+    assert forwarded == b""
 
 
-def test_allows_explicit_empty_status_for_legacy_clients():
-    payload = {"status": None, "tracking_number": "TRACK-2"}
+def test_allows_explicit_empty_managed_fields_for_legacy_clients():
+    payload = {"status": None, "delivery_status": "", "tracking_number": None}
     sent, forwarded = _run("/api/admin/orders/42", payload)
 
     assert sent[0]["status"] == 204
@@ -91,7 +103,7 @@ def test_allows_explicit_empty_status_for_legacy_clients():
 
 
 def test_does_not_guard_other_routes():
-    payload = {"status": "paid"}
+    payload = {"status": "paid", "tracking_number": "TRACK-3"}
     sent, forwarded = _run("/api/orders/42", payload)
 
     assert sent[0]["status"] == 204
