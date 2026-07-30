@@ -31,6 +31,13 @@ from .models import (
     WebhookOutbox,
 )
 from .money_model_types import apply_money_model_types
+from .order_statuses import (
+    DELIVERY_STATUS_SQL,
+    ORDER_DELIVERY_COHERENCE_SQL,
+    ORDER_PAYMENT_COHERENCE_SQL,
+    ORDER_STATUS_SQL,
+    PAYMENT_STATUS_SQL,
+)
 from .return_statuses import (
     AMOUNT_REQUIRED_RETURN_STATUS_SQL,
     OPEN_RETURN_STATUS_SQL,
@@ -126,6 +133,27 @@ def apply_model_constraints() -> None:
     _check(Order.__table__, "ck_orders_discount_nonnegative", "discount_amount >= 0")
     _check(Order.__table__, "ck_orders_loyalty_points_nonnegative", "loyalty_points_redeemed >= 0")
     _check(Order.__table__, "ck_orders_loyalty_discount_nonnegative", "loyalty_discount_amount >= 0")
+    _check(Order.__table__, "ck_orders_status_valid", f"status IN ({ORDER_STATUS_SQL})")
+    _check(
+        Order.__table__,
+        "ck_orders_payment_status_valid",
+        f"payment_status IN ({PAYMENT_STATUS_SQL})",
+    )
+    _check(
+        Order.__table__,
+        "ck_orders_delivery_status_valid",
+        f"delivery_status IN ({DELIVERY_STATUS_SQL})",
+    )
+    _check(
+        Order.__table__,
+        "ck_orders_payment_state_coherent",
+        ORDER_PAYMENT_COHERENCE_SQL,
+    )
+    _check(
+        Order.__table__,
+        "ck_orders_delivery_state_coherent",
+        ORDER_DELIVERY_COHERENCE_SQL,
+    )
 
     _check(PromoCode.__table__, "ck_promo_codes_code_nonempty", "length(trim(code)) > 0")
     _check(PromoCode.__table__, "ck_promo_codes_code_normalized", "code = upper(trim(code))")
