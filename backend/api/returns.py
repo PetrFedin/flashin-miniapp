@@ -4,6 +4,14 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import Customer, Order, Payment, ReturnRequest
+from ..return_statuses import (
+    FINAL_RETURN_STATUSES,
+    OPEN_RETURN_STATUSES,
+    PROCESSING_RETURN_STATUS,
+    REQUESTED_RETURN_STATUS,
+    RETRY_REQUIRED_RETURN_STATUS,
+    REVIEW_REQUIRED_RETURN_STATUS,
+)
 from ..schemas import RefundApproveIn, ReturnCreate, ReturnOut
 from ..security import get_current_admin, get_current_customer
 from ..services.audit import log_admin_action
@@ -21,15 +29,6 @@ from ..services.refund_state import (
 )
 
 router = APIRouter(prefix="/returns", tags=["returns"])
-
-_FINAL_RETURN_STATUSES = {"approved", "approved_partial"}
-_OPEN_RETURN_STATUSES = {
-    "requested",
-    "processing",
-    "refund_retry_required",
-    "refund_review_required",
-    "refund_pending",
-}
 
 
 def _clean_reason(value: str) -> str:
@@ -56,8 +55,8 @@ def _mark_retry_required(db: Session, return_id: int, order_id: int) -> None:
     try:
         ret = db.query(ReturnRequest).filter(ReturnRequest.id == return_id).with_for_update().first()
         order = db.query(Order).filter(Order.id == order_id).with_for_update().first()
-        if ret and ret.status == "processing":
-            ret.status = "refund_retry_required"
+        if ret and ret.status == PROCESSING_RETURN_STATUS:
+            ret.status = RETRY_REQUIRED_RETURN_STATUS
         if order and order.payment_status == "refund_processing":
             order.status = "refund_requested"
             order.payment_status = "refund_pending"
@@ -78,7 +77,7 @@ def _mark_review_required(
         if ret:
             if provider_refund_id and not ret.provider_refund_id:
                 ret.provider_refund_id = provider_refund_id
-            ret.status = "refund_review_required"
+            ret.status = REVIEW_REQUIRED_RETURN_STATUS
         if order:
             order.status = "refund_requested"
             order.payment_status = "refund_review_required"
@@ -107,7 +106,7 @@ def create_return(
             db.query(ReturnRequest)
             .filter(
                 ReturnRequest.order_id == order.id,
-                ReturnRequest.status.in_(_OPEN_RETURN_STATUSES),
+                ReturnRequest.status.in_(OPEN_RETURN_STATUSES),
             )
             .order_by(ReturnRequest.created_at.desc(), ReturnRequest.id.desc())
             .with_for_update()
@@ -127,7 +126,7 @@ def create_return(
             order_id=order.id,
             customer_id=customer.id,
             reason=_clean_reason(payload.reason),
-            status="requested",
+            status=REQUESTED_RETURN_STATUS,
         )
         order.status = "refund_requested"
         db.add(ret)
@@ -144,7 +143,7 @@ def create_return(
             .filter(
                 ReturnRequest.order_id == payload.order_id,
                 ReturnRequest.customer_id == customer.id,
-                ReturnRequest.status.in_(_OPEN_RETURN_STATUSES),
+                ReturnRequest.status.in_(OPEN_RETURN_STATUSES),
             )
             .order_by(ReturnRequest.created_at.desc(), ReturnRequest.id.desc())
             .first()
@@ -189,7 +188,7 @@ async def approve_return(
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
 
-        if ret.status in _FINAL_RETURN_STATUSES and ret.provider_refund_id:
+        if ret.status in FINAL_RETURN_STATUSES and ret.provider_refund_id:
             return _refund_response(ret, "succeeded", idempotent=True)
         if order.payment_status not in {
             "paid",
@@ -244,7 +243,7 @@ async def approve_return(
             raise HTTPException(status_code=409, detail="Refund amount is already fixed for this request")
 
         ret.refund_amount = float(requested_amount)
-        ret.status = "processing"
+        ret.status = PROCESSING_RETURN_STATUS
         order.status = "refund_requested"
         order.payment_status = "refund_processing"
         existing_refund_id = (ret.provider_refund_id or "").strip()

@@ -6,10 +6,16 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from ..models import Order, ReturnRequest
+from ..return_statuses import (
+    APPROVED_PARTIAL_RETURN_STATUS,
+    APPROVED_RETURN_STATUS,
+    FAILED_RETURN_STATUS,
+    FINAL_RETURN_STATUSES,
+    PENDING_RETURN_STATUS,
+)
 from .refund_loyalty import apply_full_refund_loyalty
 
 _MONEY_STEP = Decimal("0.01")
-_FINAL_REFUND_STATUSES = {"approved", "approved_partial"}
 
 
 def refund_money(value: object, field: str) -> Decimal:
@@ -39,7 +45,7 @@ def completed_refund_total(
 ) -> Decimal:
     query = db.query(ReturnRequest).filter(
         ReturnRequest.order_id == order_id,
-        ReturnRequest.status.in_(_FINAL_REFUND_STATUSES),
+        ReturnRequest.status.in_(FINAL_RETURN_STATUSES),
     )
     if exclude_return_id is not None:
         query = query.filter(ReturnRequest.id != exclude_return_id)
@@ -91,7 +97,7 @@ def apply_provider_refund_status(
             raise HTTPException(status_code=409, detail="Cumulative refunds exceed order total")
 
         full_refund = cumulative_total == order_total
-        ret.status = "approved" if full_refund else "approved_partial"
+        ret.status = APPROVED_RETURN_STATUS if full_refund else APPROVED_PARTIAL_RETURN_STATUS
         order.status = "refunded" if full_refund else "partially_refunded"
         order.payment_status = "refunded" if full_refund else "partially_refunded"
         result: dict[str, object] = {
@@ -112,7 +118,7 @@ def apply_provider_refund_status(
         return result
 
     if normalized_status == "canceled":
-        ret.status = "failed"
+        ret.status = FAILED_RETURN_STATUS
         remaining = remaining_refundable_amount(db, order, exclude_return_id=ret.id)
         if remaining < refund_money(order.total_amount, "order total"):
             order.status = "partially_refunded"
@@ -122,7 +128,7 @@ def apply_provider_refund_status(
             order.payment_status = "paid"
         return {}
 
-    ret.status = "refund_pending"
+    ret.status = PENDING_RETURN_STATUS
     order.status = "refund_requested"
     order.payment_status = "refund_pending"
     return {}
