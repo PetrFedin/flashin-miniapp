@@ -20,6 +20,7 @@ from ..services.payments import (
     fetch_yookassa_refund,
     validate_yookassa_refund,
 )
+from ..services.provider_failures import is_retryable_yookassa_error
 from ..services.rbac import require_permission
 from ..services.refund_state import (
     apply_provider_refund_status,
@@ -59,7 +60,7 @@ def _mark_retry_required(db: Session, return_id: int, order_id: int) -> None:
             ret.status = RETRY_REQUIRED_RETURN_STATUS
         if order and order.payment_status == "refund_processing":
             order.status = "refund_requested"
-            order.payment_status = "refund_pending"
+            order.payment_status = "refund_retry_required"
         db.commit()
     except Exception:
         db.rollback()
@@ -193,6 +194,7 @@ async def approve_return(
         if order.payment_status not in {
             "paid",
             "refund_processing",
+            "refund_retry_required",
             "refund_pending",
             "refund_review_required",
             "partially_refunded",
@@ -277,8 +279,11 @@ async def approve_return(
                 order_id,
                 return_id,
             )
-    except HTTPException:
-        _mark_retry_required(db, return_id, order_id)
+    except HTTPException as exc:
+        if is_retryable_yookassa_error(exc):
+            _mark_retry_required(db, return_id, order_id)
+        else:
+            _mark_review_required(db, return_id, order_id, existing_refund_id)
         raise
 
     provider_refund_id = str(data.get("refund_id") or "").strip()
