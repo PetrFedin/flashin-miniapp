@@ -7,6 +7,7 @@ class AdminOrderStateGuardMiddleware:
     """Prevent generic admin edits from bypassing dedicated order workflows."""
 
     _MAX_BODY_BYTES = 64 * 1024
+    _MANAGED_FIELDS = frozenset({"status", "delivery_status", "tracking_number"})
 
     def __init__(self, app):
         self.app = app
@@ -40,19 +41,24 @@ class AdminOrderStateGuardMiddleware:
             await self.app(scope, self._replay(raw_body), send)
             return
 
-        requested_status = None
-        if isinstance(payload, dict) and "status" in payload:
-            raw_status = payload.get("status")
-            requested_status = str(raw_status or "").strip().lower()
+        requested_fields: list[str] = []
+        if isinstance(payload, dict):
+            for field in sorted(self._MANAGED_FIELDS):
+                if field not in payload:
+                    continue
+                value = payload.get(field)
+                if value is not None and str(value).strip():
+                    requested_fields.append(field)
 
-        if requested_status:
+        if requested_fields:
             response = JSONResponse(
                 status_code=409,
                 content={
                     "detail": (
-                        "Order status is controlled by dedicated payment, fulfillment, "
-                        "delivery, refund, or safe-cancellation workflows"
-                    )
+                        "Order status, delivery status, and tracking are controlled by "
+                        "dedicated payment, fulfillment, shipment, refund, or safe-cancellation workflows"
+                    ),
+                    "managed_fields": requested_fields,
                 },
             )
             await response(scope, receive, send)
