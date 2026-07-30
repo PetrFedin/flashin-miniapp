@@ -1,6 +1,8 @@
 import asyncio
 import json
 
+import pytest
+
 from backend.middleware.admin_order_state_guard import AdminOrderStateGuardMiddleware
 
 
