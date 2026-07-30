@@ -1,4 +1,5 @@
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
@@ -111,6 +112,7 @@ def test_case_and_whitespace_variants_cannot_create_duplicate_codes():
         {"code": "DIRECT-ZERO", "discount_type": "fixed", "discount_value": 0},
         {"code": "DIRECT-PERCENT", "discount_type": "percent", "discount_value": 101},
         {"code": "   ", "discount_type": "fixed", "discount_value": 10},
+        {"code": " lower ", "discount_type": "fixed", "discount_value": 10},
     ],
 )
 def test_database_constraints_reject_invalid_direct_sql(values):
@@ -137,3 +139,17 @@ def test_metadata_contains_all_new_promo_constraints():
         "ck_promo_codes_percent_within_100",
         "ck_promo_codes_usage_within_limit",
     }.issubset(names)
+
+
+def test_promo_migration_uses_collision_safe_two_phase_normalization():
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "0020_promo_code_integrity.py"
+    ).read_text(encoding="utf-8")
+
+    assert "CREATE TEMP TABLE promo_code_normalization_map" in source
+    assert "SET code = '__promo_tmp_'" in source
+    assert "WHERE final_code = candidate" in source
+    assert "SET code = mapping.final_code" in source
