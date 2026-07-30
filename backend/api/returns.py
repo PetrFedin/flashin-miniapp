@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import Customer, Order, Payment, ReturnRequest
+from ..payment_statuses import SUCCEEDED_PROVIDER_PAYMENT_STATUS
 from ..return_statuses import (
     FINAL_RETURN_STATUSES,
     OPEN_RETURN_STATUSES,
@@ -205,23 +206,15 @@ async def approve_return(
             db.query(Payment)
             .filter(
                 Payment.order_id == order.id,
-                Payment.provider_payment_id != "",
-                Payment.status.in_(["succeeded", "waiting_for_capture", "paid"]),
+                Payment.provider == "yookassa",
+                Payment.status == SUCCEEDED_PROVIDER_PAYMENT_STATUS,
             )
             .order_by(Payment.created_at.desc(), Payment.id.desc())
             .with_for_update()
             .first()
         )
         if not payment:
-            payment = (
-                db.query(Payment)
-                .filter(Payment.order_id == order.id, Payment.provider_payment_id != "")
-                .order_by(Payment.created_at.desc(), Payment.id.desc())
-                .with_for_update()
-                .first()
-            )
-        if not payment:
-            raise HTTPException(status_code=409, detail="No provider payment found for refund")
+            raise HTTPException(status_code=409, detail="No succeeded YooKassa payment found for refund")
 
         remaining_amount = remaining_refundable_amount(
             db,
