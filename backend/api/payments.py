@@ -20,8 +20,10 @@ from ..services.payment_creation import (
     finalize_payment_creation,
     load_claim_payment,
     mark_payment_creation_retry_required,
+    mark_payment_creation_review_required,
 )
 from ..services.payments import create_yookassa_payment, fetch_yookassa_payment
+from ..services.provider_failures import is_retryable_yookassa_error, yookassa_error_reason
 from ..services.timeline import add_timeline_event
 
 router = APIRouter(prefix="/payments", tags=["payments"])
@@ -31,6 +33,7 @@ _SETTLED_ORDER_PAYMENT_STATUSES = {
     "paid",
     "paid_review_required",
     "refund_processing",
+    "refund_retry_required",
     "refund_pending",
     "refund_review_required",
     "partially_refunded",
@@ -193,21 +196,21 @@ async def create_payment(
         )
     except HTTPException as exc:
         try:
-            mark_payment_creation_retry_required(
-                db,
-                claim.attempt_id,
-                "provider_request_failed",
-            )
+            reason = yookassa_error_reason(exc)
+            if is_retryable_yookassa_error(exc):
+                mark_payment_creation_retry_required(db, claim.attempt_id, reason)
+            else:
+                mark_payment_creation_review_required(db, claim.attempt_id, reason)
             db.commit()
         except Exception:
             db.rollback()
-        raise exc
-    except Exception:
+        raise
+    except Exception as exc:
         try:
-            mark_payment_creation_retry_required(
+            mark_payment_creation_review_required(
                 db,
                 claim.attempt_id,
-                "unexpected_provider_failure",
+                yookassa_error_reason(exc),
             )
             db.commit()
         except Exception:
