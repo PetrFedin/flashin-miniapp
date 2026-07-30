@@ -49,22 +49,39 @@ def _run(path: str, payload: dict, method: str = "PATCH") -> tuple[list[dict], b
     return sent, bytes(received_by_app)
 
 
-def test_blocks_paid_status_on_generic_admin_order_patch():
-    sent, forwarded = _run("/api/admin/orders/42", {"status": "paid"})
+@pytest.mark.parametrize(
+    "status",
+    [
+        "payment_created",
+        "paid",
+        "payment_review_required",
+        "assembling",
+        "ready",
+        "shipped",
+        "completed",
+        "refund_requested",
+        "partially_refunded",
+        "refunded",
+        "cancelled",
+    ],
+)
+def test_blocks_every_generic_admin_order_status_override(status):
+    sent, forwarded = _run("/api/admin/orders/42", {"status": status})
 
     assert sent[0]["status"] == 409
     assert forwarded == b""
 
 
-def test_blocks_refund_workflow_statuses():
-    for status in ("payment_created", "refund_requested", "refunded"):
-        sent, forwarded = _run("/api/admin/orders/42", {"status": status})
-        assert sent[0]["status"] == 409
-        assert forwarded == b""
+def test_allows_delivery_and_tracking_updates_without_order_status():
+    payload = {"delivery_status": "shipped", "tracking_number": "TRACK-1"}
+    sent, forwarded = _run("/api/admin/orders/42", payload)
+
+    assert sent[0]["status"] == 204
+    assert json.loads(forwarded) == payload
 
 
-def test_allows_operational_status_and_replays_body():
-    payload = {"status": "assembling", "tracking_number": "TRACK-1"}
+def test_allows_explicit_empty_status_for_legacy_clients():
+    payload = {"status": None, "tracking_number": "TRACK-2"}
     sent, forwarded = _run("/api/admin/orders/42", payload)
 
     assert sent[0]["status"] == 204
