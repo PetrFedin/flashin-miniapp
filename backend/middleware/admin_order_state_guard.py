@@ -4,17 +4,10 @@ from starlette.responses import JSONResponse
 
 
 class AdminOrderStateGuardMiddleware:
-    """Prevent generic admin edits from bypassing payment, refund, and safe cancellation workflows."""
+    """Prevent generic admin edits from bypassing dedicated order workflows."""
 
     _MAX_BODY_BYTES = 64 * 1024
-    _PROVIDER_OWNED_STATUSES = {
-        "payment_created",
-        "paid",
-        "payment_review_required",
-        "refund_requested",
-        "refunded",
-        "cancelled",
-    }
+    _MANAGED_FIELDS = frozenset({"status", "delivery_status", "tracking_number"})
 
     def __init__(self, app):
         self.app = app
@@ -48,17 +41,24 @@ class AdminOrderStateGuardMiddleware:
             await self.app(scope, self._replay(raw_body), send)
             return
 
-        requested_status = ""
+        requested_fields: list[str] = []
         if isinstance(payload, dict):
-            requested_status = str(payload.get("status") or "").strip().lower()
+            for field in sorted(self._MANAGED_FIELDS):
+                if field not in payload:
+                    continue
+                value = payload.get(field)
+                if value is not None and str(value).strip():
+                    requested_fields.append(field)
 
-        if requested_status in self._PROVIDER_OWNED_STATUSES:
+        if requested_fields:
             response = JSONResponse(
                 status_code=409,
                 content={
                     "detail": (
-                        f"Status {requested_status} is controlled by a dedicated payment, refund, or cancellation workflow"
-                    )
+                        "Order status, delivery status, and tracking are controlled by "
+                        "dedicated payment, fulfillment, shipment, refund, or safe-cancellation workflows"
+                    ),
+                    "managed_fields": requested_fields,
                 },
             )
             await response(scope, receive, send)
