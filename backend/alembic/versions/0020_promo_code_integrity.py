@@ -15,9 +15,15 @@ depends_on = None
 
 
 def upgrade():
+    # Build the complete final mapping before touching the unique code column.
+    # The lowercase temporary namespace cannot collide with final normalized
+    # codes because every final code is uppercase.
     op.execute(
         sa.text(
             """
+            CREATE TEMP TABLE promo_code_normalization_map
+            ON COMMIT DROP
+            AS
             WITH normalized AS (
                 SELECT
                     id,
@@ -28,14 +34,72 @@ def upgrade():
                     ) AS duplicate_rank
                 FROM promo_codes
             )
-            UPDATE promo_codes AS promo
-            SET code = CASE
-                WHEN normalized.normalized_code = '' OR normalized.duplicate_rank > 1
-                    THEN '__MIGRATED_PROMO_' || promo.id::text || '_' || substr(md5(promo.id::text), 1, 8)
-                ELSE normalized.normalized_code
-            END
+            SELECT
+                id,
+                normalized_code,
+                duplicate_rank,
+                NULL::varchar(64) AS final_code
             FROM normalized
-            WHERE promo.id = normalized.id
+            """
+        )
+    )
+    op.execute(
+        sa.text(
+            """
+            UPDATE promo_codes
+            SET code = '__promo_tmp_' || id::text || '_' || substr(md5(id::text), 1, 12)
+            """
+        )
+    )
+    op.execute(
+        sa.text(
+            """
+            DO $$
+            DECLARE
+                promo_row record;
+                base_candidate text;
+                candidate text;
+                collision_counter integer;
+            BEGIN
+                FOR promo_row IN
+                    SELECT id, normalized_code, duplicate_rank
+                    FROM promo_code_normalization_map
+                    ORDER BY id
+                LOOP
+                    IF promo_row.normalized_code <> '' AND promo_row.duplicate_rank = 1 THEN
+                        base_candidate := promo_row.normalized_code;
+                    ELSE
+                        base_candidate := '__MIGRATED_PROMO_' || promo_row.id::text || '_'
+                            || substr(md5(promo_row.id::text || promo_row.normalized_code), 1, 8);
+                    END IF;
+
+                    candidate := left(base_candidate, 64);
+                    collision_counter := 0;
+                    WHILE EXISTS (
+                        SELECT 1
+                        FROM promo_code_normalization_map
+                        WHERE final_code = candidate
+                    ) LOOP
+                        collision_counter := collision_counter + 1;
+                        candidate := left(base_candidate, 54) || '_'
+                            || substr(md5(base_candidate || collision_counter::text), 1, 8);
+                    END LOOP;
+
+                    UPDATE promo_code_normalization_map
+                    SET final_code = candidate
+                    WHERE id = promo_row.id;
+                END LOOP;
+            END $$
+            """
+        )
+    )
+    op.execute(
+        sa.text(
+            """
+            UPDATE promo_codes AS promo
+            SET code = mapping.final_code
+            FROM promo_code_normalization_map AS mapping
+            WHERE promo.id = mapping.id
             """
         )
     )
