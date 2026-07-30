@@ -7,6 +7,14 @@ from sqlalchemy.orm import Session
 
 from ..models import Order, Payment
 from ..payment_attempt_models import PaymentCreationAttempt
+from ..payment_attempt_statuses import (
+    ABANDONED_PAYMENT_ATTEMPT_STATUS,
+    COMPLETED_PAYMENT_ATTEMPT_STATUS,
+    CREATING_PAYMENT_ATTEMPT_STATUS,
+    RETRYABLE_PAYMENT_ATTEMPT_STATUSES,
+    RETRY_REQUIRED_PAYMENT_ATTEMPT_STATUS,
+    REVIEW_REQUIRED_PAYMENT_ATTEMPT_STATUS,
+)
 from .event_dispatcher import emit_event
 from .outbox import enqueue_webhook
 
@@ -18,12 +26,12 @@ _SETTLED_ORDER_PAYMENT_STATUSES = {
     "paid",
     "paid_review_required",
     "refund_processing",
+    "refund_retry_required",
     "refund_pending",
     "refund_review_required",
     "partially_refunded",
     "refunded",
 }
-_ACTIVE_ATTEMPT_STATUSES = {"creating", "retry_required"}
 _DEFAULT_LEASE_SECONDS = 120
 
 
@@ -110,7 +118,11 @@ def begin_payment_creation(
         .first()
     )
 
-    if latest_attempt and latest_attempt.status == "completed" and latest_attempt.provider_payment_id:
+    if (
+        latest_attempt
+        and latest_attempt.status == COMPLETED_PAYMENT_ATTEMPT_STATUS
+        and latest_attempt.provider_payment_id
+    ):
         completed_payment = (
             db.query(Payment)
             .filter(
@@ -128,11 +140,17 @@ def begin_payment_creation(
             )
         raise HTTPException(status_code=409, detail="Completed payment attempt requires reconciliation")
 
+    if latest_attempt and latest_attempt.status == REVIEW_REQUIRED_PAYMENT_ATTEMPT_STATUS:
+        raise HTTPException(
+            status_code=409,
+            detail="Payment creation attempt requires manual review before retry",
+        )
+
     now = datetime.utcnow()
     lease_expires_at = now + timedelta(seconds=lease_seconds)
-    if latest_attempt and latest_attempt.status in _ACTIVE_ATTEMPT_STATUSES:
+    if latest_attempt and latest_attempt.status in RETRYABLE_PAYMENT_ATTEMPT_STATUSES:
         if (
-            latest_attempt.status == "creating"
+            latest_attempt.status == CREATING_PAYMENT_ATTEMPT_STATUS
             and latest_attempt.lease_expires_at
             and latest_attempt.lease_expires_at > now
         ):
@@ -143,7 +161,7 @@ def begin_payment_creation(
                 headers={"Retry-After": str(retry_after)},
             )
         attempt = latest_attempt
-        attempt.status = "creating"
+        attempt.status = CREATING_PAYMENT_ATTEMPT_STATUS
         attempt.lease_expires_at = lease_expires_at
         attempt.last_error = ""
         attempt.updated_at = now
@@ -161,7 +179,7 @@ def begin_payment_creation(
             order_id=order.id,
             provider=_PROVIDER,
             attempt_number=last_attempt_number + 1,
-            status="creating",
+            status=CREATING_PAYMENT_ATTEMPT_STATUS,
             lease_expires_at=lease_expires_at,
             updated_at=now,
         )
@@ -176,6 +194,11 @@ def begin_payment_creation(
     )
 
 
+def _attempt_error(error: str, fallback: str) -> str:
+    normalized = str(error or fallback).strip()[:2000]
+    return normalized or fallback
+
+
 def mark_payment_creation_retry_required(
     db: Session,
     attempt_id: int,
@@ -187,11 +210,37 @@ def mark_payment_creation_retry_required(
         .with_for_update()
         .first()
     )
-    if not attempt or attempt.status == "completed":
+    if not attempt or attempt.status in {
+        COMPLETED_PAYMENT_ATTEMPT_STATUS,
+        ABANDONED_PAYMENT_ATTEMPT_STATUS,
+        REVIEW_REQUIRED_PAYMENT_ATTEMPT_STATUS,
+    }:
         return
-    attempt.status = "retry_required"
+    attempt.status = RETRY_REQUIRED_PAYMENT_ATTEMPT_STATUS
     attempt.lease_expires_at = None
-    attempt.last_error = (error or "provider_request_failed").strip()[:2000]
+    attempt.last_error = _attempt_error(error, "provider_request_failed")
+    attempt.updated_at = datetime.utcnow()
+
+
+def mark_payment_creation_review_required(
+    db: Session,
+    attempt_id: int,
+    error: str,
+) -> None:
+    attempt = (
+        db.query(PaymentCreationAttempt)
+        .filter(PaymentCreationAttempt.id == attempt_id)
+        .with_for_update()
+        .first()
+    )
+    if not attempt or attempt.status in {
+        COMPLETED_PAYMENT_ATTEMPT_STATUS,
+        ABANDONED_PAYMENT_ATTEMPT_STATUS,
+    }:
+        return
+    attempt.status = REVIEW_REQUIRED_PAYMENT_ATTEMPT_STATUS
+    attempt.lease_expires_at = None
+    attempt.last_error = _attempt_error(error, "provider_review_required")
     attempt.updated_at = datetime.utcnow()
 
 
@@ -226,7 +275,7 @@ def finalize_payment_creation(
     if not attempt:
         raise HTTPException(status_code=409, detail="Payment creation attempt is missing")
 
-    if attempt.status == "completed" and attempt.provider_payment_id:
+    if attempt.status == COMPLETED_PAYMENT_ATTEMPT_STATUS and attempt.provider_payment_id:
         existing = (
             db.query(Payment)
             .filter(
@@ -238,6 +287,11 @@ def finalize_payment_creation(
         if existing:
             return _payment_for_output(db, existing.id)
         raise HTTPException(status_code=409, detail="Completed payment attempt requires reconciliation")
+    if attempt.status in {
+        REVIEW_REQUIRED_PAYMENT_ATTEMPT_STATUS,
+        ABANDONED_PAYMENT_ATTEMPT_STATUS,
+    }:
+        raise HTTPException(status_code=409, detail="Payment creation attempt cannot be finalized automatically")
 
     order = (
         db.query(Order)
@@ -271,7 +325,7 @@ def finalize_payment_creation(
         db.add(payment)
         db.flush()
 
-    attempt.status = "completed"
+    attempt.status = COMPLETED_PAYMENT_ATTEMPT_STATUS
     attempt.provider_payment_id = provider_payment_id
     attempt.lease_expires_at = None
     attempt.last_error = ""
