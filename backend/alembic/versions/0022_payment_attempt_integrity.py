@@ -27,6 +27,17 @@ def upgrade():
     valid_statuses = _sql_values(_VALID_STATUSES)
     error_statuses = _sql_values(_ERROR_STATUSES)
 
+    # Move attempt numbers into a globally unique temporary namespace before
+    # normalizing providers. This prevents the existing composite unique
+    # constraint from failing when legacy providers differ only by case/space.
+    op.execute(
+        sa.text(
+            """
+            UPDATE payment_creation_attempts
+            SET attempt_number = -id
+            """
+        )
+    )
     op.execute(
         sa.text(
             """
@@ -56,7 +67,6 @@ def upgrade():
             SET attempt_number = renumbered.normalized_number
             FROM renumbered
             WHERE attempt.id = renumbered.id
-              AND attempt.attempt_number <> renumbered.normalized_number
             """
         )
     )
