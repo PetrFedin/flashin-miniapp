@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -24,7 +24,7 @@ class PaymentCreationAttempt(Base):
             name="ck_payment_creation_attempts_provider_normalized",
         ),
         CheckConstraint(
-            "status IN ('completed', 'creating', 'retry_required', 'review_required')",
+            "status IN ('abandoned', 'completed', 'creating', 'retry_required', 'review_required')",
             name="ck_payment_creation_attempts_status_valid",
         ),
         CheckConstraint(
@@ -40,8 +40,16 @@ class PaymentCreationAttempt(Base):
             name="ck_payment_creation_attempts_completed_provider_id_required",
         ),
         CheckConstraint(
-            "status NOT IN ('retry_required', 'review_required') OR length(trim(last_error)) > 0",
+            "status NOT IN ('abandoned', 'retry_required', 'review_required') OR length(trim(last_error)) > 0",
             name="ck_payment_creation_attempts_failure_error_required",
+        ),
+        Index(
+            "uq_payment_creation_attempts_one_open",
+            "order_id",
+            "provider",
+            unique=True,
+            postgresql_where=text("status IN ('creating', 'retry_required', 'review_required')"),
+            sqlite_where=text("status IN ('creating', 'retry_required', 'review_required')"),
         ),
     )
 
