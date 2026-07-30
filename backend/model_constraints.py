@@ -31,6 +31,12 @@ from .models import (
     WebhookOutbox,
 )
 from .money_model_types import apply_money_model_types
+from .return_statuses import (
+    AMOUNT_REQUIRED_RETURN_STATUS_SQL,
+    OPEN_RETURN_STATUS_SQL,
+    PROVIDER_LINKED_RETURN_STATUS_SQL,
+    VALID_RETURN_STATUS_SQL,
+)
 from .services.pricing import validate_promo_definition
 
 
@@ -146,6 +152,39 @@ def apply_model_constraints() -> None:
 
     _check(Payment.__table__, "ck_payments_amount_positive", "amount > 0")
     _check(ReturnRequest.__table__, "ck_return_requests_refund_nonnegative", "refund_amount >= 0")
+    _check(
+        ReturnRequest.__table__,
+        "ck_return_requests_reason_length",
+        "length(trim(reason)) BETWEEN 5 AND 2000",
+    )
+    _check(
+        ReturnRequest.__table__,
+        "ck_return_requests_reason_normalized",
+        "reason = trim(reason)",
+    )
+    _check(
+        ReturnRequest.__table__,
+        "ck_return_requests_status_valid",
+        f"status IN ({VALID_RETURN_STATUS_SQL})",
+    )
+    _check(
+        ReturnRequest.__table__,
+        "ck_return_requests_amount_required",
+        f"status NOT IN ({AMOUNT_REQUIRED_RETURN_STATUS_SQL}) OR refund_amount > 0",
+    )
+    _check(
+        ReturnRequest.__table__,
+        "ck_return_requests_provider_id_normalized",
+        "provider_refund_id = trim(provider_refund_id)",
+    )
+    _check(
+        ReturnRequest.__table__,
+        "ck_return_requests_provider_id_required",
+        (
+            f"status NOT IN ({PROVIDER_LINKED_RETURN_STATUS_SQL}) "
+            "OR length(provider_refund_id) > 0"
+        ),
+    )
     _check(CrmProfile.__table__, "ck_crm_profiles_loyalty_nonnegative", "loyalty_points >= 0")
     _check(LoyaltyRedemptionHold.__table__, "ck_loyalty_holds_points_positive", "points > 0")
     _check(WebhookOutbox.__table__, "ck_webhook_outbox_attempts_nonnegative", "attempts >= 0")
@@ -221,6 +260,12 @@ def apply_model_constraints() -> None:
         "uq_return_requests_provider_refund_id",
         [ReturnRequest.__table__.c.provider_refund_id],
         "provider_refund_id <> ''",
+    )
+    _partial_unique_index(
+        ReturnRequest.__table__,
+        "uq_return_requests_one_open_per_order",
+        [ReturnRequest.__table__.c.order_id],
+        f"status IN ({OPEN_RETURN_STATUS_SQL})",
     )
     _partial_unique_index(
         LoyaltyTransaction.__table__,
