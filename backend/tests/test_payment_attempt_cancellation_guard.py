@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta
+
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import create_engine
@@ -30,12 +32,14 @@ def test_direct_cancellation_is_blocked_after_payment_attempt_is_claimed():
     )
     db.add(order)
     db.flush()
+    active_lease = datetime.utcnow() + timedelta(minutes=2)
     db.add(
         PaymentCreationAttempt(
             order_id=order.id,
             provider="yookassa",
             attempt_number=1,
             status="creating",
+            lease_expires_at=active_lease,
         )
     )
     db.commit()
