@@ -107,6 +107,7 @@ export function installAdminActionCoordinator() {
   const inFlight = new Map();
   let sequence = 0;
   let sessionExpired = false;
+  let lastAction = null;
 
   function expireSession(status, message) {
     if (sessionExpired) return;
@@ -118,7 +119,8 @@ export function installAdminActionCoordinator() {
     window.setTimeout(() => window.location.reload(), 0);
   }
 
-  function snapshot(last = null) {
+  function snapshot(nextLast) {
+    if (nextLast !== undefined) lastAction = nextLast;
     const active = Array.from(inFlight.values()).map((item) => ({
       id: item.id,
       method: item.method,
@@ -129,7 +131,7 @@ export function installAdminActionCoordinator() {
     dispatchAction({
       active,
       activeCount: active.length,
-      last,
+      last: lastAction,
     });
   }
 
@@ -257,6 +259,7 @@ export function installAdminActionCoordinator() {
     restore() {
       window.fetch = delegatedFetch;
       inFlight.clear();
+      lastAction = null;
       window.__flashinAdminActionStatus = null;
     },
   });
