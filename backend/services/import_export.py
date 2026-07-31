@@ -15,12 +15,7 @@ _DANGEROUS_FORMULA_PREFIXES = ("=", "+", "-", "@")
 
 
 def _safe_csv_text(value: object) -> str:
-    """Neutralize spreadsheet formulas while preserving the exported text.
-
-    Spreadsheet applications can evaluate cells that begin with =, +, -, @,
-    tab or carriage return. Prefixing an apostrophe forces a text cell and is
-    safer than returning raw administrator-controlled catalog values.
-    """
+    """Neutralize spreadsheet formulas while preserving the exported text."""
 
     text = "" if value is None else str(value)
     probe = text.lstrip(" \t\r\n")
@@ -126,7 +121,9 @@ def export_filename(kind: str, *, now: datetime | None = None) -> str:
         current = current.replace(tzinfo=UTC)
     else:
         current = current.astimezone(UTC)
-    safe_kind = "".join(character for character in kind.lower() if character.isalnum() or character == "-")
+    safe_kind = "".join(
+        character for character in kind.lower() if character.isalnum() or character == "-"
+    )
     if not safe_kind:
         raise ValueError("Export filename kind is invalid")
-    return f"{safe_kind}-{current.strftime('%Y%m%dT%H%M%SZ')}.csv"
+    return f"{safe_kind}-{current.strftime('%Y%m%dT%H%M%S%fZ')}.csv"
