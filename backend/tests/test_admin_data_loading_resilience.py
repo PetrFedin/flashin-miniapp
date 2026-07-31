@@ -55,6 +55,9 @@ def test_known_get_wave_is_parallel_and_mutations_bypass_coordinator():
     source = _read("admin-data-coordinator.js")
 
     assert "for (const [path, definition] of Object.entries(DATASETS))" in source
+    assert "const request = originalFetch" in source
+    assert "`${API}${path}`" in source
+    assert 'cache: "no-store"' in source
     assert "requests.set(path, request);" in source
     assert "await originalFetch" not in source
     assert 'requestMethod(input, init) !== "GET"' in source
