@@ -1,8 +1,10 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.routing import APIRoute
 from sqlalchemy.orm import Session, joinedload, selectinload
 
+from .admin import router as admin_router
 from ..database import get_db
 from ..models import (
     Customer,
@@ -27,6 +29,7 @@ _WORKFLOW_BOUNDARY_MESSAGE = (
     "Order status, delivery status, and tracking are controlled by dedicated "
     "payment, fulfillment, shipment, refund, or safe-cancellation workflows"
 )
+_ADMIN_ORDER_PATCH_PATH = "/admin/orders/{order_id}"
 
 
 def _load_order(db: Session, order_id: int, customer_id: int | None = None) -> Order | None:
@@ -102,18 +105,13 @@ def _cancel_before_payment(db: Session, order: Order) -> None:
     queue_order_status(db, order)
 
 
-@router.patch("/admin/orders/{order_id}", response_model=OrderOut)
 def reject_generic_admin_order_update(
     order_id: int,
     payload: OrderStatusUpdate,
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    """Defense in depth for deployments where middleware is absent or reordered.
-
-    This router is mounted before the legacy admin router, so the generic PATCH
-    can never own payment, fulfillment, shipment, refund, or cancellation state.
-    """
+    """Reject generic mutations owned by dedicated order workflows."""
     require_permission(db, admin, "orders.write")
     order_exists = db.query(Order.id).filter(Order.id == order_id).first() is not None
     db.rollback()
@@ -146,6 +144,45 @@ def reject_generic_admin_order_update(
             "managed_fields": [],
         },
     )
+
+
+def _replace_legacy_admin_order_patch() -> None:
+    matching = [
+        route
+        for route in admin_router.routes
+        if isinstance(route, APIRoute)
+        and route.path == _ADMIN_ORDER_PATCH_PATH
+        and "PATCH" in route.methods
+    ]
+    guarded = [
+        route
+        for route in matching
+        if route.endpoint is reject_generic_admin_order_update
+    ]
+    legacy = [
+        route
+        for route in matching
+        if route.endpoint is not reject_generic_admin_order_update
+    ]
+
+    if len(guarded) == 1 and not legacy:
+        return
+    if guarded or len(legacy) != 1:
+        raise RuntimeError(
+            "Expected exactly one legacy generic admin order PATCH route"
+        )
+
+    admin_router.routes.remove(legacy[0])
+    admin_router.add_api_route(
+        "/orders/{order_id}",
+        reject_generic_admin_order_update,
+        methods=["PATCH"],
+        response_model=OrderOut,
+        name="reject_generic_admin_order_update",
+    )
+
+
+_replace_legacy_admin_order_patch()
 
 
 @router.post("/orders/{order_id}/cancel-safe", response_model=OrderOut)
