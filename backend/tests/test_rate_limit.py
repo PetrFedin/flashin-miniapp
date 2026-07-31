@@ -49,10 +49,10 @@ def test_invalid_forwarded_chain_falls_back_to_direct_ip():
     assert _client_ip(request, trust_proxy_headers=True) == "10.0.0.1"
 
 
-def test_cleanup_removes_expired_buckets():
+def test_cleanup_removes_only_buckets_outside_the_full_window():
     middleware = object.__new__(InMemoryRateLimitMiddleware)
     middleware.hits = {
-        "expired": deque([1.0]),
+        "expired": deque([0.0]),
         "active": deque([59.5]),
     }
 
