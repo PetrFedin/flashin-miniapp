@@ -4,6 +4,7 @@ from . import catalog_integrity as catalog_integrity  # noqa: F401
 from . import privacy_integrity as privacy_integrity  # noqa: F401
 from . import media_integrity as media_integrity  # noqa: F401
 from . import queue_integrity as queue_integrity  # noqa: F401
+from . import queue_indexes as queue_indexes  # noqa: F401
 from . import job_models as job_models  # noqa: F401
 from . import payment_record_constraints as payment_record_constraints  # noqa: F401
 from . import payment_event_constraints as payment_event_constraints  # noqa: F401
