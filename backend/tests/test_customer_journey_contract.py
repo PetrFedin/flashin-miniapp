@@ -6,7 +6,7 @@ from backend.main import app
 
 
 ROOT = Path(__file__).resolve().parents[2]
-FRONTEND_APP = ROOT / "frontend" / "src" / "App.js"
+FRONTEND_APP = ROOT / "frontend" / "src" / "App.jsx"
 FRONTEND_API = ROOT / "frontend" / "src" / "api.js"
 TELEGRAM_HOOK = ROOT / "frontend" / "src" / "hooks" / "useTelegram.js"
 
