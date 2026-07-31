@@ -54,7 +54,9 @@ jobs:
       - name: Compile Python sources
         run: python -m compileall -q backend bot scripts
       - name: Audit critical integration links
-        run: python scripts/integration_integrity.py
+        run: |
+          python scripts/integration_integrity.py
+          python scripts/runtime_entrypoint_integrity.py
       - name: Validate shell scripts
         run: find scripts -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
       - name: Require one Alembic head
