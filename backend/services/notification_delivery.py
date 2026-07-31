@@ -170,7 +170,8 @@ def complete_notification_delivery(
         notification.sent_at = current
         notification.error = ""
         state.next_attempt_at = None
-        state.last_error = ""
+        if state.attempts == 0:
+            state.last_error = ""
         return "sent"
 
     decision = classify_notification_error(error)
