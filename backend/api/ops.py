@@ -1,8 +1,10 @@
-from datetime import datetime, timedelta
+from datetime import timedelta
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
+
 from ..config import get_settings
-from ..database import get_db
+from ..database import get_db, utcnow_naive
 from ..models import Cart, Notification, ProductVariant
 from ..schemas import AbandonedCartOut, InventorySnapshotOut
 from ..security import get_current_admin
@@ -14,7 +16,7 @@ router = APIRouter(prefix="/ops", tags=["ops"])
 @router.get("/abandoned-carts", response_model=list[AbandonedCartOut])
 def abandoned_carts(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
     settings = get_settings()
-    cutoff = datetime.utcnow() - timedelta(minutes=settings.abandoned_cart_minutes)
+    cutoff = utcnow_naive() - timedelta(minutes=settings.abandoned_cart_minutes)
     carts = (
         db.query(Cart)
         .filter(Cart.status == "active", Cart.updated_at <= cutoff, Cart.abandoned_notified_at == None)
@@ -36,7 +38,8 @@ def abandoned_carts(admin=Depends(get_current_admin), db: Session = Depends(get_
 @router.post("/abandoned-carts/queue-notifications")
 def queue_abandoned_cart_notifications(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
     settings = get_settings()
-    cutoff = datetime.utcnow() - timedelta(minutes=settings.abandoned_cart_minutes)
+    now = utcnow_naive()
+    cutoff = now - timedelta(minutes=settings.abandoned_cart_minutes)
     carts = (
         db.query(Cart)
         .filter(Cart.status == "active", Cart.updated_at <= cutoff, Cart.abandoned_notified_at == None)
@@ -51,7 +54,7 @@ def queue_abandoned_cart_notifications(admin=Depends(get_current_admin), db: Ses
             message="🛒 Вы оставили вещи в корзине FLASHIN. Вернитесь, пока размер ещё в наличии.",
             status="pending",
         ))
-        cart.abandoned_notified_at = datetime.utcnow()
+        cart.abandoned_notified_at = now
         count += 1
     db.commit()
     return {"ok": True, "queued": count}

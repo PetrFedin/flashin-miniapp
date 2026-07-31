@@ -15,13 +15,9 @@ from backend.models import Order
 ROOT = Path(__file__).resolve().parents[2]
 LEGACY_UTCNOW_BASELINE = {
     "backend/api/admin.py": 1,
-    "backend/api/admin_auth.py": 1,
-    "backend/api/ops.py": 3,
     "backend/api/orders.py": 1,
-    "backend/api/support.py": 1,
     "backend/jobs/campaign_jobs.py": 1,
     "backend/models.py": 54,
-    "backend/services/admin_security.py": 2,
     "backend/services/campaigns.py": 1,
     "backend/services/crm.py": 1,
     "backend/services/delivery_providers.py": 1,

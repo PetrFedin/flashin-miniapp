@@ -6,13 +6,14 @@ import ipaddress
 import secrets
 import struct
 import time
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
+from ..database import utcnow_naive
 from ..models import (
     AdminIpAllowlist,
     AdminLoginEvent,
@@ -122,7 +123,7 @@ def revoke_admin_sessions(db: Session, admin_id: int) -> int:
         .with_for_update()
         .all()
     )
-    revoked_at = datetime.utcnow()
+    revoked_at = utcnow_naive()
     for row in rows:
         row.revoked = True
         row.revoked_at = revoked_at
@@ -130,7 +131,7 @@ def revoke_admin_sessions(db: Session, admin_id: int) -> int:
 
 
 def create_password_reset(db: Session, admin: AdminUser) -> str:
-    now = datetime.utcnow()
+    now = utcnow_naive()
     active = (
         db.query(AdminPasswordReset)
         .filter(
