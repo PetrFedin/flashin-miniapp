@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
+from ..database import utcnow_naive
 from ..models import FulfillmentTask, FulfillmentTaskItem, Order, SlaEvent
 from .notifications import queue_order_status
 
@@ -41,7 +42,7 @@ def ensure_fulfillment_task(db: Session, order: Order) -> FulfillmentTask:
         SlaEvent(
             order_id=order.id,
             event_type="paid_to_assembling",
-            due_at=datetime.utcnow()
+            due_at=utcnow_naive()
             + timedelta(minutes=settings.order_paid_to_assembling_sla_minutes),
             status="open",
         )
@@ -122,7 +123,7 @@ def update_fulfillment_status(
     if order.status in {"cancelled", "refunded", "refund_requested"}:
         raise ValueError("Order cannot be fulfilled in its current state")
 
-    now = datetime.utcnow()
+    now = utcnow_naive()
     task.status = normalized_status
     if comment:
         task.comment = comment.strip()[:2000]
