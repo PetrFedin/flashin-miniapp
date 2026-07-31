@@ -64,11 +64,11 @@ def _terminal_run(
 
 def test_ops_router_mounts_protected_job_routes():
     paths = {route.path for route in ops.router.routes}
-    assert "/jobs/definitions" in paths
-    assert "/jobs/runs" in paths
-    assert "/jobs/runs/{run_id}" in paths
-    assert "/jobs/{job_name}/run" in paths
-    assert "/jobs/runs/{run_id}/retry" in paths
+    assert "/ops/jobs/definitions" in paths
+    assert "/ops/jobs/runs" in paths
+    assert "/ops/jobs/runs/{run_id}" in paths
+    assert "/ops/jobs/{job_name}/run" in paths
+    assert "/ops/jobs/runs/{run_id}/retry" in paths
 
 
 def test_registry_is_fixed_unique_and_matches_worker_job_names():
