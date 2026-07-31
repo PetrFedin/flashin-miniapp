@@ -1,9 +1,14 @@
+import hashlib
+import json
+import re
 from datetime import datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
+from ..checkout_models import CheckoutAttempt
 from ..config import get_settings
 from ..database import get_db
 from ..models import (
@@ -25,6 +30,7 @@ from ..services.promos import calculate_discount
 router = APIRouter(prefix="/orders", tags=["orders"])
 
 _MONEY_STEP = Decimal("0.01")
+_IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{16,128}$")
 ORDER_STATUSES = frozenset(
     {
         "created",
@@ -61,6 +67,93 @@ def _clean_required(value: str, field: str, max_length: int) -> str:
     if len(cleaned) > max_length:
         raise HTTPException(status_code=400, detail=f"{field} is too long")
     return cleaned
+
+
+def _normalize_idempotency_key(value: str | None) -> str:
+    key = str(value or "").strip()
+    if not key:
+        raise HTTPException(status_code=400, detail="Idempotency-Key header is required")
+    if not _IDEMPOTENCY_KEY_PATTERN.fullmatch(key):
+        raise HTTPException(
+            status_code=400,
+            detail="Idempotency-Key must contain 16-128 safe characters",
+        )
+    return key
+
+
+def _checkout_request_fingerprint(
+    *,
+    name: str,
+    phone: str,
+    delivery_type: str,
+    address: str,
+    comment: str,
+) -> str:
+    canonical = json.dumps(
+        {
+            "address": address,
+            "comment": comment,
+            "delivery_type": delivery_type,
+            "name": name,
+            "phone": phone,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _load_order(db: Session, order_id: int, customer_id: int) -> Order | None:
+    return (
+        db.query(Order)
+        .options(joinedload(Order.items))
+        .filter(Order.id == order_id, Order.customer_id == customer_id)
+        .first()
+    )
+
+
+def _lock_checkout_customer(db: Session, customer_id: int) -> Customer:
+    customer = (
+        db.query(Customer)
+        .filter(Customer.id == customer_id)
+        .with_for_update()
+        .first()
+    )
+    if not customer:
+        raise HTTPException(status_code=401, detail="Customer not found")
+    return customer
+
+
+def _load_existing_checkout(
+    db: Session,
+    customer_id: int,
+    idempotency_key: str,
+    request_fingerprint: str,
+) -> Order | None:
+    attempt = (
+        db.query(CheckoutAttempt)
+        .filter(
+            CheckoutAttempt.customer_id == customer_id,
+            CheckoutAttempt.idempotency_key == idempotency_key,
+        )
+        .with_for_update()
+        .first()
+    )
+    if not attempt:
+        return None
+    if attempt.request_fingerprint != request_fingerprint:
+        raise HTTPException(
+            status_code=409,
+            detail="Idempotency-Key was already used with different checkout data",
+        )
+    if not attempt.order_id:
+        raise HTTPException(status_code=409, detail="Checkout request is still being processed")
+
+    order = _load_order(db, attempt.order_id, customer_id)
+    if not order:
+        raise HTTPException(status_code=409, detail="Checkout attempt has a broken order link")
+    return order
 
 
 def _load_locked_active_cart(db: Session, customer_id: int) -> Cart | None:
@@ -191,27 +284,56 @@ def _lock_and_validate_loyalty(
 @router.post("/checkout", response_model=OrderOut)
 def checkout(
     payload: CheckoutIn,
+    idempotency_key_header: str = Header(alias="Idempotency-Key"),
     customer: Customer = Depends(get_current_customer),
     db: Session = Depends(get_db),
 ):
+    idempotency_key = _normalize_idempotency_key(idempotency_key_header)
+    name = _clean_required(payload.name, "Name", 255)
+    phone = _clean_required(payload.phone, "Phone", 64)
+    delivery_type = _clean_required(payload.delivery_type, "Delivery type", 64).lower()
+    address = (payload.address or "").strip()
+    comment = (payload.comment or "").strip()[:2000]
+    if delivery_type == "courier" and not address:
+        raise HTTPException(status_code=400, detail="Address is required for courier delivery")
+    if len(address) > 2000:
+        raise HTTPException(status_code=400, detail="Address is too long")
+
+    request_fingerprint = _checkout_request_fingerprint(
+        name=name,
+        phone=phone,
+        delivery_type=delivery_type,
+        address=address,
+        comment=comment,
+    )
+
     try:
+        locked_customer = _lock_checkout_customer(db, customer.id)
+        existing_order = _load_existing_checkout(
+            db,
+            customer.id,
+            idempotency_key,
+            request_fingerprint,
+        )
+        if existing_order:
+            return existing_order
+
         cart = _load_locked_active_cart(db, customer.id)
         if not cart:
             raise HTTPException(status_code=409, detail="No active cart available for checkout")
         _validate_cart_for_checkout(cart)
 
-        name = _clean_required(payload.name, "Name", 255)
-        phone = _clean_required(payload.phone, "Phone", 64)
-        delivery_type = _clean_required(payload.delivery_type, "Delivery type", 64).lower()
-        address = (payload.address or "").strip()
-        comment = (payload.comment or "").strip()[:2000]
-        if delivery_type == "courier" and not address:
-            raise HTTPException(status_code=400, detail="Address is required for courier delivery")
-        if len(address) > 2000:
-            raise HTTPException(status_code=400, detail="Address is too long")
+        attempt = CheckoutAttempt(
+            customer_id=customer.id,
+            cart_id=cart.id,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+        )
+        db.add(attempt)
+        db.flush()
 
-        customer.first_name = name
-        customer.phone = phone
+        locked_customer.first_name = name
+        locked_customer.phone = phone
 
         subtotal = sum(
             (_money(item.product.price, "product price") * item.quantity for item in cart.items),
@@ -261,6 +383,7 @@ def checkout(
         )
         db.add(order)
         db.flush()
+        attempt.order_id = order.id
 
         for cart_item in sorted(cart.items, key=lambda item: item.variant_id):
             variant = reserve_variant(db, cart_item.variant_id, cart_item.quantity)
@@ -286,16 +409,22 @@ def checkout(
     except HTTPException:
         db.rollback()
         raise
+    except IntegrityError as exc:
+        db.rollback()
+        existing_order = _load_existing_checkout(
+            db,
+            customer.id,
+            idempotency_key,
+            request_fingerprint,
+        )
+        if existing_order:
+            return existing_order
+        raise HTTPException(status_code=409, detail="Checkout request conflicts with an existing attempt") from exc
     except Exception:
         db.rollback()
         raise
 
-    return (
-        db.query(Order)
-        .options(joinedload(Order.items))
-        .filter(Order.id == order.id, Order.customer_id == customer.id)
-        .first()
-    )
+    return _load_order(db, order.id, customer.id)
 
 
 @router.get("", response_model=list[OrderOut])
@@ -311,12 +440,7 @@ def my_orders(customer: Customer = Depends(get_current_customer), db: Session = 
 
 @router.get("/{order_id}", response_model=OrderOut)
 def get_order(order_id: int, customer: Customer = Depends(get_current_customer), db: Session = Depends(get_db)):
-    order = (
-        db.query(Order)
-        .options(joinedload(Order.items))
-        .filter(Order.id == order_id, Order.customer_id == customer.id)
-        .first()
-    )
+    order = _load_order(db, order_id, customer.id)
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     return order
@@ -334,23 +458,13 @@ def cancel_order(order_id: int, customer: Customer = Depends(get_current_custome
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
         if order.status == "cancelled":
-            return (
-                db.query(Order)
-                .options(joinedload(Order.items))
-                .filter(Order.id == order.id)
-                .first()
-            )
+            return _load_order(db, order.id, customer.id)
         if order.payment_status in {"paid", "paid_review_required"}:
             raise HTTPException(status_code=409, detail="Paid order cannot be cancelled here; create refund")
         if order.status not in CANCELLABLE_ORDER_STATUSES:
             raise HTTPException(status_code=409, detail=f"Order in status {order.status} cannot be cancelled")
 
-        order_with_items = (
-            db.query(Order)
-            .options(joinedload(Order.items))
-            .filter(Order.id == order.id)
-            .first()
-        )
+        order_with_items = _load_order(db, order.id, customer.id)
         for item in sorted(order_with_items.items, key=lambda order_item: order_item.variant_id):
             release_variant(db, item.variant_id, item.quantity)
 
@@ -388,9 +502,4 @@ def cancel_order(order_id: int, customer: Customer = Depends(get_current_custome
         db.rollback()
         raise
 
-    return (
-        db.query(Order)
-        .options(joinedload(Order.items))
-        .filter(Order.id == order_id, Order.customer_id == customer.id)
-        .first()
-    )
+    return _load_order(db, order_id, customer.id)
