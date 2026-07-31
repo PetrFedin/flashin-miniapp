@@ -68,6 +68,12 @@ def build_scheduler() -> BlockingScheduler:
     moysklad_interval = max(5, min(settings.moysklad_sync_interval_minutes, 1440))
     scheduler = BlockingScheduler(
         timezone=UTC,
+        executors={
+            "default": {
+                "type": "threadpool",
+                "max_workers": 4,
+            }
+        },
         job_defaults={
             "coalesce": True,
             "max_instances": 1,
