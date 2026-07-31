@@ -1,10 +1,12 @@
 import io
+import os
 import warnings
 import uuid
 from pathlib import Path
 
 from fastapi import UploadFile
 from PIL import Image, ImageOps, UnidentifiedImageError
+from starlette.concurrency import run_in_threadpool
 
 from ..config import get_settings
 
@@ -46,14 +48,7 @@ def _sanitize_image(content: bytes, declared_content_type: str) -> tuple[bytes, 
     if declared_content_type not in ALLOWED_CONTENT_TYPES:
         raise ValueError("Only jpeg, png and webp images are allowed")
 
-    previous_limit = Image.MAX_IMAGE_PIXELS
-    Image.MAX_IMAGE_PIXELS = _MAX_IMAGE_PIXELS
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(io.BytesIO(content)) as source:
-                source.verify()
-
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             with Image.open(io.BytesIO(content)) as source:
@@ -69,8 +64,13 @@ def _sanitize_image(content: bytes, declared_content_type: str) -> tuple[bytes, 
                     raise ValueError("Image dimensions are too large")
                 if width * height > _MAX_IMAGE_PIXELS:
                     raise ValueError("Image has too many pixels")
+                source.verify()
 
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(content)) as source:
                 image = ImageOps.exif_transpose(source)
+                image.load()
                 if actual_format == "JPEG":
                     image = image.convert("RGB")
                 elif image.mode not in {"RGB", "RGBA"}:
@@ -99,15 +99,26 @@ def _sanitize_image(content: bytes, declared_content_type: str) -> tuple[bytes, 
         Image.DecompressionBombWarning,
     ) as exc:
         raise ValueError("Uploaded file is not a valid image") from exc
+
+
+def _atomic_write(target: Path, content: bytes) -> None:
+    temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temporary.open("xb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(target)
     finally:
-        Image.MAX_IMAGE_PIXELS = previous_limit
+        temporary.unlink(missing_ok=True)
 
 
-async def save_media(file: UploadFile) -> dict:
+def _persist_media(
+    sanitized: bytes,
+    content_type: str,
+    extension: str,
+) -> tuple[str, str]:
     settings = get_settings()
-    declared_content_type = (file.content_type or "").split(";", 1)[0].strip().lower()
-    content = await _read_limited(file)
-    sanitized, content_type, extension = _sanitize_image(content, declared_content_type)
     storage_key = f"{uuid.uuid4().hex}{extension}"
 
     if settings.media_storage in {"s3", "r2"}:
@@ -128,15 +139,32 @@ async def save_media(file: UploadFile) -> dict:
             ContentType=content_type,
             CacheControl="public, max-age=31536000, immutable",
         )
-        url = f"{settings.media_public_base_url.rstrip('/')}/{storage_key}"
     else:
         media_dir = Path(settings.media_local_dir).resolve()
         media_dir.mkdir(parents=True, exist_ok=True)
         target = (media_dir / storage_key).resolve()
         if target.parent != media_dir:
             raise ValueError("Invalid media storage path")
-        target.write_bytes(sanitized)
-        url = f"{settings.media_public_base_url.rstrip('/')}/{storage_key}"
+        _atomic_write(target, sanitized)
+
+    url = f"{settings.media_public_base_url.rstrip('/')}/{storage_key}"
+    return storage_key, url
+
+
+async def save_media(file: UploadFile) -> dict:
+    declared_content_type = (file.content_type or "").split(";", 1)[0].strip().lower()
+    content = await _read_limited(file)
+    sanitized, content_type, extension = await run_in_threadpool(
+        _sanitize_image,
+        content,
+        declared_content_type,
+    )
+    storage_key, url = await run_in_threadpool(
+        _persist_media,
+        sanitized,
+        content_type,
+        extension,
+    )
 
     return {
         "url": url,
