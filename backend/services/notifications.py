@@ -15,6 +15,24 @@ from ..notification_statuses import (
 )
 
 
+def _normalize_telegram_id(value: object) -> str | None:
+    """Compatibility wrapper for existing callers and focused safety tests."""
+
+    try:
+        return normalize_telegram_id(value)
+    except HTTPException:
+        return None
+
+
+def _normalize_message(value: object) -> str | None:
+    """Compatibility wrapper that safely truncates to Telegram's text limit."""
+
+    try:
+        return normalize_notification_message(value, truncate=True)
+    except HTTPException:
+        return None
+
+
 def _order_status_deduplication_key(order: Order) -> str:
     facts = "|".join(
         [
@@ -41,9 +59,11 @@ def queue_notification(
     caller's wider order/payment transaction.
     """
 
+    normalized_id = _normalize_telegram_id(telegram_id)
+    normalized_message = _normalize_message(message)
+    if not normalized_id or not normalized_message:
+        return False
     try:
-        normalized_id = normalize_telegram_id(telegram_id)
-        normalized_message = normalize_notification_message(message, truncate=True)
         normalized_key = normalize_notification_deduplication_key(deduplication_key)
     except HTTPException:
         return False
