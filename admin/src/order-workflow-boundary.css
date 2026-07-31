@@ -1,0 +1,48 @@
+.row.order[data-workflow-boundary] {
+  align-items: center;
+}
+
+.row.order .order-safe-cancel {
+  margin-left: auto;
+  padding: 7px 10px;
+  border-color: #d9b7b7;
+  color: #7c2020;
+  background: #fff4f4;
+  font-size: 12px;
+}
+
+.row.order .order-safe-cancel:hover:not(:disabled) {
+  border-color: #b77f7f;
+  background: #ffeaea;
+}
+
+.row.order .order-safe-cancel:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
+.row.order .order-workflow-message {
+  flex-basis: 100%;
+  padding-top: 6px;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.row.order .order-workflow-message--progress {
+  color: #765300;
+}
+
+.row.order .order-workflow-message--success {
+  color: #1f5e32;
+}
+
+.row.order .order-workflow-message--error {
+  color: #8b1717;
+}
+
+@media (max-width: 620px) {
+  .row.order .order-safe-cancel {
+    width: 100%;
+    margin-left: 0;
+  }
+}
