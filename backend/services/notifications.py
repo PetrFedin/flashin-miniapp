@@ -1,6 +1,7 @@
 from datetime import datetime
 from hashlib import sha256
 
+from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -44,7 +45,7 @@ def queue_notification(
         normalized_id = normalize_telegram_id(telegram_id)
         normalized_message = normalize_notification_message(message, truncate=True)
         normalized_key = normalize_notification_deduplication_key(deduplication_key)
-    except Exception:
+    except HTTPException:
         return False
 
     if normalized_key:
