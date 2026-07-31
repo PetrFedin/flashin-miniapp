@@ -1,12 +1,13 @@
-from datetime import datetime
 from sqlalchemy.orm import Session
+
+from ..database import utcnow_naive
 from ..models import Notification, SlaEvent
 
 
 def mark_overdue_sla(db: Session) -> int:
     rows = (
         db.query(SlaEvent)
-        .filter(SlaEvent.status == "open", SlaEvent.due_at < datetime.utcnow())
+        .filter(SlaEvent.status == "open", SlaEvent.due_at < utcnow_naive())
         .all()
     )
     count = 0

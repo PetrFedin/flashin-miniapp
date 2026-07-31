@@ -1,10 +1,8 @@
-from datetime import datetime
-
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..database import get_db
+from ..database import get_db, utcnow_naive
 from ..models import Notification
 from ..notification_models import NotificationDeliveryState
 from ..security import get_current_admin
@@ -75,7 +73,7 @@ def requeue_failed_notifications(
             .limit(limit)
             .all()
         )
-        reset_at = datetime.utcnow()
+        reset_at = utcnow_naive()
         requeued_ids: list[int] = []
         for notification in notifications:
             state = (

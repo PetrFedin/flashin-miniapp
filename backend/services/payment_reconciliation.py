@@ -1,5 +1,6 @@
-from datetime import datetime
 from sqlalchemy.orm import Session
+
+from ..database import utcnow_naive
 from ..models import Order, Payment, PaymentReconciliation
 
 
@@ -25,4 +26,4 @@ def create_reconciliation_row(db: Session, payment: Payment, provider_status: st
 def resolve_reconciliation(row: PaymentReconciliation, message: str = "") -> None:
     row.status = "resolved"
     row.message = message or row.message
-    row.resolved_at = datetime.utcnow()
+    row.resolved_at = utcnow_naive()

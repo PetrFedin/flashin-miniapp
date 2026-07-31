@@ -3,7 +3,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from ..database import get_db
+from ..database import get_db, utcnow_naive
 from ..models import WebhookOutbox
 from ..schemas import WebhookOutboxOut
 from ..security import get_current_admin
@@ -73,7 +73,7 @@ def retry_failed_outbox(
             .limit(limit)
             .all()
         )
-        now = datetime.utcnow()
+        now = utcnow_naive()
         retried_ids: list[int] = []
         skipped: list[dict] = []
         for row in rows:
@@ -132,7 +132,7 @@ def retry_outbox(
             "attempts": row.attempts,
             "last_error": row.last_error[:500],
         }
-        _reset_for_retry(row, datetime.utcnow())
+        _reset_for_retry(row, utcnow_naive())
         log_admin_action(
             db,
             admin,

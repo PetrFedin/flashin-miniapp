@@ -1,6 +1,8 @@
 import json
-from datetime import datetime
+
 from sqlalchemy.orm import Session
+
+from ..database import utcnow_naive
 from ..models import BusinessEvent
 from .outbox import enqueue_event_for_destinations
 
@@ -21,7 +23,7 @@ def process_event(db: Session, event: BusinessEvent) -> None:
     payload = json.loads(event.payload_json or "{}")
     enqueue_event_for_destinations(db, event.event_type, payload)
     event.status = "processed"
-    event.processed_at = datetime.utcnow()
+    event.processed_at = utcnow_naive()
 
 
 def process_pending_events(db: Session, limit: int = 100) -> int:

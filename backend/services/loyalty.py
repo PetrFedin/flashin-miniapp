@@ -1,12 +1,12 @@
 import math
 import random
 import string
-from datetime import datetime
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
+from ..database import utcnow_naive
 from ..models import (
     Cart,
     CrmProfile,
@@ -121,7 +121,7 @@ def redeem_points(db: Session, customer_id: int, cart: Cart, points: float) -> C
         cart.loyalty_points_to_redeem = 0
         if current_hold:
             current_hold.status = "released"
-            current_hold.released_at = datetime.utcnow()
+            current_hold.released_at = utcnow_naive()
         return cart
 
     profile = _locked_profile(db, customer_id)
@@ -217,7 +217,7 @@ def reward_referral_after_first_paid_order(db: Session, invited_customer_id: int
     add_points(db, referral.customer_id, referral.reward_points, "referral_reward", order_id)
     attribution.status = "rewarded"
     attribution.rewarded_order_id = order_id
-    attribution.rewarded_at = datetime.utcnow()
+    attribution.rewarded_at = utcnow_naive()
     referral.used_count += 1
 
 
@@ -241,7 +241,7 @@ def create_redemption_hold(
     if points_value <= 0:
         if hold:
             hold.status = "released"
-            hold.released_at = datetime.utcnow()
+            hold.released_at = utcnow_naive()
         return None
     if hold:
         hold.points = points_value
@@ -341,4 +341,4 @@ def refund_redeemed_points(db: Session, customer_id: int, order_id: int, points:
     add_points(db, customer_id, points_value, "loyalty_refund", order_id)
     if hold:
         hold.status = "refunded"
-        hold.released_at = datetime.utcnow()
+        hold.released_at = utcnow_naive()

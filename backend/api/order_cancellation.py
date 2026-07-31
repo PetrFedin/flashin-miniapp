@@ -1,9 +1,7 @@
-from datetime import datetime
-
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from ..database import get_db
+from ..database import get_db, utcnow_naive
 from ..models import (
     Customer,
     LoyaltyRedemptionHold,
@@ -79,7 +77,7 @@ def _cancel_before_payment(db: Session, order: Order) -> None:
     )
     for hold in holds:
         hold.status = "released"
-        hold.released_at = datetime.utcnow()
+        hold.released_at = utcnow_naive()
 
     order.status = "cancelled"
     order.payment_status = "cancelled"
