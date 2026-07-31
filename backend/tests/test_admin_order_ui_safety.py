@@ -20,7 +20,7 @@ def test_admin_ui_only_exposes_safe_pre_payment_cancellation():
     boundary = (ADMIN_SRC / "order-workflow-boundary.js").read_text(encoding="utf-8")
 
     assert 'status === "created" && paymentStatus === "pending"' in boundary
-    assert '`/api/admin/orders/${orderId}/cancel-safe`' in boundary
+    assert "/api/admin/orders/${orderId}/cancel-safe" in boundary
     assert 'method: "POST"' in boundary
     assert "window.confirm" in boundary
     assert "if (button.disabled) return;" in boundary
