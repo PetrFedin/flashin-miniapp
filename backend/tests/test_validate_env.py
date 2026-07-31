@@ -18,6 +18,7 @@ def _valid_production_env() -> dict[str, str]:
         "JWT_SECRET": "j" * 48,
         "ADMIN_EMAIL": "admin@flashin.store",
         "ADMIN_PASSWORD": "admin-password-2026",
+        "ADMIN_TOTP_ENCRYPTION_KEY": "t" * 48,
         "MINI_APP_URL": "https://mini.flashin.store",
         "API_PUBLIC_URL": "https://api.flashin.store",
         "ADMIN_URL": "https://admin.flashin.store",
@@ -34,6 +35,9 @@ def _valid_production_env() -> dict[str, str]:
         "MEILISEARCH_ENABLED": "true",
         "MEILISEARCH_MASTER_KEY": "meili-master-key",
         "MOYSKLAD_TOKEN": "moysklad-token",
+        "MOYSKLAD_SALE_PRICE_TYPE": "Розничная цена",
+        "MOYSKLAD_SIZE_ATTRIBUTE_NAMES": "Размер,Size",
+        "MOYSKLAD_COLOR_ATTRIBUTE_NAMES": "Цвет,Color",
         "MOYSKLAD_SYNC_INTERVAL_MINUTES": "30",
         "SCHEDULER_ENABLED": "true",
         "NOTIFICATION_BATCH_SIZE": "50",
@@ -102,3 +106,13 @@ def test_moysklad_interval_outside_safe_range_is_rejected(tmp_path):
 
     assert result.returncode == 1
     assert "MOYSKLAD_SYNC_INTERVAL_MINUTES must be between 5 and 1440" in result.stdout
+
+
+def test_missing_moysklad_sale_price_type_is_rejected(tmp_path):
+    values = _valid_production_env()
+    values["MOYSKLAD_SALE_PRICE_TYPE"] = ""
+
+    result = _run_validator(tmp_path, values)
+
+    assert result.returncode == 1
+    assert "MOYSKLAD_SALE_PRICE_TYPE" in result.stdout

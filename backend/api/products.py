@@ -6,8 +6,8 @@ from sqlalchemy.orm import Session, joinedload
 
 from ..config import get_settings
 from ..database import get_db
-from ..models import Product, ProductImage, ProductVariant
-from ..schemas import ProductCreate, ProductOut
+from ..models import Product
+from ..schemas import ProductOut
 
 router = APIRouter(prefix="/products", tags=["products"])
 settings = get_settings()
@@ -136,8 +136,8 @@ def _commerce_card(product: Product) -> dict:
             "requires_variant": bool(variants),
             "supports_promo_code": True,
             "supports_loyalty_points": True,
-            "supports_gift_order": True,
-            "supports_telegram_stars": True,
+            "supports_gift_order": False,
+            "supports_telegram_stars": False,
         },
         "telegram": {
             "mini_app_url": product_url,
@@ -193,42 +193,3 @@ def get_product(product_id: int, db: Session = Depends(get_db)):
 @router.get("/slug/{slug}", response_model=ProductOut)
 def get_product_by_slug(slug: str, db: Session = Depends(get_db)):
     return _load_active_product(db, slug=slug)
-
-
-@router.post("", response_model=ProductOut)
-def create_product(payload: ProductCreate, db: Session = Depends(get_db)):
-    # Keep public create only for local bootstrap; hide behind admin in production.
-    product = Product(
-        sku=payload.sku,
-        title=payload.title,
-        slug=payload.slug,
-        brand=payload.brand,
-        description=payload.description,
-        price=payload.price,
-        old_price=payload.old_price,
-        currency=payload.currency,
-        category=payload.category,
-        gender=payload.gender,
-        active=payload.active,
-        is_drop=payload.is_drop,
-        is_rare=payload.is_rare,
-        drop_starts_at=payload.drop_starts_at,
-        vip_only_until=payload.vip_only_until,
-    )
-    db.add(product)
-    db.flush()
-    for idx, url in enumerate(payload.images):
-        db.add(ProductImage(product_id=product.id, url=url, sort_order=idx))
-    for variant in payload.variants:
-        db.add(
-            ProductVariant(
-                product_id=product.id,
-                size=variant["size"],
-                color=variant.get("color", ""),
-                sku=variant["sku"],
-                stock_qty=int(variant.get("stock_qty", 0)),
-                reserved_qty=0,
-            )
-        )
-    db.commit()
-    return get_product(product.id, db)

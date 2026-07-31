@@ -14,6 +14,15 @@ depends_on = None
 
 
 def upgrade():
+    # Alembic creates its version table as VARCHAR(32) by default. This revision
+    # identifier exceeds that limit, so widen the internal column before Alembic
+    # stamps this revision. Keep the wider type on downgrade because subsequent
+    # deployed revision identifiers may also be longer than 32 characters.
+    op.execute(
+        "ALTER TABLE alembic_version "
+        "ALTER COLUMN version_num TYPE VARCHAR(255)"
+    )
+
     op.create_table(
         "loyalty_transactions",
         sa.Column("id", sa.Integer(), primary_key=True),

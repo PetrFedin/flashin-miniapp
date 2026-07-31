@@ -37,12 +37,12 @@ def test_payment_event_is_unique():
     assert "uq_payment_events_provider_event" in _index_names(PaymentEvent.__table__)
 
 
-def test_return_request_is_unique_per_order_and_provider_refund():
+def test_return_requests_allow_multiple_partial_refunds_with_unique_provider_ids():
     constraints = _constraint_names(ReturnRequest.__table__)
     indexes = _index_names(ReturnRequest.__table__)
 
     assert "ck_return_requests_refund_nonnegative" in constraints
-    assert "uq_return_requests_order_id" in constraints
+    assert "uq_return_requests_order_id" not in constraints
     assert "uq_return_requests_provider_refund_id" in indexes
 
 

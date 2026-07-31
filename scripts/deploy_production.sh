@@ -9,6 +9,7 @@ if [ ! -f .env ]; then
 fi
 
 export COMPOSE_FILE="docker-compose.yml:docker-compose.production.yml"
+export COMPOSE_PROFILES="production,workers,scheduler,search"
 
 python3 scripts/validate_env.py
 python3 scripts/preflight.py
@@ -72,13 +73,7 @@ echo "Verifying transaction integrity after migration..."
 docker compose run --rm backend python scripts/check_transaction_integrity.py
 
 echo "Starting production services, scheduler, notifications and search..."
-docker compose \
-  --profile production \
-  --profile workers \
-  --profile scheduler \
-  --profile search \
-  up -d \
-  db backend frontend admin bot caddy notification_worker scheduler meilisearch
+docker compose up -d db backend frontend admin bot caddy notification_worker scheduler meilisearch
 
 echo "Waiting for backend inside Docker network..."
 backend_healthy=0

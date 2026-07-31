@@ -99,12 +99,12 @@ def _stock_quantity(value: object) -> int:
     if isinstance(value, bool):
         raise HTTPException(status_code=400, detail="Stock quantity must be a non-negative integer")
     try:
-        quantity = int(value)
+        quantity = float(value)
     except (TypeError, ValueError):
         raise HTTPException(status_code=400, detail="Stock quantity must be a non-negative integer")
-    if quantity < 0 or str(value).strip() not in {str(quantity), f"{quantity}.0"}:
+    if not math.isfinite(quantity) or quantity < 0 or not quantity.is_integer():
         raise HTTPException(status_code=400, detail="Stock quantity must be a non-negative integer")
-    return quantity
+    return int(quantity)
 
 
 def _order_with_items(db: Session, order_id: int) -> Order | None:

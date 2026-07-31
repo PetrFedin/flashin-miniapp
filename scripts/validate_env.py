@@ -129,6 +129,9 @@ if is_production:
             "ADMIN_TOTP_ENCRYPTION_KEY",
             "SCHEDULER_ENABLED",
             "MOYSKLAD_SYNC_INTERVAL_MINUTES",
+            "MOYSKLAD_SALE_PRICE_TYPE",
+            "MOYSKLAD_SIZE_ATTRIBUTE_NAMES",
+            "MOYSKLAD_COLOR_ATTRIBUTE_NAMES",
             "NOTIFICATION_BATCH_SIZE",
             "NOTIFICATION_POLL_SECONDS",
             "NOTIFICATION_MAX_ATTEMPTS",
@@ -203,6 +206,13 @@ if is_production:
         env.get("MOYSKLAD_LOGIN") and env.get("MOYSKLAD_PASSWORD")
     ):
         invalid.append("Configure MOYSKLAD_TOKEN or MOYSKLAD_LOGIN and MOYSKLAD_PASSWORD")
+
+    if not env.get("MOYSKLAD_SALE_PRICE_TYPE", "").strip():
+        invalid.append("MOYSKLAD_SALE_PRICE_TYPE must identify the retail sale price")
+    if not env.get("MOYSKLAD_SIZE_ATTRIBUTE_NAMES", "").strip():
+        invalid.append("MOYSKLAD_SIZE_ATTRIBUTE_NAMES must not be empty")
+    if not env.get("MOYSKLAD_COLOR_ATTRIBUTE_NAMES", "").strip():
+        invalid.append("MOYSKLAD_COLOR_ATTRIBUTE_NAMES must not be empty")
 
 batch_size = validate_int(env, "NOTIFICATION_BATCH_SIZE", 1, 200, invalid)
 poll_seconds = validate_float(env, "NOTIFICATION_POLL_SECONDS", 1.0, 3600.0, invalid)

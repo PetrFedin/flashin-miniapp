@@ -25,7 +25,23 @@ from ..services.promos import calculate_discount
 router = APIRouter(prefix="/orders", tags=["orders"])
 
 _MONEY_STEP = Decimal("0.01")
-CANCELLABLE_ORDER_STATUSES = {"created", "payment_created"}
+ORDER_STATUSES = frozenset(
+    {
+        "created",
+        "payment_created",
+        "payment_review_required",
+        "paid",
+        "assembling",
+        "ready",
+        "shipped",
+        "completed",
+        "refund_requested",
+        "partially_refunded",
+        "refunded",
+        "cancelled",
+    }
+)
+CANCELLABLE_ORDER_STATUSES = frozenset({"created", "payment_created"})
 
 
 def _money(value: object, field: str) -> Decimal:
