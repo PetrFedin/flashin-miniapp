@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 
 from sqlalchemy.orm import Session
@@ -5,6 +6,7 @@ from sqlalchemy.orm import Session
 from ..models import MarketingCampaign
 from ..services.campaigns import queue_campaign
 
+logger = logging.getLogger(__name__)
 _MAX_CAMPAIGNS_PER_RUN = 100
 
 
@@ -30,6 +32,7 @@ def queue_due_campaigns(db: Session) -> int:
                 db.flush()
             queued_campaigns += 1
         except Exception:
+            logger.exception("Failed to queue marketing campaign id=%s", campaign.id)
             # A malformed scheduled campaign must not poison every later campaign
             # or be retried forever by each scheduler tick.
             campaign.status = "failed"
