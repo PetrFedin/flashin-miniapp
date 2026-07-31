@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import ScheduledJobsPanel from "./ScheduledJobsPanel";
+import { installAuthenticatedExportDownloads } from "./export-downloads";
 import { installOrderWorkflowBoundary } from "./order-workflow-boundary";
 import "./main.jsx";
 
@@ -58,6 +59,7 @@ function ScheduledJobsRoot() {
 }
 
 installOrderWorkflowBoundary();
+installAuthenticatedExportDownloads();
 
 const root = document.getElementById("scheduled-jobs-root");
 if (!root) throw new Error("Scheduled jobs root is missing");
