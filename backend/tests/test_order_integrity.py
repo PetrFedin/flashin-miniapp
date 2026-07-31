@@ -4,7 +4,13 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from backend.api.orders import _clean_required, _money, _validate_cart_for_checkout
+from backend.api.orders import (
+    _checkout_request_fingerprint,
+    _clean_required,
+    _money,
+    _normalize_idempotency_key,
+    _validate_cart_for_checkout,
+)
 
 
 def _cart_item(
@@ -56,6 +62,41 @@ def test_clean_required_rejects_empty_value(value):
         _clean_required(value, "Name", 20)
 
     assert exc.value.status_code == 400
+
+
+def test_idempotency_key_accepts_safe_uuid():
+    assert (
+        _normalize_idempotency_key(" 550e8400-e29b-41d4-a716-446655440000 ")
+        == "550e8400-e29b-41d4-a716-446655440000"
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [None, "", "too-short", "unsafe key with spaces", "x" * 129],
+)
+def test_idempotency_key_rejects_missing_or_unsafe_values(value):
+    with pytest.raises(HTTPException) as exc:
+        _normalize_idempotency_key(value)
+
+    assert exc.value.status_code == 400
+
+
+def test_checkout_fingerprint_is_stable_and_sensitive_to_payload():
+    base = {
+        "name": "Petr",
+        "phone": "+79990000000",
+        "delivery_type": "courier",
+        "address": "Moscow",
+        "comment": "Call first",
+    }
+    first = _checkout_request_fingerprint(**base)
+    second = _checkout_request_fingerprint(**dict(reversed(list(base.items()))))
+    changed = _checkout_request_fingerprint(**{**base, "address": "Saint Petersburg"})
+
+    assert first == second
+    assert first != changed
+    assert len(first) == 64
 
 
 def test_cart_validation_accepts_consistent_item():
