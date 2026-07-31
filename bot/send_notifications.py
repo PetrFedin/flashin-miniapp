@@ -69,14 +69,12 @@ def _claim_pending_batch() -> list[dict]:
                     ),
                     and_(
                         Notification.status == NOTIFICATION_PROCESSING,
-                        NotificationDeliveryState.next_attempt_at <= now,
+                        or_(
+                            NotificationDeliveryState.id.is_(None),
+                            NotificationDeliveryState.next_attempt_at.is_(None),
+                            NotificationDeliveryState.next_attempt_at <= now,
+                        ),
                     ),
-                )
-            )
-            .filter(
-                or_(
-                    NotificationDeliveryState.id.is_(None),
-                    NotificationDeliveryState.attempts < MAX_ATTEMPTS,
                 )
             )
             .order_by(Notification.created_at.asc(), Notification.id.asc())
