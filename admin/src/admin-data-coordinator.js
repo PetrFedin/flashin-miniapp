@@ -64,6 +64,7 @@ function fallbackResponse(value, sourceStatus) {
 }
 
 function dispatchStatus(detail) {
+  window.__flashinAdminDataStatus = detail;
   window.dispatchEvent(new CustomEvent(STATUS_EVENT, { detail }));
 }
 
@@ -75,23 +76,27 @@ async function boundedResponseText(response) {
   }
 }
 
-function expireSession(status, detail) {
-  localStorage.removeItem("admin_token");
-  window.dispatchEvent(new CustomEvent(SESSION_EVENT, {
-    detail: { status, message: detail || "Административная сессия завершена" },
-  }));
-  window.setTimeout(() => window.location.reload(), 0);
-}
-
 export function installAdminDataCoordinator() {
   if (window.__flashinAdminDataCoordinator) return window.__flashinAdminDataCoordinator;
 
   const originalFetch = window.fetch.bind(window);
   let generation = 0;
   let batch = null;
+  let sessionExpired = false;
+
+  function expireSession(status, detail) {
+    if (sessionExpired) return;
+    sessionExpired = true;
+    localStorage.removeItem("admin_token");
+    window.dispatchEvent(new CustomEvent(SESSION_EVENT, {
+      detail: { status, message: detail || "Административная сессия завершена" },
+    }));
+    window.setTimeout(() => window.location.reload(), 0);
+  }
 
   function startBatch(token) {
     generation += 1;
+    sessionExpired = false;
     const batchGeneration = generation;
     const failures = [];
     let completed = 0;
@@ -211,9 +216,13 @@ export function installAdminDataCoordinator() {
     datasets: DATASETS,
     statusEvent: STATUS_EVENT,
     sessionEvent: SESSION_EVENT,
+    getStatus() {
+      return window.__flashinAdminDataStatus || null;
+    },
     restore() {
       window.fetch = originalFetch;
       batch = null;
+      window.__flashinAdminDataStatus = null;
     },
   });
   window.__flashinAdminDataCoordinator = coordinator;
