@@ -1,11 +1,9 @@
-from datetime import datetime
-
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
-from ..database import get_db
+from ..database import get_db, utcnow_naive
 from ..middleware.rate_limit import _client_ip
 from ..models import AdminPasswordReset, AdminTotpSecret, AdminUser
 from ..schemas import TokenOut
@@ -195,7 +193,7 @@ def confirm_admin_password_reset(
         db.commit()
         raise HTTPException(status_code=403, detail="Admin access is not allowed")
 
-    now = datetime.utcnow()
+    now = utcnow_naive()
     try:
         reset = (
             db.query(AdminPasswordReset)
