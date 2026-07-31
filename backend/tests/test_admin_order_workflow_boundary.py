@@ -42,7 +42,7 @@ class _Db:
         ),
     ],
 )
-def test_endpoint_shadow_rejects_every_managed_order_field(
+def test_endpoint_boundary_rejects_every_managed_order_field(
     monkeypatch,
     payload,
     expected_fields,
@@ -72,7 +72,7 @@ def test_endpoint_shadow_rejects_every_managed_order_field(
     assert db.rollbacks == 1
 
 
-def test_endpoint_shadow_rejects_empty_legacy_patch(monkeypatch):
+def test_endpoint_boundary_rejects_empty_legacy_patch(monkeypatch):
     monkeypatch.setattr(order_cancellation, "require_permission", lambda *_args: None)
     db = _Db()
 
@@ -89,7 +89,7 @@ def test_endpoint_shadow_rejects_empty_legacy_patch(monkeypatch):
     assert db.rollbacks == 1
 
 
-def test_endpoint_shadow_preserves_not_found_semantics(monkeypatch):
+def test_endpoint_boundary_preserves_not_found_semantics(monkeypatch):
     monkeypatch.setattr(order_cancellation, "require_permission", lambda *_args: None)
     db = _Db(exists=False)
 
@@ -105,7 +105,7 @@ def test_endpoint_shadow_preserves_not_found_semantics(monkeypatch):
     assert db.rollbacks == 1
 
 
-def test_safe_endpoint_is_registered_before_legacy_admin_patch():
+def test_legacy_admin_patch_is_replaced_by_one_guarded_route():
     matching = [
         route
         for route in app.routes
@@ -114,9 +114,23 @@ def test_safe_endpoint_is_registered_before_legacy_admin_patch():
         and "PATCH" in route.methods
     ]
 
-    assert len(matching) == 2
+    assert len(matching) == 1
     assert matching[0].endpoint is order_cancellation.reject_generic_admin_order_update
-    assert matching[1].endpoint.__module__ == "backend.api.admin"
+    assert matching[0].name == "reject_generic_admin_order_update"
+
+
+def test_router_replacement_is_idempotent():
+    order_cancellation._replace_legacy_admin_order_patch()
+    matching = [
+        route
+        for route in order_cancellation.admin_router.routes
+        if isinstance(route, APIRoute)
+        and route.path == "/admin/orders/{order_id}"
+        and "PATCH" in route.methods
+    ]
+
+    assert len(matching) == 1
+    assert matching[0].endpoint is order_cancellation.reject_generic_admin_order_update
 
 
 def test_middleware_and_endpoint_boundary_are_both_installed():
