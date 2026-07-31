@@ -26,7 +26,8 @@ def _save_webp_atomic(image: Image.Image, target: Path, quality: int) -> int:
     temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
     try:
         image.save(temporary, format="WEBP", quality=quality, method=4)
-        with temporary.open("rb") as handle:
+        with temporary.open("rb+") as handle:
+            handle.flush()
             os.fsync(handle.fileno())
         size_bytes = temporary.stat().st_size
         if size_bytes < 1 or size_bytes > _MAX_MEDIA_BYTES:
