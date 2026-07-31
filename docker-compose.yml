@@ -80,7 +80,7 @@ services:
     env_file:
       - .env
     depends_on:
-      db:
+      backend:
         condition: service_healthy
     profiles:
       - workers
@@ -93,7 +93,7 @@ services:
     env_file:
       - .env
     depends_on:
-      db:
+      backend:
         condition: service_healthy
     profiles:
       - workers
@@ -106,7 +106,7 @@ services:
     env_file:
       - .env
     depends_on:
-      db:
+      backend:
         condition: service_healthy
     profiles:
       - workers
@@ -119,7 +119,7 @@ services:
     env_file:
       - .env
     depends_on:
-      db:
+      backend:
         condition: service_healthy
     profiles:
       - workers
@@ -132,7 +132,7 @@ services:
     env_file:
       - .env
     depends_on:
-      db:
+      backend:
         condition: service_healthy
     profiles:
       - workers
@@ -145,7 +145,7 @@ services:
     env_file:
       - .env
     depends_on:
-      db:
+      backend:
         condition: service_healthy
     profiles:
       - workers
@@ -158,7 +158,7 @@ services:
     env_file:
       - .env
     depends_on:
-      db:
+      backend:
         condition: service_healthy
     profiles:
       - workers
@@ -171,7 +171,7 @@ services:
     env_file:
       - .env
     depends_on:
-      db:
+      backend:
         condition: service_healthy
     profiles:
       - workers
@@ -184,13 +184,13 @@ services:
     env_file:
       - .env
     depends_on:
-      db:
+      backend:
         condition: service_healthy
     profiles:
       - scheduler
 
   meilisearch:
-    image: getmeili/meilisearch:v1.12
+    image: getmeili/getmeili:v1.12
     environment:
       MEILI_MASTER_KEY: ${MEILISEARCH_MASTER_KEY:-change-me}
     ports:
