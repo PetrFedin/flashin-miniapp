@@ -58,17 +58,14 @@ jobs:
       - name: Validate shell scripts
         run: find scripts -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
       - name: Require one Alembic head
-        working-directory: backend
         run: |
           set -euo pipefail
-          alembic -c alembic.ini heads | tee /tmp/alembic-heads.txt
+          alembic -c backend/alembic.ini heads | tee /tmp/alembic-heads.txt
           test "$(grep -c '(head)' /tmp/alembic-heads.txt)" -eq 1
       - name: Apply database migrations
-        working-directory: backend
-        run: alembic -c alembic.ini upgrade head
+        run: alembic -c backend/alembic.ini upgrade head
       - name: Verify migration state
-        working-directory: backend
-        run: alembic -c alembic.ini current
+        run: alembic -c backend/alembic.ini current
       - name: Run backend tests
         run: pytest -q backend/tests
 
