@@ -1,6 +1,6 @@
 import asyncio
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from aiogram import Bot
 from sqlalchemy import and_, create_engine, or_
@@ -8,6 +8,15 @@ from sqlalchemy.orm import sessionmaker
 
 from backend.models import Notification
 from backend.notification_models import NotificationDeliveryState
+from backend.notification_statuses import (
+    MAX_NOTIFICATION_ATTEMPTS,
+    NOTIFICATION_PENDING,
+    NOTIFICATION_PROCESSING,
+)
+from backend.services.notification_delivery import (
+    claim_notification_delivery,
+    complete_notification_delivery,
+)
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
@@ -16,7 +25,13 @@ DATABASE_URL = os.getenv(
 BOT_TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
 BATCH_SIZE = max(1, min(int(os.getenv("NOTIFICATION_BATCH_SIZE", "50")), 200))
 POLL_SECONDS = max(1.0, float(os.getenv("NOTIFICATION_POLL_SECONDS", "10")))
-MAX_ATTEMPTS = max(1, min(int(os.getenv("NOTIFICATION_MAX_ATTEMPTS", "5")), 20))
+MAX_ATTEMPTS = max(
+    1,
+    min(
+        int(os.getenv("NOTIFICATION_MAX_ATTEMPTS", "5")),
+        MAX_NOTIFICATION_ATTEMPTS,
+    ),
+)
 INITIAL_BACKOFF_SECONDS = max(5, int(os.getenv("NOTIFICATION_INITIAL_BACKOFF_SECONDS", "30")))
 MAX_BACKOFF_SECONDS = max(
     INITIAL_BACKOFF_SECONDS,
@@ -28,12 +43,8 @@ engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
 
-def _next_attempt_at(attempts: int) -> datetime:
-    delay = min(
-        INITIAL_BACKOFF_SECONDS * (2 ** max(attempts - 1, 0)),
-        MAX_BACKOFF_SECONDS,
-    )
-    return datetime.utcnow() + timedelta(seconds=delay)
+class DeliveryOutcomeUnknown(RuntimeError):
+    pass
 
 
 def _claim_pending_batch() -> list[dict]:
@@ -49,7 +60,7 @@ def _claim_pending_batch() -> list[dict]:
             .filter(
                 or_(
                     and_(
-                        Notification.status == "pending",
+                        Notification.status == NOTIFICATION_PENDING,
                         or_(
                             NotificationDeliveryState.id.is_(None),
                             NotificationDeliveryState.next_attempt_at.is_(None),
@@ -57,7 +68,7 @@ def _claim_pending_batch() -> list[dict]:
                         ),
                     ),
                     and_(
-                        Notification.status == "processing",
+                        Notification.status == NOTIFICATION_PROCESSING,
                         NotificationDeliveryState.next_attempt_at <= now,
                     ),
                 )
@@ -75,7 +86,6 @@ def _claim_pending_batch() -> list[dict]:
         )
 
         claimed: list[dict] = []
-        lease_until = now + timedelta(seconds=LEASE_SECONDS)
         for row in rows:
             state = (
                 db.query(NotificationDeliveryState)
@@ -87,18 +97,29 @@ def _claim_pending_batch() -> list[dict]:
                 state = NotificationDeliveryState(
                     notification_id=row.id,
                     attempts=0,
+                    next_attempt_at=now,
+                    last_error="",
+                    deduplication_key="",
+                    lease_token="",
                 )
                 db.add(state)
                 db.flush()
 
-            row.status = "processing"
-            state.next_attempt_at = lease_until
-            state.updated_at = now
+            lease_token = claim_notification_delivery(
+                row,
+                state,
+                now=now,
+                lease_seconds=LEASE_SECONDS,
+                max_attempts=MAX_ATTEMPTS,
+            )
+            if not lease_token:
+                continue
             claimed.append(
                 {
                     "id": row.id,
                     "telegram_id": row.telegram_id,
                     "message": row.message,
+                    "lease_token": lease_token,
                 }
             )
 
@@ -111,15 +132,16 @@ def _claim_pending_batch() -> list[dict]:
         db.close()
 
 
-def _finish_delivery(notification_id: int, error: Exception | None = None) -> str:
+def _finish_delivery(
+    notification_id: int,
+    lease_token: str,
+    error: Exception | None = None,
+) -> str:
     db = SessionLocal()
     try:
         row = (
             db.query(Notification)
-            .filter(
-                Notification.id == notification_id,
-                Notification.status == "processing",
-            )
+            .filter(Notification.id == notification_id)
             .with_for_update()
             .first()
         )
@@ -134,33 +156,21 @@ def _finish_delivery(notification_id: int, error: Exception | None = None) -> st
             .first()
         )
         if not state:
-            state = NotificationDeliveryState(
-                notification_id=row.id,
-                attempts=0,
-            )
-            db.add(state)
-            db.flush()
+            db.rollback()
+            return "ignored"
 
-        if error is None:
-            row.status = "sent"
-            row.sent_at = datetime.utcnow()
-            row.error = ""
-            db.delete(state)
-            db.commit()
-            return "sent"
-
-        state.attempts += 1
-        state.updated_at = datetime.utcnow()
-        state.last_error = f"{error.__class__.__name__}: {error}"[:2000]
-        row.error = state.last_error
-        if state.attempts >= MAX_ATTEMPTS:
-            row.status = "failed"
-            state.next_attempt_at = None
-            outcome = "failed"
-        else:
-            row.status = "pending"
-            state.next_attempt_at = _next_attempt_at(state.attempts)
-            outcome = "retry_scheduled"
+        outcome = complete_notification_delivery(
+            row,
+            state,
+            lease_token,
+            error,
+            max_attempts=MAX_ATTEMPTS,
+            initial_backoff_seconds=INITIAL_BACKOFF_SECONDS,
+            max_backoff_seconds=MAX_BACKOFF_SECONDS,
+        )
+        if outcome == "ignored":
+            db.rollback()
+            return outcome
         db.commit()
         return outcome
     except Exception:
@@ -194,10 +204,23 @@ async def send_pending_batch(bot: Bot) -> dict[str, int]:
                 text=message,
                 disable_web_page_preview=True,
             )
+        except asyncio.CancelledError:
+            _finish_delivery(
+                item["id"],
+                item["lease_token"],
+                error=DeliveryOutcomeUnknown(
+                    "Worker was cancelled while Telegram delivery outcome was unknown"
+                ),
+            )
+            raise
         except Exception as exc:
             error = exc
 
-        outcome = _finish_delivery(item["id"], error=error)
+        outcome = _finish_delivery(
+            item["id"],
+            item["lease_token"],
+            error=error,
+        )
         if outcome in result:
             result[outcome] += 1
 
@@ -215,6 +238,8 @@ async def worker() -> None:
                 result = await send_pending_batch(bot)
                 if result["seen"]:
                     print(result)
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 print({"notification_worker_error": exc.__class__.__name__})
             await asyncio.sleep(POLL_SECONDS)
