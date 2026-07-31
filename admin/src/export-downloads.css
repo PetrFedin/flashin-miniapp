@@ -1,0 +1,49 @@
+.admin-export-downloads {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.admin-export-downloads__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.admin-export-downloads__actions button {
+  margin-left: 0;
+}
+
+.admin-export-downloads__actions button:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
+.admin-export-downloads__message {
+  min-height: 18px;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.admin-export-downloads__message--progress {
+  color: #765300;
+}
+
+.admin-export-downloads__message--success {
+  color: #1f5e32;
+}
+
+.admin-export-downloads__message--error {
+  color: #8b1717;
+}
+
+@media (max-width: 620px) {
+  .admin-export-downloads__actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .admin-export-downloads__actions button {
+    width: 100%;
+  }
+}
