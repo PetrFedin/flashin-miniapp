@@ -1,6 +1,7 @@
-import json
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Response
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -14,6 +15,7 @@ from ..services.privacy import (
     anonymize_customer,
     build_customer_export,
     mark_privacy_processed,
+    render_customer_export,
     withdraw_optional_consents,
 )
 from ..services.rbac import require_permission
@@ -29,6 +31,20 @@ def _request_type(value: str) -> str:
     return normalized
 
 
+def _lock_customer(db: Session, customer_id: int) -> Customer:
+    customer = (
+        db.query(Customer)
+        .filter(Customer.id == customer_id)
+        .with_for_update()
+        .first()
+    )
+    if not customer:
+        raise HTTPException(status_code=409, detail="Privacy request customer is missing")
+    if str(customer.telegram_id or "").startswith("deleted:"):
+        raise HTTPException(status_code=409, detail="Customer is already anonymized")
+    return customer
+
+
 @router.post("/consent")
 def set_consent(
     payload: ConsentIn,
@@ -40,6 +56,7 @@ def set_consent(
         raise HTTPException(status_code=400, detail="Unsupported consent type")
 
     try:
+        _lock_customer(db, customer.id)
         latest = (
             db.query(ConsentRecord)
             .filter(
@@ -51,6 +68,7 @@ def set_consent(
             .first()
         )
         if latest and latest.granted == payload.granted:
+            db.rollback()
             return {"ok": True, "idempotent": True}
 
         db.add(
@@ -63,6 +81,9 @@ def set_consent(
         )
         db.commit()
         return {"ok": True, "idempotent": False}
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception:
         db.rollback()
         raise
@@ -76,6 +97,7 @@ def create_privacy_request(
 ):
     request_type = _request_type(payload.request_type)
     try:
+        _lock_customer(db, customer.id)
         existing = (
             db.query(PrivacyRequest)
             .filter(
@@ -88,17 +110,38 @@ def create_privacy_request(
             .first()
         )
         if existing:
+            db.rollback()
             return existing
 
         request = PrivacyRequest(
             customer_id=customer.id,
             request_type=request_type,
             status="requested",
+            result_url="",
+            processed_at=None,
         )
         db.add(request)
         db.commit()
         db.refresh(request)
         return request
+    except IntegrityError:
+        db.rollback()
+        existing = (
+            db.query(PrivacyRequest)
+            .filter(
+                PrivacyRequest.customer_id == customer.id,
+                PrivacyRequest.request_type == request_type,
+                PrivacyRequest.status.in_(OPEN_PRIVACY_REQUEST_STATUSES),
+            )
+            .order_by(PrivacyRequest.created_at.desc(), PrivacyRequest.id.desc())
+            .first()
+        )
+        if existing:
+            return existing
+        raise HTTPException(status_code=409, detail="Privacy request state changed concurrently")
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception:
         db.rollback()
         raise
@@ -112,7 +155,7 @@ def my_privacy_requests(
     return (
         db.query(PrivacyRequest)
         .filter(PrivacyRequest.customer_id == customer.id)
-        .order_by(PrivacyRequest.created_at.desc())
+        .order_by(PrivacyRequest.created_at.desc(), PrivacyRequest.id.desc())
         .all()
     )
 
@@ -123,12 +166,14 @@ def export_my_data(
     db: Session = Depends(get_db),
 ):
     data = build_customer_export(db, customer)
+    content = render_customer_export(data)
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     return Response(
-        content=json.dumps(data, ensure_ascii=False, indent=2),
+        content=content,
         media_type="application/json",
         headers={
             "Content-Disposition": (
-                f'attachment; filename="flashin_customer_{customer.id}_export.json"'
+                f'attachment; filename="flashin-customer-{customer.id}-{timestamp}.json"'
             ),
             "Cache-Control": "no-store, max-age=0",
             "Pragma": "no-cache",
@@ -143,7 +188,11 @@ def admin_privacy_requests(
     db: Session = Depends(get_db),
 ):
     require_permission(db, admin, "privacy.read")
-    return db.query(PrivacyRequest).order_by(PrivacyRequest.created_at.desc()).all()
+    return (
+        db.query(PrivacyRequest)
+        .order_by(PrivacyRequest.created_at.desc(), PrivacyRequest.id.desc())
+        .all()
+    )
 
 
 @router.post("/admin/requests/{request_id}/process")
@@ -163,25 +212,26 @@ def admin_process_privacy_request(
         if not request:
             raise HTTPException(status_code=404, detail="Privacy request not found")
         if request.status == "processed":
-            return {"ok": True, "idempotent": True, "result": {}}
+            return {
+                "ok": True,
+                "idempotent": True,
+                "result": {
+                    "request_type": request.request_type,
+                    "result_url": request.result_url,
+                },
+            }
         if request.status not in OPEN_PRIVACY_REQUEST_STATUSES:
             raise HTTPException(status_code=409, detail="Privacy request cannot be processed")
 
-        customer = (
-            db.query(Customer)
-            .filter(Customer.id == request.customer_id)
-            .with_for_update()
-            .first()
-        )
-        if not customer:
-            raise HTTPException(status_code=409, detail="Privacy request customer is missing")
-
+        customer = _lock_customer(db, request.customer_id)
         request.status = "processing"
+        request.result_url = ""
+        request.processed_at = None
         result: dict = {}
         result_url = ""
         if request.request_type == "export":
             result_url = "/api/privacy/export"
-            result = {"export_ready": True}
+            result = {"export_ready": True, "result_url": result_url}
         elif request.request_type == "consent_withdrawal":
             result = {
                 "consents_withdrawn": withdraw_optional_consents(
