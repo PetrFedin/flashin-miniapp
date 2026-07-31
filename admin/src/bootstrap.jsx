@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
+import AdminRuntimeStatus from "./AdminRuntimeStatus";
 import ScheduledJobsPanel from "./ScheduledJobsPanel";
+import { installAdminDataCoordinator } from "./admin-data-coordinator";
 import { installAuthenticatedExportDownloads } from "./export-downloads";
 import { installOrderWorkflowBoundary } from "./order-workflow-boundary";
-import "./main.jsx";
 
 const API = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
@@ -11,7 +12,7 @@ function readAdminToken() {
   return localStorage.getItem("admin_token") || "";
 }
 
-function ScheduledJobsRoot() {
+function ScheduledJobsRoot({ sessionEvent }) {
   const [token, setToken] = useState(readAdminToken);
 
   useEffect(() => {
@@ -23,15 +24,21 @@ function ScheduledJobsRoot() {
         setToken(next);
       }
     };
+    const expire = () => {
+      current = "";
+      setToken("");
+    };
     const timer = window.setInterval(refresh, 500);
     window.addEventListener("storage", refresh);
     window.addEventListener("focus", refresh);
+    window.addEventListener(sessionEvent, expire);
     return () => {
       window.clearInterval(timer);
       window.removeEventListener("storage", refresh);
       window.removeEventListener("focus", refresh);
+      window.removeEventListener(sessionEvent, expire);
     };
-  }, []);
+  }, [sessionEvent]);
 
   const api = useCallback(async (path, options = {}) => {
     const currentToken = readAdminToken();
@@ -51,16 +58,37 @@ function ScheduledJobsRoot() {
   }, []);
 
   if (!token) return null;
-  return <main className="scheduled-jobs-host">
-    <section>
-      <ScheduledJobsPanel key={token} api={api} />
-    </section>
-  </main>;
+  return <>
+    <AdminRuntimeStatus key={`runtime:${token}`} />
+    <main className="scheduled-jobs-host">
+      <section>
+        <ScheduledJobsPanel key={`jobs:${token}`} api={api} />
+      </section>
+    </main>
+  </>;
 }
 
-installOrderWorkflowBoundary();
-installAuthenticatedExportDownloads();
+async function bootstrap() {
+  const coordinator = installAdminDataCoordinator();
+  installOrderWorkflowBoundary();
+  installAuthenticatedExportDownloads();
 
-const root = document.getElementById("scheduled-jobs-root");
-if (!root) throw new Error("Scheduled jobs root is missing");
-createRoot(root).render(<ScheduledJobsRoot />);
+  // The legacy admin app is imported only after the coordinator is installed,
+  // so its first products/audit request starts the full parallel data wave.
+  await import("./main.jsx");
+
+  const root = document.getElementById("scheduled-jobs-root");
+  if (!root) throw new Error("Scheduled jobs root is missing");
+  createRoot(root).render(
+    <ScheduledJobsRoot sessionEvent={coordinator.sessionEvent} />,
+  );
+}
+
+bootstrap().catch((error) => {
+  console.error("FLASHIN Admin bootstrap failed", error);
+  const root = document.getElementById("scheduled-jobs-root");
+  if (root) {
+    root.textContent = "Административная панель не запущена. Обновите страницу.";
+    root.setAttribute("role", "alert");
+  }
+});
