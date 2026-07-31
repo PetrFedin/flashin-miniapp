@@ -2,6 +2,7 @@ import "./export-downloads.css";
 
 const API = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 const LEGACY_EXPORT_PATH = "/api/admin/orders/export-csv";
+const MAX_IMPORT_BYTES = 5_000_000;
 const EXPORTS = Object.freeze([
   {
     key: "orders",
@@ -28,6 +29,12 @@ function parseApiError(error) {
     // Proxy and network errors can be plain text.
   }
   return raw.slice(0, 1000);
+}
+
+function readAdminToken() {
+  const token = localStorage.getItem("admin_token");
+  if (!token) throw new Error("Административная сессия завершена");
+  return token;
 }
 
 function safeFilename(value, fallback) {
@@ -71,14 +78,11 @@ function triggerBrowserDownload(blob, filename) {
 }
 
 async function downloadCsv(definition) {
-  const token = localStorage.getItem("admin_token");
-  if (!token) throw new Error("Административная сессия завершена");
-
   const response = await fetch(`${API}${definition.path}`, {
     method: "POST",
     headers: {
       Accept: "text/csv",
-      Authorization: `Bearer ${token}`,
+      Authorization: `Bearer ${readAdminToken()}`,
     },
   });
   if (!response.ok) throw new Error(await response.text());
@@ -97,6 +101,35 @@ async function downloadCsv(definition) {
   return filename;
 }
 
+async function importProductsCsv(file) {
+  if (!(file instanceof File)) throw new Error("CSV-файл не выбран");
+  if (!file.name.toLowerCase().endsWith(".csv")) {
+    throw new Error("Для импорта требуется файл с расширением .csv");
+  }
+  if (!file.size) throw new Error("Выбран пустой CSV-файл");
+  if (file.size > MAX_IMPORT_BYTES) {
+    throw new Error(`CSV-файл превышает лимит ${MAX_IMPORT_BYTES} байт`);
+  }
+
+  const form = new FormData();
+  form.append("file", file, file.name);
+  const response = await fetch(`${API}/api/import-export/admin/products/import-csv`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${readAdminToken()}` },
+    body: form,
+  });
+  if (!response.ok) throw new Error(await response.text());
+  const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+  if (!contentType.includes("application/json")) {
+    throw new Error("Сервер вернул неожиданный формат результата импорта");
+  }
+  const result = await response.json();
+  if (!result?.ok || !Number.isSafeInteger(result.rows) || result.rows < 1) {
+    throw new Error("Сервер вернул некорректный результат импорта");
+  }
+  return result;
+}
+
 function setMessage(container, text, kind) {
   const message = container.querySelector(".admin-export-downloads__message");
   message.className = `admin-export-downloads__message admin-export-downloads__message--${kind}`;
@@ -104,7 +137,13 @@ function setMessage(container, text, kind) {
   message.textContent = text;
 }
 
-function createExportControls() {
+function setControlsDisabled(container, disabled) {
+  container.querySelectorAll("button, input").forEach((item) => {
+    item.disabled = disabled;
+  });
+}
+
+function createDataExchangeControls() {
   const container = document.createElement("div");
   container.className = "admin-export-downloads";
   container.setAttribute("data-export-downloads", "ready");
@@ -115,6 +154,36 @@ function createExportControls() {
   message.className = "admin-export-downloads__message";
   message.setAttribute("aria-live", "polite");
 
+  const importLabel = document.createElement("label");
+  importLabel.className = "admin-export-downloads__import";
+  const importText = document.createElement("span");
+  importText.textContent = "Импортировать товары CSV";
+  const importInput = document.createElement("input");
+  importInput.type = "file";
+  importInput.accept = ".csv,text/csv";
+  importInput.setAttribute("data-import-products-csv", "ready");
+  importInput.addEventListener("change", async () => {
+    const file = importInput.files?.[0];
+    if (!file || importInput.disabled) return;
+    setControlsDisabled(container, true);
+    setMessage(container, `Проверяется и импортируется файл «${file.name}»…`, "progress");
+    try {
+      const result = await importProductsCsv(file);
+      setMessage(
+        container,
+        `Импортировано строк: ${result.rows}; товары +${result.products_created}/обновлено ${result.products_updated}; варианты +${result.variants_created}/обновлено ${result.variants_updated}.`,
+        "success",
+      );
+    } catch (error) {
+      setMessage(container, parseApiError(error), "error");
+    } finally {
+      importInput.value = "";
+      setControlsDisabled(container, false);
+    }
+  });
+  importLabel.append(importText, importInput);
+  actions.appendChild(importLabel);
+
   for (const definition of EXPORTS) {
     const button = document.createElement("button");
     button.type = "button";
@@ -122,8 +191,7 @@ function createExportControls() {
     button.setAttribute("data-export-key", definition.key);
     button.addEventListener("click", async () => {
       if (button.disabled) return;
-      const buttons = actions.querySelectorAll("button");
-      buttons.forEach((item) => { item.disabled = true; });
+      setControlsDisabled(container, true);
       button.textContent = "Формирование…";
       setMessage(container, `Формируется выгрузка «${definition.label}»…`, "progress");
       try {
@@ -133,7 +201,7 @@ function createExportControls() {
         setMessage(container, parseApiError(error), "error");
       } finally {
         button.textContent = definition.label;
-        buttons.forEach((item) => { item.disabled = false; });
+        setControlsDisabled(container, false);
       }
     });
     actions.appendChild(button);
@@ -143,17 +211,20 @@ function createExportControls() {
   return container;
 }
 
-function enhanceLegacyExportLink(link) {
+function enhanceLegacyDataExchange(link) {
   if (!(link instanceof HTMLAnchorElement) || !link.isConnected) return;
   if (link.closest("[data-export-downloads='ready']")) return;
-  const controls = createExportControls();
+  const section = link.closest("section");
+  const legacyInput = section?.querySelector('input[type="file"][accept*=".csv"]');
+  const controls = createDataExchangeControls();
+  if (legacyInput instanceof HTMLInputElement) legacyInput.remove();
   link.replaceWith(controls);
 }
 
 function enhanceAll(root) {
   root
     .querySelectorAll(`a[href*="${LEGACY_EXPORT_PATH}"]`)
-    .forEach(enhanceLegacyExportLink);
+    .forEach(enhanceLegacyDataExchange);
 }
 
 export function installAuthenticatedExportDownloads() {
