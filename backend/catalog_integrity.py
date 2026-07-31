@@ -1,4 +1,3 @@
-import math
 import re
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
@@ -72,27 +71,40 @@ def _money(value: object, *, field: str, nullable: bool = False) -> float | None
 
 
 def _validate_product_before_write(_mapper, _connection, target: Product) -> None:
+    # SQLAlchemy column defaults are normally populated during INSERT, after
+    # before_insert listeners run. Apply the same canonical defaults here so
+    # strict validation remains compatible with direct ORM construction.
     target.sku = _normalize_required(target.sku, field="Product SKU", maximum=120)
     target.moysklad_id = _normalize_optional(
-        target.moysklad_id,
+        target.moysklad_id or "",
         field="MoySklad product id",
         maximum=255,
     )
     target.title = _normalize_required(target.title, field="Product title", maximum=255)
     target.slug = _normalize_required(target.slug, field="Product slug", maximum=255)
-    target.brand = _normalize_required(target.brand, field="Product brand", maximum=120)
+    target.brand = _normalize_required(
+        target.brand or "FLASHIN",
+        field="Product brand",
+        maximum=120,
+    )
     target.category = _normalize_required(
-        target.category,
+        target.category or "Clothing",
         field="Product category",
         maximum=120,
     )
-    target.gender = _normalize_required(target.gender, field="Product gender", maximum=32)
-    target.currency = str(target.currency or "").strip().upper()
+    target.gender = _normalize_required(
+        target.gender or "unisex",
+        field="Product gender",
+        maximum=32,
+    )
+    target.currency = str(target.currency or "RUB").strip().upper()
     if not _CURRENCY_RE.fullmatch(target.currency):
         raise HTTPException(status_code=400, detail="Product currency must be a 3-letter code")
 
     target.price = _money(target.price, field="Product price")
     target.old_price = _money(target.old_price, field="Product old price", nullable=True)
+    if target.active is None:
+        target.active = True
     if target.active and target.price <= 0:
         raise HTTPException(status_code=400, detail="Active product price must be positive")
     if target.old_price is not None and target.old_price <= target.price:
@@ -105,12 +117,16 @@ def _validate_product_before_write(_mapper, _connection, target: Product) -> Non
 def _validate_variant_before_write(_mapper, _connection, target: ProductVariant) -> None:
     target.sku = _normalize_required(target.sku, field="Variant SKU", maximum=120)
     target.moysklad_id = _normalize_optional(
-        target.moysklad_id,
+        target.moysklad_id or "",
         field="MoySklad variant id",
         maximum=255,
     )
     target.size = _normalize_required(target.size, field="Variant size", maximum=32)
-    target.color = _normalize_optional(target.color, field="Variant color", maximum=64)
+    target.color = _normalize_optional(
+        target.color or "",
+        field="Variant color",
+        maximum=64,
+    )
     try:
         target.stock_qty = int(target.stock_qty or 0)
         target.reserved_qty = int(target.reserved_qty or 0)
@@ -123,8 +139,8 @@ def _validate_variant_before_write(_mapper, _connection, target: ProductVariant)
 
 
 def _validate_sync_log_before_write(_mapper, _connection, target: MoySkladSyncLog) -> None:
-    target.sync_type = str(target.sync_type or "").strip().lower()
-    target.status = str(target.status or "").strip().lower()
+    target.sync_type = str(target.sync_type or "manual").strip().lower()
+    target.status = str(target.status or "started").strip().lower()
     target.error = str(target.error or "").strip()[:MAX_SYNC_ERROR_LENGTH]
     if target.sync_type not in VALID_MOYSKLAD_SYNC_TYPES:
         raise HTTPException(status_code=400, detail="Invalid MoySklad sync type")
