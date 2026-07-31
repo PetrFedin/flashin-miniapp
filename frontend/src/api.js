@@ -12,11 +12,15 @@ function headers(auth = true) {
 }
 
 async function errorDetail(response) {
+  const text = await response.text();
+  if (!text) return "";
   try {
-    const data = await response.json();
-    return typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
+    const data = JSON.parse(text);
+    if (typeof data.detail === "string") return data.detail;
+    if (data.detail !== undefined) return JSON.stringify(data.detail);
+    return text;
   } catch {
-    return response.text();
+    return text;
   }
 }
 
