@@ -1,10 +1,10 @@
-from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 
 from backend.api.outbox import _reset_for_retry
+from backend.database import utcnow_naive
 from backend.services.outbox import enqueue_webhook, schedule_retry
 from backend.services.webhook_security import (
     is_internal_destination,
@@ -79,7 +79,7 @@ def test_failed_outbox_row_is_fully_reset_for_retry():
         last_error="provider failed",
         next_attempt_at=None,
     )
-    now = datetime.utcnow()
+    now = utcnow_naive()
 
     _reset_for_retry(row, now)
 
@@ -99,6 +99,6 @@ def test_sent_outbox_row_cannot_be_retried():
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        _reset_for_retry(row, datetime.utcnow())
+        _reset_for_retry(row, utcnow_naive())
 
     assert exc_info.value.status_code == 409
