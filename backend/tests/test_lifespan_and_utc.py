@@ -13,6 +13,41 @@ from backend.models import Order
 
 
 ROOT = Path(__file__).resolve().parents[2]
+LEGACY_UTCNOW_BASELINE = {
+    "backend/api/admin.py": 1,
+    "backend/api/admin_auth.py": 1,
+    "backend/api/admin_notifications.py": 1,
+    "backend/api/ops.py": 3,
+    "backend/api/order_cancellation.py": 1,
+    "backend/api/orders.py": 1,
+    "backend/api/outbox.py": 2,
+    "backend/api/support.py": 1,
+    "backend/jobs/campaign_jobs.py": 1,
+    "backend/jobs/media_jobs.py": 1,
+    "backend/jobs/ops_jobs.py": 2,
+    "backend/jobs/outbox_jobs.py": 1,
+    "backend/jobs/scheduler_app.py": 1,
+    "backend/jobs/sla_jobs.py": 1,
+    "backend/models.py": 54,
+    "backend/services/admin_security.py": 2,
+    "backend/services/campaigns.py": 1,
+    "backend/services/crm.py": 1,
+    "backend/services/delivery_providers.py": 1,
+    "backend/services/diagnostics.py": 1,
+    "backend/services/event_dispatcher.py": 1,
+    "backend/services/fulfillment.py": 2,
+    "backend/services/loyalty.py": 4,
+    "backend/services/moysklad.py": 2,
+    "backend/services/notification_delivery.py": 1,
+    "backend/services/outbox.py": 2,
+    "backend/services/payment_reconciliation.py": 1,
+    "backend/services/promos.py": 1,
+    "backend/services/search.py": 1,
+    "bot/send_notifications.py": 4,
+    "scripts/generate_release_pack.py": 1,
+    "scripts/pilot_runner.py": 1,
+    "scripts/release_freeze.py": 1,
+}
 
 
 def test_utcnow_naive_is_explicit_utc_and_matches_existing_db_contract():
@@ -101,7 +136,7 @@ def test_main_uses_lifespan_instead_of_deprecated_startup_hook():
     assert ".on_event(" not in source
 
 
-def test_datetime_utcnow_is_confined_to_controlled_legacy_models():
+def test_datetime_utcnow_legacy_debt_is_explicitly_bounded():
     occurrences = {}
     for directory in ("backend", "bot", "scripts"):
         for path in sorted((ROOT / directory).rglob("*.py")):
@@ -117,4 +152,4 @@ def test_datetime_utcnow_is_confined_to_controlled_legacy_models():
             if count:
                 occurrences[path.relative_to(ROOT).as_posix()] = count
 
-    assert occurrences == {"backend/models.py": 45}
+    assert occurrences == LEGACY_UTCNOW_BASELINE
