@@ -60,17 +60,17 @@ def test_only_one_open_request_per_customer_and_type():
 def test_terminal_request_state_requires_processed_at():
     db = _session()
     customer = _customer(db)
-    db.execute(
-        PrivacyRequest.__table__.insert().values(
-            customer_id=customer.id,
-            request_type="delete",
-            status="processed",
-            result_url="",
-            processed_at=None,
-        )
-    )
 
     with pytest.raises(IntegrityError):
+        db.execute(
+            PrivacyRequest.__table__.insert().values(
+                customer_id=customer.id,
+                request_type="delete",
+                status="processed",
+                result_url="",
+                processed_at=None,
+            )
+        )
         db.commit()
     db.rollback()
 
