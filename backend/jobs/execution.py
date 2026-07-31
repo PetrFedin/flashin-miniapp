@@ -25,6 +25,7 @@ from ..job_models import (
 T = TypeVar("T")
 _LOCAL_LOCKS: dict[int, threading.Lock] = {}
 _LOCAL_LOCKS_GUARD = threading.Lock()
+_STALE_RUN_ERROR = "Recovered stale scheduled job run after distributed lock acquisition"
 
 
 @dataclass(frozen=True)
@@ -185,6 +186,42 @@ def _create_run(
         db.close()
 
 
+def _recover_stale_runs(session_factory: sessionmaker, job_name: str) -> int:
+    """Close abandoned `running` audits once the same job lock is acquired.
+
+    Holding the distributed lock proves there is no live guarded execution with
+    this job name, so any surviving running audit belongs to a terminated or
+    pre-lock process and can be marked failed safely.
+    """
+
+    now = datetime.utcnow()
+    db = session_factory()
+    try:
+        rows = (
+            db.query(ScheduledJobRun)
+            .filter(
+                ScheduledJobRun.job_name == job_name,
+                ScheduledJobRun.status == "running",
+            )
+            .order_by(ScheduledJobRun.started_at.asc(), ScheduledJobRun.id.asc())
+            .with_for_update()
+            .all()
+        )
+        for run in rows:
+            elapsed_ms = int(max((now - run.started_at).total_seconds() * 1000, 0))
+            run.status = "failed"
+            run.finished_at = now
+            run.duration_ms = min(elapsed_ms, MAX_JOB_DURATION_MS)
+            run.error = _STALE_RUN_ERROR
+        db.commit()
+        return len(rows)
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 def _finish_run(
     session_factory: sessionmaker,
     run_id: int,
@@ -241,6 +278,7 @@ def run_sync_job(
             )
             return JobExecutionOutcome(normalized_name, "skipped", skipped.id)
 
+        _recover_stale_runs(session_factory, normalized_name)
         run = _create_run(
             session_factory,
             job_name=normalized_name,
@@ -293,6 +331,7 @@ async def run_async_job(
             )
             return JobExecutionOutcome(normalized_name, "skipped", skipped.id)
 
+        _recover_stale_runs(session_factory, normalized_name)
         run = _create_run(
             session_factory,
             job_name=normalized_name,
