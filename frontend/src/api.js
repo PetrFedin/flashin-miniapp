@@ -1,4 +1,6 @@
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+const ACTIVE_CART_STORAGE_KEY = "flashin_active_cart_id";
+const CHECKOUT_KEY_PREFIX = "flashin_checkout_key:";
 
 function getToken() {
   return localStorage.getItem("flashin_token");
@@ -9,6 +11,23 @@ function headers(auth = true) {
   const token = getToken();
   if (auth && token) result.Authorization = `Bearer ${token}`;
   return result;
+}
+
+function createRequestId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `checkout-${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function checkoutKeyForActiveCart() {
+  const cartId = localStorage.getItem(ACTIVE_CART_STORAGE_KEY);
+  if (!cartId) throw new Error("Активная корзина не определена. Обновите корзину и повторите оформление.");
+  const storageKey = `${CHECKOUT_KEY_PREFIX}${cartId}`;
+  let idempotencyKey = localStorage.getItem(storageKey);
+  if (!idempotencyKey) {
+    idempotencyKey = createRequestId();
+    localStorage.setItem(storageKey, idempotencyKey);
+  }
+  return { cartId, idempotencyKey, storageKey };
 }
 
 async function errorDetail(response) {
@@ -62,7 +81,9 @@ export async function searchProducts(query) {
 }
 
 export async function getCart() {
-  return request("/api/cart");
+  const cart = await request("/api/cart");
+  if (cart?.id) localStorage.setItem(ACTIVE_CART_STORAGE_KEY, String(cart.id));
+  return cart;
 }
 
 export async function addToCart(productId, variantId, quantity = 1) {
@@ -104,10 +125,14 @@ export async function applyReferral(code) {
 }
 
 export async function checkout(payload) {
-  return request("/api/orders/checkout", {
+  const { idempotencyKey, storageKey } = checkoutKeyForActiveCart();
+  const order = await request("/api/orders/checkout", {
     method: "POST",
+    headers: { "Idempotency-Key": idempotencyKey },
     body: JSON.stringify(payload),
   });
+  localStorage.removeItem(storageKey);
+  return order;
 }
 
 export async function listOrders() {
