@@ -2,6 +2,7 @@ import base64
 import math
 import re
 from datetime import datetime
+from urllib.parse import urlparse
 
 import httpx
 from sqlalchemy.orm import Session
@@ -45,16 +46,53 @@ async def fetch_assortment(limit: int = 100, offset: int = 0) -> dict:
     return payload
 
 
-def _price_from_moysklad(row: dict) -> float:
-    sale_prices = row.get("salePrices") or []
-    for sale_price in sale_prices:
+def _reference_id(value: object) -> str:
+    if not isinstance(value, dict):
+        return ""
+    direct = str(value.get("id") or "").strip()
+    if direct:
+        return direct
+    meta = value.get("meta")
+    if not isinstance(meta, dict):
+        return ""
+    href = str(meta.get("href") or "").strip()
+    if not href:
+        return ""
+    path = urlparse(href).path.rstrip("/")
+    return path.rsplit("/", 1)[-1] if path else ""
+
+
+def _sale_price_type_keys(sale_price: object) -> set[str]:
+    if not isinstance(sale_price, dict):
+        return set()
+    price_type = sale_price.get("priceType")
+    if not isinstance(price_type, dict):
+        return set()
+    keys = {
+        str(price_type.get("name") or "").strip().casefold(),
+        str(price_type.get("id") or "").strip().casefold(),
+        _reference_id(price_type).casefold(),
+    }
+    return {key for key in keys if key}
+
+
+def _price_from_moysklad(row: dict, preferred_price_type: str = "") -> float:
+    preferred = str(preferred_price_type or "").strip().casefold()
+    candidates: list[tuple[set[str], float]] = []
+    for sale_price in row.get("salePrices") or []:
         try:
             value = float(sale_price.get("value"))
         except (AttributeError, TypeError, ValueError):
             continue
         if math.isfinite(value) and value > 0:
-            return round(value / 100, 2)
-    return 0.0
+            candidates.append((_sale_price_type_keys(sale_price), round(value / 100, 2)))
+
+    if preferred:
+        for keys, value in candidates:
+            if preferred in keys:
+                return value
+        return 0.0
+    return candidates[0][1] if candidates else 0.0
 
 
 def _stock_from_moysklad(row: dict) -> int | None:
@@ -74,6 +112,56 @@ def _stock_from_moysklad(row: dict) -> int | None:
             return None
         return max(int(value), 0)
     return None
+
+
+def _attribute_names(value: object) -> set[str]:
+    return {
+        item.strip().casefold()
+        for item in str(value or "").split(",")
+        if item.strip()
+    }
+
+
+def _attribute_value(
+    row: dict,
+    configured_names: object,
+    *,
+    direct_keys: tuple[str, ...] = (),
+) -> str:
+    for key in direct_keys:
+        direct = row.get(key)
+        if direct is not None and str(direct).strip():
+            return str(direct).strip()
+
+    expected = _attribute_names(configured_names)
+    if not expected:
+        return ""
+    attributes = row.get("attributes") or []
+    if not isinstance(attributes, list):
+        return ""
+
+    for attribute in attributes:
+        if not isinstance(attribute, dict):
+            continue
+        name = str(attribute.get("name") or "").strip().casefold()
+        if name not in expected:
+            continue
+        value = attribute.get("value")
+        if isinstance(value, dict):
+            value = value.get("name") or value.get("value") or value.get("id")
+        cleaned = str(value or "").strip()
+        if cleaned:
+            return cleaned
+    return ""
+
+
+def _row_type(row: dict) -> str:
+    meta = row.get("meta")
+    if isinstance(meta, dict):
+        value = str(meta.get("type") or "").strip().casefold()
+        if value:
+            return value
+    return str(row.get("type") or "").strip().casefold()
 
 
 def _slugify(value: str) -> str:
@@ -145,7 +233,7 @@ async def sync_assortment_to_catalog(db: Session, sync_type: str = "manual") -> 
                     )
 
                 name = str(row.get("name") or sku).strip()[:255]
-                price = _price_from_moysklad(row)
+                price = _price_from_moysklad(row, settings.moysklad_sale_price_type)
                 external_stock = _stock_from_moysklad(row)
                 product = db.query(Product).filter(Product.sku == sku).first()
 
@@ -159,6 +247,11 @@ async def sync_assortment_to_catalog(db: Session, sync_type: str = "manual") -> 
                     )
                     continue
 
+                missing_price_message = (
+                    f"Configured sale price type '{settings.moysklad_sale_price_type}' is missing or invalid"
+                    if settings.moysklad_sale_price_type.strip()
+                    else "No positive sale price was supplied"
+                )
                 if not product:
                     if price <= 0:
                         log_conflict(
@@ -166,7 +259,7 @@ async def sync_assortment_to_catalog(db: Session, sync_type: str = "manual") -> 
                             moysklad_id,
                             sku,
                             "missing_price",
-                            "Product imported inactive because no positive sale price was supplied",
+                            f"Product imported inactive because {missing_price_message.lower()}",
                         )
                     product = Product(
                         sku=sku,
@@ -200,7 +293,7 @@ async def sync_assortment_to_catalog(db: Session, sync_type: str = "manual") -> 
                             moysklad_id,
                             sku,
                             "missing_price",
-                            "Existing local price preserved because provider price is missing",
+                            f"Existing local price preserved because {missing_price_message.lower()}",
                         )
                     product.category = apply_mapping(
                         db,
@@ -209,12 +302,27 @@ async def sync_assortment_to_catalog(db: Session, sync_type: str = "manual") -> 
                         product.category,
                     )
 
-                size = apply_mapping(
-                    db,
-                    "size",
-                    row.get("size") or row.get("uom", {}).get("name") or "ONE SIZE",
-                    "ONE SIZE",
+                raw_size = _attribute_value(
+                    row,
+                    settings.moysklad_size_attribute_names,
+                    direct_keys=("size",),
                 )
+                if not raw_size and _row_type(row) == "variant":
+                    log_conflict(
+                        db,
+                        moysklad_id,
+                        sku,
+                        "missing_size",
+                        "Variant has no configured size attribute; ONE SIZE fallback applied",
+                    )
+                size = apply_mapping(db, "size", raw_size or "ONE SIZE", "ONE SIZE")
+                raw_color = _attribute_value(
+                    row,
+                    settings.moysklad_color_attribute_names,
+                    direct_keys=("color",),
+                )
+                color = apply_mapping(db, "color", raw_color, "") if raw_color else ""
+
                 variant = db.query(ProductVariant).filter(ProductVariant.sku == sku).first()
                 if variant and variant.product_id != product.id:
                     log_conflict(
@@ -238,6 +346,7 @@ async def sync_assortment_to_catalog(db: Session, sync_type: str = "manual") -> 
                     variant = ProductVariant(
                         product_id=product.id,
                         size=str(size)[:32],
+                        color=str(color)[:64],
                         sku=sku,
                         moysklad_id=moysklad_id,
                         stock_qty=external_stock if external_stock is not None else 0,
@@ -248,6 +357,7 @@ async def sync_assortment_to_catalog(db: Session, sync_type: str = "manual") -> 
                 else:
                     variant.moysklad_id = moysklad_id
                     variant.size = str(size)[:32]
+                    variant.color = str(color)[:64]
                     if external_stock is not None:
                         if external_stock < variant.reserved_qty:
                             log_conflict(
