@@ -1,5 +1,6 @@
-from datetime import datetime
 from sqlalchemy.orm import Session
+
+from ..database import utcnow_naive
 from ..models import MediaAsset, MediaProcessingJob
 from ..services.media_pipeline import generate_local_derivatives
 
@@ -27,7 +28,7 @@ def process_media_jobs(db: Session, limit: int = 20) -> int:
         try:
             generate_local_derivatives(db, asset)
             row.status = "processed"
-            row.processed_at = datetime.utcnow()
+            row.processed_at = utcnow_naive()
             count += 1
         except Exception as exc:
             row.attempts += 1
