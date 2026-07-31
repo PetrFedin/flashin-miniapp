@@ -1,9 +1,7 @@
-from datetime import datetime
-
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from ..database import get_db
+from ..database import get_db, utcnow_naive
 from ..models import AdminUser, Customer, SupportTicket
 from ..schemas import SupportTicketCreate, SupportTicketOut, SupportTicketUpdate
 from ..security import get_current_admin, get_current_customer
@@ -120,7 +118,7 @@ def admin_update_ticket(
                 raise HTTPException(status_code=409, detail="Assigned administrator not found or inactive")
             ticket.assigned_admin_id = assignee.id
 
-        ticket.updated_at = datetime.utcnow()
+        ticket.updated_at = utcnow_naive()
         db.commit()
         db.refresh(ticket)
         return ticket
