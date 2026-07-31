@@ -1,8 +1,8 @@
-from datetime import datetime
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
+from ..database import utcnow_naive
 from ..models import (
     Cart,
     ConsentRecord,
@@ -78,7 +78,7 @@ def build_customer_export(db: Session, customer: Customer) -> dict:
     )
 
     return {
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": utcnow_naive().isoformat() + "Z",
         "customer": {
             "id": customer.id,
             "telegram_id": customer.telegram_id,
@@ -360,4 +360,4 @@ def anonymize_customer(db: Session, customer: Customer) -> dict:
 def mark_privacy_processed(req: PrivacyRequest, result_url: str = "") -> None:
     req.status = "processed"
     req.result_url = result_url[:2048]
-    req.processed_at = datetime.utcnow()
+    req.processed_at = utcnow_naive()

@@ -1,13 +1,9 @@
-from datetime import UTC, datetime
+from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from .database import Base
-
-
-def _utcnow_naive() -> datetime:
-    return datetime.now(UTC).replace(tzinfo=None)
+from .database import Base, utcnow_naive
 
 
 class CheckoutAttempt(Base):
@@ -28,4 +24,4 @@ class CheckoutAttempt(Base):
     order_id: Mapped[int | None] = mapped_column(ForeignKey("orders.id"), nullable=True)
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
     request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow_naive)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)

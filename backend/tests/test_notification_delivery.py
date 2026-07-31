@@ -1,8 +1,9 @@
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import pytest
 from fastapi import HTTPException
 
+from backend.database import utcnow_naive
 from backend.models import Notification
 from backend.notification_models import NotificationDeliveryState
 from backend.services.notification_delivery import reset_notification_delivery
@@ -15,7 +16,7 @@ def _notification(status: str) -> Notification:
         message="Order update",
         status=status,
         error="delivery failed",
-        sent_at=datetime.utcnow() if status == "sent" else None,
+        sent_at=utcnow_naive() if status == "sent" else None,
     )
 
 
@@ -28,7 +29,7 @@ def test_failed_notification_is_reset_for_immediate_retry():
         next_attempt_at=None,
         last_error="network error",
     )
-    reset_at = datetime.utcnow() - timedelta(seconds=1)
+    reset_at = utcnow_naive() - timedelta(seconds=1)
 
     result = reset_notification_delivery(notification, state, now=reset_at)
 
@@ -44,7 +45,7 @@ def test_failed_notification_is_reset_for_immediate_retry():
 
 def test_pending_notification_without_state_gets_new_retry_state():
     notification = _notification("pending")
-    reset_at = datetime.utcnow()
+    reset_at = utcnow_naive()
 
     state = reset_notification_delivery(notification, now=reset_at)
 
