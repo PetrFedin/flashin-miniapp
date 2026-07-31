@@ -1,3 +1,6 @@
+export * from "./bot-callback.js";
+export * from "./bot-flow.js";
+export * from "./bot-types.js";
 export * from "./checkout.js";
 export * from "./errors.js";
 export * from "./inventory.js";

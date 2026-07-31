@@ -1,12 +1,12 @@
 declare module "node:crypto" {
   interface Hash {
     update(data: string, encoding?: string): Hash;
-    digest(encoding: "hex"): string;
+    digest(encoding: "hex" | "base64url"): string;
   }
   interface Hmac {
     update(data: string, encoding?: string): Hmac;
     digest(): Uint8Array;
-    digest(encoding: "hex"): string;
+    digest(encoding: "hex" | "base64url"): string;
   }
   export function createHash(algorithm: string): Hash;
   export function createHmac(algorithm: string, key: string | Uint8Array): Hmac;
@@ -33,4 +33,5 @@ declare module "node:test" {
 
 declare const Buffer: {
   from(value: string, encoding?: string): Uint8Array;
+  byteLength(value: string, encoding?: string): number;
 };
