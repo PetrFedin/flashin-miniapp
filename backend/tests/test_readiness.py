@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from backend.api import health
 
 
-CURRENT_HEAD = "0014_multiple_partial_refunds"
+CURRENT_HEAD = "0015_checkout_idempotency"
 
 
 class ScalarResult:
@@ -58,7 +58,7 @@ def test_not_ready_when_database_revision_is_old(monkeypatch):
         "_expected_migration_heads",
         lambda: frozenset({CURRENT_HEAD}),
     )
-    db = FakeDb(["0013_webhook_outbox_integrity"])
+    db = FakeDb(["0014_multiple_partial_refunds"])
 
     with pytest.raises(HTTPException) as exc_info:
         health.ready(db)
