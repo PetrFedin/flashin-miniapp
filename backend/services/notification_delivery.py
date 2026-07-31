@@ -2,6 +2,7 @@ from datetime import datetime
 
 from fastapi import HTTPException
 
+from ..database import utcnow_naive
 from ..models import Notification
 from ..notification_models import NotificationDeliveryState
 
@@ -29,7 +30,7 @@ def reset_notification_delivery(
             detail=f"Notification in status {notification.status} cannot be retried",
         )
 
-    reset_at = now or datetime.utcnow()
+    reset_at = now or utcnow_naive()
     notification.status = "pending"
     notification.error = ""
     notification.sent_at = None
