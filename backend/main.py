@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import sentry_sdk
@@ -82,11 +83,31 @@ if settings.sentry_dsn:
         environment=settings.app_env,
     )
 
+
+def initialize_application() -> None:
+    if settings.use_create_all:
+        Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+    try:
+        bootstrap_admin(db)
+        if settings.enable_seed:
+            seed_products(db)
+    finally:
+        db.close()
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    initialize_application()
+    yield
+
+
 app = FastAPI(
     title="FLASHIN Mini App Backend v52",
     docs_url=None if is_production else "/docs",
     redoc_url=None if is_production else "/redoc",
     openapi_url=None if is_production else "/openapi.json",
+    lifespan=lifespan,
 )
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(InMemoryRateLimitMiddleware)
@@ -151,19 +172,6 @@ app.include_router(delivery_providers_router, prefix="/api")
 app.include_router(moysklad_deep_mapping_router, prefix="/api")
 app.include_router(admin_security_router, prefix="/api")
 app.include_router(delivery_quotes_router, prefix="/api")
-
-
-@app.on_event("startup")
-def on_startup():
-    if settings.use_create_all:
-        Base.metadata.create_all(bind=engine)
-    db = SessionLocal()
-    try:
-        bootstrap_admin(db)
-        if settings.enable_seed:
-            seed_products(db)
-    finally:
-        db.close()
 
 
 if settings.metrics_enabled:
