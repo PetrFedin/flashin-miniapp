@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Fail when production Compose exposes internal services on host ports."""
+"""Fail when the resolved production Compose graph is incomplete or unsafe."""
+
+from __future__ import annotations
 
 import json
 import subprocess
 import sys
 from collections.abc import Mapping
+from pathlib import Path
 
 PUBLIC_SERVICE = "caddy"
 REQUIRED_INTERNAL_SERVICES = {
@@ -18,6 +21,7 @@ REQUIRED_INTERNAL_SERVICES = {
     "meilisearch",
 }
 EXPECTED_PUBLIC_PORTS = {(80, "tcp"), (443, "tcp")}
+PRODUCTION_PROFILES = ("production", "workers", "scheduler", "search")
 
 
 def _published_ports(service: Mapping) -> set[tuple[int, str]]:
@@ -72,9 +76,26 @@ def validate_config(config: Mapping) -> list[str]:
     return errors
 
 
-def load_compose_config() -> dict:
+def compose_config_command(root: Path) -> list[str]:
+    command = [
+        "docker",
+        "compose",
+        "-f",
+        str(root / "docker-compose.yml"),
+        "-f",
+        str(root / "docker-compose.production.yml"),
+    ]
+    for profile in PRODUCTION_PROFILES:
+        command.extend(("--profile", profile))
+    command.extend(("config", "--format", "json"))
+    return command
+
+
+def load_compose_config(root: Path | None = None) -> dict:
+    project_root = (root or Path(__file__).resolve().parents[1]).resolve()
     result = subprocess.run(
-        ["docker", "compose", "config", "--format", "json"],
+        compose_config_command(project_root),
+        cwd=project_root,
         capture_output=True,
         text=True,
         check=False,
@@ -102,7 +123,14 @@ def main() -> int:
     if errors:
         print({"ok": False, "errors": errors})
         return 1
-    print({"ok": True, "public_service": PUBLIC_SERVICE, "ports": [80, 443]})
+    print(
+        {
+            "ok": True,
+            "public_service": PUBLIC_SERVICE,
+            "ports": [80, 443],
+            "profiles": list(PRODUCTION_PROFILES),
+        }
+    )
     return 0
 
 
