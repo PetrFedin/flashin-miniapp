@@ -7,7 +7,7 @@ from ..models import CrmProfile, Customer, MarketingCampaign
 from ..notification_statuses import normalize_notification_message
 from .notifications import queue_notification
 
-_ALLOWED_QUEUE_STATES = frozenset({"draft", "scheduled"})
+_ALLOWED_QUEUE_STATES = frozenset({"draft", "failed", "scheduled"})
 
 
 def _campaign_message(campaign: MarketingCampaign) -> str:
