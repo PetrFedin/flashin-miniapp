@@ -163,24 +163,42 @@ def test_parse_rejects_row_limit_before_database_work(monkeypatch):
     assert "more than 1" in exc_info.value.detail
 
 
-def test_conflicting_product_facts_and_duplicate_variants_are_rejected():
-    with pytest.raises(HTTPException) as facts_error:
+def test_conflicting_product_facts_are_rejected():
+    with pytest.raises(HTTPException) as exc_info:
         parse_product_csv(
             _csv(
                 "SKU-3,First,10,S,Black,1",
                 "SKU-3,Second,10,M,Black,1",
             )
         )
-    assert "conflicting product fields" in facts_error.value.detail
 
-    with pytest.raises(HTTPException) as duplicate_error:
-        parse_product_csv(
-            _csv(
-                "SKU-3,First,10,S,Black,1",
-                "SKU-3,First,10,S,Black,2",
-            )
-        )
-    assert "size and color are duplicated" in duplicate_error.value.detail
+    assert "conflicting product fields" in exc_info.value.detail
+
+
+def test_duplicate_variant_sku_is_rejected_independently():
+    content = _csv(
+        "SKU-3,First,10,S,Black,1,EXPLICIT-VARIANT",
+        "SKU-3,First,10,M,Black,2,EXPLICIT-VARIANT",
+        header="sku,title,price,size,color,stock_qty,variant_sku",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        parse_product_csv(content)
+
+    assert "variant_sku is duplicated" in exc_info.value.detail
+
+
+def test_duplicate_size_and_color_are_rejected_independently():
+    content = _csv(
+        "SKU-3,First,10,S,Black,1,VARIANT-A",
+        "SKU-3,First,10,S,Black,2,VARIANT-B",
+        header="sku,title,price,size,color,stock_qty,variant_sku",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        parse_product_csv(content)
+
+    assert "size and color are duplicated" in exc_info.value.detail
 
 
 def test_failed_import_rolls_back_product_changes_when_stock_is_reserved():
