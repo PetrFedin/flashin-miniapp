@@ -7,6 +7,10 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import Notification
 from ..notification_models import NotificationDeliveryState
+from ..notification_statuses import (
+    NOTIFICATION_FAILED,
+    VALID_NOTIFICATION_STATUSES,
+)
 from ..security import get_current_admin
 from ..services.audit import log_admin_action
 from ..services.notification_delivery import reset_notification_delivery
@@ -27,6 +31,8 @@ def _serialize(notification: Notification, state: NotificationDeliveryState | No
         "attempts": state.attempts if state else 0,
         "next_attempt_at": state.next_attempt_at if state else None,
         "last_error": state.last_error if state else "",
+        "deduplication_key": state.deduplication_key if state else "",
+        "leased": bool(state and state.lease_token),
     }
 
 
@@ -47,7 +53,7 @@ def list_notification_delivery(
     )
     if status:
         normalized_status = status.strip().lower()
-        if normalized_status not in {"pending", "sent", "failed"}:
+        if normalized_status not in VALID_NOTIFICATION_STATUSES:
             raise HTTPException(status_code=400, detail="Invalid notification status")
         query = query.filter(Notification.status == normalized_status)
 
@@ -69,7 +75,7 @@ def requeue_failed_notifications(
     try:
         notifications = (
             db.query(Notification)
-            .filter(Notification.status == "failed")
+            .filter(Notification.status == NOTIFICATION_FAILED)
             .order_by(Notification.created_at.asc(), Notification.id.asc())
             .with_for_update(skip_locked=True)
             .limit(limit)
