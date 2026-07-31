@@ -4,6 +4,9 @@ from fastapi import HTTPException
 from backend.api import health
 
 
+CURRENT_HEAD = "0014_multiple_partial_refunds"
+
+
 class ScalarResult:
     def __init__(self, values=None):
         self.values = list(values or [])
@@ -31,18 +34,16 @@ class FakeDb:
 
 
 def test_repository_has_single_current_migration_head():
-    assert health._expected_migration_heads() == frozenset(
-        {"0013_webhook_outbox_integrity"}
-    )
+    assert health._expected_migration_heads() == frozenset({CURRENT_HEAD})
 
 
 def test_ready_when_database_revision_matches(monkeypatch):
     monkeypatch.setattr(
         health,
         "_expected_migration_heads",
-        lambda: frozenset({"0013_webhook_outbox_integrity"}),
+        lambda: frozenset({CURRENT_HEAD}),
     )
-    db = FakeDb(["0013_webhook_outbox_integrity"])
+    db = FakeDb([CURRENT_HEAD])
 
     result = health.ready(db)
 
@@ -55,9 +56,9 @@ def test_not_ready_when_database_revision_is_old(monkeypatch):
     monkeypatch.setattr(
         health,
         "_expected_migration_heads",
-        lambda: frozenset({"0013_webhook_outbox_integrity"}),
+        lambda: frozenset({CURRENT_HEAD}),
     )
-    db = FakeDb(["0012_notification_delivery_retry_state"])
+    db = FakeDb(["0013_webhook_outbox_integrity"])
 
     with pytest.raises(HTTPException) as exc_info:
         health.ready(db)
@@ -71,7 +72,7 @@ def test_not_ready_when_migration_graph_is_invalid(monkeypatch):
         raise RuntimeError("no head")
 
     monkeypatch.setattr(health, "_expected_migration_heads", fail)
-    db = FakeDb(["0013_webhook_outbox_integrity"])
+    db = FakeDb([CURRENT_HEAD])
 
     with pytest.raises(HTTPException) as exc_info:
         health.ready(db)
