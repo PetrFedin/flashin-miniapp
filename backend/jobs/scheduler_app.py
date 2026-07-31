@@ -1,10 +1,10 @@
 import asyncio
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
 from backend.config import get_settings
-from backend.database import SessionLocal
+from backend.database import SessionLocal, utcnow_naive
 from backend.jobs.campaign_jobs import queue_due_campaigns
 from backend.jobs.event_jobs import run_event_dispatcher
 from backend.jobs.ops_jobs import create_inventory_snapshot, queue_abandoned_cart_notifications
@@ -97,7 +97,7 @@ def main():
         "interval",
         minutes=moysklad_interval,
         id="moysklad-sync",
-        next_run_time=datetime.utcnow() + timedelta(seconds=30),
+        next_run_time=utcnow_naive() + timedelta(seconds=30),
     )
     scheduler.start()
 
