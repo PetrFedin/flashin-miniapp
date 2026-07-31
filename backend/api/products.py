@@ -2,25 +2,46 @@ from collections import defaultdict
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from ..config import get_settings
 from ..database import get_db
 from ..models import Product, ProductImage, ProductVariant
 from ..schemas import ProductCreate, ProductOut
+from ..security import get_current_admin
+from ..services.rbac import require_permission
 
 router = APIRouter(prefix="/products", tags=["products"])
 settings = get_settings()
 
 
-def _load_active_product(db: Session, *, product_id: int | None = None, slug: str | None = None) -> Product:
-    query = db.query(Product).options(joinedload(Product.images), joinedload(Product.variants))
-    query = query.filter(Product.active.is_(True))
+def _product_query(db: Session):
+    return db.query(Product).options(
+        joinedload(Product.images),
+        joinedload(Product.variants),
+    )
+
+
+def _load_active_product(
+    db: Session,
+    *,
+    product_id: int | None = None,
+    slug: str | None = None,
+) -> Product:
+    query = _product_query(db).filter(Product.active.is_(True))
     if product_id is not None:
         query = query.filter(Product.id == product_id)
     if slug is not None:
         query = query.filter(Product.slug == slug)
     product = query.first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return product
+
+
+def _load_product_for_admin(db: Session, product_id: int) -> Product:
+    product = _product_query(db).filter(Product.id == product_id).first()
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
     return product
@@ -153,6 +174,34 @@ def _commerce_card(product: Product) -> dict:
     }
 
 
+def _normalized_variant_payload(raw: object) -> dict:
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=400, detail="Product variant must be an object")
+    sku = str(raw.get("sku") or "").strip()
+    size = str(raw.get("size") or "").strip()
+    color = str(raw.get("color") or "").strip()
+    if not sku or len(sku) > 120:
+        raise HTTPException(status_code=400, detail="Variant SKU is invalid")
+    if not size or len(size) > 32:
+        raise HTTPException(status_code=400, detail="Variant size is invalid")
+    if len(color) > 64:
+        raise HTTPException(status_code=400, detail="Variant color is too long")
+    try:
+        stock_qty = int(raw.get("stock_qty", 0))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Variant stock must be an integer") from exc
+    if stock_qty < 0:
+        raise HTTPException(status_code=400, detail="Variant stock cannot be negative")
+    return {"sku": sku, "size": size, "color": color, "stock_qty": stock_qty}
+
+
+def _normalized_image_url(raw: object) -> str:
+    url = str(raw or "").strip()
+    if not url or len(url) > 2048:
+        raise HTTPException(status_code=400, detail="Product image URL is invalid")
+    return url
+
+
 @router.get("", response_model=list[ProductOut])
 def list_products(
     brand: str | None = None,
@@ -161,7 +210,7 @@ def list_products(
     q: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
-    query = db.query(Product).options(joinedload(Product.images), joinedload(Product.variants)).filter(Product.active.is_(True))
+    query = _product_query(db).filter(Product.active.is_(True))
     if brand:
         query = query.filter(Product.brand.ilike(f"%{brand}%"))
     if category:
@@ -196,39 +245,68 @@ def get_product_by_slug(slug: str, db: Session = Depends(get_db)):
 
 
 @router.post("", response_model=ProductOut)
-def create_product(payload: ProductCreate, db: Session = Depends(get_db)):
-    # Keep public create only for local bootstrap; hide behind admin in production.
-    product = Product(
-        sku=payload.sku,
-        title=payload.title,
-        slug=payload.slug,
-        brand=payload.brand,
-        description=payload.description,
-        price=payload.price,
-        old_price=payload.old_price,
-        currency=payload.currency,
-        category=payload.category,
-        gender=payload.gender,
-        active=payload.active,
-        is_drop=payload.is_drop,
-        is_rare=payload.is_rare,
-        drop_starts_at=payload.drop_starts_at,
-        vip_only_until=payload.vip_only_until,
-    )
-    db.add(product)
-    db.flush()
-    for idx, url in enumerate(payload.images):
-        db.add(ProductImage(product_id=product.id, url=url, sort_order=idx))
-    for variant in payload.variants:
-        db.add(
-            ProductVariant(
-                product_id=product.id,
-                size=variant["size"],
-                color=variant.get("color", ""),
-                sku=variant["sku"],
-                stock_qty=int(variant.get("stock_qty", 0)),
-                reserved_qty=0,
-            )
+def create_product(
+    payload: ProductCreate,
+    admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    require_permission(db, admin, "products.write")
+    variants = [_normalized_variant_payload(value) for value in payload.variants]
+    images = [_normalized_image_url(value) for value in payload.images]
+    if len({variant["sku"] for variant in variants}) != len(variants):
+        raise HTTPException(status_code=400, detail="Variant SKU values must be unique")
+    if len(
+        {(variant["size"], variant["color"]) for variant in variants}
+    ) != len(variants):
+        raise HTTPException(
+            status_code=400,
+            detail="Variant size and color combinations must be unique",
         )
-    db.commit()
-    return get_product(product.id, db)
+
+    try:
+        product = Product(
+            sku=payload.sku,
+            title=payload.title,
+            slug=payload.slug,
+            brand=payload.brand,
+            description=payload.description,
+            price=payload.price,
+            old_price=payload.old_price,
+            currency=payload.currency,
+            category=payload.category,
+            gender=payload.gender,
+            active=payload.active,
+            is_drop=payload.is_drop,
+            is_rare=payload.is_rare,
+            drop_starts_at=payload.drop_starts_at,
+            vip_only_until=payload.vip_only_until,
+        )
+        db.add(product)
+        db.flush()
+        for idx, url in enumerate(images):
+            db.add(ProductImage(product_id=product.id, url=url, sort_order=idx))
+        for variant in variants:
+            db.add(
+                ProductVariant(
+                    product_id=product.id,
+                    size=variant["size"],
+                    color=variant["color"],
+                    sku=variant["sku"],
+                    stock_qty=variant["stock_qty"],
+                    reserved_qty=0,
+                )
+            )
+        db.commit()
+        return _load_product_for_admin(db, product.id)
+    except HTTPException:
+        db.rollback()
+        raise
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Product SKU, slug, provider id, or variant identity already exists",
+        ) from exc
+    except Exception:
+        db.rollback()
+        raise
