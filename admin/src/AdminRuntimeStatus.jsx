@@ -140,7 +140,7 @@ export default function AdminRuntimeStatus() {
         <p>{activeSummary}{activeActions.length > 4 ? "; …" : ""}</p>
         {duplicateCount > 0 && <small>Повторных запросов подавлено: {duplicateCount}</small>}
       </div>
-      <progress value={undefined} />
+      <progress />
     </div>}
 
     {!loading && hasFailures && <div className="admin-runtime-status__warning" role="alert">
