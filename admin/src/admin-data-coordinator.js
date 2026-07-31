@@ -186,6 +186,21 @@ export function installAdminDataCoordinator() {
     return batch;
   }
 
+  async function responseFromLatestBatch(path, token, sourceBatch) {
+    let selectedBatch = sourceBatch;
+    let response = await selectedBatch.requests.get(path);
+    if (selectedBatch !== batch) {
+      const currentToken = String(localStorage.getItem("admin_token") || "").trim();
+      if (!currentToken || currentToken !== token || !batch || batch.token !== token) {
+        throw new DOMException("Stale admin data request", "AbortError");
+      }
+      selectedBatch = batch;
+      selectedBatch.served.add(path);
+      response = await selectedBatch.requests.get(path);
+    }
+    return response;
+  }
+
   async function coordinatedFetch(input, init = {}) {
     let url;
     try {
@@ -207,7 +222,7 @@ export function installAdminDataCoordinator() {
     if (!token) return originalFetch(input, init);
     const activeBatch = ensureBatch(path, token);
     activeBatch.served.add(path);
-    const response = await activeBatch.requests.get(path);
+    const response = await responseFromLatestBatch(path, token, activeBatch);
     return response.clone();
   }
 
