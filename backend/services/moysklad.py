@@ -62,8 +62,7 @@ def _price_from_moysklad(row: dict) -> float:
         return 0.0
     for sale_price in sale_prices:
         try:
-            raw_value = sale_price.get("value")
-            value = Decimal(str(raw_value))
+            value = Decimal(str(sale_price.get("value")))
         except (AttributeError, InvalidOperation, TypeError, ValueError):
             continue
         if value.is_finite() and value > 0:
@@ -77,11 +76,7 @@ def _price_from_moysklad(row: dict) -> float:
 
 
 def _stock_from_moysklad(row: dict) -> int | None:
-    """Return stock only when the provider actually supplied a valid value.
-
-    Assortment responses do not always contain stock fields. Treating a missing
-    field as zero would incorrectly sell out the local catalog.
-    """
+    """Return stock only when the provider supplied a finite value."""
     for key in ("effectiveStock", "stock", "quantity"):
         if key not in row or row[key] is None:
             continue
@@ -128,7 +123,6 @@ def _start_sync(db: Session, sync_type: str) -> MoySkladSyncLog:
     stale_before = now - timedelta(
         minutes=max(10, int(settings.moysklad_sync_interval_minutes) * 2)
     )
-
     try:
         running = (
             db.query(MoySkladSyncLog)
@@ -194,18 +188,12 @@ async def _fetch_assortment_snapshot(limit: int) -> list[dict]:
         if not rows:
             return rows_snapshot
 
-        signature = tuple(
-            str(row.get("id") or "") if isinstance(row, dict) else "<invalid>"
-            for row in rows
-        )
-        if signature in page_signatures:
-            raise ValueError("MoySklad pagination returned a repeated page")
-        page_signatures.add(signature)
-
+        page_provider_ids: list[str] = []
         for row in rows:
             if not isinstance(row, dict):
                 raise ValueError("MoySklad assortment row must be an object")
             provider_id = str(row.get("id") or "").strip()
+            page_provider_ids.append(provider_id)
             if provider_id:
                 if provider_id in seen_provider_ids:
                     raise ValueError(
@@ -215,6 +203,11 @@ async def _fetch_assortment_snapshot(limit: int) -> list[dict]:
             rows_snapshot.append(row)
             if len(rows_snapshot) > MAX_MOYSKLAD_ROWS:
                 raise ValueError("MoySklad assortment exceeds the safe row limit")
+
+        signature = tuple(page_provider_ids)
+        if signature in page_signatures:
+            raise ValueError("MoySklad pagination returned a repeated page")
+        page_signatures.add(signature)
 
         offset += len(rows)
         if len(rows) < limit:
@@ -405,8 +398,10 @@ def _apply_assortment_snapshot(
         if not size_source:
             uom = row.get("uom")
             size_source = uom.get("name") if isinstance(uom, dict) else None
-        size = apply_mapping(db, "size", size_source or "ONE SIZE", "ONE SIZE")
-        size = str(size or "ONE SIZE").strip()[:32] or "ONE SIZE"
+        raw_size = str(size_source or "ONE SIZE").strip()[:32] or "ONE SIZE"
+        size = apply_mapping(db, "size", raw_size, raw_size)
+        size = str(size or raw_size).strip()[:32] or raw_size
+
         variant, variant_conflict = _resolve_variant(
             db,
             product=product,
@@ -476,9 +471,8 @@ async def sync_assortment_to_catalog(
         currency = _normalized_currency(settings.moysklad_default_currency)
         rows = await _fetch_assortment_snapshot(limit)
 
-        # No product or conflict mutation happens until the complete remote
-        # snapshot has been fetched and validated. The entire catalog apply is
-        # then committed once, so a late row failure cannot leave a partial sync.
+        # No catalog mutation happens until the complete remote snapshot has
+        # been fetched and validated. The entire apply then commits once.
         db.rollback()
         log = (
             db.query(MoySkladSyncLog)
