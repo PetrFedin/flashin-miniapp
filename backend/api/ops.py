@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
@@ -14,6 +14,17 @@ from ..security import get_current_admin
 from ..services.rbac import require_permission
 
 router = APIRouter(prefix="/ops", tags=["ops"])
+
+
+def _require_executed(outcome, operation: str) -> None:
+    if outcome.status == "skipped":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": f"{operation} is already running",
+                "run_id": outcome.run_id,
+            },
+        )
 
 
 @router.get("/abandoned-carts", response_model=list[AbandonedCartOut])
@@ -58,8 +69,9 @@ def queue_abandoned_cart_notifications(
         queue_abandoned_cart_job,
         trigger="api",
     )
+    _require_executed(outcome, "Abandoned-cart notification job")
     return {
-        "ok": outcome.status == "succeeded",
+        "ok": True,
         "status": outcome.status,
         "run_id": outcome.run_id,
         "queued": outcome.result or 0,
@@ -100,8 +112,9 @@ def inventory_snapshot(admin=Depends(get_current_admin), db: Session = Depends(g
         create_inventory_snapshot,
         trigger="api",
     )
+    _require_executed(outcome, "Inventory snapshot job")
     return {
-        "ok": outcome.status == "succeeded",
+        "ok": True,
         "status": outcome.status,
         "run_id": outcome.run_id,
         "snapshotted": outcome.result or 0,
