@@ -1,4 +1,8 @@
 import inspect
+from types import SimpleNamespace
+
+import pytest
+from fastapi import HTTPException
 
 from backend.api import ops
 
@@ -30,3 +34,22 @@ def test_ops_read_endpoints_require_scoped_permissions():
     assert 'require_permission(db, admin, "products.read")' in low_stock_source
     assert ".limit(500)" in abandoned_source
     assert ".limit(1000)" in low_stock_source
+
+
+def test_manual_operation_returns_conflict_when_job_is_already_running():
+    with pytest.raises(HTTPException) as exc_info:
+        ops._require_executed(
+            SimpleNamespace(status="skipped", run_id=42),
+            "Inventory snapshot job",
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["run_id"] == 42
+    assert "already running" in exc_info.value.detail["message"]
+
+
+def test_manual_operation_accepts_completed_execution():
+    ops._require_executed(
+        SimpleNamespace(status="succeeded", run_id=43),
+        "Inventory snapshot job",
+    )
