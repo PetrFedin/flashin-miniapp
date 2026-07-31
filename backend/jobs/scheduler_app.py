@@ -8,11 +8,25 @@ from backend.config import get_settings
 from backend.jobs.campaign_jobs import queue_due_campaigns
 from backend.jobs.event_jobs import run_event_dispatcher
 from backend.jobs.execution import run_async_job, run_sync_job
-from backend.jobs.moysklad_jobs import sync_moysklad_and_rebuild
+from backend.jobs.moysklad_jobs import execute_moysklad_workflow
 from backend.jobs.ops_jobs import create_inventory_snapshot, queue_abandoned_cart_notifications
 from backend.jobs.outbox_jobs import process_outbox
 from backend.jobs.refund_jobs import reconcile_pending_refunds
 from backend.jobs.sla_jobs import mark_overdue_sla
+from backend.services.crm import recompute_all_profiles
+from backend.services.moysklad import sync_assortment_to_catalog
+from backend.services.recommendations import rebuild_basic_recommendations
+
+
+async def sync_moysklad_and_rebuild(db):
+    """Scheduler adapter retaining its stable dependency patch points."""
+
+    return await execute_moysklad_workflow(
+        db,
+        sync_function=sync_assortment_to_catalog,
+        profile_function=recompute_all_profiles,
+        recommendation_function=rebuild_basic_recommendations,
+    )
 
 
 def _print_outcome(outcome) -> None:
