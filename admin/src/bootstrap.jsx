@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import AdminRuntimeStatus from "./AdminRuntimeStatus";
 import ScheduledJobsPanel from "./ScheduledJobsPanel";
+import { installAdminActionCoordinator } from "./admin-action-coordinator";
 import { installAdminDataCoordinator } from "./admin-data-coordinator";
 import { installAuthenticatedExportDownloads } from "./export-downloads";
 import { installOrderWorkflowBoundary } from "./order-workflow-boundary";
@@ -69,18 +70,22 @@ function ScheduledJobsRoot({ sessionEvent }) {
 }
 
 async function bootstrap() {
-  const coordinator = installAdminDataCoordinator();
+  const dataCoordinator = installAdminDataCoordinator();
+  const actionCoordinator = installAdminActionCoordinator();
   installOrderWorkflowBoundary();
   installAuthenticatedExportDownloads();
 
-  // The legacy admin app is imported only after the coordinator is installed,
-  // so its first products/audit request starts the full parallel data wave.
+  // Both coordinators are installed before legacy handlers are registered.
+  // GET reads are parallelized by the data coordinator; mutations are fenced
+  // by the action coordinator and then delegated through the data layer.
   await import("./main.jsx");
 
   const root = document.getElementById("scheduled-jobs-root");
   if (!root) throw new Error("Scheduled jobs root is missing");
   createRoot(root).render(
-    <ScheduledJobsRoot sessionEvent={coordinator.sessionEvent} />,
+    <ScheduledJobsRoot
+      sessionEvent={actionCoordinator.sessionEvent || dataCoordinator.sessionEvent}
+    />,
   );
 }
 
