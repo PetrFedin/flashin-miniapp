@@ -127,5 +127,6 @@ jobs:
         run: |
           cp .env.production.example .env
           export COMPOSE_FILE="docker-compose.yml:docker-compose.production.yml"
+          export COMPOSE_PROFILES="production,workers,scheduler,search"
           docker compose config --quiet
           python3 scripts/check_production_compose.py
