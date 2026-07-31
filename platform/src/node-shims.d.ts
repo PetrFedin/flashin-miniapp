@@ -15,11 +15,13 @@ declare module "node:crypto" {
 
 declare module "node:assert/strict" {
   const assert: {
-    equal(actual: unknown, expected: unknown): void;
+    equal(actual: unknown, expected: unknown, message?: string): void;
     deepEqual(actual: unknown, expected: unknown): void;
     match(actual: string, expected: RegExp): void;
     throws(block: () => unknown, validator?: (error: unknown) => boolean): void;
     doesNotThrow(block: () => unknown): void;
+    ok(value: unknown, message?: string): asserts value;
+    rejects(block: () => Promise<unknown>, validator?: (error: unknown) => boolean): Promise<void>;
   };
   export default assert;
 }

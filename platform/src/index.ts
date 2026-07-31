@@ -3,6 +3,7 @@ export * from "./errors.js";
 export * from "./inventory.js";
 export * from "./money.js";
 export * from "./order-state.js";
+export * from "./persistence.js";
 export * from "./pricing.js";
 export * from "./tbank.js";
 export * from "./telegram.js";
