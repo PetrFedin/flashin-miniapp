@@ -3,7 +3,13 @@ declare module "node:crypto" {
     update(data: string, encoding?: string): Hash;
     digest(encoding: "hex"): string;
   }
+  interface Hmac {
+    update(data: string, encoding?: string): Hmac;
+    digest(): Uint8Array;
+    digest(encoding: "hex"): string;
+  }
   export function createHash(algorithm: string): Hash;
+  export function createHmac(algorithm: string, key: string | Uint8Array): Hmac;
   export function timingSafeEqual(left: Uint8Array, right: Uint8Array): boolean;
 }
 

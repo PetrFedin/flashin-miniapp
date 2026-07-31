@@ -5,4 +5,5 @@ export * from "./money.js";
 export * from "./order-state.js";
 export * from "./pricing.js";
 export * from "./tbank.js";
+export * from "./telegram.js";
 export * from "./tilda-csv.js";
