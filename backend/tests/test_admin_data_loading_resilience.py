@@ -44,9 +44,11 @@ def test_coordinator_is_installed_before_legacy_admin_module_executes():
     bootstrap = _read("bootstrap.jsx")
 
     assert 'import "./main.jsx";' not in bootstrap
-    assert "const coordinator = installAdminDataCoordinator();" in bootstrap
+    assert "const dataCoordinator = installAdminDataCoordinator();" in bootstrap
+    assert "const actionCoordinator = installAdminActionCoordinator();" in bootstrap
     assert 'await import("./main.jsx");' in bootstrap
-    assert bootstrap.index("installAdminDataCoordinator()") < bootstrap.index('await import("./main.jsx")')
+    assert bootstrap.index("installAdminDataCoordinator()") < bootstrap.index("installAdminActionCoordinator()")
+    assert bootstrap.index("installAdminActionCoordinator()") < bootstrap.index('await import("./main.jsx")')
     assert "bootstrap().catch" in bootstrap
     assert 'root.setAttribute("role", "alert")' in bootstrap
 
