@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import ScheduledJobsPanel from "./ScheduledJobsPanel";
+import { installOrderWorkflowBoundary } from "./order-workflow-boundary";
 import "./main.jsx";
 
 const API = import.meta.env.VITE_API_BASE || "http://localhost:8000";
@@ -55,6 +56,8 @@ function ScheduledJobsRoot() {
     </section>
   </main>;
 }
+
+installOrderWorkflowBoundary();
 
 const root = document.getElementById("scheduled-jobs-root");
 if (!root) throw new Error("Scheduled jobs root is missing");
