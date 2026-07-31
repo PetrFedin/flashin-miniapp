@@ -2,13 +2,14 @@ import asyncio
 import hashlib
 import hmac
 import json
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import httpx
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
+from ..database import utcnow_naive
 from ..models import WebhookDestination, WebhookOutbox
 from ..services.outbox import schedule_retry
 from ..services.webhook_security import (
@@ -22,7 +23,7 @@ _MAX_WEBHOOK_BODY_BYTES = 256 * 1024
 
 
 def _claim_outbox(db: Session) -> list[dict]:
-    now = datetime.utcnow()
+    now = utcnow_naive()
     rows = (
         db.query(WebhookOutbox)
         .filter(
