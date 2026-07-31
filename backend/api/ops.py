@@ -12,6 +12,7 @@ from ..models import Cart, ProductVariant
 from ..schemas import AbandonedCartOut, InventorySnapshotOut
 from ..security import get_current_admin
 from ..services.rbac import require_permission
+from .ops_jobs import router as jobs_router
 
 router = APIRouter(prefix="/ops", tags=["ops"])
 
@@ -119,3 +120,6 @@ def inventory_snapshot(admin=Depends(get_current_admin), db: Session = Depends(g
         "run_id": outcome.run_id,
         "snapshotted": outcome.result or 0,
     }
+
+
+router.include_router(jobs_router)
