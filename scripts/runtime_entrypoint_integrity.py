@@ -43,14 +43,19 @@ def main() -> int:
 
     alembic_ini = root / "backend" / "alembic.ini"
     alembic_source = alembic_ini.read_text(encoding="utf-8") if alembic_ini.is_file() else ""
-    if "script_location = %(here)s/alembic" not in alembic_source:
-        errors.append(
-            {
-                "check": "alembic_entrypoint",
-                "path": str(alembic_ini),
-                "message": "script_location must be anchored to %(here)s for root and Docker invocations",
-            }
-        )
+    required_alembic_links = {
+        "script_location = %(here)s/alembic": "migration scripts must be anchored to the Alembic config directory",
+        "prepend_sys_path = %(here)s/..": "project root must be available for backend package imports",
+    }
+    for expected, message in required_alembic_links.items():
+        if expected not in alembic_source:
+            errors.append(
+                {
+                    "check": "alembic_entrypoint",
+                    "path": str(alembic_ini),
+                    "message": message,
+                }
+            )
 
     migrate = root / "scripts" / "migrate.sh"
     migrate_source = migrate.read_text(encoding="utf-8") if migrate.is_file() else ""
