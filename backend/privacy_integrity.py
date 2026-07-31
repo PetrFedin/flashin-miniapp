@@ -68,10 +68,12 @@ def apply_privacy_constraints() -> None:
     request = PrivacyRequest.__table__
     consent = ConsentRecord.__table__
 
+    # `legacy_unknown` is migration-only quarantine. ORM validation never lets
+    # application code create new records with that value.
     _check(
         request,
         "ck_privacy_requests_type_valid",
-        "request_type IN ('consent_withdrawal', 'delete', 'export')",
+        "request_type IN ('consent_withdrawal', 'delete', 'export', 'legacy_unknown')",
     )
     _check(
         request,
@@ -123,7 +125,7 @@ def apply_privacy_constraints() -> None:
     _check(
         consent,
         "ck_consent_records_type_valid",
-        "consent_type IN ('analytics', 'marketing', 'personalization', 'privacy', 'terms')",
+        "consent_type IN ('analytics', 'legacy_unknown', 'marketing', 'personalization', 'privacy', 'terms')",
     )
     _check(
         consent,
