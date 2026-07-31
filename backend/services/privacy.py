@@ -1,4 +1,7 @@
-from datetime import datetime
+import json
+import math
+from datetime import UTC, date, datetime
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
@@ -26,59 +29,128 @@ OPEN_PRIVACY_REQUEST_STATUSES = {"requested", "processing"}
 
 
 def _iso(value) -> str | None:
-    return value.isoformat() if value else None
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=UTC)
+        else:
+            value = value.astimezone(UTC)
+        return value.isoformat(timespec="seconds").replace("+00:00", "Z")
+    if isinstance(value, date):
+        return value.isoformat()
+    raise ValueError("Privacy export contains an invalid date value")
+
+
+def _money_text(value: object) -> str:
+    try:
+        amount = Decimal(str(value or 0)).quantize(
+            Decimal("0.01"),
+            rounding=ROUND_HALF_UP,
+        )
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError("Privacy export contains an invalid monetary value") from exc
+    if not amount.is_finite():
+        raise ValueError("Privacy export contains a non-finite monetary value")
+    return format(amount, ".2f")
+
+
+def _json_safe(value):
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise ValueError("Privacy export contains a non-finite decimal")
+        return format(value, "f")
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("Privacy export contains a non-finite number")
+        return value
+    if isinstance(value, (datetime, date)):
+        return _iso(value)
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    return str(value)
+
+
+def render_customer_export(data: dict) -> str:
+    return json.dumps(
+        _json_safe(data),
+        ensure_ascii=False,
+        indent=2,
+        allow_nan=False,
+        sort_keys=True,
+    )
 
 
 def build_customer_export(db: Session, customer: Customer) -> dict:
     orders = (
         db.query(Order)
         .filter(Order.customer_id == customer.id)
-        .order_by(Order.created_at.asc())
+        .order_by(Order.created_at.asc(), Order.id.asc())
         .all()
     )
     carts = (
         db.query(Cart)
         .filter(Cart.customer_id == customer.id)
-        .order_by(Cart.created_at.asc())
+        .order_by(Cart.created_at.asc(), Cart.id.asc())
         .all()
     )
-    wishlist = db.query(WishlistItem).filter(WishlistItem.customer_id == customer.id).all()
-    restock = db.query(RestockSubscription).filter(RestockSubscription.customer_id == customer.id).all()
+    wishlist = (
+        db.query(WishlistItem)
+        .filter(WishlistItem.customer_id == customer.id)
+        .order_by(WishlistItem.created_at.asc(), WishlistItem.id.asc())
+        .all()
+    )
+    restock = (
+        db.query(RestockSubscription)
+        .filter(RestockSubscription.customer_id == customer.id)
+        .order_by(RestockSubscription.created_at.asc(), RestockSubscription.id.asc())
+        .all()
+    )
     consents = (
         db.query(ConsentRecord)
         .filter(ConsentRecord.customer_id == customer.id)
-        .order_by(ConsentRecord.created_at.asc())
+        .order_by(ConsentRecord.created_at.asc(), ConsentRecord.id.asc())
         .all()
     )
     requests = (
         db.query(PrivacyRequest)
         .filter(PrivacyRequest.customer_id == customer.id)
-        .order_by(PrivacyRequest.created_at.asc())
+        .order_by(PrivacyRequest.created_at.asc(), PrivacyRequest.id.asc())
         .all()
     )
     loyalty = (
         db.query(LoyaltyTransaction)
         .filter(LoyaltyTransaction.customer_id == customer.id)
-        .order_by(LoyaltyTransaction.created_at.asc())
+        .order_by(LoyaltyTransaction.created_at.asc(), LoyaltyTransaction.id.asc())
         .all()
     )
     profile = db.query(CrmProfile).filter(CrmProfile.customer_id == customer.id).first()
-    referrals = db.query(ReferralCode).filter(ReferralCode.customer_id == customer.id).all()
+    referrals = (
+        db.query(ReferralCode)
+        .filter(ReferralCode.customer_id == customer.id)
+        .order_by(ReferralCode.created_at.asc(), ReferralCode.id.asc())
+        .all()
+    )
     tickets = (
         db.query(SupportTicket)
         .filter(SupportTicket.customer_id == customer.id)
-        .order_by(SupportTicket.created_at.asc())
+        .order_by(SupportTicket.created_at.asc(), SupportTicket.id.asc())
         .all()
     )
     timeline = (
         db.query(CustomerTimelineEvent)
         .filter(CustomerTimelineEvent.customer_id == customer.id)
-        .order_by(CustomerTimelineEvent.created_at.asc())
+        .order_by(CustomerTimelineEvent.created_at.asc(), CustomerTimelineEvent.id.asc())
         .all()
     )
 
     return {
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": _iso(datetime.now(UTC)),
+        "schema_version": 1,
         "customer": {
             "id": customer.id,
             "telegram_id": customer.telegram_id,
@@ -95,10 +167,10 @@ def build_customer_export(db: Session, customer: Customer) -> dict:
                 "status": order.status,
                 "payment_status": order.payment_status,
                 "delivery_status": order.delivery_status,
-                "total_amount": order.total_amount,
-                "delivery_price": order.delivery_price,
-                "discount_amount": order.discount_amount,
-                "loyalty_points_redeemed": order.loyalty_points_redeemed,
+                "total_amount": _money_text(order.total_amount),
+                "delivery_price": _money_text(order.delivery_price),
+                "discount_amount": _money_text(order.discount_amount),
+                "loyalty_points_redeemed": _money_text(order.loyalty_points_redeemed),
                 "currency": order.currency,
                 "delivery_type": order.delivery_type,
                 "address": order.address,
@@ -112,29 +184,29 @@ def build_customer_export(db: Session, customer: Customer) -> dict:
                         "title": item.title,
                         "size": item.size,
                         "quantity": item.quantity,
-                        "price": item.price,
+                        "price": _money_text(item.price),
                     }
-                    for item in order.items
+                    for item in sorted(order.items, key=lambda item: item.id)
                 ],
                 "payments": [
                     {
                         "provider": payment.provider,
                         "provider_payment_id": payment.provider_payment_id,
                         "status": payment.status,
-                        "amount": payment.amount,
+                        "amount": _money_text(payment.amount),
                         "created_at": _iso(payment.created_at),
                     }
-                    for payment in order.payments
+                    for payment in sorted(order.payments, key=lambda payment: payment.id)
                 ],
                 "returns": [
                     {
                         "id": return_request.id,
                         "reason": return_request.reason,
                         "status": return_request.status,
-                        "refund_amount": return_request.refund_amount,
+                        "refund_amount": _money_text(return_request.refund_amount),
                         "created_at": _iso(return_request.created_at),
                     }
-                    for return_request in order.returns
+                    for return_request in sorted(order.returns, key=lambda request: request.id)
                 ],
             }
             for order in orders
@@ -144,7 +216,7 @@ def build_customer_export(db: Session, customer: Customer) -> dict:
                 "id": cart.id,
                 "status": cart.status,
                 "referral_code": cart.referral_code,
-                "loyalty_points_to_redeem": cart.loyalty_points_to_redeem,
+                "loyalty_points_to_redeem": _money_text(cart.loyalty_points_to_redeem),
                 "created_at": _iso(cart.created_at),
                 "items": [
                     {
@@ -152,7 +224,7 @@ def build_customer_export(db: Session, customer: Customer) -> dict:
                         "variant_id": item.variant_id,
                         "quantity": item.quantity,
                     }
-                    for item in cart.items
+                    for item in sorted(cart.items, key=lambda item: item.id)
                 ],
             }
             for cart in carts
@@ -193,9 +265,9 @@ def build_customer_export(db: Session, customer: Customer) -> dict:
                 {
                     "segment": profile.segment,
                     "orders_count": profile.orders_count,
-                    "total_spent": profile.total_spent,
-                    "average_order_value": profile.average_order_value,
-                    "loyalty_points": profile.loyalty_points,
+                    "total_spent": _money_text(profile.total_spent),
+                    "average_order_value": _money_text(profile.average_order_value),
+                    "loyalty_points": _money_text(profile.loyalty_points),
                     "vip": profile.vip,
                 }
                 if profile
@@ -204,7 +276,7 @@ def build_customer_export(db: Session, customer: Customer) -> dict:
             "transactions": [
                 {
                     "order_id": row.order_id,
-                    "points_delta": row.points_delta,
+                    "points_delta": _money_text(row.points_delta),
                     "reason": row.reason,
                     "created_at": _iso(row.created_at),
                 }
@@ -214,7 +286,7 @@ def build_customer_export(db: Session, customer: Customer) -> dict:
         "referral_codes": [
             {
                 "code": row.code,
-                "reward_points": row.reward_points,
+                "reward_points": _money_text(row.reward_points),
                 "used_count": row.used_count,
                 "active": row.active,
                 "created_at": _iso(row.created_at),
@@ -237,7 +309,7 @@ def build_customer_export(db: Session, customer: Customer) -> dict:
             {
                 "event_type": row.event_type,
                 "title": row.title,
-                "payload": row.payload,
+                "payload": _json_safe(row.payload),
                 "created_at": _iso(row.created_at),
             }
             for row in timeline
@@ -273,6 +345,16 @@ def withdraw_optional_consents(db: Session, customer_id: int, source: str = "pri
 
 
 def anonymize_customer(db: Session, customer: Customer) -> dict:
+    if str(customer.telegram_id or "").startswith("deleted:"):
+        return {
+            "already_anonymized": True,
+            "orders_anonymized": 0,
+            "returns_redacted": 0,
+            "tickets_redacted": 0,
+            "carts_removed": 0,
+            "consents_withdrawn": 0,
+        }
+
     original_telegram_id = customer.telegram_id
     orders = db.query(Order).filter(Order.customer_id == customer.id).with_for_update().all()
     for order in orders:
@@ -349,6 +431,7 @@ def anonymize_customer(db: Session, customer: Customer) -> dict:
     customer.email = ""
 
     return {
+        "already_anonymized": False,
         "orders_anonymized": len(orders),
         "returns_redacted": len(return_requests),
         "tickets_redacted": len(tickets),
@@ -358,6 +441,8 @@ def anonymize_customer(db: Session, customer: Customer) -> dict:
 
 
 def mark_privacy_processed(req: PrivacyRequest, result_url: str = "") -> None:
+    if req.status != "processing":
+        raise ValueError("Privacy request must be processing before completion")
     req.status = "processed"
-    req.result_url = result_url[:2048]
-    req.processed_at = datetime.utcnow()
+    req.result_url = str(result_url or "").strip()[:2048]
+    req.processed_at = datetime.now(UTC).replace(tzinfo=None)
