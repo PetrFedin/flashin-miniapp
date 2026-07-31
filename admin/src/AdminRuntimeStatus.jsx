@@ -17,23 +17,30 @@ function readableError(value) {
   return raw.slice(0, MAX_MESSAGE);
 }
 
+function normalizeDataStatus(detail) {
+  if (!detail || !Number.isSafeInteger(detail.generation)) return null;
+  return {
+    generation: detail.generation,
+    loading: Boolean(detail.loading),
+    completed: Number(detail.completed || 0),
+    total: Number(detail.total || 0),
+    failures: Array.isArray(detail.failures) ? detail.failures.slice(0, 50) : [],
+  };
+}
+
 export default function AdminRuntimeStatus() {
-  const [dataStatus, setDataStatus] = useState(null);
+  const [dataStatus, setDataStatus] = useState(
+    () => normalizeDataStatus(window.__flashinAdminDataStatus),
+  );
   const [actionError, setActionError] = useState("");
 
   useEffect(() => {
     function onDataStatus(event) {
-      const detail = event?.detail;
-      if (!detail || !Number.isSafeInteger(detail.generation)) return;
+      const next = normalizeDataStatus(event?.detail);
+      if (!next) return;
       setDataStatus((current) => {
-        if (current && current.generation > detail.generation) return current;
-        return {
-          generation: detail.generation,
-          loading: Boolean(detail.loading),
-          completed: Number(detail.completed || 0),
-          total: Number(detail.total || 0),
-          failures: Array.isArray(detail.failures) ? detail.failures.slice(0, 50) : [],
-        };
+        if (current && current.generation > next.generation) return current;
+        return next;
       });
     }
 
