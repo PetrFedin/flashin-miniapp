@@ -1,9 +1,10 @@
 import json
 import re
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from sqlalchemy.orm import Session
 
+from ..database import utcnow_naive
 from ..models import WebhookDestination, WebhookOutbox
 from .webhook_security import is_internal_destination, normalize_webhook_url
 
@@ -72,7 +73,7 @@ def enqueue_webhook(
             payload=serialized_payload,
             status="pending",
             attempts=0,
-            next_attempt_at=datetime.utcnow(),
+            next_attempt_at=utcnow_naive(),
         )
     )
     return True
@@ -86,7 +87,7 @@ def schedule_retry(row: WebhookOutbox, error: str) -> None:
         row.next_attempt_at = None
         return
     row.status = "pending"
-    row.next_attempt_at = datetime.utcnow() + timedelta(
+    row.next_attempt_at = utcnow_naive() + timedelta(
         minutes=min(60, 2 ** row.attempts)
     )
 
