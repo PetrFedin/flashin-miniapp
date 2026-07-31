@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     moysklad_default_currency: str = "RUB"
     moysklad_sync_limit: int = 100
     moysklad_sync_interval_minutes: int = 30
+    moysklad_sale_price_type: str = ""
+    moysklad_size_attribute_names: str = "Размер,Size"
+    moysklad_color_attribute_names: str = "Цвет,Color"
 
     cdn_public_base_url: str = "https://cdn.flashin.store"
     loyalty_points_per_ruble: float = 0.01
@@ -122,6 +125,10 @@ class Settings(BaseSettings):
             raise ValueError("Delivery prices cannot be negative")
         if self.media_storage not in {"local", "s3", "r2"}:
             raise ValueError("MEDIA_STORAGE must be local, s3, or r2")
+        if not self.moysklad_size_attribute_names.strip():
+            raise ValueError("MOYSKLAD_SIZE_ATTRIBUTE_NAMES must not be empty")
+        if not self.moysklad_color_attribute_names.strip():
+            raise ValueError("MOYSKLAD_COLOR_ATTRIBUTE_NAMES must not be empty")
 
         if self.app_env.strip().lower() != "production":
             return self
@@ -183,6 +190,16 @@ class Settings(BaseSettings):
             or self.meilisearch_master_key.strip().lower() in weak_values
         ):
             errors.append("MEILISEARCH_MASTER_KEY is missing or unsafe")
+
+        moysklad_configured = bool(
+            self.moysklad_token.strip()
+            or self.moysklad_login.strip()
+            or self.moysklad_password.strip()
+        )
+        if moysklad_configured and not self.moysklad_sale_price_type.strip():
+            errors.append(
+                "MOYSKLAD_SALE_PRICE_TYPE is required when MoySklad synchronization is configured"
+            )
 
         if errors:
             raise ValueError("Unsafe production configuration: " + "; ".join(errors))
