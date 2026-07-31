@@ -1,13 +1,17 @@
-from datetime import datetime, timedelta
+from datetime import timedelta
+
 from sqlalchemy.orm import Session
+
 from ..config import get_settings
+from ..database import utcnow_naive
 from ..models import Cart, Notification
 from ..services.inventory import snapshot_inventory
 
 
 def queue_abandoned_cart_notifications(db: Session) -> int:
     settings = get_settings()
-    cutoff = datetime.utcnow() - timedelta(minutes=settings.abandoned_cart_minutes)
+    now = utcnow_naive()
+    cutoff = now - timedelta(minutes=settings.abandoned_cart_minutes)
     carts = (
         db.query(Cart)
         .filter(Cart.status == "active", Cart.updated_at <= cutoff, Cart.abandoned_notified_at == None)
@@ -22,7 +26,7 @@ def queue_abandoned_cart_notifications(db: Session) -> int:
             message="🛒 Вы оставили вещи в корзине FLASHIN. Вернитесь, пока размер ещё в наличии.",
             status="pending",
         ))
-        cart.abandoned_notified_at = datetime.utcnow()
+        cart.abandoned_notified_at = now
         count += 1
     db.commit()
     return count
