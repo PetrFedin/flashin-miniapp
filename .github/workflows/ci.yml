@@ -69,7 +69,7 @@ jobs:
       - name: Verify migration state
         run: alembic -c backend/alembic.ini current
       - name: Run backend tests
-        run: pytest -q backend/tests
+        run: python -m pytest -q backend/tests
 
   frontend:
     runs-on: ubuntu-latest
