@@ -17,9 +17,11 @@ def test_admin_bootstrap_mounts_existing_app_and_isolated_jobs_console():
     assert '<div id="scheduled-jobs-root"></div>' in index
     assert 'src="/src/bootstrap.jsx"' in index
     assert 'src="/src/main.jsx"' not in index
-    assert 'import "./main.jsx";' in bootstrap
+    assert 'import "./main.jsx";' not in bootstrap
+    assert 'await import("./main.jsx");' in bootstrap
     assert 'import ScheduledJobsPanel from "./ScheduledJobsPanel";' in bootstrap
     assert 'document.getElementById("scheduled-jobs-root")' in bootstrap
+    assert bootstrap.index("installAdminDataCoordinator()") < bootstrap.index('await import("./main.jsx")')
 
 
 def test_jobs_console_is_hidden_without_current_admin_session():
@@ -27,9 +29,11 @@ def test_jobs_console_is_hidden_without_current_admin_session():
 
     assert 'localStorage.getItem("admin_token")' in bootstrap
     assert 'if (!token) return null;' in bootstrap
-    assert 'key={token}' in bootstrap
+    assert 'key={`jobs:${token}`}' in bootstrap
+    assert 'key={`runtime:${token}`}' in bootstrap
     assert 'Административная сессия завершена' in bootstrap
     assert 'Authorization: `Bearer ${currentToken}`' in bootstrap
+    assert "window.addEventListener(sessionEvent, expire);" in bootstrap
 
 
 def test_jobs_console_uses_only_allowlisted_backend_routes():
