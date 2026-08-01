@@ -1,5 +1,6 @@
 from backend.services.payment_attempts import (
     can_fallback_to_stored_attempt,
+    is_stale_cancellation,
     resolve_provider_payment_attempt,
 )
 
@@ -66,3 +67,15 @@ def test_stored_attempt_is_only_fallback_for_active_payment_with_url():
     assert can_fallback_to_stored_attempt("waiting_for_capture", "https://pay.example") is True
     assert can_fallback_to_stored_attempt("succeeded", "https://pay.example") is False
     assert can_fallback_to_stored_attempt("pending", "") is False
+
+
+def test_old_cancellation_is_stale_when_newer_live_attempt_exists():
+    assert is_stale_cancellation("pay-1", "pay-2", "pending") is True
+    assert is_stale_cancellation("pay-1", "pay-2", "waiting_for_capture") is True
+    assert is_stale_cancellation("pay-1", "pay-2", "succeeded") is True
+
+
+def test_latest_or_non_live_cancellation_is_not_ignored():
+    assert is_stale_cancellation("pay-2", "pay-2", "pending") is False
+    assert is_stale_cancellation("pay-1", "pay-2", "canceled") is False
+    assert is_stale_cancellation("", "pay-2", "pending") is False
