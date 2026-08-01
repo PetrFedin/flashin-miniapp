@@ -118,7 +118,12 @@ export async function loginAdmin(email, password) {
 export async function uploadAdminFile(path, file, field = "file") {
   const form = new FormData();
   form.append(field, file);
-  return adminRequest(path, { method: "POST", body: form });
+  const fileIdentity = [file.name, file.size, file.lastModified, file.type].join(":");
+  return adminRequest(path, {
+    method: "POST",
+    body: form,
+    dedupeKey: `UPLOAD:${path}:${field}:${fileIdentity}`,
+  });
 }
 
 export async function downloadAdminFile(path, fallbackFilename) {
