@@ -15,7 +15,6 @@ from backend.models import Order
 ROOT = Path(__file__).resolve().parents[2]
 LEGACY_UTCNOW_BASELINE = {
     "backend/api/admin.py": 1,
-    "backend/api/orders.py": 1,
     "backend/models.py": 54,
     "scripts/generate_release_pack.py": 1,
     "scripts/pilot_runner.py": 1,
@@ -77,7 +76,6 @@ def test_application_initializer_closes_database_session_on_failure(monkeypatch)
         "settings",
         SimpleNamespace(use_create_all=False, enable_seed=False),
     )
-    monkeypatch.setattr(main, "SessionLocal", lambda: db)
 
     def fail(_db):
         raise RuntimeError("bootstrap failed")
