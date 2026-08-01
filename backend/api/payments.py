@@ -11,19 +11,18 @@ from ..models import Order, Payment, PaymentEvent
 from ..schemas import PaymentCreate, PaymentOut
 from ..security import get_current_customer
 from ..services.event_dispatcher import emit_event
-from ..services.fulfillment import ensure_fulfillment_task
-from ..services.inventory import commit_reservations_to_sold
-from ..services.loyalty import add_points, mark_redemption_committed, reward_referral_after_first_paid_order
-from ..services.notifications import queue_order_paid
 from ..services.order_cancellation import cancel_order_before_settlement
-from ..services.outbox import enqueue_event_for_destinations, enqueue_webhook
+from ..services.outbox import enqueue_webhook
 from ..services.payment_attempts import (
     can_fallback_to_stored_attempt,
     is_stale_cancellation,
     resolve_provider_payment_attempt,
 )
+from ..services.payment_settlement import (
+    SETTLED_ORDER_PAYMENT_STATUSES,
+    settle_paid_order,
+)
 from ..services.payments import create_yookassa_payment, fetch_yookassa_payment
-from ..services.timeline import add_timeline_event
 
 router = APIRouter(prefix="/payments", tags=["payments"])
 
@@ -31,15 +30,6 @@ _PROVIDER = "yookassa"
 _RECONCILABLE_PAYMENT_STATUSES = {"pending", "waiting_for_capture", "succeeded"}
 _PAYMENT_CREATION_ORDER_STATUSES = {"created", "payment_created"}
 _PAYMENT_CREATION_PAYMENT_STATUSES = {"pending", "payment_created"}
-_SETTLED_ORDER_PAYMENT_STATUSES = {
-    "paid",
-    "paid_review_required",
-    "refund_processing",
-    "refund_pending",
-    "refund_review_required",
-    "partially_refunded",
-    "refunded",
-}
 _SUPPORTED_WEBHOOK_EVENTS = {
     "payment.waiting_for_capture",
     "payment.succeeded",
@@ -125,13 +115,6 @@ async def _reconcile_existing_payment(order: Order, payment: Payment) -> Payment
     return None
 
 
-def _order_item_quantities(order: Order) -> dict[int, int]:
-    quantities: dict[int, int] = {}
-    for item in order.items:
-        quantities[item.variant_id] = quantities.get(item.variant_id, 0) + item.quantity
-    return quantities
-
-
 def _parse_webhook_payload(raw_body: bytes) -> tuple[dict, str, dict, str]:
     if not raw_body:
         raise HTTPException(status_code=400, detail="Empty webhook payload")
@@ -208,6 +191,8 @@ async def create_payment(
         if latest_payment and latest_payment.status in _RECONCILABLE_PAYMENT_STATUSES:
             reusable_payment = await _reconcile_existing_payment(order, latest_payment)
             if reusable_payment:
+                if reusable_payment.status == "succeeded":
+                    settle_paid_order(db, order)
                 db.commit()
                 return _payment_out(order, reusable_payment)
 
@@ -238,6 +223,8 @@ async def create_payment(
         db.add(payment)
         order.payment_status = "payment_created"
         order.status = "payment_created"
+        if payment.status == "succeeded":
+            settle_paid_order(db, order)
         db.commit()
         return _payment_out(order, payment)
     except HTTPException:
@@ -345,48 +332,12 @@ async def yookassa_webhook(request: Request, db: Session = Depends(get_db)):
             payment.status = provider_status
 
         if event == "payment.succeeded" and provider_status == "succeeded":
-            if order.payment_status in _SETTLED_ORDER_PAYMENT_STATUSES:
-                pass
-            elif order.status == "cancelled" or order.payment_status == "cancelled":
+            if order.status == "cancelled" or order.payment_status == "cancelled":
                 order.payment_status = "paid_review_required"
                 order.status = "payment_review_required"
                 _queue_payment_review(db, order, payment_id, "paid_after_cancel")
             else:
-                commit_reservations_to_sold(db, _order_item_quantities(order))
-                queue_order_paid(db, order)
-                if order.loyalty_points_redeemed:
-                    add_points(db, order.customer_id, -order.loyalty_points_redeemed, "loyalty_redeemed", order.id)
-                    mark_redemption_committed(
-                        db,
-                        order.customer_id,
-                        None,
-                        order.id,
-                        order.loyalty_points_redeemed,
-                    )
-                add_points(db, order.customer_id, round(order.total_amount * 0.01, 2), "order_paid", order.id)
-                reward_referral_after_first_paid_order(db, order.customer_id, order.id)
-                add_timeline_event(
-                    db,
-                    order.customer_id,
-                    "order_paid",
-                    f"Заказ #{order.id} оплачен",
-                    {"total": order.total_amount},
-                )
-                ensure_fulfillment_task(db, order)
-                emit_event(db, "order.paid", "order", order.id, {"order_id": order.id, "total": order.total_amount})
-                enqueue_webhook(
-                    db,
-                    "internal://order-paid",
-                    "order.paid",
-                    {"order_id": order.id, "total": order.total_amount},
-                )
-                enqueue_event_for_destinations(
-                    db,
-                    "order.paid",
-                    {"order_id": order.id, "total": order.total_amount},
-                )
-                order.payment_status = "paid"
-                order.status = "paid"
+                settle_paid_order(db, order)
         elif event == "payment.canceled" and provider_status == "canceled":
             if latest_order_payment and is_stale_cancellation(
                 payment_id,
@@ -405,7 +356,7 @@ async def yookassa_webhook(request: Request, db: Session = Depends(get_db)):
                         "latest_payment_status": latest_order_payment.status,
                     },
                 )
-            elif order.payment_status in _SETTLED_ORDER_PAYMENT_STATUSES:
+            elif order.payment_status in SETTLED_ORDER_PAYMENT_STATUSES:
                 _queue_payment_review(db, order, payment_id, "canceled_after_settlement")
             else:
                 try:
