@@ -1,7 +1,6 @@
 import hashlib
 import json
 import re
-from datetime import datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -24,30 +23,13 @@ from ..models import (
 from ..schemas import CheckoutIn, OrderOut
 from ..security import get_current_customer
 from ..services.delivery import calculate_delivery_price
-from ..services.inventory import release_variant, reserve_variant
+from ..services.inventory import reserve_variant
 from ..services.promos import calculate_discount
 
 router = APIRouter(prefix="/orders", tags=["orders"])
 
 _MONEY_STEP = Decimal("0.01")
 _IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{16,128}$")
-ORDER_STATUSES = frozenset(
-    {
-        "created",
-        "payment_created",
-        "payment_review_required",
-        "paid",
-        "assembling",
-        "ready",
-        "shipped",
-        "completed",
-        "refund_requested",
-        "partially_refunded",
-        "refunded",
-        "cancelled",
-    }
-)
-CANCELLABLE_ORDER_STATUSES = frozenset({"created", "payment_created"})
 
 
 def _money(value: object, field: str) -> Decimal:
@@ -201,7 +183,11 @@ def _validate_cart_for_checkout(cart: Cart) -> None:
             raise HTTPException(status_code=409, detail=f"Invalid price for product {item.product.title}")
 
 
-def _lock_and_calculate_promo(db: Session, cart: Cart, subtotal: Decimal) -> tuple[PromoCode | None, Decimal]:
+def _lock_and_calculate_promo(
+    db: Session,
+    cart: Cart,
+    subtotal: Decimal,
+) -> tuple[PromoCode | None, Decimal]:
     if not cart.promo_code_id:
         return None, Decimal("0.00")
 
@@ -419,7 +405,10 @@ def checkout(
         )
         if existing_order:
             return existing_order
-        raise HTTPException(status_code=409, detail="Checkout request conflicts with an existing attempt") from exc
+        raise HTTPException(
+            status_code=409,
+            detail="Checkout request conflicts with an existing attempt",
+        ) from exc
     except Exception:
         db.rollback()
         raise
@@ -428,7 +417,10 @@ def checkout(
 
 
 @router.get("", response_model=list[OrderOut])
-def my_orders(customer: Customer = Depends(get_current_customer), db: Session = Depends(get_db)):
+def my_orders(
+    customer: Customer = Depends(get_current_customer),
+    db: Session = Depends(get_db),
+):
     return (
         db.query(Order)
         .options(joinedload(Order.items))
@@ -439,67 +431,12 @@ def my_orders(customer: Customer = Depends(get_current_customer), db: Session = 
 
 
 @router.get("/{order_id}", response_model=OrderOut)
-def get_order(order_id: int, customer: Customer = Depends(get_current_customer), db: Session = Depends(get_db)):
+def get_order(
+    order_id: int,
+    customer: Customer = Depends(get_current_customer),
+    db: Session = Depends(get_db),
+):
     order = _load_order(db, order_id, customer.id)
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     return order
-
-
-@router.post("/{order_id}/cancel", response_model=OrderOut)
-def cancel_order(order_id: int, customer: Customer = Depends(get_current_customer), db: Session = Depends(get_db)):
-    try:
-        order = (
-            db.query(Order)
-            .filter(Order.id == order_id, Order.customer_id == customer.id)
-            .with_for_update()
-            .first()
-        )
-        if not order:
-            raise HTTPException(status_code=404, detail="Order not found")
-        if order.status == "cancelled":
-            return _load_order(db, order.id, customer.id)
-        if order.payment_status in {"paid", "paid_review_required"}:
-            raise HTTPException(status_code=409, detail="Paid order cannot be cancelled here; create refund")
-        if order.status not in CANCELLABLE_ORDER_STATUSES:
-            raise HTTPException(status_code=409, detail=f"Order in status {order.status} cannot be cancelled")
-
-        order_with_items = _load_order(db, order.id, customer.id)
-        for item in sorted(order_with_items.items, key=lambda order_item: order_item.variant_id):
-            release_variant(db, item.variant_id, item.quantity)
-
-        if order.promo_code_id:
-            promo = (
-                db.query(PromoCode)
-                .filter(PromoCode.id == order.promo_code_id)
-                .with_for_update()
-                .first()
-            )
-            if promo:
-                promo.used_count = max(promo.used_count - 1, 0)
-
-        holds = (
-            db.query(LoyaltyRedemptionHold)
-            .filter(
-                LoyaltyRedemptionHold.customer_id == customer.id,
-                LoyaltyRedemptionHold.order_id == order.id,
-                LoyaltyRedemptionHold.status == "reserved",
-            )
-            .with_for_update()
-            .all()
-        )
-        for hold in holds:
-            hold.status = "released"
-            hold.released_at = datetime.utcnow()
-
-        order.status = "cancelled"
-        order.payment_status = "cancelled"
-        db.commit()
-    except HTTPException:
-        db.rollback()
-        raise
-    except Exception:
-        db.rollback()
-        raise
-
-    return _load_order(db, order_id, customer.id)
