@@ -76,6 +76,7 @@ def test_application_initializer_closes_database_session_on_failure(monkeypatch)
         "settings",
         SimpleNamespace(use_create_all=False, enable_seed=False),
     )
+    monkeypatch.setattr(main, "SessionLocal", lambda: db)
 
     def fail(_db):
         raise RuntimeError("bootstrap failed")
