@@ -1,6 +1,18 @@
+import {
+  DEFAULT_REQUEST_TIMEOUT_MS,
+  createRequestCoordinator,
+  createTimeoutController,
+  mutationRequestKey,
+} from "./requestPolicy.js";
+
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 const ACTIVE_CART_STORAGE_KEY = "flashin_active_cart_id";
 const CHECKOUT_KEY_PREFIX = "flashin_checkout_key:";
+const configuredTimeout = Number(import.meta.env.VITE_API_TIMEOUT_MS);
+const REQUEST_TIMEOUT_MS = Number.isFinite(configuredTimeout) && configuredTimeout > 0
+  ? Math.min(Math.max(configuredTimeout, 3_000), 120_000)
+  : DEFAULT_REQUEST_TIMEOUT_MS;
+const requestCoordinator = createRequestCoordinator();
 
 function getToken() {
   return localStorage.getItem("flashin_token");
@@ -43,19 +55,53 @@ async function errorDetail(response) {
   }
 }
 
-async function request(path, options = {}) {
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: { ...headers(options.auth !== false), ...(options.headers || {}) },
-  });
-  if (!response.ok) {
-    if (response.status === 401 && options.auth !== false) {
-      localStorage.removeItem("flashin_token");
+async function fetchWithTimeout(url, options = {}) {
+  const {
+    timeoutMs = REQUEST_TIMEOUT_MS,
+    signal: externalSignal,
+    ...fetchOptions
+  } = options;
+  const timeout = createTimeoutController(timeoutMs, externalSignal);
+  try {
+    return await fetch(url, { ...fetchOptions, signal: timeout.signal });
+  } catch (error) {
+    if (timeout.didTimeout()) {
+      throw new Error("Сервер не ответил вовремя. Проверьте соединение и повторите попытку.");
     }
-    throw new Error((await errorDetail(response)) || `Request failed: ${response.status}`);
+    if (timeout.signal.aborted) {
+      throw new Error("Запрос был отменён.");
+    }
+    throw new Error("Не удалось связаться с сервером. Проверьте интернет-соединение.", {
+      cause: error,
+    });
+  } finally {
+    timeout.cleanup();
   }
-  if (response.status === 204) return null;
-  return response.json();
+}
+
+async function request(path, options = {}) {
+  const {
+    auth = true,
+    dedupeKey,
+    headers: customHeaders,
+    ...requestOptions
+  } = options;
+  const coordinationKey = dedupeKey ?? mutationRequestKey(path, requestOptions);
+
+  return requestCoordinator.run(coordinationKey, async () => {
+    const response = await fetchWithTimeout(`${API_BASE}${path}`, {
+      ...requestOptions,
+      headers: { ...headers(auth), ...(customHeaders || {}) },
+    });
+    if (!response.ok) {
+      if (response.status === 401 && auth) {
+        localStorage.removeItem("flashin_token");
+      }
+      throw new Error((await errorDetail(response)) || `Request failed: ${response.status}`);
+    }
+    if (response.status === 204) return null;
+    return response.json();
+  });
 }
 
 export async function telegramAuth(initData) {
@@ -238,10 +284,12 @@ export async function listSupportTickets() {
 }
 
 export async function downloadPrivacyData() {
-  const response = await fetch(`${API_BASE}/api/privacy/export`, {
+  const response = await fetchWithTimeout(`${API_BASE}/api/privacy/export`, {
     headers: { Authorization: `Bearer ${getToken()}` },
   });
-  if (!response.ok) throw new Error((await errorDetail(response)) || "Не удалось экспортировать данные");
+  if (!response.ok) {
+    throw new Error((await errorDetail(response)) || "Не удалось экспортировать данные");
+  }
   const blob = await response.blob();
   const disposition = response.headers.get("content-disposition") || "";
   const match = disposition.match(/filename="?([^";]+)"?/i);
