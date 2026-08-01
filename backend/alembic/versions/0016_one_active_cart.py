@@ -14,7 +14,7 @@ branch_labels = None
 depends_on = None
 
 
-_ACTIVE_CART_INDEX = "uq_carts_customer_active"
+_ACTIVE_CART_INDEX = "uq_carts_one_active_per_customer"
 
 
 def upgrade():
