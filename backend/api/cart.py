@@ -4,10 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
+from ..cart_schemas import CartOut
 from ..config import get_settings
 from ..database import get_db
 from ..models import Cart, CartItem, Customer, Product, ProductVariant, PromoCode
-from ..schemas import CartAddIn, CartItemOut, CartOut, LoyaltyRedeemIn, PromoApplyIn, ReferralApplyIn
+from ..schemas import CartAddIn, CartItemOut, LoyaltyRedeemIn, PromoApplyIn, ReferralApplyIn
 from ..security import get_current_customer
 from ..services.cart_adjustments import (
     CartAdjustmentResult,
@@ -192,30 +193,39 @@ def serialize_cart(
 
     subtotal = subtotal.quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
     if adjustments is None:
-        discount = (
+        promo_discount = (
             _money(calculate_discount(cart.promo_code, float(subtotal)), "promo discount")
             if cart.promo_code
             else Decimal("0.00")
         )
-        discount = min(max(discount, Decimal("0.00")), subtotal)
-        loyalty_points = _money(cart.loyalty_points_to_redeem or 0, "loyalty points")
+        promo_discount = min(max(promo_discount, Decimal("0.00")), subtotal)
+        loyalty_points_value = _money(cart.loyalty_points_to_redeem or 0, "loyalty points")
+        if loyalty_points_value != loyalty_points_value.to_integral_value():
+            raise HTTPException(status_code=409, detail="Loyalty points must be whole numbers")
+        loyalty_points = int(loyalty_points_value)
         point_value = _money(get_settings().loyalty_point_value_rub, "loyalty point value")
-        loyalty_discount = (loyalty_points * point_value).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
-        loyalty_discount = min(max(loyalty_discount, Decimal("0.00")), subtotal - discount)
-        final_amount = max(subtotal - discount - loyalty_discount, Decimal("0.00"))
+        loyalty_discount = (loyalty_points_value * point_value).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
+        loyalty_discount = min(max(loyalty_discount, Decimal("0.00")), subtotal - promo_discount)
+        final_amount = max(subtotal - promo_discount - loyalty_discount, Decimal("0.00"))
         promo_code = cart.promo_code.code if cart.promo_code else None
     else:
         if subtotal != adjustments.subtotal:
             raise HTTPException(status_code=409, detail="Cart changed during adjustment reconciliation")
-        discount = adjustments.promo_discount
+        promo_discount = adjustments.promo_discount
+        loyalty_points = adjustments.loyalty_points
+        loyalty_discount = adjustments.loyalty_discount
         final_amount = adjustments.final_amount
         promo_code = adjustments.promo_code
 
+    total_discount = (promo_discount + loyalty_discount).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
     return CartOut(
         id=cart.id,
         items=items,
         total_amount=float(subtotal),
-        discount_amount=float(discount),
+        discount_amount=float(total_discount),
+        promo_discount_amount=float(promo_discount),
+        loyalty_points_reserved=loyalty_points,
+        loyalty_discount_amount=float(loyalty_discount),
         final_amount=float(final_amount),
         promo_code=promo_code,
     )
