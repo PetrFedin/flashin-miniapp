@@ -57,7 +57,6 @@ from .api.wishlist import router as wishlist_router
 from .config import get_settings
 from .database import Base, SessionLocal, engine
 from .middleware.admin_order_state_guard import AdminOrderStateGuardMiddleware
-from .middleware.customer_order_cancel_guard import CustomerOrderCancelGuardMiddleware
 from .middleware.metrics import MetricsMiddleware, metrics_response
 from .middleware.rate_limit import InMemoryRateLimitMiddleware
 from .middleware.security_headers import SecurityHeadersMiddleware
@@ -71,6 +70,14 @@ admin_router.routes[:] = [
     for route in admin_router.routes
     if not (
         getattr(route, "path", "") == "/admin/login"
+        and "POST" in getattr(route, "methods", set())
+    )
+]
+orders_router.routes[:] = [
+    route
+    for route in orders_router.routes
+    if not (
+        getattr(route, "path", "") == "/orders/{order_id}/cancel"
         and "POST" in getattr(route, "methods", set())
     )
 ]
@@ -112,7 +119,6 @@ app = FastAPI(
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(InMemoryRateLimitMiddleware)
 app.add_middleware(AdminOrderStateGuardMiddleware)
-app.add_middleware(CustomerOrderCancelGuardMiddleware)
 if settings.metrics_enabled:
     app.add_middleware(MetricsMiddleware)
 

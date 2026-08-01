@@ -12,9 +12,10 @@ from ..schemas import PaymentCreate, PaymentOut
 from ..security import get_current_customer
 from ..services.event_dispatcher import emit_event
 from ..services.fulfillment import ensure_fulfillment_task
-from ..services.inventory import commit_reserved_to_sold, release_variant
+from ..services.inventory import commit_reservations_to_sold
 from ..services.loyalty import add_points, mark_redemption_committed, reward_referral_after_first_paid_order
 from ..services.notifications import queue_order_paid
+from ..services.order_cancellation import cancel_order_before_settlement
 from ..services.outbox import enqueue_event_for_destinations, enqueue_webhook
 from ..services.payments import create_yookassa_payment, fetch_yookassa_payment
 from ..services.timeline import add_timeline_event
@@ -74,6 +75,13 @@ def _validate_provider_amount(provider_payment: dict, order: Order) -> None:
 
     if provider_amount != order_amount or provider_currency != str(order.currency).upper():
         raise HTTPException(status_code=409, detail="Provider payment amount or currency does not match order")
+
+
+def _order_item_quantities(order: Order) -> dict[int, int]:
+    quantities: dict[int, int] = {}
+    for item in order.items:
+        quantities[item.variant_id] = quantities.get(item.variant_id, 0) + item.quantity
+    return quantities
 
 
 def _parse_webhook_payload(raw_body: bytes) -> tuple[dict, str, dict, str]:
@@ -285,8 +293,7 @@ async def yookassa_webhook(request: Request, db: Session = Depends(get_db)):
                 order.status = "payment_review_required"
                 _queue_payment_review(db, order, payment_id, "paid_after_cancel")
             else:
-                for item in order.items:
-                    commit_reserved_to_sold(db, item.variant_id, item.quantity)
+                commit_reservations_to_sold(db, _order_item_quantities(order))
                 queue_order_paid(db, order)
                 if order.loyalty_points_redeemed:
                     add_points(db, order.customer_id, -order.loyalty_points_redeemed, "loyalty_redeemed", order.id)
@@ -325,11 +332,17 @@ async def yookassa_webhook(request: Request, db: Session = Depends(get_db)):
             if order.payment_status in _SETTLED_ORDER_PAYMENT_STATUSES:
                 _queue_payment_review(db, order, payment_id, "canceled_after_settlement")
             else:
-                if order.payment_status != "cancelled":
-                    for item in order.items:
-                        release_variant(db, item.variant_id, item.quantity)
-                order.payment_status = "cancelled"
-                order.status = "cancelled"
+                try:
+                    cancel_order_before_settlement(db, order, source="provider")
+                except HTTPException as exc:
+                    order.payment_status = "payment_review_required"
+                    order.status = "payment_review_required"
+                    _queue_payment_review(
+                        db,
+                        order,
+                        payment_id,
+                        f"provider_cancel_conflict:{exc.detail}",
+                    )
 
         payment_event.processed = True
         db.commit()

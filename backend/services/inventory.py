@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
@@ -21,6 +23,18 @@ def _validate_variant_state(variant: ProductVariant) -> None:
         raise HTTPException(status_code=409, detail="Reserved quantity exceeds stock")
 
 
+def _normalize_quantities(quantities: Mapping[int, int]) -> dict[int, int]:
+    normalized: dict[int, int] = {}
+    for variant_id, quantity in quantities.items():
+        if isinstance(variant_id, bool) or not isinstance(variant_id, int) or variant_id <= 0:
+            raise HTTPException(status_code=400, detail="Variant id must be a positive integer")
+        _validate_positive_quantity(quantity)
+        normalized[variant_id] = normalized.get(variant_id, 0) + quantity
+    if not normalized:
+        raise HTTPException(status_code=400, detail="At least one inventory quantity is required")
+    return normalized
+
+
 def _load_locked_variant(db: Session, variant_id: int) -> ProductVariant:
     variant = (
         db.query(ProductVariant)
@@ -34,6 +48,30 @@ def _load_locked_variant(db: Session, variant_id: int) -> ProductVariant:
     return variant
 
 
+def _load_locked_variants(
+    db: Session,
+    quantities: Mapping[int, int],
+) -> tuple[dict[int, int], dict[int, ProductVariant]]:
+    normalized = _normalize_quantities(quantities)
+    variants = (
+        db.query(ProductVariant)
+        .filter(ProductVariant.id.in_(sorted(normalized)))
+        .order_by(ProductVariant.id.asc())
+        .with_for_update()
+        .all()
+    )
+    by_id = {variant.id: variant for variant in variants}
+    missing = sorted(set(normalized) - set(by_id))
+    if missing:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Inventory variants not found: {', '.join(map(str, missing))}",
+        )
+    for variant in variants:
+        _validate_variant_state(variant)
+    return normalized, by_id
+
+
 def reserve_variant(db: Session, variant_id: int, quantity: int) -> ProductVariant:
     _validate_positive_quantity(quantity)
     variant = _load_locked_variant(db, variant_id)
@@ -44,23 +82,44 @@ def reserve_variant(db: Session, variant_id: int, quantity: int) -> ProductVaria
     return variant
 
 
+def release_variants(db: Session, quantities: Mapping[int, int]) -> None:
+    normalized, variants = _load_locked_variants(db, quantities)
+    for variant_id, quantity in normalized.items():
+        if variants[variant_id].reserved_qty < quantity:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Reserved quantity mismatch for variant {variant_id}",
+            )
+    for variant_id, quantity in normalized.items():
+        variants[variant_id].reserved_qty -= quantity
+
+
 def release_variant(db: Session, variant_id: int, quantity: int) -> None:
-    _validate_positive_quantity(quantity)
-    variant = _load_locked_variant(db, variant_id)
-    if variant.reserved_qty < quantity:
-        raise HTTPException(status_code=409, detail="Reserved quantity mismatch")
-    variant.reserved_qty -= quantity
+    release_variants(db, {variant_id: quantity})
+
+
+def commit_reservations_to_sold(db: Session, quantities: Mapping[int, int]) -> None:
+    normalized, variants = _load_locked_variants(db, quantities)
+    for variant_id, quantity in normalized.items():
+        variant = variants[variant_id]
+        if variant.reserved_qty < quantity:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Reserved quantity mismatch for variant {variant_id}",
+            )
+        if variant.stock_qty < quantity:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Inventory would become negative for variant {variant_id}",
+            )
+    for variant_id, quantity in normalized.items():
+        variant = variants[variant_id]
+        variant.reserved_qty -= quantity
+        variant.stock_qty -= quantity
 
 
 def commit_reserved_to_sold(db: Session, variant_id: int, quantity: int) -> None:
-    _validate_positive_quantity(quantity)
-    variant = _load_locked_variant(db, variant_id)
-    if variant.reserved_qty < quantity:
-        raise HTTPException(status_code=409, detail="Reserved quantity mismatch")
-    if variant.stock_qty < quantity:
-        raise HTTPException(status_code=409, detail="Inventory would become negative")
-    variant.reserved_qty -= quantity
-    variant.stock_qty -= quantity
+    commit_reservations_to_sold(db, {variant_id: quantity})
 
 
 def adjust_stock(
