@@ -45,7 +45,7 @@ function downloadBlob(blob, filename) {
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
-  URL.revokeObjectURL(url);
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 function App() {
@@ -377,11 +377,20 @@ function App() {
         </div>
         <textarea placeholder="Описание" value={productForm.description} onChange={(event) => setProductForm({ ...productForm, description: event.target.value })} />
         <h3>Фото</h3>
-        <input type="file" accept="image/*" disabled={isBusy("upload-image")} onChange={(event) => event.target.files?.[0] && uploadImage(event.target.files[0])} />
+        <input
+          type="file"
+          accept="image/*"
+          disabled={isBusy("upload-image")}
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = "";
+            if (file) uploadImage(file);
+          }}
+        />
         <div className="image-list">{productForm.images.map((url) => <img key={url} src={url} alt="Загруженный товар" />)}</div>
         <h3>Размеры</h3>
         {productForm.variants.map((variant, index) => (
-          <div className="form-grid" key={`${index}-${variant.sku}`}>
+          <div className="form-grid" key={index}>
             <input placeholder="Размер" value={variant.size} onChange={(event) => updateVariant(index, "size", event.target.value)} />
             <input placeholder="SKU размера" value={variant.sku} onChange={(event) => updateVariant(index, "sku", event.target.value)} />
             <input placeholder="Цвет" value={variant.color} onChange={(event) => updateVariant(index, "color", event.target.value)} />
