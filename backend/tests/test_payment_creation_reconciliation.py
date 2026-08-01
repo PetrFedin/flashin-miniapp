@@ -52,15 +52,17 @@ class FakeSession:
         self.rollbacks += 1
 
 
-def make_order():
-    return SimpleNamespace(
-        id=7,
-        customer_id=3,
-        status="payment_created",
-        payment_status="payment_created",
-        total_amount=1250.0,
-        currency="RUB",
-    )
+def make_order(**overrides):
+    values = {
+        "id": 7,
+        "customer_id": 3,
+        "status": "payment_created",
+        "payment_status": "payment_created",
+        "total_amount": 1250.0,
+        "currency": "RUB",
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
 
 
 def make_payment(status="pending", url="https://pay.example/old"):
@@ -85,6 +87,19 @@ def provider_snapshot(status, payment_id="pay-1", url=""):
     if url:
         result["confirmation"] = {"confirmation_url": url}
     return result
+
+
+def settlement_spy(monkeypatch):
+    calls = []
+
+    def settle(db, order):
+        calls.append((db, order.id))
+        order.status = "paid"
+        order.payment_status = "paid"
+        return True
+
+    monkeypatch.setattr(payments_api, "settle_paid_order", settle)
+    return calls
 
 
 def test_canceled_attempt_creates_next_provider_attempt(monkeypatch):
@@ -126,10 +141,11 @@ def test_canceled_attempt_creates_next_provider_attempt(monkeypatch):
     assert db.rollbacks == 0
 
 
-def test_succeeded_attempt_is_reused_without_second_charge(monkeypatch):
+def test_succeeded_attempt_self_heals_order_without_second_charge(monkeypatch):
     order = make_order()
     payment = make_payment()
     db = FakeSession(order, [payment])
+    settle_calls = settlement_spy(monkeypatch)
 
     async def fetch(_payment_id):
         return provider_snapshot("succeeded")
@@ -150,9 +166,43 @@ def test_succeeded_attempt_is_reused_without_second_charge(monkeypatch):
 
     assert result.status == "succeeded"
     assert result.confirmation_url == ""
+    assert order.status == "paid"
+    assert order.payment_status == "paid"
+    assert settle_calls == [(db, 7)]
     assert len(db.payments) == 1
     assert db.commits == 1
     assert db.rollbacks == 0
+
+
+def test_immediately_succeeded_new_attempt_is_settled(monkeypatch):
+    order = make_order(status="created", payment_status="pending")
+    db = FakeSession(order, [])
+    settle_calls = settlement_spy(monkeypatch)
+
+    async def create(order_id, amount, currency, attempt):
+        return {
+            "provider_payment_id": "pay-immediate",
+            "status": "succeeded",
+            "confirmation_url": "",
+        }
+
+    monkeypatch.setattr(payments_api, "create_yookassa_payment", create)
+
+    result = asyncio.run(
+        payments_api.create_payment(
+            PaymentCreate(order_id=7),
+            customer=SimpleNamespace(id=3),
+            db=db,
+        )
+    )
+
+    assert result.status == "succeeded"
+    assert result.provider_payment_id == "pay-immediate"
+    assert order.status == "paid"
+    assert order.payment_status == "paid"
+    assert settle_calls == [(db, 7)]
+    assert len(db.payments) == 1
+    assert db.commits == 1
 
 
 def test_pending_attempt_refreshes_link_without_new_charge(monkeypatch):
