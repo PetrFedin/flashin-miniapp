@@ -46,19 +46,24 @@ def _active_cart_query(db: Session, customer_id: int):
 
 
 def _load_cart(db: Session, cart_id: int) -> Cart:
-    cart = (
-        db.query(Cart)
-        .options(
-            joinedload(Cart.items).joinedload(CartItem.product),
-            joinedload(Cart.items).joinedload(CartItem.variant),
-            joinedload(Cart.promo_code),
-        )
-        .filter(Cart.id == cart_id)
-        .first()
+    query = db.query(Cart).options(
+        joinedload(Cart.items).joinedload(CartItem.product),
+        joinedload(Cart.items).joinedload(CartItem.variant),
+        joinedload(Cart.promo_code),
     )
+    populate_existing = getattr(query, "populate_existing", None)
+    if callable(populate_existing):
+        query = populate_existing()
+    cart = query.filter(Cart.id == cart_id).first()
     if not cart:
         raise HTTPException(status_code=404, detail="Cart not found")
     return cart
+
+
+def _flush(db: Session) -> None:
+    flush = getattr(db, "flush", None)
+    if callable(flush):
+        flush()
 
 
 def _lock_cart(db: Session, cart_id: int) -> Cart:
@@ -217,10 +222,13 @@ def serialize_cart(
 
 
 def _commit_reconciled_cart(db: Session, cart_id: int) -> CartOut:
+    _flush(db)
     current_cart = _load_cart(db, cart_id)
     adjustments = reconcile_cart_adjustments(db, current_cart)
+    _flush(db)
+    response = serialize_cart(_load_cart(db, cart_id), adjustments)
     db.commit()
-    return serialize_cart(_load_cart(db, cart_id), adjustments)
+    return response
 
 
 @router.get("", response_model=CartOut)
@@ -407,8 +415,10 @@ def apply_loyalty(payload: LoyaltyRedeemIn, customer: Customer = Depends(get_cur
         _lock_cart(db, cart.id)
         current_cart = _load_cart(db, cart.id)
         adjustments = apply_loyalty_request(db, current_cart, payload.points)
+        _flush(db)
+        response = serialize_cart(_load_cart(db, cart.id), adjustments)
         db.commit()
-        return serialize_cart(_load_cart(db, cart.id), adjustments)
+        return response
     except HTTPException:
         db.rollback()
         raise
