@@ -169,6 +169,7 @@ def attach_referral_to_customer(db: Session, code: str, invited_customer_id: int
     referral = (
         db.query(ReferralCode)
         .filter(ReferralCode.code == normalized_code, ReferralCode.active.is_(True))
+        .with_for_update()
         .first()
     )
     if not referral or referral.customer_id == invited_customer_id:
@@ -181,7 +182,13 @@ def attach_referral_to_customer(db: Session, code: str, invited_customer_id: int
         .first()
     )
     if existing:
-        return False
+        if existing.referral_code_id == referral.id:
+            return True
+        raise HTTPException(
+            status_code=409,
+            detail="Customer is already linked to another referral code",
+        )
+
     db.add(
         ReferralAttribution(
             referral_code_id=referral.id,
