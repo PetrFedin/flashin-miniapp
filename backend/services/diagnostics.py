@@ -1,10 +1,11 @@
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import httpx
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
+from ..database import utcnow_naive
 from ..models import MoySkladSyncLog, Notification, WebhookOutbox
 from ..notification_models import NotificationDeliveryState
 
@@ -104,7 +105,7 @@ def run_diagnostics(db: Session) -> dict:
             "enabled": False,
         }
 
-    now = datetime.utcnow()
+    now = utcnow_naive()
     try:
         failed_notifications = (
             db.query(Notification)
