@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 _ACTIVE_PROVIDER_STATUSES = frozenset({"pending", "waiting_for_capture"})
 _SETTLED_PROVIDER_STATUSES = frozenset({"succeeded"})
+_LIVE_PROVIDER_STATUSES = _ACTIVE_PROVIDER_STATUSES | _SETTLED_PROVIDER_STATUSES
 _REPLACEABLE_PROVIDER_STATUSES = frozenset({"canceled"})
 
 
@@ -49,3 +50,19 @@ def can_fallback_to_stored_attempt(status: str, confirmation_url: str) -> bool:
     normalized_status = str(status or "").strip().lower()
     normalized_url = str(confirmation_url or "").strip()
     return normalized_status in _ACTIVE_PROVIDER_STATUSES and bool(normalized_url)
+
+
+def is_stale_cancellation(
+    canceled_provider_payment_id: str,
+    latest_provider_payment_id: str,
+    latest_status: str,
+) -> bool:
+    canceled_id = str(canceled_provider_payment_id or "").strip()
+    latest_id = str(latest_provider_payment_id or "").strip()
+    normalized_status = str(latest_status or "").strip().lower()
+    return bool(
+        canceled_id
+        and latest_id
+        and canceled_id != latest_id
+        and normalized_status in _LIVE_PROVIDER_STATUSES
+    )
