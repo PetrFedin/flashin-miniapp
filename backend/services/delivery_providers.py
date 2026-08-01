@@ -1,7 +1,9 @@
 import json
-from datetime import datetime
+
 from sqlalchemy.orm import Session
-from ..models import DeliveryProvider, DeliveryShipment, Order
+
+from ..database import utcnow_naive
+from ..models import DeliveryShipment, Order
 
 
 def calculate_delivery_price(provider_code: str, zone: str = "default") -> float:
@@ -31,4 +33,4 @@ def create_shipment(db: Session, order: Order, provider_code: str = "courier") -
 def update_tracking(shipment: DeliveryShipment, tracking_number: str, status: str = "shipped") -> None:
     shipment.tracking_number = tracking_number
     shipment.status = status
-    shipment.updated_at = datetime.utcnow()
+    shipment.updated_at = utcnow_naive()
