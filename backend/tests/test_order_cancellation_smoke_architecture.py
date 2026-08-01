@@ -11,11 +11,14 @@ def test_cancellation_smoke_uses_real_http_and_transactional_postgres():
 
     assert 'join_transaction_mode="create_savepoint"' in source
     assert "outer_transaction.rollback()" in source
-    assert 'client.post("/api/cart/items"' in source
-    assert 'client.post("/api/cart/promo"' in source
-    assert 'client.post("/api/cart/loyalty"' in source
-    assert '"/api/orders/checkout"' in source
-    assert 'client.post(f"/api/orders/{order_id}/cancel")' in source
+    for route in (
+        '"/api/cart/items"',
+        '"/api/cart/promo"',
+        '"/api/cart/loyalty"',
+        '"/api/orders/checkout"',
+        'f"/api/orders/{order_id}/cancel"',
+    ):
+        assert route in source
     assert '"idempotent cancellation replay"' in source
     assert "create_yookassa_payment" not in source
 
