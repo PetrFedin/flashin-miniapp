@@ -1,4 +1,9 @@
+from pathlib import Path
+
 from backend import main
+
+
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _post_routes(path: str):
@@ -34,6 +39,14 @@ def test_legacy_safe_aliases_are_hidden_from_openapi():
 
 
 def test_customer_cancel_rewrite_middleware_is_removed():
-    source = (main.Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+    source = (BACKEND_ROOT / "main.py").read_text(encoding="utf-8")
 
     assert "CustomerOrderCancelGuardMiddleware" not in source
+
+
+def test_legacy_customer_cancel_handler_and_route_pruning_are_removed():
+    orders_source = (BACKEND_ROOT / "api" / "orders.py").read_text(encoding="utf-8")
+    main_source = (BACKEND_ROOT / "main.py").read_text(encoding="utf-8")
+
+    assert "def cancel_order(" not in orders_source
+    assert "orders_router.routes[:]" not in main_source

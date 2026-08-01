@@ -73,14 +73,6 @@ admin_router.routes[:] = [
         and "POST" in getattr(route, "methods", set())
     )
 ]
-orders_router.routes[:] = [
-    route
-    for route in orders_router.routes
-    if not (
-        getattr(route, "path", "") == "/orders/{order_id}/cancel"
-        and "POST" in getattr(route, "methods", set())
-    )
-]
 
 if settings.sentry_dsn:
     sentry_sdk.init(
