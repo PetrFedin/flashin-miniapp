@@ -19,6 +19,7 @@ from ..services.order_cancellation import cancel_order_before_settlement
 from ..services.outbox import enqueue_event_for_destinations, enqueue_webhook
 from ..services.payment_attempts import (
     can_fallback_to_stored_attempt,
+    is_stale_cancellation,
     resolve_provider_payment_attempt,
 )
 from ..services.payments import create_yookassa_payment, fetch_yookassa_payment
@@ -299,6 +300,14 @@ async def yookassa_webhook(request: Request, db: Session = Depends(get_db)):
         if payment and payment.order_id != order.id:
             raise HTTPException(status_code=409, detail="Payment belongs to another order")
 
+        latest_order_payment = (
+            db.query(Payment)
+            .filter(Payment.order_id == order.id, Payment.provider == _PROVIDER)
+            .order_by(Payment.id.desc())
+            .with_for_update()
+            .first()
+        )
+
         payment_event = (
             db.query(PaymentEvent)
             .filter(
@@ -379,7 +388,24 @@ async def yookassa_webhook(request: Request, db: Session = Depends(get_db)):
                 order.payment_status = "paid"
                 order.status = "paid"
         elif event == "payment.canceled" and provider_status == "canceled":
-            if order.payment_status in _SETTLED_ORDER_PAYMENT_STATUSES:
+            if latest_order_payment and is_stale_cancellation(
+                payment_id,
+                latest_order_payment.provider_payment_id,
+                latest_order_payment.status,
+            ):
+                emit_event(
+                    db,
+                    "payment.cancellation_ignored",
+                    "order",
+                    order.id,
+                    {
+                        "order_id": order.id,
+                        "canceled_payment_id": payment_id,
+                        "latest_payment_id": latest_order_payment.provider_payment_id,
+                        "latest_payment_status": latest_order_payment.status,
+                    },
+                )
+            elif order.payment_status in _SETTLED_ORDER_PAYMENT_STATUSES:
                 _queue_payment_review(db, order, payment_id, "canceled_after_settlement")
             else:
                 try:
