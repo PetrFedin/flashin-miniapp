@@ -29,7 +29,7 @@ def upgrade():
             "created_at",
             sa.DateTime(),
             nullable=False,
-            server_default=sa.text("CURRENT_TIMESTAMP AT TIME ZONE 'UTC'"),
+            server_default=sa.text("timezone('UTC', CURRENT_TIMESTAMP)"),
         ),
         sa.UniqueConstraint(
             "event_key",
