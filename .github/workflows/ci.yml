@@ -68,6 +68,8 @@ jobs:
         run: alembic -c backend/alembic.ini upgrade head
       - name: Verify migration state
         run: alembic -c backend/alembic.ini current
+      - name: Run transactional customer journey smoke
+        run: python scripts/customer_journey_smoke.py
       - name: Run backend tests
         run: python -m pytest -q backend/tests
 
