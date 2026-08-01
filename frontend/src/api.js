@@ -1,3 +1,4 @@
+import { normalizePaymentContinuation } from "./paymentFlow.js";
 import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   createRequestCoordinator,
@@ -194,10 +195,11 @@ export async function cancelOrder(orderId) {
 }
 
 export async function createPayment(orderId) {
-  return request("/api/payments", {
+  const payment = await request("/api/payments", {
     method: "POST",
     body: JSON.stringify({ order_id: orderId }),
   });
+  return normalizePaymentContinuation(payment, orderId);
 }
 
 export async function createReturn(orderId, reason) {
