@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-from pathlib import Path
-from datetime import datetime
 import json
+from pathlib import Path
+
+from script_time import utc_timestamp
 
 release = {
     "version": "v50",
-    "created_at": datetime.utcnow().isoformat(),
+    "created_at": utc_timestamp(),
     "entrypoints": {
         "simple_start": "scripts/start_simple.sh",
         "unified_launch": "scripts/launch.py",
@@ -30,16 +31,19 @@ release = {
     ],
 }
 
-Path("deploy/release/v50_release_pack.json").write_text(json.dumps(release, ensure_ascii=False, indent=2), encoding="utf-8")
+Path("deploy/release/v50_release_pack.json").write_text(
+    json.dumps(release, ensure_ascii=False, indent=2),
+    encoding="utf-8",
+)
 Path("docs/v50_release_pack.md").write_text(
     "# FLASHIN v50 Release Pack\n\n"
     + f"Created at: {release['created_at']}\n\n"
     + "## Entrypoints\n\n"
-    + "\n".join([f"- {k}: `{v}`" for k, v in release["entrypoints"].items()])
+    + "\n".join([f"- {key}: `{value}`" for key, value in release["entrypoints"].items()])
     + "\n\n## Must read\n\n"
-    + "\n".join([f"- `{x}`" for x in release["must_read"]])
+    + "\n".join([f"- `{item}`" for item in release["must_read"]])
     + "\n\n## No-go if\n\n"
-    + "\n".join([f"- {x}" for x in release["no_go_if"]])
+    + "\n".join([f"- {item}" for item in release["no_go_if"]])
     + "\n",
     encoding="utf-8",
 )
