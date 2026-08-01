@@ -37,41 +37,18 @@ import {
 import ErrorBoundary from "./ErrorBoundary";
 import SkeletonCard from "./components/SkeletonCard";
 import { useTelegram } from "./hooks/useTelegram";
-
-const ORDER_LABELS = {
-  created: "Заказ создан",
-  payment_created: "Ожидает оплаты",
-  paid: "Оплачен",
-  assembling: "Собирается",
-  ready: "Готов к отправке",
-  shipped: "Передан в доставку",
-  completed: "Доставлен",
-  refund_requested: "Возврат рассматривается",
-  partially_refunded: "Частично возвращён",
-  refunded: "Возвращён",
-  payment_review_required: "Требует проверки оплаты",
-  cancelled: "Отменён",
-};
-const PAYMENT_LABELS = {
-  pending: "Оплата не начата",
-  payment_created: "Ожидает оплаты",
-  paid: "Оплачено",
-  partially_refunded: "Частичный возврат",
-  refund_processing: "Возврат обрабатывается",
-  refund_pending: "Возврат ожидает подтверждения",
-  refund_review_required: "Возврат требует проверки",
-  paid_review_required: "Оплата требует проверки",
-  refunded: "Возвращено",
-  cancelled: "Отменено",
-};
-const DELIVERY_LABELS = {
-  not_started: "Не начата",
-  assembling: "Комплектуется",
-  ready: "Готова",
-  shipped: "В пути",
-  delivered: "Доставлена",
-  cancelled: "Отменена",
-};
+import { parseLoyaltyPoints, validateCheckoutForm, validateSizeForm } from "./inputRules.js";
+import {
+  DELIVERY_LABELS,
+  ORDER_LABELS,
+  PAYMENT_LABELS,
+  canCancelOrder,
+  canPayOrder,
+  canReturnOrder,
+  paymentReturnMessage,
+} from "./orderRules.js";
+import { loadProfileSections, loadStorefrontBootstrap } from "./storefrontLoaders.js";
+import { useActionLocks } from "./useActionLocks.js";
 
 function money(value, currency = "RUB") {
   return new Intl.NumberFormat("ru-RU", {
@@ -85,10 +62,10 @@ function productImage(product) {
   return product?.images?.[0]?.url || product?.image_url || "/fallback-product.svg";
 }
 
-function ProductCard({ product, onOpen, action }) {
+function ProductCard({ product, onOpen, action, disabled = false }) {
   return (
     <article className="product-card">
-      <button className="product-open" onClick={() => onOpen(product)}>
+      <button className="product-open" onClick={() => onOpen(product)} disabled={disabled}>
         <img src={productImage(product)} alt={product.title} loading="lazy" />
         <span className="title">{product.title}</span>
         <span className="meta">{product.brand || product.category || "FLASHIN"}</span>
@@ -122,8 +99,18 @@ function sleep(milliseconds) {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
+function warningText(prefix, warnings) {
+  if (!warnings?.length) return "";
+  return `${prefix}: ${warnings.join("; ")}`;
+}
+
+function cartItemActionKey(itemId) {
+  return `cart-item-${itemId}`;
+}
+
 export default function App() {
   const { tg, initData, user, initialized } = useTelegram();
+  const { runAction, isBusy } = useActionLocks();
   const [view, setView] = useState("catalog");
   const [products, setProducts] = useState([]);
   const [looks, setLooks] = useState([]);
@@ -140,7 +127,6 @@ export default function App() {
   const [privacyRequests, setPrivacyRequests] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [promo, setPromo] = useState("");
@@ -164,6 +150,8 @@ export default function App() {
     () => cart?.items?.reduce((sum, item) => sum + item.quantity, 0) || 0,
     [cart],
   );
+  const checkoutBusy = isBusy("checkout");
+  const addToCartBusy = isBusy("add-to-cart");
 
   function clearMessages() {
     setError("");
@@ -171,21 +159,19 @@ export default function App() {
   }
 
   async function act(key, operation, successMessage = "") {
-    if (busy) return null;
-    clearMessages();
-    setBusy(key);
-    try {
-      const result = await operation();
-      if (successMessage) setNotice(successMessage);
-      tg?.HapticFeedback?.notificationOccurred?.("success");
-      return result;
-    } catch (operationError) {
-      setError(operationError.message || "Операция не выполнена");
-      tg?.HapticFeedback?.notificationOccurred?.("error");
-      return null;
-    } finally {
-      setBusy("");
-    }
+    return runAction(key, async () => {
+      clearMessages();
+      try {
+        const result = await operation();
+        if (successMessage) setNotice(successMessage);
+        tg?.HapticFeedback?.notificationOccurred?.("success");
+        return result;
+      } catch (operationError) {
+        setError(operationError.message || "Операция не выполнена");
+        tg?.HapticFeedback?.notificationOccurred?.("error");
+        return null;
+      }
+    });
   }
 
   async function refreshOrders() {
@@ -196,20 +182,30 @@ export default function App() {
 
   async function resolvePaymentReturn(orderId) {
     let current = null;
+    let lastError = null;
     for (let attempt = 0; attempt < 5; attempt += 1) {
-      current = await getOrder(orderId);
-      if (!["pending", "payment_created"].includes(current.payment_status)) break;
-      await sleep(1500);
+      try {
+        current = await getOrder(orderId);
+        lastError = null;
+      } catch (pollError) {
+        lastError = pollError;
+      }
+      if (current && !["pending", "payment_created"].includes(current.payment_status)) break;
+      if (attempt < 4) await sleep(1500);
     }
-    await refreshOrders();
+    if (!current && lastError) throw lastError;
+
+    try {
+      await refreshOrders();
+    } catch {
+      if (current) setOrders((items) => items.some((item) => item.id === current.id)
+        ? items.map((item) => item.id === current.id ? current : item)
+        : [current, ...items]);
+    }
     setView("orders");
-    if (current?.payment_status === "paid") {
-      setNotice(`Заказ #${orderId} оплачен. Статус обновлён.`);
-    } else if (current?.payment_status === "cancelled") {
-      setError(`Оплата заказа #${orderId} отменена.`);
-    } else {
-      setNotice(`Заказ #${orderId} создан. Подтверждение оплаты ещё обрабатывается.`);
-    }
+    const message = paymentReturnMessage(orderId, current?.payment_status);
+    if (message.type === "error") setError(message.text);
+    else setNotice(message.text);
     window.history.replaceState({}, "", "/");
   }
 
@@ -225,16 +221,19 @@ export default function App() {
       clearMessages();
       try {
         await telegramAuth(initData);
-        const [catalog, activeCart, activeLooks, saved] = await Promise.all([
-          listProducts(),
-          getCart(),
-          listLooks(),
-          listWishlist(),
-        ]);
-        setProducts(catalog);
-        setCart(activeCart);
-        setLooks(activeLooks);
-        setWishlist(saved);
+        const bootstrap = await loadStorefrontBootstrap({
+          listProducts,
+          getCart,
+          listLooks,
+          listWishlist,
+        });
+        setProducts(bootstrap.products);
+        setCart(bootstrap.cart);
+        setLooks(bootstrap.looks);
+        setWishlist(bootstrap.wishlist);
+        if (bootstrap.warnings.length) {
+          setNotice(warningText("Основные данные загружены, но часть разделов временно недоступна", bootstrap.warnings));
+        }
 
         const params = new URLSearchParams(window.location.search);
         const productId = Number(params.get("product"));
@@ -280,30 +279,41 @@ export default function App() {
       mainButton.onClick?.(handler);
       handlers.push(handler);
     };
-    if (view === "checkout") bind("Перейти к оплате", handleCheckout, !busy);
-    else if (view === "cart" && cartCount > 0) bind("Оформить заказ", () => setView("checkout"), !busy);
-    else if (view === "product" && selectedVariant?.available_qty > 0) bind("Добавить в корзину", handleAddSelected, !busy);
-    else if (view !== "cart" && cartCount > 0) bind(`Корзина · ${cartCount}`, () => setView("cart"), !busy);
+    if (view === "checkout") bind("Перейти к оплате", handleCheckout, !checkoutBusy);
+    else if (view === "cart" && cartCount > 0) bind("Оформить заказ", () => setView("checkout"));
+    else if (view === "product" && selectedVariant?.available_qty > 0) bind("Добавить в корзину", handleAddSelected, !addToCartBusy);
+    else if (view !== "cart" && cartCount > 0) bind(`Корзина · ${cartCount}`, () => setView("cart"));
     else mainButton.hide?.();
     return () => handlers.forEach((handler) => mainButton.offClick?.(handler));
-  }, [tg, view, cartCount, selectedVariant, checkoutForm, busy]);
+  }, [tg, view, cartCount, selectedVariant, checkoutForm, checkoutBusy, addToCartBusy]);
 
   async function loadProfileData() {
-    const [nextProfile, loyalty, nextReferral, nextTimeline, tickets, privacy, saved, nextOrders] = await Promise.all([
-      getProfile(), myLoyalty(), myReferralCode(), getTimeline(), listSupportTickets(), listPrivacyRequests(), listWishlist(), listOrders(),
-    ]);
-    setProfile(nextProfile);
-    setLoyaltyRows(loyalty);
-    setReferral(nextReferral);
-    setTimeline(nextTimeline);
-    setSupportTickets(tickets);
-    setPrivacyRequests(privacy);
-    setWishlist(saved);
-    setOrders(nextOrders);
+    const { data, warnings } = await loadProfileSections({
+      getProfile,
+      myLoyalty,
+      myReferralCode,
+      getTimeline,
+      listSupportTickets,
+      listPrivacyRequests,
+      listWishlist,
+      listOrders,
+    });
+    setProfile(data.profile);
+    setLoyaltyRows(data.loyalty);
+    setReferral(data.referral);
+    setTimeline(data.timeline);
+    setSupportTickets(data.tickets);
+    setPrivacyRequests(data.privacy);
+    setWishlist(data.wishlist);
+    setOrders(data.orders);
+    if (warnings.length) {
+      setNotice(warningText("Профиль открыт, но не все данные обновились", warnings));
+    }
+    return data;
   }
 
   async function openProduct(product) {
-    return act("open-product", async () => {
+    return act(`open-product-${product.id}`, async () => {
       const fullProduct = product?.variants ? product : await getProduct(product.id);
       setSelected(fullProduct);
       setSelectedVariantId(fullProduct.variants?.find((variant) => variant.available_qty > 0)?.id || fullProduct.variants?.[0]?.id || null);
@@ -324,55 +334,117 @@ export default function App() {
 
   async function handleAddSelected() {
     if (!selected || !selectedVariant || selectedVariant.available_qty <= 0) return;
-    const nextCart = await act("add-to-cart", () => addToCart(selected.id, selectedVariant.id, 1), `${selected.title}, размер ${selectedVariant.size}, добавлен в корзину.`);
+    const nextCart = await act(
+      "add-to-cart",
+      () => addToCart(selected.id, selectedVariant.id, 1),
+      `${selected.title}, размер ${selectedVariant.size}, добавлен в корзину.`,
+    );
     if (nextCart) setCart(nextCart);
   }
 
   async function handleFavorite() {
     if (!selected) return;
+    const key = `wishlist-${selected.id}`;
     if (isFavorite) {
-      const result = await act("wishlist", () => removeWishlist(selected.id), `${selected.title} удалён из избранного.`);
+      const result = await act(key, () => removeWishlist(selected.id), `${selected.title} удалён из избранного.`);
       if (result) setWishlist((current) => current.filter((product) => product.id !== selected.id));
     } else {
-      const saved = await act("wishlist", () => addWishlist(selected.id), `${selected.title} сохранён в избранном.`);
+      const saved = await act(key, () => addWishlist(selected.id), `${selected.title} сохранён в избранном.`);
       if (saved) setWishlist((current) => current.some((product) => product.id === saved.id) ? current : [...current, saved]);
     }
   }
 
   async function handleRestock() {
     if (!selectedVariant || selectedVariant.available_qty > 0) return;
-    await act("restock", () => subscribeRestock(selectedVariant.id), `Уведомление для размера ${selectedVariant.size} подключено.`);
+    await act(
+      `restock-${selectedVariant.id}`,
+      () => subscribeRestock(selectedVariant.id),
+      `Уведомление для размера ${selectedVariant.size} подключено.`,
+    );
   }
 
   async function handleCartQuantity(item, quantity) {
-    if (quantity < 1 || quantity > Math.min(item.available_qty, 10)) return;
-    const nextCart = await act(`cart-${item.id}`, () => updateCartItem(item.id, quantity), `Количество ${item.title} обновлено.`);
+    const maxQuantity = Math.min(item.available_qty, 10);
+    if (quantity < 1 || quantity > maxQuantity) return;
+    const nextCart = await act(
+      cartItemActionKey(item.id),
+      () => updateCartItem(item.id, quantity),
+      `Количество ${item.title} обновлено.`,
+    );
     if (nextCart) setCart(nextCart);
   }
 
   async function handleCartRemove(item) {
-    const nextCart = await act(`cart-${item.id}`, () => removeCartItem(item.id), `${item.title} удалён из корзины.`);
+    const nextCart = await act(
+      cartItemActionKey(item.id),
+      () => removeCartItem(item.id),
+      `${item.title} удалён из корзины.`,
+    );
     if (nextCart) setCart(nextCart);
   }
 
-  async function handleCheckout() {
-    if (!checkoutForm.name.trim() || !checkoutForm.phone.trim()) {
-      setError("Укажите имя и телефон получателя.");
+  async function handleApplyPromo() {
+    const code = promo.trim();
+    if (!code) {
+      setError("Введите промокод.");
       return;
     }
-    if (checkoutForm.delivery_type === "courier" && !checkoutForm.address.trim()) {
-      setError("Для курьерской доставки укажите адрес.");
+    const nextCart = await act("promo", () => applyPromo(code), "Промокод применён.");
+    if (nextCart) {
+      setCart(nextCart);
+      setPromo("");
+    }
+  }
+
+  async function handleApplyLoyalty() {
+    const parsed = parseLoyaltyPoints(loyaltyPoints);
+    if (parsed.error) {
+      setError(parsed.error);
+      return;
+    }
+    const nextCart = await act("loyalty", () => applyLoyalty(parsed.value), "Баллы зарезервированы.");
+    if (nextCart) {
+      setCart(nextCart);
+      setLoyaltyPoints("");
+    }
+  }
+
+  async function handleApplyReferral() {
+    const code = referralInput.trim();
+    if (!code) {
+      setError("Введите реферальный код.");
+      return;
+    }
+    const nextCart = await act("referral", () => applyReferral(code), "Реферальный код связан с заказом.");
+    if (nextCart) {
+      setCart(nextCart);
+      setReferralInput("");
+    }
+  }
+
+  async function handleCheckout() {
+    const validation = validateCheckoutForm(checkoutForm);
+    if (validation.error) {
+      setError(validation.error);
       return;
     }
     await act("checkout", async () => {
-      const order = await checkout(checkoutForm);
-      setCart(await getCart());
+      const order = await checkout(validation.value);
+      try {
+        setCart(await getCart());
+      } catch {
+        setCart(null);
+      }
       try {
         const payment = await createPayment(order.id);
         if (!payment.confirmation_url) throw new Error("Платёж создан без ссылки на оплату");
         window.location.assign(payment.confirmation_url);
       } catch (paymentError) {
-        await refreshOrders();
+        try {
+          await refreshOrders();
+        } catch {
+          setOrders((current) => current.some((item) => item.id === order.id) ? current : [order, ...current]);
+        }
         setView("orders");
         throw new Error(`Заказ #${order.id} создан и товар зарезервирован. Продолжите оплату в разделе заказов. ${paymentError.message}`);
       }
@@ -380,11 +452,13 @@ export default function App() {
   }
 
   async function openProfile() {
-    await act("profile", async () => { await loadProfileData(); setView("profile"); });
+    setView("profile");
+    await act("profile", loadProfileData);
   }
 
   async function openOrders() {
-    await act("orders", async () => { await refreshOrders(); setView("orders"); });
+    setView("orders");
+    await act("orders", refreshOrders);
   }
 
   async function handleRefreshOrders() {
@@ -404,7 +478,11 @@ export default function App() {
     await act(`cancel-${order.id}`, async () => {
       const updated = await cancelOrder(order.id);
       setOrders((current) => current.map((item) => item.id === updated.id ? updated : item));
-      setCart(await getCart());
+      try {
+        setCart(await getCart());
+      } catch {
+        // Cancellation succeeded; a cart refresh failure must not report it as failed.
+      }
       return updated;
     }, `Заказ #${order.id} отменён, резерв освобождён.`);
   }
@@ -418,7 +496,13 @@ export default function App() {
     await act(`return-${order.id}`, async () => {
       const result = await createReturn(order.id, reason);
       setReturnReasons((current) => ({ ...current, [order.id]: "" }));
-      await refreshOrders();
+      try {
+        await refreshOrders();
+      } catch {
+        setOrders((current) => current.map((item) => item.id === order.id
+          ? { ...item, status: "refund_requested" }
+          : item));
+      }
       return result;
     }, `Запрос на возврат заказа #${order.id} зарегистрирован.`);
   }
@@ -435,7 +519,11 @@ export default function App() {
         order_id: supportForm.order_id ? Number(supportForm.order_id) : null,
       });
       setSupportForm({ subject: "", message: "", order_id: "" });
-      setSupportTickets(await listSupportTickets());
+      try {
+        setSupportTickets(await listSupportTickets());
+      } catch {
+        if (result?.id) setSupportTickets((current) => [result, ...current.filter((item) => item.id !== result.id)]);
+      }
       return result;
     }, "Обращение зарегистрировано. Его статус отображается ниже.");
   }
@@ -450,7 +538,7 @@ export default function App() {
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
-    URL.revokeObjectURL(url);
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
     setNotice("Архив персональных данных сформирован и скачан.");
   }
 
@@ -458,28 +546,24 @@ export default function App() {
     if (confirmation && !window.confirm(confirmation)) return;
     await act(`privacy-${requestType}`, async () => {
       const result = await createPrivacyRequest(requestType);
-      setPrivacyRequests(await listPrivacyRequests());
+      try {
+        setPrivacyRequests(await listPrivacyRequests());
+      } catch {
+        if (result?.id) setPrivacyRequests((current) => [result, ...current.filter((item) => item.id !== result.id)]);
+      }
       return result;
     }, message);
   }
 
   async function handleSizeHelper() {
-    if (!sizeForm.height_cm && !sizeForm.weight_kg && !sizeForm.usual_size.trim()) {
-      setError("Укажите рост, вес или привычный размер.");
+    const validation = validateSizeForm(sizeForm);
+    if (validation.error) {
+      setError(validation.error);
       return;
     }
-    const result = await act("size", () => sizeHelper(selected.id, {
-      height_cm: Number(sizeForm.height_cm) || null,
-      weight_kg: Number(sizeForm.weight_kg) || null,
-      usual_size: sizeForm.usual_size.trim() || null,
-      fit_preference: sizeForm.fit_preference,
-    }));
+    const result = await act("size", () => sizeHelper(selected.id, validation.value));
     if (result) setSizeResult(result);
   }
-
-  const canPay = (order) => ["created", "payment_created"].includes(order.status) && ["pending", "payment_created"].includes(order.payment_status);
-  const canCancel = (order) => order.status === "created" && order.payment_status === "pending";
-  const canReturn = (order) => ["paid", "partially_refunded"].includes(order.payment_status) && !["refund_requested", "refunded", "cancelled"].includes(order.status);
 
   return (
     <ErrorBoundary>
@@ -491,8 +575,8 @@ export default function App() {
         <nav className="tabs" aria-label="Основная навигация">
           <button className={view === "catalog" || view === "product" ? "active" : ""} onClick={() => setView("catalog")}>Каталог</button>
           <button className={view === "looks" ? "active" : ""} onClick={() => setView("looks")}>Образы</button>
-          <button className={view === "orders" ? "active" : ""} onClick={openOrders}>Заказы</button>
-          <button className={view === "profile" ? "active" : ""} onClick={openProfile}>Профиль</button>
+          <button className={view === "orders" ? "active" : ""} onClick={openOrders} disabled={isBusy("orders")}>Заказы</button>
+          <button className={view === "profile" ? "active" : ""} onClick={openProfile} disabled={isBusy("profile")}>Профиль</button>
         </nav>
         {error && <div className="message error" role="alert">{error}<button onClick={() => setError("")}>×</button></div>}
         {notice && <div className="message success" role="status">{notice}<button onClick={() => setNotice("")}>×</button></div>}
@@ -502,10 +586,10 @@ export default function App() {
           <main>
             <div className="section-heading"><div><h1>Каталог</h1><p>Актуальные товары и реальные остатки.</p></div></div>
             <div className="search">
-              <input aria-label="Поиск товаров" placeholder="Бренд, категория или артикул" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} onKeyDown={(event) => event.key === "Enter" && handleSearch()} />
-              <button className="secondary compact" onClick={() => handleSearch()} disabled={busy === "search"}>Найти</button>
+              <input aria-label="Поиск товаров" placeholder="Бренд, категория или артикул" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} onKeyDown={(event) => event.key === "Enter" && !isBusy("search") && handleSearch()} disabled={isBusy("search")} />
+              <button className="secondary compact" onClick={() => handleSearch()} disabled={isBusy("search")}>Найти</button>
             </div>
-            {!products.length ? <EmptyState title="Ничего не найдено" text="Измените запрос или вернитесь ко всему каталогу." action="Показать весь каталог" onAction={() => handleSearch("")} /> : <div className="grid">{products.map((product) => <ProductCard key={product.id} product={product} onOpen={openProduct} />)}</div>}
+            {!products.length ? <EmptyState title="Ничего не найдено" text="Измените запрос или вернитесь ко всему каталогу." action="Показать весь каталог" onAction={() => handleSearch("")} /> : <div className="grid">{products.map((product) => <ProductCard key={product.id} product={product} onOpen={openProduct} disabled={isBusy(`open-product-${product.id}`)} />)}</div>}
           </main>
         )}
 
@@ -521,17 +605,17 @@ export default function App() {
             <div className="panel">
               <h3>Ориентир по размеру</h3>
               <div className="form-grid">
-                <input inputMode="numeric" placeholder="Рост, см" value={sizeForm.height_cm} onChange={(event) => setSizeForm({ ...sizeForm, height_cm: event.target.value })} />
-                <input inputMode="numeric" placeholder="Вес, кг" value={sizeForm.weight_kg} onChange={(event) => setSizeForm({ ...sizeForm, weight_kg: event.target.value })} />
-                <input placeholder="Обычный размер" value={sizeForm.usual_size} onChange={(event) => setSizeForm({ ...sizeForm, usual_size: event.target.value })} />
-                <select value={sizeForm.fit_preference} onChange={(event) => setSizeForm({ ...sizeForm, fit_preference: event.target.value })}><option value="slim">По фигуре</option><option value="regular">Обычная посадка</option><option value="oversize">Свободная посадка</option></select>
+                <input inputMode="numeric" placeholder="Рост, см" value={sizeForm.height_cm} onChange={(event) => setSizeForm({ ...sizeForm, height_cm: event.target.value })} disabled={isBusy("size")} />
+                <input inputMode="numeric" placeholder="Вес, кг" value={sizeForm.weight_kg} onChange={(event) => setSizeForm({ ...sizeForm, weight_kg: event.target.value })} disabled={isBusy("size")} />
+                <input placeholder="Обычный размер" value={sizeForm.usual_size} onChange={(event) => setSizeForm({ ...sizeForm, usual_size: event.target.value })} disabled={isBusy("size")} />
+                <select value={sizeForm.fit_preference} onChange={(event) => setSizeForm({ ...sizeForm, fit_preference: event.target.value })} disabled={isBusy("size")}><option value="slim">По фигуре</option><option value="regular">Обычная посадка</option><option value="oversize">Свободная посадка</option></select>
               </div>
-              <button className="secondary" onClick={handleSizeHelper} disabled={busy === "size"}>Получить рекомендацию</button>
+              <button className="secondary" onClick={handleSizeHelper} disabled={isBusy("size")}>Получить рекомендацию</button>
               {sizeResult && <div className="result-card"><span>Рекомендуемый размер</span><b>{sizeResult.suggested_size}</b><p>{sizeResult.note || "Сверьте результат с замерами конкретного изделия."}</p></div>}
             </div>
             <div className="actions">
-              {selectedVariant?.available_qty > 0 ? <button className="primary" onClick={handleAddSelected} disabled={busy === "add-to-cart"}>Добавить размер {selectedVariant.size} в корзину</button> : selectedVariant ? <button className="primary" onClick={handleRestock} disabled={busy === "restock"}>Сообщить о поступлении размера {selectedVariant.size}</button> : null}
-              <button className="secondary" onClick={handleFavorite} disabled={busy === "wishlist"}>{isFavorite ? "Удалить из избранного" : "Сохранить в избранное"}</button>
+              {selectedVariant?.available_qty > 0 ? <button className="primary" onClick={handleAddSelected} disabled={addToCartBusy}>Добавить размер {selectedVariant.size} в корзину</button> : selectedVariant ? <button className="primary" onClick={handleRestock} disabled={isBusy(`restock-${selectedVariant.id}`)}>Сообщить о поступлении размера {selectedVariant.size}</button> : null}
+              <button className="secondary" onClick={handleFavorite} disabled={isBusy(`wishlist-${selected.id}`)}>{isFavorite ? "Удалить из избранного" : "Сохранить в избранное"}</button>
             </div>
           </main>
         )}
@@ -540,11 +624,11 @@ export default function App() {
           <main>
             <button className="link" onClick={() => setView("catalog")}>← Продолжить покупки</button><h1>Корзина</h1>
             {!cart?.items?.length ? <EmptyState title="Корзина пуста" text="Добавьте товар и выберите размер." action="Перейти в каталог" onAction={() => setView("catalog")} /> : <>
-              <div className="cart-list">{cart.items.map((item) => <div className="cart-item" key={item.id}><div><b>{item.title}</b><div className="meta">Размер {item.size} · доступно {item.available_qty}</div><div>{money(item.price * item.quantity)}</div></div><div className="quantity-control"><button onClick={() => handleCartQuantity(item, item.quantity - 1)} disabled={item.quantity <= 1 || busy === `cart-${item.id}`}>−</button><b>{item.quantity}</b><button onClick={() => handleCartQuantity(item, item.quantity + 1)} disabled={item.quantity >= Math.min(item.available_qty, 10) || busy === `cart-${item.id}`}>+</button></div><button className="danger-link" onClick={() => handleCartRemove(item)} disabled={busy === `cart-${item.id}`}>Удалить</button></div>)}</div>
+              <div className="cart-list">{cart.items.map((item) => { const itemBusy = isBusy(cartItemActionKey(item.id)); const maxQuantity = Math.min(item.available_qty, 10); return <div className="cart-item" key={item.id}><div><b>{item.title}</b><div className="meta">Размер {item.size} · доступно {item.available_qty}</div><div>{money(item.price * item.quantity)}</div></div><div className="quantity-control"><button onClick={() => handleCartQuantity(item, item.quantity - 1)} disabled={item.quantity <= 1 || itemBusy}>−</button><b>{item.quantity}</b><button onClick={() => handleCartQuantity(item, item.quantity + 1)} disabled={item.quantity >= maxQuantity || itemBusy}>+</button></div><button className="danger-link" onClick={() => handleCartRemove(item)} disabled={itemBusy}>Удалить</button></div>; })}</div>
               <div className="panel"><h3>Скидки и бонусы</h3>
-                <div className="promo"><input placeholder="Промокод" value={promo} onChange={(event) => setPromo(event.target.value)} /><button className="secondary compact" onClick={async () => { const next = await act("promo", () => applyPromo(promo), "Промокод применён."); if (next) setCart(next); }} disabled={!promo.trim() || busy === "promo"}>Применить</button></div>
-                <div className="promo"><input inputMode="decimal" placeholder="Баллы к списанию" value={loyaltyPoints} onChange={(event) => setLoyaltyPoints(event.target.value)} /><button className="secondary compact" onClick={async () => { const next = await act("loyalty", () => applyLoyalty(Number(loyaltyPoints)), "Баллы зарезервированы."); if (next) setCart(next); }} disabled={!loyaltyPoints || busy === "loyalty"}>Списать</button></div>
-                <div className="promo"><input placeholder="Реферальный код" value={referralInput} onChange={(event) => setReferralInput(event.target.value)} /><button className="secondary compact" onClick={async () => { const next = await act("referral", () => applyReferral(referralInput), "Реферальный код связан с заказом."); if (next) setCart(next); }} disabled={!referralInput.trim() || busy === "referral"}>Добавить</button></div>
+                <div className="promo"><input placeholder="Промокод" value={promo} onChange={(event) => setPromo(event.target.value)} disabled={isBusy("promo")} /><button className="secondary compact" onClick={handleApplyPromo} disabled={!promo.trim() || isBusy("promo")}>Применить</button></div>
+                <div className="promo"><input inputMode="numeric" placeholder="Баллы к списанию" value={loyaltyPoints} onChange={(event) => setLoyaltyPoints(event.target.value)} disabled={isBusy("loyalty")} /><button className="secondary compact" onClick={handleApplyLoyalty} disabled={!loyaltyPoints || isBusy("loyalty")}>Списать</button></div>
+                <div className="promo"><input placeholder="Реферальный код" value={referralInput} onChange={(event) => setReferralInput(event.target.value)} disabled={isBusy("referral")} /><button className="secondary compact" onClick={handleApplyReferral} disabled={!referralInput.trim() || isBusy("referral")}>Добавить</button></div>
               </div>
               <div className="summary"><StatusRow label="Товары" value={money(cart.total_amount)} />{cart.discount_amount > 0 && <StatusRow label="Скидка" value={`−${money(cart.discount_amount)}`} tone="success" />}<div className="summary-total"><span>К оплате без доставки</span><b>{money(cart.final_amount)}</b></div></div>
               <button className="primary" onClick={() => setView("checkout")}>Оформить заказ</button>
@@ -553,20 +637,20 @@ export default function App() {
         )}
 
         {!loading && view === "checkout" && (
-          <main>
-            <button className="link" onClick={() => setView("cart")}>← Корзина</button><h1>Получатель и доставка</h1><p className="lead">Перед созданием заказа повторно проверим цены, скидки, остатки и баллы.</p>
-            <label>Имя<input autoComplete="name" placeholder="Имя получателя" value={checkoutForm.name} onChange={(event) => setCheckoutForm({ ...checkoutForm, name: event.target.value })} /></label>
-            <label>Телефон<input autoComplete="tel" inputMode="tel" placeholder="+7 999 000-00-00" value={checkoutForm.phone} onChange={(event) => setCheckoutForm({ ...checkoutForm, phone: event.target.value })} /></label>
-            <label>Способ получения<select value={checkoutForm.delivery_type} onChange={(event) => setCheckoutForm({ ...checkoutForm, delivery_type: event.target.value, address: event.target.value === "pickup" ? "" : checkoutForm.address })}><option value="pickup">Самовывоз</option><option value="courier">Курьер</option></select></label>
-            {checkoutForm.delivery_type === "courier" && <label>Адрес<textarea placeholder="Город, улица, дом, квартира" value={checkoutForm.address} onChange={(event) => setCheckoutForm({ ...checkoutForm, address: event.target.value })} /></label>}
-            <label>Комментарий<textarea placeholder="Необязательный комментарий" value={checkoutForm.comment} onChange={(event) => setCheckoutForm({ ...checkoutForm, comment: event.target.value })} /></label>
-            <button className="primary" onClick={handleCheckout} disabled={busy === "checkout"}>Создать заказ и перейти к оплате</button>
+          <main aria-busy={checkoutBusy}>
+            <button className="link" onClick={() => setView("cart")} disabled={checkoutBusy}>← Корзина</button><h1>Получатель и доставка</h1><p className="lead">Перед созданием заказа повторно проверим цены, скидки, остатки и баллы.</p>
+            <label>Имя<input autoComplete="name" placeholder="Имя получателя" value={checkoutForm.name} onChange={(event) => setCheckoutForm({ ...checkoutForm, name: event.target.value })} disabled={checkoutBusy} /></label>
+            <label>Телефон<input autoComplete="tel" inputMode="tel" placeholder="+7 999 000-00-00" value={checkoutForm.phone} onChange={(event) => setCheckoutForm({ ...checkoutForm, phone: event.target.value })} disabled={checkoutBusy} /></label>
+            <label>Способ получения<select value={checkoutForm.delivery_type} onChange={(event) => setCheckoutForm({ ...checkoutForm, delivery_type: event.target.value, address: event.target.value === "pickup" ? "" : checkoutForm.address })} disabled={checkoutBusy}><option value="pickup">Самовывоз</option><option value="courier">Курьер</option></select></label>
+            {checkoutForm.delivery_type === "courier" && <label>Адрес<textarea placeholder="Город, улица, дом, квартира" value={checkoutForm.address} onChange={(event) => setCheckoutForm({ ...checkoutForm, address: event.target.value })} disabled={checkoutBusy} /></label>}
+            <label>Комментарий<textarea placeholder="Необязательный комментарий" value={checkoutForm.comment} onChange={(event) => setCheckoutForm({ ...checkoutForm, comment: event.target.value })} disabled={checkoutBusy} /></label>
+            <button className="primary" onClick={handleCheckout} disabled={checkoutBusy}>{checkoutBusy ? "Создаём заказ…" : "Создать заказ и перейти к оплате"}</button>
           </main>
         )}
 
         {!loading && view === "orders" && (
           <main>
-            <div className="section-heading"><div><h1>Мои заказы</h1><p>Оплата, сборка, доставка и возврат в одном месте.</p></div><button className="secondary compact" onClick={handleRefreshOrders} disabled={busy === "refresh-orders"}>Обновить</button></div>
+            <div className="section-heading"><div><h1>Мои заказы</h1><p>Оплата, сборка, доставка и возврат в одном месте.</p></div><button className="secondary compact" onClick={handleRefreshOrders} disabled={isBusy("refresh-orders")}>Обновить</button></div>
             {!orders.length ? <EmptyState title="Заказов пока нет" text="После оформления здесь появятся состав, оплата и доставка." action="Выбрать товары" onAction={() => setView("catalog")} /> : orders.map((order) => <article className="order-card" key={order.id}>
               <div className="order-title"><div><div className="meta">Заказ #{order.id}</div><h2>{money(order.total_amount, order.currency)}</h2></div><span className="status neutral">{ORDER_LABELS[order.status] || order.status}</span></div>
               <StatusRow label="Оплата" value={PAYMENT_LABELS[order.payment_status] || order.payment_status} tone={order.payment_status === "paid" ? "success" : "neutral"} />
@@ -574,8 +658,8 @@ export default function App() {
               <StatusRow label="Получение" value={order.delivery_type === "courier" ? "Курьер" : "Самовывоз"} />
               {order.address && <StatusRow label="Адрес" value={order.address} />}{order.tracking_number && <StatusRow label="Трек-номер" value={order.tracking_number} />}
               <div className="order-items">{order.items?.map((item) => <div key={item.id}><span>{item.title} · {item.size} × {item.quantity}</span><b>{money(item.price * item.quantity, order.currency)}</b></div>)}</div>
-              <div className="actions horizontal">{canPay(order) && <button className="primary" onClick={() => handleOrderPayment(order)} disabled={busy === `pay-${order.id}`}>Продолжить оплату</button>}{canCancel(order) && <button className="secondary" onClick={() => handleOrderCancel(order)} disabled={busy === `cancel-${order.id}`}>Отменить заказ</button>}</div>
-              {canReturn(order) && <div className="return-box"><label>Причина возврата<textarea placeholder="Что необходимо вернуть и почему" value={returnReasons[order.id] || ""} onChange={(event) => setReturnReasons({ ...returnReasons, [order.id]: event.target.value })} /></label><button className="secondary" onClick={() => handleReturn(order)} disabled={busy === `return-${order.id}`}>Зарегистрировать возврат</button></div>}
+              <div className="actions horizontal">{canPayOrder(order) && <button className="primary" onClick={() => handleOrderPayment(order)} disabled={isBusy(`pay-${order.id}`)}>Продолжить оплату</button>}{canCancelOrder(order) && <button className="secondary" onClick={() => handleOrderCancel(order)} disabled={isBusy(`cancel-${order.id}`)}>Отменить заказ</button>}</div>
+              {canReturnOrder(order) && <div className="return-box"><label>Причина возврата<textarea placeholder="Что необходимо вернуть и почему" value={returnReasons[order.id] || ""} onChange={(event) => setReturnReasons({ ...returnReasons, [order.id]: event.target.value })} disabled={isBusy(`return-${order.id}`)} /></label><button className="secondary" onClick={() => handleReturn(order)} disabled={isBusy(`return-${order.id}`)}>Зарегистрировать возврат</button></div>}
             </article>)}
           </main>
         )}
@@ -583,18 +667,18 @@ export default function App() {
         {!loading && view === "looks" && (
           <main>
             <div className="section-heading"><div><h1>Готовые образы</h1><p>Каждый элемент связан с доступной карточкой товара.</p></div></div>
-            {!looks.length ? <EmptyState title="Активных образов нет" text="Все товары доступны в каталоге." action="Открыть каталог" onAction={() => setView("catalog")} /> : looks.map((look) => <section className="look-card" key={look.id}><div className="look-heading"><h2>{look.title}</h2>{look.description && <p>{look.description}</p>}</div><div className="look-products">{look.products.map((product) => <ProductCard key={product.id} product={product} onOpen={openProduct} />)}</div></section>)}
+            {!looks.length ? <EmptyState title="Активных образов нет" text="Все товары доступны в каталоге." action="Открыть каталог" onAction={() => setView("catalog")} /> : looks.map((look) => <section className="look-card" key={look.id}><div className="look-heading"><h2>{look.title}</h2>{look.description && <p>{look.description}</p>}</div><div className="look-products">{look.products.map((product) => <ProductCard key={product.id} product={product} onOpen={openProduct} disabled={isBusy(`open-product-${product.id}`)} />)}</div></section>)}
           </main>
         )}
 
         {!loading && view === "profile" && (
-          <main>
+          <main aria-busy={isBusy("profile")}>
             <h1>Профиль и сервис</h1>
             {profile && <div className="panel profile-card"><div><b>{profile.customer.first_name || profile.customer.username || "Клиент FLASHIN"}</b><p>{profile.customer.phone || "Телефон добавится при оформлении заказа"}</p></div><div><span>Баллы</span><b>{profile.loyalty_points}</b></div><div><span>Реферальный код</span><code>{profile.referral_code || referral?.code || "Формируется"}</code></div></div>}
-            <section><h2>Избранное</h2>{!wishlist.length ? <p className="muted">Сохранённых товаров нет.</p> : <div className="grid">{wishlist.map((product) => <ProductCard key={product.id} product={product} onOpen={openProduct} action={<button className="danger-link card-action" onClick={async () => { const result = await act(`wishlist-${product.id}`, () => removeWishlist(product.id), `${product.title} удалён из избранного.`); if (result) setWishlist((current) => current.filter((item) => item.id !== product.id)); }}>Удалить</button>} />)}</div>}</section>
+            <section><h2>Избранное</h2>{!wishlist.length ? <p className="muted">Сохранённых товаров нет.</p> : <div className="grid">{wishlist.map((product) => { const wishlistBusy = isBusy(`wishlist-${product.id}`); return <ProductCard key={product.id} product={product} onOpen={openProduct} disabled={isBusy(`open-product-${product.id}`)} action={<button className="danger-link card-action" disabled={wishlistBusy} onClick={async () => { const result = await act(`wishlist-${product.id}`, () => removeWishlist(product.id), `${product.title} удалён из избранного.`); if (result) setWishlist((current) => current.filter((item) => item.id !== product.id)); }}>Удалить</button>} />; })}</div>}</section>
             <section><h2>История баллов</h2>{!loyaltyRows.length ? <p className="muted">Операций пока нет.</p> : loyaltyRows.map((row) => <div className="cart-line" key={row.id}><span>{row.reason}</span><b className={row.points_delta >= 0 ? "positive" : "negative"}>{row.points_delta > 0 ? "+" : ""}{row.points_delta}</b></div>)}</section>
-            <section><h2>Поддержка</h2><select value={supportForm.order_id} onChange={(event) => setSupportForm({ ...supportForm, order_id: event.target.value })}><option value="">Без привязки к заказу</option>{orders.map((order) => <option key={order.id} value={order.id}>Заказ #{order.id}</option>)}</select><input placeholder="Тема обращения" value={supportForm.subject} onChange={(event) => setSupportForm({ ...supportForm, subject: event.target.value })} /><textarea placeholder="Опишите вопрос и ожидаемый результат" value={supportForm.message} onChange={(event) => setSupportForm({ ...supportForm, message: event.target.value })} /><button className="secondary" onClick={handleSupport} disabled={busy === "support"}>Отправить обращение</button>{supportTickets.map((ticket) => <div className="ticket" key={ticket.id}><div><b>{ticket.subject}</b><p>{ticket.message}</p></div><span className="status neutral">{ticket.status}</span></div>)}</section>
-            <section><h2>Персональные данные</h2><p className="muted">Экспорт скачивается файлом. Запросы имеют отслеживаемый статус.</p><div className="actions"><button className="secondary" onClick={handlePrivacyExport} disabled={busy === "privacy-export"}>Скачать мои данные</button><button className="secondary" onClick={() => handlePrivacyRequest("consent_withdrawal", "Отозвать необязательные согласия?", "Запрос на отзыв согласий зарегистрирован.")}>Отозвать необязательные согласия</button><button className="danger" onClick={() => handlePrivacyRequest("delete", "Запросить обезличивание персональных данных? История финансовых операций сохранится по требованиям учёта.", "Запрос на обезличивание зарегистрирован.")}>Запросить удаление данных</button></div>{privacyRequests.map((request) => <div className="cart-line" key={request.id}><span>{request.request_type}</span><b>{request.status}</b></div>)}</section>
+            <section><h2>Поддержка</h2><select value={supportForm.order_id} onChange={(event) => setSupportForm({ ...supportForm, order_id: event.target.value })} disabled={isBusy("support")}><option value="">Без привязки к заказу</option>{orders.map((order) => <option key={order.id} value={order.id}>Заказ #{order.id}</option>)}</select><input placeholder="Тема обращения" value={supportForm.subject} onChange={(event) => setSupportForm({ ...supportForm, subject: event.target.value })} disabled={isBusy("support")} /><textarea placeholder="Опишите вопрос и ожидаемый результат" value={supportForm.message} onChange={(event) => setSupportForm({ ...supportForm, message: event.target.value })} disabled={isBusy("support")} /><button className="secondary" onClick={handleSupport} disabled={isBusy("support")}>Отправить обращение</button>{supportTickets.map((ticket) => <div className="ticket" key={ticket.id}><div><b>{ticket.subject}</b><p>{ticket.message}</p></div><span className="status neutral">{ticket.status}</span></div>)}</section>
+            <section><h2>Персональные данные</h2><p className="muted">Экспорт скачивается файлом. Запросы имеют отслеживаемый статус.</p><div className="actions"><button className="secondary" onClick={handlePrivacyExport} disabled={isBusy("privacy-export")}>Скачать мои данные</button><button className="secondary" onClick={() => handlePrivacyRequest("consent_withdrawal", "Отозвать необязательные согласия?", "Запрос на отзыв согласий зарегистрирован.")} disabled={isBusy("privacy-consent_withdrawal")}>Отозвать необязательные согласия</button><button className="danger" onClick={() => handlePrivacyRequest("delete", "Запросить обезличивание персональных данных? История финансовых операций сохранится по требованиям учёта.", "Запрос на обезличивание зарегистрирован.")} disabled={isBusy("privacy-delete")}>Запросить удаление данных</button></div>{privacyRequests.map((request) => <div className="cart-line" key={request.id}><span>{request.request_type}</span><b>{request.status}</b></div>)}</section>
             <section><h2>История действий</h2>{!timeline.length ? <p className="muted">Событий пока нет.</p> : timeline.map((event) => <div className="cart-line" key={event.id}><span>{event.title}</span><small>{event.event_type}</small></div>)}</section>
           </main>
         )}
