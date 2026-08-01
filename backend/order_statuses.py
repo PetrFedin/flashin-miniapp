@@ -1,8 +1,8 @@
-"""Canonical business statuses for the order lifecycle.
+"""Canonical business statuses and transitions for the order lifecycle.
 
-Payment and delivery statuses have separate state domains. Keep this set limited
-to values assigned to ``Order.status`` so API validation and tests share one
-source of truth without depending on a route module.
+Payment, refund, cancellation, and delivery statuses have dedicated workflows.
+The generic admin order editor is intentionally limited to fulfillment progress
+so it cannot impersonate provider-owned state transitions.
 """
 
 ORDER_STATUSES = frozenset(
@@ -15,6 +15,25 @@ ORDER_STATUSES = frozenset(
         "ready",
         "shipped",
         "completed",
+        "refund_requested",
+        "partially_refunded",
+        "refunded",
+        "cancelled",
+    }
+)
+
+ADMIN_MANAGED_ORDER_TRANSITIONS = {
+    "paid": frozenset({"assembling"}),
+    "assembling": frozenset({"ready"}),
+    "ready": frozenset({"shipped"}),
+    "shipped": frozenset({"completed"}),
+}
+
+PROVIDER_OWNED_ORDER_STATUSES = frozenset(
+    {
+        "payment_created",
+        "payment_review_required",
+        "paid",
         "refund_requested",
         "partially_refunded",
         "refunded",
