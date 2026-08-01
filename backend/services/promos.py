@@ -1,12 +1,13 @@
-from datetime import datetime
 from fastapi import HTTPException
+
+from ..database import utcnow_naive
 from ..models import PromoCode
 
 
 def validate_promo(promo: PromoCode | None, subtotal: float) -> None:
     if not promo or not promo.active:
         raise HTTPException(status_code=404, detail="Promo code not found or inactive")
-    if promo.expires_at and promo.expires_at < datetime.utcnow():
+    if promo.expires_at and promo.expires_at < utcnow_naive():
         raise HTTPException(status_code=409, detail="Promo code expired")
     if promo.max_uses and promo.used_count >= promo.max_uses:
         raise HTTPException(status_code=409, detail="Promo code usage limit reached")
