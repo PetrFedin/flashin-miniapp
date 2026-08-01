@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-from pathlib import Path
-from datetime import datetime
 import json
+from pathlib import Path
+
+from script_time import utc_timestamp
 
 steps = [
     {"id": "P01", "title": "Open Mini App in Telegram", "critical": True},
@@ -27,14 +28,22 @@ steps = [
 ]
 
 report = {
-    "created_at": datetime.utcnow().isoformat(),
-    "steps": [{**s, "status": "todo", "comment": ""} for s in steps],
+    "created_at": utc_timestamp(),
+    "steps": [{**step, "status": "todo", "comment": ""} for step in steps],
 }
 
-Path("docs/pilot/live_pilot_runner.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+Path("docs/pilot/live_pilot_runner.json").write_text(
+    json.dumps(report, ensure_ascii=False, indent=2),
+    encoding="utf-8",
+)
 Path("docs/pilot/live_pilot_runner.md").write_text(
     "# Live Pilot Runner\n\n"
-    + "\n".join([f"- [ ] {s['id']} — {s['title']} {'(critical)' if s['critical'] else ''}" for s in steps])
+    + "\n".join(
+        [
+            f"- [ ] {step['id']} — {step['title']} {'(critical)' if step['critical'] else ''}"
+            for step in steps
+        ]
+    )
     + "\n",
     encoding="utf-8",
 )
