@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from backend.api import health
 
 
-CURRENT_HEAD = "0017_promo_definition_constraints"
+CURRENT_HEAD = "0018_notification_event_keys"
 
 
 class ScalarResult:
@@ -58,7 +58,7 @@ def test_not_ready_when_database_revision_is_old(monkeypatch):
         "_expected_migration_heads",
         lambda: frozenset({CURRENT_HEAD}),
     )
-    db = FakeDb(["0016_one_active_cart"])
+    db = FakeDb(["0017_promo_definition_constraints"])
 
     with pytest.raises(HTTPException) as exc_info:
         health.ready(db)
