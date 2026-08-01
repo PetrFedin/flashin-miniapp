@@ -6,11 +6,11 @@ from fastapi import HTTPException
 
 from backend.api.orders import (
     _checkout_request_fingerprint,
-    _clean_required,
     _money,
     _normalize_idempotency_key,
     _validate_cart_for_checkout,
 )
+from backend.services.checkout_validation import normalize_checkout_input
 
 
 def _cart_item(
@@ -40,6 +40,18 @@ def _cart_item(
     )
 
 
+def _checkout_input(**overrides):
+    values = {
+        "name": "Petr",
+        "phone": "+79990000000",
+        "delivery_type": "pickup",
+        "address": "",
+        "comment": "",
+    }
+    values.update(overrides)
+    return normalize_checkout_input(**values)
+
+
 def test_money_rounds_to_two_decimals():
     assert _money("10.005", "amount") == Decimal("10.01")
 
@@ -52,14 +64,14 @@ def test_money_rejects_invalid_values(value):
     assert exc.value.status_code == 409
 
 
-def test_clean_required_trims_value():
-    assert _clean_required("  Petr  ", "Name", 20) == "Petr"
+def test_checkout_input_normalizes_required_name():
+    assert _checkout_input(name="  Petr   Fedin  ").name == "Petr Fedin"
 
 
 @pytest.mark.parametrize("value", ["", "   ", None])
-def test_clean_required_rejects_empty_value(value):
+def test_checkout_input_rejects_empty_name(value):
     with pytest.raises(HTTPException) as exc:
-        _clean_required(value, "Name", 20)
+        _checkout_input(name=value)
 
     assert exc.value.status_code == 400
 
@@ -87,7 +99,7 @@ def test_checkout_fingerprint_is_stable_and_sensitive_to_payload():
         "name": "Petr",
         "phone": "+79990000000",
         "delivery_type": "courier",
-        "address": "Moscow",
+        "address": "Moscow center",
         "comment": "Call first",
     }
     first = _checkout_request_fingerprint(**base)

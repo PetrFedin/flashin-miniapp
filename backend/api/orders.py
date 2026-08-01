@@ -22,6 +22,7 @@ from ..models import (
 )
 from ..schemas import CheckoutIn, OrderOut
 from ..security import get_current_customer
+from ..services.checkout_validation import normalize_checkout_input
 from ..services.delivery import calculate_delivery_price
 from ..services.inventory import reserve_variant
 from ..services.promos import calculate_discount
@@ -40,15 +41,6 @@ def _money(value: object, field: str) -> Decimal:
     if not amount.is_finite():
         raise HTTPException(status_code=409, detail=f"Invalid {field}")
     return amount
-
-
-def _clean_required(value: str, field: str, max_length: int) -> str:
-    cleaned = (value or "").strip()
-    if not cleaned:
-        raise HTTPException(status_code=400, detail=f"{field} is required")
-    if len(cleaned) > max_length:
-        raise HTTPException(status_code=400, detail=f"{field} is too long")
-    return cleaned
 
 
 def _normalize_idempotency_key(value: str | None) -> str:
@@ -275,15 +267,18 @@ def checkout(
     db: Session = Depends(get_db),
 ):
     idempotency_key = _normalize_idempotency_key(idempotency_key_header)
-    name = _clean_required(payload.name, "Name", 255)
-    phone = _clean_required(payload.phone, "Phone", 64)
-    delivery_type = _clean_required(payload.delivery_type, "Delivery type", 64).lower()
-    address = (payload.address or "").strip()
-    comment = (payload.comment or "").strip()[:2000]
-    if delivery_type == "courier" and not address:
-        raise HTTPException(status_code=400, detail="Address is required for courier delivery")
-    if len(address) > 2000:
-        raise HTTPException(status_code=400, detail="Address is too long")
+    checkout_input = normalize_checkout_input(
+        name=payload.name,
+        phone=payload.phone,
+        delivery_type=payload.delivery_type,
+        address=payload.address,
+        comment=payload.comment,
+    )
+    name = checkout_input.name
+    phone = checkout_input.phone
+    delivery_type = checkout_input.delivery_type
+    address = checkout_input.address
+    comment = checkout_input.comment
 
     request_fingerprint = _checkout_request_fingerprint(
         name=name,
