@@ -89,6 +89,16 @@ def apply_model_constraints() -> None:
     _check(PromoCode.__table__, "ck_promo_codes_used_count_nonnegative", "used_count >= 0")
     _check(
         PromoCode.__table__,
+        "ck_promo_codes_discount_type",
+        "discount_type IN ('percent', 'fixed')",
+    )
+    _check(
+        PromoCode.__table__,
+        "ck_promo_codes_percent_bounded",
+        "discount_type <> 'percent' OR discount_value <= 100",
+    )
+    _check(
+        PromoCode.__table__,
         "ck_promo_codes_usage_within_limit",
         "max_uses = 0 OR used_count <= max_uses",
     )
