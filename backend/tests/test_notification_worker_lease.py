@@ -1,5 +1,11 @@
+import sys
 from datetime import datetime, timedelta
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
+
+
+aiogram_stub = ModuleType("aiogram")
+aiogram_stub.Bot = object
+sys.modules.setdefault("aiogram", aiogram_stub)
 
 from bot import send_notifications
 
