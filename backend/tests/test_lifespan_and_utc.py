@@ -17,7 +17,6 @@ LEGACY_UTCNOW_BASELINE = {
     "backend/api/admin.py": 1,
     "backend/api/orders.py": 1,
     "backend/models.py": 54,
-    "bot/send_notifications.py": 4,
     "scripts/generate_release_pack.py": 1,
     "scripts/pilot_runner.py": 1,
     "scripts/release_freeze.py": 1,
