@@ -46,7 +46,7 @@ export function canCancelOrder(order) {
 
 export function canReturnOrder(order) {
   return ["paid", "partially_refunded"].includes(order?.payment_status)
-    && !["refund_requested", "partially_refunded", "refunded", "cancelled"].includes(order?.status);
+    && !["refund_requested", "refunded", "cancelled"].includes(order?.status);
 }
 
 export function paymentReturnMessage(orderId, paymentStatus) {
