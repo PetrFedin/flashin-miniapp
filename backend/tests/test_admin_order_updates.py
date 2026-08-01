@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -144,16 +145,9 @@ def test_admin_noop_update_does_not_notify_or_audit(monkeypatch):
 
 
 def test_admin_order_update_source_has_no_legacy_cancellation_side_effects():
-    source = (admin_api.Path(__file__).resolve().parents[1] / "api" / "admin.py").read_text(
+    source = (Path(__file__).resolve().parents[1] / "api" / "admin.py").read_text(
         encoding="utf-8"
-    ) if hasattr(admin_api, "Path") else None
-
-    if source is None:
-        from pathlib import Path
-
-        source = (Path(__file__).resolve().parents[1] / "api" / "admin.py").read_text(
-            encoding="utf-8"
-        )
+    )
 
     assert "datetime.utcnow" not in source
     assert "release_variant" not in source
