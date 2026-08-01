@@ -12,6 +12,7 @@ from . import notification_models as _notification_models  # noqa: F401
 from .api.admin import router as admin_router
 from .api.admin_auth import router as admin_auth_router
 from .api.admin_notifications import router as admin_notifications_router
+from .api.admin_promos import router as admin_promos_router
 from .api.admin_returns import router as admin_returns_router
 from .api.admin_security import router as admin_security_router
 from .api.analytics import router as analytics_router
@@ -65,12 +66,17 @@ from .seed import bootstrap_admin, seed_products
 settings = get_settings()
 is_production = settings.app_env.strip().lower() == "production"
 
+_REMOVED_MONOLITH_ADMIN_ROUTES = {
+    ("/admin/login", "POST"),
+    ("/admin/promocodes", "POST"),
+}
 admin_router.routes[:] = [
     route
     for route in admin_router.routes
-    if not (
-        getattr(route, "path", "") == "/admin/login"
-        and "POST" in getattr(route, "methods", set())
+    if not any(
+        getattr(route, "path", "") == path
+        and method in getattr(route, "methods", set())
+        for path, method in _REMOVED_MONOLITH_ADMIN_ROUTES
     )
 ]
 
@@ -137,6 +143,7 @@ app.include_router(payments_router, prefix="/api")
 app.include_router(analytics_router, prefix="/api")
 app.include_router(admin_auth_router, prefix="/api")
 app.include_router(admin_router, prefix="/api")
+app.include_router(admin_promos_router, prefix="/api")
 app.include_router(admin_notifications_router, prefix="/api")
 app.include_router(admin_returns_router, prefix="/api")
 app.include_router(media_router, prefix="/api")
