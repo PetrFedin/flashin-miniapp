@@ -21,11 +21,12 @@ test("customer cancellation is limited to untouched orders", () => {
   assert.equal(canCancelOrder({ status: "created", payment_status: "paid" }), false);
 });
 
-test("return action excludes orders already in refund lifecycle", () => {
+test("return action follows refundable order lifecycle", () => {
   assert.equal(canReturnOrder({ status: "paid", payment_status: "paid" }), true);
   assert.equal(canReturnOrder({ status: "shipped", payment_status: "paid" }), true);
   assert.equal(canReturnOrder({ status: "refund_requested", payment_status: "paid" }), false);
-  assert.equal(canReturnOrder({ status: "partially_refunded", payment_status: "partially_refunded" }), false);
+  assert.equal(canReturnOrder({ status: "partially_refunded", payment_status: "partially_refunded" }), true);
+  assert.equal(canReturnOrder({ status: "refunded", payment_status: "refunded" }), false);
   assert.equal(canReturnOrder({ status: "cancelled", payment_status: "cancelled" }), false);
 });
 
