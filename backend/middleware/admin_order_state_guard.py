@@ -2,19 +2,13 @@ import json
 
 from starlette.responses import JSONResponse
 
+from ..order_statuses import PROVIDER_OWNED_ORDER_STATUSES
+
 
 class AdminOrderStateGuardMiddleware:
-    """Prevent generic admin edits from bypassing payment, refund, and safe cancellation workflows."""
+    """Prevent generic admin edits from bypassing dedicated order workflows."""
 
     _MAX_BODY_BYTES = 64 * 1024
-    _PROVIDER_OWNED_STATUSES = {
-        "payment_created",
-        "paid",
-        "payment_review_required",
-        "refund_requested",
-        "refunded",
-        "cancelled",
-    }
 
     def __init__(self, app):
         self.app = app
@@ -52,7 +46,7 @@ class AdminOrderStateGuardMiddleware:
         if isinstance(payload, dict):
             requested_status = str(payload.get("status") or "").strip().lower()
 
-        if requested_status in self._PROVIDER_OWNED_STATUSES:
+        if requested_status in PROVIDER_OWNED_ORDER_STATUSES:
             response = JSONResponse(
                 status_code=409,
                 content={
