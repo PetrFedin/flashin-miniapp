@@ -1,7 +1,6 @@
 import csv
 import io
 import math
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from sqlalchemy.exc import IntegrityError
@@ -13,7 +12,6 @@ from ..models import (
     AuditLog,
     CrmProfile,
     Customer,
-    LoyaltyRedemptionHold,
     MoySkladConflict,
     MoySkladMappingRule,
     Notification,
@@ -23,6 +21,7 @@ from ..models import (
     ProductVariant,
     PromoCode,
 )
+from ..order_statuses import ADMIN_MANAGED_ORDER_TRANSITIONS
 from ..schemas import (
     AdminLoginIn,
     AdminProductUpdate,
@@ -45,7 +44,7 @@ from ..security import (
     verify_password,
 )
 from ..services.audit import log_admin_action
-from ..services.inventory import adjust_stock, release_variant
+from ..services.inventory import adjust_stock
 from ..services.notifications import queue_order_status
 from ..services.rbac import require_permission
 
@@ -53,19 +52,6 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 _MAX_CSV_BYTES = 5 * 1024 * 1024
 _MAX_CSV_ROWS = 10_000
-_ORDER_TRANSITIONS = {
-    "created": {"payment_created", "cancelled"},
-    "payment_created": {"paid", "cancelled"},
-    "paid": {"assembling", "refund_requested"},
-    "assembling": {"ready", "refund_requested"},
-    "ready": {"shipped", "refund_requested"},
-    "shipped": {"completed", "refund_requested"},
-    "completed": {"refund_requested"},
-    "refund_requested": {"refunded"},
-    "refunded": set(),
-    "cancelled": set(),
-    "payment_review_required": {"paid", "refund_requested"},
-}
 _DELIVERY_STATUSES = {
     "not_started",
     "assembling",
@@ -301,66 +287,38 @@ def admin_update_order(
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
         previous_status = order.status
+        changed: dict[str, object] = {}
 
-        if payload.status and payload.status != order.status:
-            allowed_targets = _ORDER_TRANSITIONS.get(order.status, set())
-            if payload.status not in allowed_targets:
+        requested_status = (payload.status or "").strip().lower()
+        if requested_status and requested_status != order.status:
+            allowed_targets = ADMIN_MANAGED_ORDER_TRANSITIONS.get(order.status, frozenset())
+            if requested_status not in allowed_targets:
                 raise HTTPException(
                     status_code=409,
-                    detail=f"Transition {order.status} -> {payload.status} is not allowed",
+                    detail=f"Transition {order.status} -> {requested_status} is not allowed",
                 )
-            if payload.status == "cancelled":
-                if order.payment_status in {"paid", "paid_review_required"}:
-                    raise HTTPException(status_code=409, detail="Paid order requires refund flow")
-                order_data = _order_with_items(db, order.id)
-                for item in sorted(order_data.items, key=lambda row: row.variant_id):
-                    release_variant(db, item.variant_id, item.quantity)
-                order.payment_status = "cancelled"
-
-                if order.promo_code_id:
-                    promo = (
-                        db.query(PromoCode)
-                        .filter(PromoCode.id == order.promo_code_id)
-                        .with_for_update()
-                        .first()
-                    )
-                    if promo:
-                        promo.used_count = max(promo.used_count - 1, 0)
-
-                holds = (
-                    db.query(LoyaltyRedemptionHold)
-                    .filter(
-                        LoyaltyRedemptionHold.order_id == order.id,
-                        LoyaltyRedemptionHold.status == "reserved",
-                    )
-                    .with_for_update()
-                    .all()
-                )
-                for hold in holds:
-                    hold.status = "released"
-                    hold.released_at = datetime.utcnow()
-
-            order.status = payload.status
-            if payload.status == "paid":
-                order.payment_status = "paid"
-            elif payload.status == "refunded":
-                order.payment_status = "refunded"
+            order.status = requested_status
+            changed["status"] = requested_status
 
         if payload.delivery_status:
             normalized_delivery_status = payload.delivery_status.strip().lower()
             if normalized_delivery_status not in _DELIVERY_STATUSES:
                 raise HTTPException(status_code=400, detail="Invalid delivery status")
-            order.delivery_status = normalized_delivery_status
+            if normalized_delivery_status != order.delivery_status:
+                order.delivery_status = normalized_delivery_status
+                changed["delivery_status"] = normalized_delivery_status
 
         if payload.tracking_number is not None:
-            order.tracking_number = _clean(
+            tracking_number = _clean(
                 payload.tracking_number,
                 "Tracking number",
                 255,
                 required=False,
             )
+            if tracking_number != order.tracking_number:
+                order.tracking_number = tracking_number
+                changed["tracking_number"] = tracking_number
 
-        changed = payload.model_dump(exclude_unset=True)
         if changed:
             queue_order_status(db, order)
             log_admin_action(
@@ -371,7 +329,9 @@ def admin_update_order(
                 order.id,
                 {"from_status": previous_status, **changed},
             )
-        db.commit()
+            db.commit()
+        else:
+            db.rollback()
     except HTTPException:
         db.rollback()
         raise
