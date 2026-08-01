@@ -17,13 +17,17 @@ from ..services.loyalty import add_points, mark_redemption_committed, reward_ref
 from ..services.notifications import queue_order_paid
 from ..services.order_cancellation import cancel_order_before_settlement
 from ..services.outbox import enqueue_event_for_destinations, enqueue_webhook
+from ..services.payment_attempts import (
+    can_fallback_to_stored_attempt,
+    resolve_provider_payment_attempt,
+)
 from ..services.payments import create_yookassa_payment, fetch_yookassa_payment
 from ..services.timeline import add_timeline_event
 
 router = APIRouter(prefix="/payments", tags=["payments"])
 
 _PROVIDER = "yookassa"
-_REUSABLE_PAYMENT_STATUSES = {"pending", "waiting_for_capture", "succeeded"}
+_RECONCILABLE_PAYMENT_STATUSES = {"pending", "waiting_for_capture", "succeeded"}
 _PAYMENT_CREATION_ORDER_STATUSES = {"created", "payment_created"}
 _PAYMENT_CREATION_PAYMENT_STATUSES = {"pending", "payment_created"}
 _SETTLED_ORDER_PAYMENT_STATUSES = {
@@ -75,6 +79,49 @@ def _validate_provider_amount(provider_payment: dict, order: Order) -> None:
 
     if provider_amount != order_amount or provider_currency != str(order.currency).upper():
         raise HTTPException(status_code=409, detail="Provider payment amount or currency does not match order")
+
+
+async def _reconcile_existing_payment(order: Order, payment: Payment) -> Payment | None:
+    provider_payment_id = str(payment.provider_payment_id or "").strip()
+    if not provider_payment_id:
+        payment.status = "invalid"
+        payment.confirmation_url = ""
+        return None
+
+    try:
+        provider_payment = await fetch_yookassa_payment(provider_payment_id)
+    except HTTPException as exc:
+        if exc.status_code == 502 and can_fallback_to_stored_attempt(
+            payment.status,
+            payment.confirmation_url,
+        ):
+            return payment
+        raise
+
+    if _provider_order_id(provider_payment) != order.id:
+        raise HTTPException(status_code=409, detail="Provider payment belongs to another order")
+    _validate_provider_amount(provider_payment, order)
+
+    resolution = resolve_provider_payment_attempt(
+        provider_payment,
+        stored_confirmation_url=payment.confirmation_url,
+    )
+    if resolution.outcome == "unavailable":
+        raise HTTPException(
+            status_code=409,
+            detail="Payment is active but has no confirmation URL. Retry later or contact support.",
+        )
+    if resolution.outcome == "review":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Provider payment status requires review: {resolution.status}",
+        )
+
+    payment.status = resolution.status
+    payment.confirmation_url = resolution.confirmation_url
+    if resolution.outcome in {"reuse", "settled"}:
+        return payment
+    return None
 
 
 def _order_item_quantities(order: Order) -> dict[int, int]:
@@ -157,8 +204,11 @@ async def create_payment(
             .with_for_update()
             .first()
         )
-        if latest_payment and latest_payment.status in _REUSABLE_PAYMENT_STATUSES:
-            return _payment_out(order, latest_payment)
+        if latest_payment and latest_payment.status in _RECONCILABLE_PAYMENT_STATUSES:
+            reusable_payment = await _reconcile_existing_payment(order, latest_payment)
+            if reusable_payment:
+                db.commit()
+                return _payment_out(order, reusable_payment)
 
         attempt = (
             db.query(func.count(Payment.id))
