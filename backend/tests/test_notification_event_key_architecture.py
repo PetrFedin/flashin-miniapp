@@ -31,6 +31,8 @@ def test_migration_owns_notification_event_key_table():
     assert '"notification_event_keys"' in source
     assert 'name="uq_notification_event_keys_event_key"' in source
     assert 'ondelete="CASCADE"' in source
+    assert 'timezone(\'UTC\', CURRENT_TIMESTAMP)' in source
+    assert 'CURRENT_TIMESTAMP AT TIME ZONE' not in source
 
 
 def test_order_notifications_use_business_event_keys_not_message_deduplication():
