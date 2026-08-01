@@ -1,8 +1,11 @@
-"""enforce one active cart per customer
+"""reconcile duplicate active carts
 
 Revision ID: 0016_one_active_cart
 Revises: 0015_checkout_idempotency
 Create Date: 2026-08-01
+
+The active-cart unique index is owned by revision 0010. This revision repairs
+any drifted data and restores that index only when an environment lost it.
 """
 
 from alembic import op
@@ -165,14 +168,17 @@ def upgrade():
         )
     )
 
-    op.create_index(
-        _ACTIVE_CART_INDEX,
-        "carts",
-        ["customer_id"],
-        unique=True,
-        postgresql_where=sa.text("status = 'active'"),
+    op.execute(
+        sa.text(
+            f"""
+            CREATE UNIQUE INDEX IF NOT EXISTS {_ACTIVE_CART_INDEX}
+            ON carts (customer_id)
+            WHERE status = 'active'
+            """
+        )
     )
 
 
 def downgrade():
-    op.drop_index(_ACTIVE_CART_INDEX, table_name="carts")
+    # The active-cart index is owned by revision 0010 and must remain in place.
+    pass
