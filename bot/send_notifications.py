@@ -6,6 +6,7 @@ from aiogram import Bot
 from sqlalchemy import and_, create_engine, or_
 from sqlalchemy.orm import sessionmaker
 
+from backend.database import utcnow_naive
 from backend.models import Notification
 from backend.notification_models import NotificationDeliveryState
 
@@ -28,18 +29,18 @@ engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
 
-def _next_attempt_at(attempts: int) -> datetime:
+def _next_attempt_at(attempts: int, *, now: datetime | None = None) -> datetime:
     delay = min(
         INITIAL_BACKOFF_SECONDS * (2 ** max(attempts - 1, 0)),
         MAX_BACKOFF_SECONDS,
     )
-    return datetime.utcnow() + timedelta(seconds=delay)
+    return (now or utcnow_naive()) + timedelta(seconds=delay)
 
 
 def _claim_pending_batch() -> list[dict]:
     db = SessionLocal()
     try:
-        now = datetime.utcnow()
+        now = utcnow_naive()
         rows = (
             db.query(Notification)
             .outerjoin(
@@ -99,6 +100,7 @@ def _claim_pending_batch() -> list[dict]:
                     "id": row.id,
                     "telegram_id": row.telegram_id,
                     "message": row.message,
+                    "lease_until": lease_until,
                 }
             )
 
@@ -111,7 +113,11 @@ def _claim_pending_batch() -> list[dict]:
         db.close()
 
 
-def _finish_delivery(notification_id: int, error: Exception | None = None) -> str:
+def _finish_delivery(
+    notification_id: int,
+    lease_until: datetime,
+    error: Exception | None = None,
+) -> str:
     db = SessionLocal()
     try:
         row = (
@@ -133,24 +139,21 @@ def _finish_delivery(notification_id: int, error: Exception | None = None) -> st
             .with_for_update()
             .first()
         )
-        if not state:
-            state = NotificationDeliveryState(
-                notification_id=row.id,
-                attempts=0,
-            )
-            db.add(state)
-            db.flush()
+        if not state or state.next_attempt_at != lease_until:
+            db.rollback()
+            return "ignored"
 
+        now = utcnow_naive()
         if error is None:
             row.status = "sent"
-            row.sent_at = datetime.utcnow()
+            row.sent_at = now
             row.error = ""
             db.delete(state)
             db.commit()
             return "sent"
 
         state.attempts += 1
-        state.updated_at = datetime.utcnow()
+        state.updated_at = now
         state.last_error = f"{error.__class__.__name__}: {error}"[:2000]
         row.error = state.last_error
         if state.attempts >= MAX_ATTEMPTS:
@@ -159,7 +162,7 @@ def _finish_delivery(notification_id: int, error: Exception | None = None) -> st
             outcome = "failed"
         else:
             row.status = "pending"
-            state.next_attempt_at = _next_attempt_at(state.attempts)
+            state.next_attempt_at = _next_attempt_at(state.attempts, now=now)
             outcome = "retry_scheduled"
         db.commit()
         return outcome
@@ -197,7 +200,11 @@ async def send_pending_batch(bot: Bot) -> dict[str, int]:
         except Exception as exc:
             error = exc
 
-        outcome = _finish_delivery(item["id"], error=error)
+        outcome = _finish_delivery(
+            item["id"],
+            item["lease_until"],
+            error=error,
+        )
         if outcome in result:
             result[outcome] += 1
 
