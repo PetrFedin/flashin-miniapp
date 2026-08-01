@@ -1,13 +1,13 @@
 import base64
 import math
 import re
-from datetime import datetime
 from urllib.parse import urlparse
 
 import httpx
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
+from ..database import utcnow_naive
 from ..models import MoySkladSyncLog, Product, ProductVariant
 from .moysklad_mapping import apply_mapping, log_conflict
 
@@ -379,7 +379,7 @@ async def sync_assortment_to_catalog(db: Session, sync_type: str = "manual") -> 
         log.products_seen = seen
         log.products_upserted = upserted_products
         log.variants_upserted = upserted_variants
-        log.finished_at = datetime.utcnow()
+        log.finished_at = utcnow_naive()
         db.commit()
         return log
     except Exception as exc:
@@ -387,7 +387,7 @@ async def sync_assortment_to_catalog(db: Session, sync_type: str = "manual") -> 
         log = db.query(MoySkladSyncLog).filter(MoySkladSyncLog.id == log.id).first() or log
         log.status = "failed"
         log.error = f"{exc.__class__.__name__}: {exc}"[:2000]
-        log.finished_at = datetime.utcnow()
+        log.finished_at = utcnow_naive()
         db.add(log)
         db.commit()
         return log
