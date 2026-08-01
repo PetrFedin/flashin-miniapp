@@ -1,4 +1,3 @@
-import math
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -10,7 +9,12 @@ from ..database import get_db
 from ..models import Cart, CartItem, Customer, Product, ProductVariant, PromoCode
 from ..schemas import CartAddIn, CartItemOut, CartOut, LoyaltyRedeemIn, PromoApplyIn, ReferralApplyIn
 from ..security import get_current_customer
-from ..services.loyalty import attach_referral_to_customer, redeem_points
+from ..services.cart_adjustments import (
+    CartAdjustmentResult,
+    apply_loyalty_request,
+    reconcile_cart_adjustments,
+)
+from ..services.loyalty import attach_referral_to_customer
 from ..services.promos import calculate_discount
 
 router = APIRouter(prefix="/cart", tags=["cart"])
@@ -158,7 +162,10 @@ def get_or_create_cart(db: Session, customer: Customer) -> Cart:
         raise
 
 
-def serialize_cart(cart: Cart) -> CartOut:
+def serialize_cart(
+    cart: Cart,
+    adjustments: CartAdjustmentResult | None = None,
+) -> CartOut:
     items: list[CartItemOut] = []
     subtotal = Decimal("0.00")
     for item in cart.items:
@@ -179,14 +186,25 @@ def serialize_cart(cart: Cart) -> CartOut:
         )
 
     subtotal = subtotal.quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
-    discount = _money(calculate_discount(cart.promo_code, float(subtotal)), "promo discount") if cart.promo_code else Decimal("0.00")
-    discount = min(max(discount, Decimal("0.00")), subtotal)
-
-    loyalty_points = _money(cart.loyalty_points_to_redeem or 0, "loyalty points")
-    point_value = _money(get_settings().loyalty_point_value_rub, "loyalty point value")
-    loyalty_discount = (loyalty_points * point_value).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
-    loyalty_discount = min(max(loyalty_discount, Decimal("0.00")), subtotal - discount)
-    final_amount = max(subtotal - discount - loyalty_discount, Decimal("0.00"))
+    if adjustments is None:
+        discount = (
+            _money(calculate_discount(cart.promo_code, float(subtotal)), "promo discount")
+            if cart.promo_code
+            else Decimal("0.00")
+        )
+        discount = min(max(discount, Decimal("0.00")), subtotal)
+        loyalty_points = _money(cart.loyalty_points_to_redeem or 0, "loyalty points")
+        point_value = _money(get_settings().loyalty_point_value_rub, "loyalty point value")
+        loyalty_discount = (loyalty_points * point_value).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
+        loyalty_discount = min(max(loyalty_discount, Decimal("0.00")), subtotal - discount)
+        final_amount = max(subtotal - discount - loyalty_discount, Decimal("0.00"))
+        promo_code = cart.promo_code.code if cart.promo_code else None
+    else:
+        if subtotal != adjustments.subtotal:
+            raise HTTPException(status_code=409, detail="Cart changed during adjustment reconciliation")
+        discount = adjustments.promo_discount
+        final_amount = adjustments.final_amount
+        promo_code = adjustments.promo_code
 
     return CartOut(
         id=cart.id,
@@ -194,13 +212,29 @@ def serialize_cart(cart: Cart) -> CartOut:
         total_amount=float(subtotal),
         discount_amount=float(discount),
         final_amount=float(final_amount),
-        promo_code=cart.promo_code.code if cart.promo_code else None,
+        promo_code=promo_code,
     )
+
+
+def _commit_reconciled_cart(db: Session, cart_id: int) -> CartOut:
+    current_cart = _load_cart(db, cart_id)
+    adjustments = reconcile_cart_adjustments(db, current_cart)
+    db.commit()
+    return serialize_cart(_load_cart(db, cart_id), adjustments)
 
 
 @router.get("", response_model=CartOut)
 def get_cart(customer: Customer = Depends(get_current_customer), db: Session = Depends(get_db)):
-    return serialize_cart(get_or_create_cart(db, customer))
+    cart = get_or_create_cart(db, customer)
+    try:
+        _lock_cart(db, cart.id)
+        return _commit_reconciled_cart(db, cart.id)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.post("/items", response_model=CartOut)
@@ -251,7 +285,7 @@ def add_item(payload: CartAddIn, customer: Customer = Depends(get_current_custom
                     quantity=payload.quantity,
                 )
             )
-        db.commit()
+        return _commit_reconciled_cart(db, cart.id)
     except HTTPException:
         db.rollback()
         raise
@@ -261,7 +295,49 @@ def add_item(payload: CartAddIn, customer: Customer = Depends(get_current_custom
     except Exception:
         db.rollback()
         raise
-    return serialize_cart(_load_cart(db, cart.id))
+
+
+@router.patch("/items/{item_id}", response_model=CartOut)
+def update_item(
+    item_id: int,
+    quantity: int,
+    customer: Customer = Depends(get_current_customer),
+    db: Session = Depends(get_db),
+):
+    if quantity < 1 or quantity > _MAX_VARIANT_QUANTITY:
+        raise HTTPException(status_code=422, detail="Quantity must be between 1 and 10")
+
+    cart = get_or_create_cart(db, customer)
+    try:
+        _lock_cart(db, cart.id)
+        item = (
+            db.query(CartItem)
+            .filter(CartItem.id == item_id, CartItem.cart_id == cart.id)
+            .with_for_update()
+            .first()
+        )
+        if not item:
+            raise HTTPException(status_code=404, detail="Cart item not found")
+        variant = (
+            db.query(ProductVariant)
+            .filter(ProductVariant.id == item.variant_id)
+            .with_for_update()
+            .first()
+        )
+        if not variant or variant.product_id != item.product_id:
+            raise HTTPException(status_code=409, detail="Cart item variant is invalid")
+        if variant.stock_qty < 0 or variant.reserved_qty < 0 or variant.reserved_qty > variant.stock_qty:
+            raise HTTPException(status_code=409, detail="Inventory state is invalid")
+        if variant.available_qty < quantity:
+            raise HTTPException(status_code=409, detail="Not enough stock available")
+        item.quantity = quantity
+        return _commit_reconciled_cart(db, cart.id)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.delete("/items/{item_id}", response_model=CartOut)
@@ -278,14 +354,13 @@ def remove_item(item_id: int, customer: Customer = Depends(get_current_customer)
         if not item:
             raise HTTPException(status_code=404, detail="Cart item not found")
         db.delete(item)
-        db.commit()
+        return _commit_reconciled_cart(db, cart.id)
     except HTTPException:
         db.rollback()
         raise
     except Exception:
         db.rollback()
         raise
-    return serialize_cart(_load_cart(db, cart.id))
 
 
 @router.post("/promo", response_model=CartOut)
@@ -296,21 +371,21 @@ def apply_promo(payload: PromoApplyIn, customer: Customer = Depends(get_current_
         raise HTTPException(status_code=422, detail="Promo code is required")
     try:
         _lock_cart(db, cart.id)
+        current_cart = _load_cart(db, cart.id)
+        baseline = reconcile_cart_adjustments(db, current_cart)
         promo = db.query(PromoCode).filter(PromoCode.code == code).with_for_update().first()
         if not promo:
             raise HTTPException(status_code=404, detail="Promo code not found")
-        current_cart = _load_cart(db, cart.id)
-        subtotal = sum(float(_money(item.product.price, "product price")) * item.quantity for item in current_cart.items)
-        calculate_discount(promo, subtotal)
+        calculate_discount(promo, float(baseline.subtotal))
         current_cart.promo_code_id = promo.id
-        db.commit()
+        current_cart.promo_code = promo
+        return _commit_reconciled_cart(db, cart.id)
     except HTTPException:
         db.rollback()
         raise
     except Exception:
         db.rollback()
         raise
-    return serialize_cart(_load_cart(db, cart.id))
 
 
 @router.delete("/promo", response_model=CartOut)
@@ -319,35 +394,27 @@ def remove_promo(customer: Customer = Depends(get_current_customer), db: Session
     try:
         locked_cart = _lock_cart(db, cart.id)
         locked_cart.promo_code_id = None
-        db.commit()
+        return _commit_reconciled_cart(db, cart.id)
     except Exception:
         db.rollback()
         raise
-    return serialize_cart(_load_cart(db, cart.id))
 
 
 @router.post("/loyalty", response_model=CartOut)
 def apply_loyalty(payload: LoyaltyRedeemIn, customer: Customer = Depends(get_current_customer), db: Session = Depends(get_db)):
-    try:
-        points = float(payload.points)
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=422, detail="Invalid loyalty points")
-    if not math.isfinite(points) or points < 0:
-        raise HTTPException(status_code=422, detail="Loyalty points must be non-negative")
-
     cart = get_or_create_cart(db, customer)
     try:
         _lock_cart(db, cart.id)
         current_cart = _load_cart(db, cart.id)
-        redeem_points(db, customer.id, current_cart, points)
+        adjustments = apply_loyalty_request(db, current_cart, payload.points)
         db.commit()
+        return serialize_cart(_load_cart(db, cart.id), adjustments)
     except HTTPException:
         db.rollback()
         raise
     except Exception:
         db.rollback()
         raise
-    return serialize_cart(_load_cart(db, cart.id))
 
 
 @router.post("/referral", response_model=CartOut)
@@ -361,7 +428,7 @@ def apply_referral(payload: ReferralApplyIn, customer: Customer = Depends(get_cu
         if not attach_referral_to_customer(db, code, customer.id):
             raise HTTPException(status_code=404, detail="Referral code not found or unavailable")
         locked_cart.referral_code = code[:64]
-        db.commit()
+        return _commit_reconciled_cart(db, cart.id)
     except HTTPException:
         db.rollback()
         raise
@@ -371,4 +438,3 @@ def apply_referral(payload: ReferralApplyIn, customer: Customer = Depends(get_cu
     except Exception:
         db.rollback()
         raise
-    return serialize_cart(_load_cart(db, cart.id))
