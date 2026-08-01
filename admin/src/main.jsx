@@ -1,396 +1,499 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+
+import {
+  AdminApiError,
+  adminJson,
+  downloadAdminFile,
+  getAdminToken,
+  loginAdmin,
+  setAdminToken,
+  uploadAdminFile,
+} from "./api.js";
+import {
+  ORDER_STATUS_LABELS,
+  orderAction,
+} from "./orderTransitions.js";
 import "./style.css";
 
-const API = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+const EMPTY_PROMO = {
+  code: "",
+  discount_type: "percent",
+  discount_value: 10,
+  min_amount: 0,
+};
 
-function authHeaders() {
-  const token = localStorage.getItem("admin_token");
-  return { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
-}
+const EMPTY_PRODUCT = {
+  sku: "",
+  title: "",
+  slug: "",
+  brand: "FLASHIN",
+  description: "",
+  price: "",
+  currency: "RUB",
+  category: "Clothing",
+  gender: "unisex",
+  images: [],
+  variants: [{ size: "M", sku: "", stock_qty: 1, color: "" }],
+};
 
-async function api(path, options = {}) {
-  const res = await fetch(`${API}${path}`, {
-    ...options,
-    headers: { ...authHeaders(), ...(options.headers || {}) },
-  });
-  if (!res.ok) throw new Error(await res.text());
-  const ct = res.headers.get("content-type") || "";
-  if (ct.includes("application/json")) return res.json();
-  return res.text();
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
 }
 
 function App() {
-  const [token, setToken] = useState(localStorage.getItem("admin_token") || "");
-  const [email, setEmail] = useState("admin@flashin.store");
+  const [token, setToken] = useState(getAdminToken());
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [products, setProducts] = useState([]);
   const [orders, setOrders] = useState([]);
-  const [promocode, setPromocode] = useState({ code: "", discount_type: "percent", discount_value: 10, min_amount: 0 });
-  const [productForm, setProductForm] = useState({
-    sku: "",
-    title: "",
-    slug: "",
-    brand: "FLASHIN",
-    description: "",
-    price: 0,
-    currency: "RUB",
-    category: "Clothing",
-    gender: "unisex",
-    images: [],
-    variants: [{ size: "M", sku: "", stock_qty: 1, color: "" }]
-  });
-  const [error, setError] = useState("");
   const [auditLogs, setAuditLogs] = useState([]);
   const [lowStock, setLowStock] = useState([]);
   const [abandonedCarts, setAbandonedCarts] = useState([]);
-  const [tickets, setTickets] = useState([]);
-  const [privacyRequests, setPrivacyRequests] = useState([]);
-  const [outboxRows, setOutboxRows] = useState([]);
-  const [analytics, setAnalytics] = useState(null);
-  const [crmProfiles, setCrmProfiles] = useState([]);
-  const [moyskladLogs, setMoyskladLogs] = useState([]);
-  const [campaigns, setCampaigns] = useState([]);
-  const [campaignForm, setCampaignForm] = useState({ name: "", segment: "all", message: "" });
-  const [lookForm, setLookForm] = useState({ title: "", description: "", product_ids: "" });
-  const [customers, setCustomers] = useState([]);
-  const [mappingRules, setMappingRules] = useState([]);
-  const [moyskladConflicts, setMoyskladConflicts] = useState([]);
-  const [reconciliation, setReconciliation] = useState([]);
-  const [customerTimeline, setCustomerTimeline] = useState([]);
-  const [fulfillmentTasks, setFulfillmentTasks] = useState([]);
-  const [slaEvents, setSlaEvents] = useState([]);
-  const [webhookDestinations, setWebhookDestinations] = useState([]);
-  const [webhookForm, setWebhookForm] = useState({ name: "", url: "", event_type: "order.paid", active: true, signing_secret: "" });
-  const [mappingForm, setMappingForm] = useState({ source_field: "size", source_value: "", target_field: "size", target_value: "", active: true });
+  const [promocode, setPromocode] = useState(EMPTY_PROMO);
+  const [productForm, setProductForm] = useState(EMPTY_PRODUCT);
+  const [busyKeys, setBusyKeys] = useState(() => new Set());
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const operationLocks = useRef(new Set());
 
-  async function login() {
-    try {
-      setError("");
-      const res = await fetch(`${API}/api/admin/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
-      localStorage.setItem("admin_token", data.access_token);
-      setToken(data.access_token);
-    } catch (e) {
-      setError(e.message);
-    }
+  function isBusy(key) {
+    return busyKeys.has(key);
   }
 
-  async function loadOps() {
-    try {
-      setAuditLogs(await api("/api/admin/audit-logs"));
-      setLowStock(await api("/api/ops/inventory/low-stock"));
-      setAbandonedCarts(await api("/api/ops/abandoned-carts"));
-      setTickets(await api("/api/support/admin/tickets"));
-      setPrivacyRequests(await api("/api/privacy/admin/requests"));
-      setOutboxRows(await api("/api/outbox"));
-      setAnalytics(await api("/api/business-analytics/summary"));
-      setCrmProfiles(await api("/api/crm/profiles"));
-      setMoyskladLogs(await api("/api/moysklad/sync-logs"));
-      setCampaigns(await api("/api/campaigns"));
-      setCustomers(await api("/api/admin/customers"));
-      setMappingRules(await api("/api/admin/moysklad/mapping-rules"));
-      setMoyskladConflicts(await api("/api/admin/moysklad/conflicts"));
-      setReconciliation(await api("/api/reconciliation/stock"));
-      setFulfillmentTasks(await api("/api/fulfillment/tasks"));
-      setSlaEvents(await api("/api/fulfillment/sla"));
-      setWebhookDestinations(await api("/api/webhook-destinations"));
-    } catch (e) {
-      setError(e.message);
-    }
-  }
-
-  async function updateFulfillment(id, status) {
-    await api(`/api/fulfillment/tasks/${id}`, { method: "PATCH", body: JSON.stringify({ status }) });
-    await loadOps();
-  }
-
-  async function createWebhookDestination() {
-    await api("/api/webhook-destinations", { method: "POST", body: JSON.stringify(webhookForm) });
-    setWebhookForm({ name: "", url: "", event_type: "order.paid", active: true, signing_secret: "" });
-    await loadOps();
-  }
-
-  async function createMappingRule() {
-    await api("/api/admin/moysklad/mapping-rules", { method: "POST", body: JSON.stringify(mappingForm) });
-    setMappingForm({ source_field: "size", source_value: "", target_field: "size", target_value: "", active: true });
-    await loadOps();
-  }
-
-  async function createCampaign() {
-    await api("/api/campaigns", { method: "POST", body: JSON.stringify(campaignForm) });
-    setCampaignForm({ name: "", segment: "all", message: "" });
-    await loadOps();
-  }
-
-  async function scheduleCampaign(id) {
-    const date = prompt("ISO date, e.g. 2026-06-01T12:00:00");
-    if (!date) return;
-    await api(`/api/campaigns/${id}/schedule`, { method: "POST", body: JSON.stringify({ scheduled_at: date }) });
-    await loadOps();
-  }
-
-  async function loadCustomerTimeline(customerId) {
-    setCustomerTimeline(await api(`/api/timeline/admin/customers/${customerId}`));
-  }
-
-  async function queueCampaign(id) {
-    await api(`/api/campaigns/${id}/queue`, { method: "POST" });
-    await loadOps();
-  }
-
-  async function configureMeili() {
-    await api("/api/search/admin/configure-meili", { method: "POST" });
-  }
-
-  async function rebuildSearch() {
-    await api("/api/search/admin/rebuild", { method: "POST" });
-  }
-
-  async function createLook() {
-    await api("/api/looks", {
-      method: "POST",
-      body: JSON.stringify({
-        title: lookForm.title,
-        description: lookForm.description,
-        product_ids: lookForm.product_ids.split(",").map(x => Number(x.trim())).filter(Boolean)
-      })
+  function markBusy(key, active) {
+    setBusyKeys((current) => {
+      const next = new Set(current);
+      if (active) next.add(key);
+      else next.delete(key);
+      return next;
     });
-    setLookForm({ title: "", description: "", product_ids: "" });
   }
 
-  async function syncMoySklad() {
-    await api("/api/moysklad/sync", { method: "POST" });
-    await loadOps();
-    await load();
+  function logout(message = "") {
+    setAdminToken("");
+    setToken("");
+    setProducts([]);
+    setOrders([]);
+    setAuditLogs([]);
+    setLowStock([]);
+    setAbandonedCarts([]);
+    if (message) setError(message);
   }
 
-  async function rebuildRecommendations() {
-    await api("/api/recommendations/admin/rebuild", { method: "POST" });
-  }
-
-  async function recomputeCrm() {
-    await api("/api/crm/recompute", { method: "POST" });
-    await loadOps();
-  }
-
-  async function queueAbandoned() {
-    await api("/api/ops/abandoned-carts/queue-notifications", { method: "POST" });
-    await loadOps();
-  }
-
-  async function snapshotInventory() {
-    await api("/api/ops/inventory/snapshot", { method: "POST" });
-    await loadOps();
-  }
-
-  async function load() {
+  async function runAction(key, operation, successMessage = "") {
+    if (operationLocks.current.has(key)) return null;
+    operationLocks.current.add(key);
+    markBusy(key, true);
+    setError("");
+    setNotice("");
     try {
-      setProducts(await api("/api/admin/products"));
-      setOrders(await api("/api/admin/orders"));
-    } catch (e) {
-      setError(e.message);
+      const result = await operation();
+      if (successMessage) setNotice(successMessage);
+      return result;
+    } catch (actionError) {
+      if (actionError instanceof AdminApiError && actionError.status === 401) {
+        logout("Сессия администратора истекла. Войдите снова.");
+      } else {
+        setError(actionError.message || "Операция не выполнена");
+      }
+      return null;
+    } finally {
+      operationLocks.current.delete(key);
+      markBusy(key, false);
     }
   }
 
-  useEffect(() => { if (token) { load(); loadOps(); } }, [token]);
+  async function loadCore() {
+    const [nextProducts, nextOrders] = await Promise.all([
+      adminJson("/api/admin/products"),
+      adminJson("/api/admin/orders"),
+    ]);
+    setProducts(nextProducts);
+    setOrders(nextOrders);
+  }
 
-  async function updateOrder(orderId, status) {
-    await api(`/api/admin/orders/${orderId}`, { method: "PATCH", body: JSON.stringify({ status }) });
-    await load();
+  async function loadOperations() {
+    const sections = [
+      ["audit log", "/api/admin/audit-logs", setAuditLogs],
+      ["низкие остатки", "/api/ops/inventory/low-stock", setLowStock],
+      ["брошенные корзины", "/api/ops/abandoned-carts", setAbandonedCarts],
+    ];
+    const results = await Promise.allSettled(
+      sections.map(([, path]) => adminJson(path)),
+    );
+    const failures = [];
+    results.forEach((result, index) => {
+      if (result.status === "fulfilled") sections[index][2](result.value);
+      else failures.push({ name: sections[index][0], error: result.reason });
+    });
+    const authFailure = failures.find(({ error: failure }) => failure?.status === 401);
+    if (authFailure) throw authFailure.error;
+    if (failures.length) {
+      throw new Error(`Не загружены разделы: ${failures.map(({ name }) => name).join(", ")}`);
+    }
+  }
+
+  async function refreshAll() {
+    await Promise.all([loadCore(), loadOperations()]);
+  }
+
+  useEffect(() => {
+    if (token) runAction("initial-load", refreshAll);
+  }, [token]);
+
+  async function handleLogin() {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail || !password) {
+      setError("Введите email и пароль администратора.");
+      return;
+    }
+    const result = await runAction("login", () => loginAdmin(normalizedEmail, password));
+    if (result) {
+      setPassword("");
+      setToken(result.access_token);
+    }
   }
 
   async function createPromo() {
-    await api("/api/admin/promocodes", { method: "POST", body: JSON.stringify(promocode) });
-    setPromocode({ code: "", discount_type: "percent", discount_value: 10, min_amount: 0 });
+    if (!promocode.code.trim()) {
+      setError("Введите код промокода.");
+      return;
+    }
+    const result = await runAction(
+      "create-promo",
+      () => adminJson("/api/admin/promocodes", {
+        method: "POST",
+        body: JSON.stringify({ ...promocode, code: promocode.code.trim().toUpperCase() }),
+      }),
+      "Промокод создан.",
+    );
+    if (result) setPromocode(EMPTY_PROMO);
   }
 
+  async function uploadImage(file) {
+    const asset = await runAction(
+      "upload-image",
+      () => uploadAdminFile("/api/media/upload", file),
+      "Изображение загружено.",
+    );
+    if (asset) {
+      setProductForm((current) => ({
+        ...current,
+        images: current.images.includes(asset.url)
+          ? current.images
+          : [...current.images, asset.url],
+      }));
+    }
+  }
 
-async function uploadImage(file) {
-  const form = new FormData();
-  form.append("file", file);
-  const res = await fetch(`${API}/api/media/upload`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${localStorage.getItem("admin_token")}` },
-    body: form,
-  });
-  if (!res.ok) throw new Error(await res.text());
-  const asset = await res.json();
-  setProductForm({ ...productForm, images: [...productForm.images, asset.url] });
-}
+  function updateVariant(index, field, value) {
+    setProductForm((current) => ({
+      ...current,
+      variants: current.variants.map((variant, variantIndex) => (
+        variantIndex === index ? { ...variant, [field]: value } : variant
+      )),
+    }));
+  }
 
-async function createProduct() {
-  await api("/api/admin/products", {
-    method: "POST",
-    body: JSON.stringify({
-      ...productForm,
-      price: Number(productForm.price),
-      variants: productForm.variants.map(v => ({ ...v, stock_qty: Number(v.stock_qty) }))
-    }),
-  });
-  setProductForm({
-    sku: "",
-    title: "",
-    slug: "",
-    brand: "FLASHIN",
-    description: "",
-    price: 0,
-    currency: "RUB",
-    category: "Clothing",
-    gender: "unisex",
-    images: [],
-    variants: [{ size: "M", sku: "", stock_qty: 1, color: "" }]
-  });
-  await load();
-}
+  function addVariant() {
+    setProductForm((current) => ({
+      ...current,
+      variants: [...current.variants, { size: "", sku: "", stock_qty: 1, color: "" }],
+    }));
+  }
+
+  function removeVariant(index) {
+    setProductForm((current) => ({
+      ...current,
+      variants: current.variants.length === 1
+        ? current.variants
+        : current.variants.filter((_, variantIndex) => variantIndex !== index),
+    }));
+  }
+
+  async function createProduct() {
+    if (!productForm.sku.trim() || !productForm.title.trim() || !productForm.slug.trim()) {
+      setError("Для товара обязательны SKU, название и slug.");
+      return;
+    }
+    if (!(Number(productForm.price) > 0)) {
+      setError("Цена товара должна быть больше нуля.");
+      return;
+    }
+    if (productForm.variants.some((variant) => !variant.size.trim() || !variant.sku.trim())) {
+      setError("У каждого варианта должны быть размер и SKU.");
+      return;
+    }
+
+    const result = await runAction(
+      "create-product",
+      () => adminJson("/api/admin/products", {
+        method: "POST",
+        body: JSON.stringify({
+          ...productForm,
+          sku: productForm.sku.trim().toUpperCase(),
+          slug: productForm.slug.trim().toLowerCase(),
+          price: Number(productForm.price),
+          variants: productForm.variants.map((variant) => ({
+            ...variant,
+            sku: variant.sku.trim().toUpperCase(),
+            stock_qty: Number(variant.stock_qty),
+          })),
+        }),
+      }),
+      "Товар создан.",
+    );
+    if (result) {
+      setProductForm(EMPTY_PRODUCT);
+      await runAction("reload-products", loadCore);
+    }
+  }
 
   async function importCsv(file) {
-    const form = new FormData();
-    form.append("file", file);
-    const res = await fetch(`${API}/api/admin/products/import-csv`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${localStorage.getItem("admin_token")}` },
-      body: form,
-    });
-    if (!res.ok) throw new Error(await res.text());
-    await load();
+    const result = await runAction(
+      "import-csv",
+      () => uploadAdminFile("/api/admin/products/import-csv", file),
+      "CSV импортирован.",
+    );
+    if (result) await runAction("reload-products", loadCore);
+  }
+
+  async function exportOrders() {
+    const exported = await runAction(
+      "export-orders",
+      () => downloadAdminFile("/api/admin/orders/export-csv", "flashin_orders.csv"),
+    );
+    if (exported) {
+      downloadBlob(exported.blob, exported.filename);
+      setNotice("Выгрузка заказов скачана.");
+    }
+  }
+
+  async function refreshOperationsAfter(key, path, successMessage) {
+    const result = await runAction(
+      key,
+      () => adminJson(path, { method: "POST" }),
+      successMessage,
+    );
+    if (result) await runAction("reload-operations", loadOperations);
+  }
+
+  async function handleOrderAction(order) {
+    const action = orderAction(order);
+    if (!action) return;
+    if (action.type === "cancel" && !window.confirm(`Отменить заказ #${order.id} до оплаты?`)) return;
+
+    const result = await runAction(
+      `order-${order.id}`,
+      () => action.type === "cancel"
+        ? adminJson(`/api/admin/orders/${order.id}/cancel`, { method: "POST" })
+        : adminJson(`/api/admin/orders/${order.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ status: action.status }),
+        }),
+      action.type === "cancel"
+        ? `Заказ #${order.id} отменён.`
+        : `Заказ #${order.id}: ${ORDER_STATUS_LABELS[action.status]}.`,
+    );
+    if (result) await runAction("reload-orders", loadCore);
   }
 
   if (!token) {
-    return <main className="login">
-      <h1>FLASHIN Admin</h1>
-      {error && <div className="error">{error}</div>}
-      <input value={email} onChange={e => setEmail(e.target.value)} placeholder="email" />
-      <input value={password} onChange={e => setPassword(e.target.value)} placeholder="password" type="password" />
-      <button onClick={login}>Войти</button>
-    </main>;
+    return (
+      <main className="login">
+        <h1>FLASHIN Admin</h1>
+        {error && <div className="error" role="alert">{error}</div>}
+        <input
+          value={email}
+          onChange={(event) => setEmail(event.target.value)}
+          onKeyDown={(event) => event.key === "Enter" && handleLogin()}
+          placeholder="Email администратора"
+          autoComplete="username"
+        />
+        <input
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          onKeyDown={(event) => event.key === "Enter" && handleLogin()}
+          placeholder="Пароль"
+          type="password"
+          autoComplete="current-password"
+        />
+        <button onClick={handleLogin} disabled={isBusy("login")}>Войти</button>
+      </main>
+    );
   }
 
-  return <main>
-    <header>
-      <h1>FLASHIN Admin</h1>
-      <button onClick={() => { localStorage.removeItem("admin_token"); setToken(""); }}>Выйти</button>
-    </header>
-    {error && <div className="error">{error}</div>}
+  return (
+    <main>
+      <header>
+        <h1>FLASHIN Admin</h1>
+        <div>
+          <button onClick={() => runAction("refresh-all", refreshAll, "Данные обновлены.")} disabled={isBusy("refresh-all")}>Обновить</button>
+          <button onClick={() => logout()}>Выйти</button>
+        </div>
+      </header>
+      {error && <div className="error" role="alert">{error}<button onClick={() => setError("")}>×</button></div>}
+      {notice && <div className="notice" role="status">{notice}<button onClick={() => setNotice("")}>×</button></div>}
 
-    <section>
-      <h2>Импорт товаров CSV</h2>
-      <input type="file" accept=".csv" onChange={(e) => e.target.files?.[0] && importCsv(e.target.files[0])} />
-      <a href={`${API}/api/admin/orders/export-csv`} target="_blank">Скачать заказы CSV</a>
-    </section>
+      <section>
+        <h2>Импорт и экспорт</h2>
+        <input
+          type="file"
+          accept=".csv,text/csv"
+          disabled={isBusy("import-csv")}
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = "";
+            if (file) importCsv(file);
+          }}
+        />
+        <button onClick={exportOrders} disabled={isBusy("export-orders")}>Скачать заказы CSV</button>
+      </section>
 
-    <section>
-      <h2>Промокод</h2>
-      <input placeholder="CODE" value={promocode.code} onChange={e => setPromocode({ ...promocode, code: e.target.value.toUpperCase() })} />
-      <input type="number" value={promocode.discount_value} onChange={e => setPromocode({ ...promocode, discount_value: Number(e.target.value) })} />
-      <button onClick={createPromo}>Создать</button>
-    </section>
+      <section>
+        <h2>Промокод</h2>
+        <input placeholder="CODE" value={promocode.code} onChange={(event) => setPromocode({ ...promocode, code: event.target.value.toUpperCase() })} />
+        <input type="number" min="0" value={promocode.discount_value} onChange={(event) => setPromocode({ ...promocode, discount_value: Number(event.target.value) })} />
+        <button onClick={createPromo} disabled={isBusy("create-promo")}>Создать</button>
+      </section>
 
+      <section>
+        <h2>Создать товар</h2>
+        <div className="form-grid">
+          <input placeholder="SKU" value={productForm.sku} onChange={(event) => setProductForm({ ...productForm, sku: event.target.value })} />
+          <input placeholder="Название" value={productForm.title} onChange={(event) => setProductForm({ ...productForm, title: event.target.value })} />
+          <input placeholder="slug" value={productForm.slug} onChange={(event) => setProductForm({ ...productForm, slug: event.target.value })} />
+          <input placeholder="Бренд" value={productForm.brand} onChange={(event) => setProductForm({ ...productForm, brand: event.target.value })} />
+          <input type="number" min="0" step="0.01" placeholder="Цена" value={productForm.price} onChange={(event) => setProductForm({ ...productForm, price: event.target.value })} />
+          <input placeholder="Категория" value={productForm.category} onChange={(event) => setProductForm({ ...productForm, category: event.target.value })} />
+        </div>
+        <textarea placeholder="Описание" value={productForm.description} onChange={(event) => setProductForm({ ...productForm, description: event.target.value })} />
+        <h3>Фото</h3>
+        <input type="file" accept="image/*" disabled={isBusy("upload-image")} onChange={(event) => event.target.files?.[0] && uploadImage(event.target.files[0])} />
+        <div className="image-list">{productForm.images.map((url) => <img key={url} src={url} alt="Загруженный товар" />)}</div>
+        <h3>Размеры</h3>
+        {productForm.variants.map((variant, index) => (
+          <div className="form-grid" key={`${index}-${variant.sku}`}>
+            <input placeholder="Размер" value={variant.size} onChange={(event) => updateVariant(index, "size", event.target.value)} />
+            <input placeholder="SKU размера" value={variant.sku} onChange={(event) => updateVariant(index, "sku", event.target.value)} />
+            <input placeholder="Цвет" value={variant.color} onChange={(event) => updateVariant(index, "color", event.target.value)} />
+            <input type="number" min="0" placeholder="Остаток" value={variant.stock_qty} onChange={(event) => updateVariant(index, "stock_qty", event.target.value)} />
+            <button type="button" onClick={() => removeVariant(index)} disabled={productForm.variants.length === 1}>Удалить размер</button>
+          </div>
+        ))}
+        <button type="button" onClick={addVariant}>Добавить размер</button>
+        <button onClick={createProduct} disabled={isBusy("create-product")}>Создать товар</button>
+      </section>
 
-<section>
-  <h2>Создать товар</h2>
-  <div className="form-grid">
-    <input placeholder="SKU" value={productForm.sku} onChange={e => setProductForm({ ...productForm, sku: e.target.value })} />
-    <input placeholder="Название" value={productForm.title} onChange={e => setProductForm({ ...productForm, title: e.target.value })} />
-    <input placeholder="slug" value={productForm.slug} onChange={e => setProductForm({ ...productForm, slug: e.target.value })} />
-    <input placeholder="brand" value={productForm.brand} onChange={e => setProductForm({ ...productForm, brand: e.target.value })} />
-    <input type="number" placeholder="Цена" value={productForm.price} onChange={e => setProductForm({ ...productForm, price: e.target.value })} />
-    <input placeholder="Категория" value={productForm.category} onChange={e => setProductForm({ ...productForm, category: e.target.value })} />
-  </div>
-  <textarea placeholder="Описание" value={productForm.description} onChange={e => setProductForm({ ...productForm, description: e.target.value })} />
-  <h3>Фото</h3>
-  <input type="file" accept="image/*" onChange={(e) => e.target.files?.[0] && uploadImage(e.target.files[0])} />
-  <div className="image-list">{productForm.images.map(url => <img key={url} src={url} />)}</div>
-  <h3>Размеры</h3>
-  {productForm.variants.map((v, idx) => <div className="form-grid" key={idx}>
-    <input placeholder="Размер" value={v.size} onChange={e => {
-      const variants = [...productForm.variants]; variants[idx].size = e.target.value; setProductForm({ ...productForm, variants });
-    }} />
-    <input placeholder="SKU размера" value={v.sku} onChange={e => {
-      const variants = [...productForm.variants]; variants[idx].sku = e.target.value; setProductForm({ ...productForm, variants });
-    }} />
-    <input placeholder="Цвет" value={v.color} onChange={e => {
-      const variants = [...productForm.variants]; variants[idx].color = e.target.value; setProductForm({ ...productForm, variants });
-    }} />
-    <input type="number" placeholder="Остаток" value={v.stock_qty} onChange={e => {
-      const variants = [...productForm.variants]; variants[idx].stock_qty = e.target.value; setProductForm({ ...productForm, variants });
-    }} />
-  </div>)}
-  <button onClick={() => setProductForm({ ...productForm, variants: [...productForm.variants, { size: "", sku: "", stock_qty: 1, color: "" }] })}>Добавить размер</button>
-  <button onClick={createProduct}>Создать товар</button>
-</section>
+      <section>
+        <h2>Операционный контроль</h2>
+        <button
+          onClick={() => refreshOperationsAfter("queue-abandoned", "/api/ops/abandoned-carts/queue-notifications", "Уведомления поставлены в очередь.")}
+          disabled={isBusy("queue-abandoned")}
+        >
+          Поставить уведомления по брошенным корзинам
+        </button>
+        <button
+          onClick={() => refreshOperationsAfter("snapshot-inventory", "/api/ops/inventory/snapshot", "Снимок остатков создан.")}
+          disabled={isBusy("snapshot-inventory")}
+        >
+          Сделать снимок остатков
+        </button>
+        <h3>Низкие остатки</h3>
+        {!lowStock.length && <p>Товаров с низким остатком нет.</p>}
+        <div className="table">
+          {lowStock.map((item) => (
+            <div className="row" key={item.variant_id}>
+              <b>{item.product_title}</b>
+              <span>{item.sku}</span>
+              <span>stock {item.stock_qty}</span>
+              <span>reserved {item.reserved_qty}</span>
+              <span>available {item.available_qty}</span>
+            </div>
+          ))}
+        </div>
+        <h3>Брошенные корзины</h3>
+        {!abandonedCarts.length && <p>Брошенных корзин нет.</p>}
+        <div className="table">
+          {abandonedCarts.map((cart) => (
+            <div className="row" key={cart.cart_id}>
+              <b>Cart #{cart.cart_id}</b>
+              <span>User {cart.customer_id}</span>
+              <span>{cart.telegram_id}</span>
+              <span>{cart.items_count} items</span>
+              <span>{cart.total_amount}</span>
+            </div>
+          ))}
+        </div>
+      </section>
 
+      <section>
+        <h2>Audit log</h2>
+        {!auditLogs.length && <p>Записей аудита пока нет.</p>}
+        <div className="table">
+          {auditLogs.slice(0, 30).map((item) => (
+            <div className="row" key={item.id}>
+              <b>{item.action}</b>
+              <span>{item.entity_type}</span>
+              <span>{item.entity_id}</span>
+              <span>admin {item.admin_id}</span>
+              <span>{item.payload}</span>
+            </div>
+          ))}
+        </div>
+      </section>
 
-<section>
-  <h2>Операционный контроль</h2>
-  <button onClick={queueAbandoned}>Поставить уведомления по брошенным корзинам</button>
-  <button onClick={snapshotInventory}>Сделать снимок остатков</button>
-  <h3>Низкие остатки</h3>
-  <div className="table">
-    {lowStock.map(x => <div className="row" key={x.variant_id}>
-      <b>{x.product_title}</b>
-      <span>{x.sku}</span>
-      <span>stock {x.stock_qty}</span>
-      <span>reserved {x.reserved_qty}</span>
-      <span>available {x.available_qty}</span>
-    </div>)}
-  </div>
-  <h3>Брошенные корзины</h3>
-  <div className="table">
-    {abandonedCarts.map(x => <div className="row" key={x.cart_id}>
-      <b>Cart #{x.cart_id}</b>
-      <span>User {x.customer_id}</span>
-      <span>{x.telegram_id}</span>
-      <span>{x.items_count} items</span>
-      <span>{x.total_amount}</span>
-    </div>)}
-  </div>
-</section>
+      <section>
+        <h2>Товары</h2>
+        {!products.length && <p>Товары не найдены.</p>}
+        <div className="table">
+          {products.map((product) => (
+            <div className="row" key={product.id}>
+              <b>{product.title}</b>
+              <span>{product.price} {product.currency}</span>
+              <span>{product.active ? "active" : "hidden"}</span>
+            </div>
+          ))}
+        </div>
+      </section>
 
-<section>
-  <h2>Audit log</h2>
-  <div className="table">
-    {auditLogs.slice(0, 30).map(x => <div className="row" key={x.id}>
-      <b>{x.action}</b>
-      <span>{x.entity_type}</span>
-      <span>{x.entity_id}</span>
-      <span>admin {x.admin_id}</span>
-      <span>{x.payload}</span>
-    </div>)}
-  </div>
-</section>
-
-    <section>
-      <h2>Товары</h2>
-      <div className="table">
-        {products.map(p => <div className="row" key={p.id}>
-          <b>{p.title}</b>
-          <span>{p.price} {p.currency}</span>
-          <span>{p.active ? "active" : "hidden"}</span>
-        </div>)}
-      </div>
-    </section>
-
-    <section>
-      <h2>Заказы</h2>
-      <div className="table">
-        {orders.map(o => <div className="row order" key={o.id}>
-          <b>#{o.id}</b>
-          <span>{o.status}</span>
-          <span>{o.payment_status}</span>
-          <span>{o.total_amount} {o.currency}</span>
-          <select value={o.status} onChange={e => updateOrder(o.id, e.target.value)}>
-            {["created","payment_created","paid","assembling","ready","shipped","completed","cancelled","refund_requested","refunded"].map(s => <option key={s}>{s}</option>)}
-          </select>
-        </div>)}
-      </div>
-    </section>
-  </main>;
+      <section>
+        <h2>Заказы</h2>
+        {!orders.length && <p>Заказов пока нет.</p>}
+        <div className="table">
+          {orders.map((order) => {
+            const action = orderAction(order);
+            return (
+              <div className="row order" key={order.id}>
+                <b>#{order.id}</b>
+                <span>{ORDER_STATUS_LABELS[order.status] || order.status}</span>
+                <span>{order.payment_status}</span>
+                <span>{order.total_amount} {order.currency}</span>
+                {action ? (
+                  <button
+                    onClick={() => handleOrderAction(order)}
+                    disabled={isBusy(`order-${order.id}`)}
+                  >
+                    {action.label}
+                  </button>
+                ) : (
+                  <span>Нет доступного ручного перехода</span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </section>
+    </main>
+  );
 }
 
 createRoot(document.getElementById("root")).render(<App />);
