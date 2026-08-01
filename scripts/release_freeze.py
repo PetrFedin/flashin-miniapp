@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-from pathlib import Path
-from datetime import datetime
-import json
 import hashlib
+import json
+from pathlib import Path
+
+from script_time import utc_timestamp
 
 ROOT = Path(".")
 freeze_files = [
@@ -20,24 +21,32 @@ freeze_files = [
 
 manifest = {
     "version": "v51",
-    "frozen_at": datetime.utcnow().isoformat(),
+    "frozen_at": utc_timestamp(),
     "files": {},
     "rule": "Do not change architecture before live pilot. Only fix pilot-blocking bugs.",
 }
 
-for rel in freeze_files:
-    p = ROOT / rel
-    if p.exists():
-        manifest["files"][rel] = hashlib.sha256(p.read_bytes()).hexdigest()
+for relative_path in freeze_files:
+    path = ROOT / relative_path
+    if path.exists():
+        manifest["files"][relative_path] = hashlib.sha256(path.read_bytes()).hexdigest()
 
-Path("deploy/release/v51_freeze_manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+Path("deploy/release/v51_freeze_manifest.json").write_text(
+    json.dumps(manifest, ensure_ascii=False, indent=2),
+    encoding="utf-8",
+)
 Path("docs/acceptance/v51_release_freeze.md").write_text(
     "# v51 Release Freeze\n\n"
     f"Frozen at: {manifest['frozen_at']}\n\n"
     "Rule: do not add new architecture before live pilot. Only fix pilot-blocking bugs.\n\n"
     "## Frozen files\n\n"
-    + "\n".join([f"- `{k}`" for k in manifest["files"].keys()])
+    + "\n".join([f"- `{relative_path}`" for relative_path in manifest["files"]])
     + "\n",
     encoding="utf-8",
 )
-print({"written": "deploy/release/v51_freeze_manifest.json", "files": len(manifest["files"])})
+print(
+    {
+        "written": "deploy/release/v51_freeze_manifest.json",
+        "files": len(manifest["files"]),
+    }
+)

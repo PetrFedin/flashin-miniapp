@@ -15,9 +15,6 @@ from backend.models import Order
 ROOT = Path(__file__).resolve().parents[2]
 LEGACY_UTCNOW_BASELINE = {
     "backend/models.py": 54,
-    "scripts/generate_release_pack.py": 1,
-    "scripts/pilot_runner.py": 1,
-    "scripts/release_freeze.py": 1,
 }
 
 
