@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run live external-provider probes and write a private pilot evidence report."""
+"""Run or verify signed live external-provider evidence for FLASHIN pilot admission."""
 
 from __future__ import annotations
 
@@ -8,16 +8,29 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
+import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from pilot_evidence import (
+    atomic_write_text,
+    configuration_fingerprint,
+    load_json,
+    release_binding,
+    require_signing_secret,
+    sign_payload,
+    utc_now,
+    utc_timestamp,
+    validate_provider_report,
+)
 from pilot_readiness import read_env
-from script_time import utc_timestamp
+from release_control import verify_release
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_REPORT = ROOT / "docs/pilot/integration_check_report.json"
+DEFAULT_MAX_AGE_MINUTES = 60
 SECRET_KEYS = {
     "TELEGRAM_BOT_TOKEN",
     "BOT_TOKEN",
@@ -27,6 +40,7 @@ SECRET_KEYS = {
     "S3_ACCESS_KEY_ID",
     "S3_SECRET_ACCESS_KEY",
     "MEILISEARCH_MASTER_KEY",
+    "PILOT_EVIDENCE_SIGNING_SECRET",
 }
 
 
@@ -89,11 +103,37 @@ def redact(text: str, env: Mapping[str, str]) -> str:
     return result
 
 
-def _command(probe: Probe, *, host_python: bool) -> list[str]:
+def build_probe_context(env: Mapping[str, str], release: Mapping[str, Any], run_id: str) -> dict[str, str]:
+    shop_id = str(env.get("YOOKASSA_SHOP_ID", "")).strip()
+    git_commit = str(release.get("git_commit", "")).strip()
+    return_url = str(env.get("YOOKASSA_RETURN_URL", "")).strip()
+    idempotence_key = str(
+        uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"flashin:pilot-provider-probe:yookassa:{shop_id}:{git_commit}:{return_url}",
+        )
+    )
+    return {
+        "FLASHIN_PROBE_RUN_ID": run_id,
+        "FLASHIN_RELEASE_GIT_COMMIT": git_commit,
+        "FLASHIN_YOOKASSA_IDEMPOTENCE_KEY": idempotence_key,
+    }
+
+
+def _command(
+    probe: Probe,
+    *,
+    host_python: bool,
+    probe_context: Mapping[str, str] | None = None,
+) -> list[str]:
     script_path = f"scripts/{probe.script}"
     if host_python:
         return [sys.executable, script_path]
-    return ["docker", "compose", "exec", "-T", "backend", "python", script_path]
+    command = ["docker", "compose", "exec", "-T"]
+    for key, value in sorted((probe_context or {}).items()):
+        command.extend(["-e", f"{key}={value}"])
+    command.extend(["backend", "python", script_path])
+    return command
 
 
 def run_probe(
@@ -101,12 +141,14 @@ def run_probe(
     *,
     env: Mapping[str, str],
     host_python: bool,
+    probe_context: Mapping[str, str] | None = None,
     runner=subprocess.run,
 ) -> dict[str, Any]:
-    command = _command(probe, host_python=host_python)
+    command = _command(probe, host_python=host_python, probe_context=probe_context)
     process_env = dict(os.environ)
     if host_python:
         process_env.update(env)
+        process_env.update(probe_context or {})
     try:
         completed = runner(
             command,
@@ -136,52 +178,75 @@ def run_probe(
         }
 
 
+def load_current_release(root: Path = ROOT) -> dict[str, Any]:
+    state = load_json(root / "deploy/release/runtime/current_release.json")
+    archive = Path(str(state.get("archive", "")))
+    verification = verify_release(archive)
+    if not verification.get("ok"):
+        raise ValueError(
+            "Current release verification failed: "
+            + "; ".join(str(item) for item in verification.get("errors", []))
+        )
+    for key in ("release_id", "git_commit", "sha256"):
+        if str(state.get(key, "")) != str(verification.get(key, "")):
+            raise ValueError(f"Current release pointer {key} does not match the archive")
+    return state
+
+
 def build_report(
     results: Sequence[Mapping[str, Any]],
     *,
     strict: bool,
     host_python: bool,
+    env: Mapping[str, str],
+    current_release: Mapping[str, Any],
+    max_age_minutes: int,
+    run_id: str,
+    created_at: datetime | None = None,
 ) -> dict[str, Any]:
+    secret = require_signing_secret(env)
+    created = (created_at or utc_now()).astimezone(UTC)
     failed = [result for result in results if not result.get("ok")]
-    return {
+    payload: dict[str, Any] = {
         "schema_version": 1,
-        "created_at": utc_timestamp(),
+        "kind": "provider_probes",
+        "created_at": utc_timestamp(created),
+        "expires_at": utc_timestamp(created + timedelta(minutes=max_age_minutes)),
+        "max_age_minutes": max_age_minutes,
+        "run_id": run_id,
         "mode": "strict" if strict else "advisory",
         "execution": "host-python" if host_python else "backend-container",
+        "release": release_binding(current_release),
+        "configuration_fingerprint": configuration_fingerprint(env, secret),
         "go": not failed if strict else True,
         "summary": {
             "total": len(results),
             "passed": sum(1 for result in results if result.get("ok")),
             "failed": len(failed),
         },
+        "side_effects": {
+            "yookassa": "1.00 RUB pending test payment; idempotent per release and return URL",
+        },
         "results": list(results),
     }
-
-
-def _atomic_write(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_name, path)
-    finally:
-        if os.path.exists(temporary_name):
-            os.unlink(temporary_name)
+    return sign_payload(payload, secret)
 
 
 def write_report(path: Path, report: Mapping[str, Any]) -> tuple[Path, Path]:
     json_path = path
     markdown_path = path.with_suffix(".md")
-    _atomic_write(json_path, json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+    atomic_write_text(json_path, json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+    release = report.get("release") if isinstance(report.get("release"), Mapping) else {}
     lines = [
-        "# FLASHIN provider integration probes",
+        "# FLASHIN provider integration evidence",
         "",
         f"Decision: **{'GO' if report.get('go') else 'NO-GO'}**",
         "",
         f"Created: `{report.get('created_at')}`",
+        f"Expires: `{report.get('expires_at')}`",
+        f"Release: `{release.get('release_id', 'unknown')}` / `{release.get('git_commit', 'unknown')}`",
+        "",
+        "YooKassa probe creates one 1.00 RUB pending payment idempotently per release and return URL.",
         "",
     ]
     for result in report.get("results", []):
@@ -189,37 +254,136 @@ def write_report(path: Path, report: Mapping[str, Any]) -> tuple[Path, Path]:
             f"- [{'x' if result.get('ok') else ' '}] `{result.get('name')}` — "
             f"exit={result.get('returncode')}"
         )
-    _atomic_write(markdown_path, "\n".join(lines) + "\n")
+    atomic_write_text(markdown_path, "\n".join(lines) + "\n")
     return json_path, markdown_path
 
 
-def main(argv: list[str] | None = None) -> int:
+def verify_existing_report(
+    path: Path,
+    *,
+    env: Mapping[str, str],
+    current_release: Mapping[str, Any],
+    max_age_minutes: int,
+) -> tuple[dict[str, Any] | None, list[str]]:
+    try:
+        report = load_json(path)
+    except ValueError as exc:
+        return None, [str(exc)]
+    errors = validate_provider_report(
+        report,
+        env=env,
+        current_release=current_release,
+        max_age_minutes=max_age_minutes,
+    )
+    return report, errors
+
+
+def _safe_summary(report: Mapping[str, Any] | None, errors: Sequence[str]) -> dict[str, Any]:
+    return {
+        "go": not errors and bool(report and report.get("go")),
+        "created_at": report.get("created_at") if report else None,
+        "expires_at": report.get("expires_at") if report else None,
+        "release": report.get("release") if report else None,
+        "summary": report.get("summary") if report else None,
+        "errors": list(errors),
+    }
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--advisory",
+    subparsers = parser.add_subparsers(dest="command")
+
+    run = subparsers.add_parser("run", help="Run live probes and create signed evidence")
+    run.add_argument(
+        "--acknowledge-side-effects",
         action="store_true",
-        help="Collect evidence without blocking on failures; strict is the default",
+        help="Acknowledge that the YooKassa probe creates a 1.00 RUB pending payment",
     )
-    parser.add_argument(
-        "--host-python",
-        action="store_true",
-        help="Run probes on the host instead of the live backend container",
-    )
-    parser.add_argument("--report", default=str(DEFAULT_REPORT))
-    parser.add_argument(
-        "--quiet",
-        action="store_true",
-        help="Print only the safe decision summary",
-    )
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Print detailed probe output; the default output is a safe summary",
-    )
-    args = parser.parse_args(argv)
+    run.add_argument("--force", action="store_true", help="Re-run even if valid fresh evidence exists")
+    run.add_argument("--advisory", action="store_true")
+    run.add_argument("--host-python", action="store_true")
+    run.add_argument("--report", default=str(DEFAULT_REPORT))
+    run.add_argument("--max-age-minutes", type=int)
+    run.add_argument("--quiet", action="store_true")
+    run.add_argument("--verbose", action="store_true")
+
+    verify = subparsers.add_parser("verify", help="Verify existing signed evidence without side effects")
+    verify.add_argument("--report", default=str(DEFAULT_REPORT))
+    verify.add_argument("--max-age-minutes", type=int)
+    verify.add_argument("--quiet", action="store_true")
+    verify.add_argument("--verbose", action="store_true")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    raw_args = list(sys.argv[1:] if argv is None else argv)
+    if not raw_args or raw_args[0].startswith("-"):
+        raw_args.insert(0, "verify")
+    args = build_parser().parse_args(raw_args)
 
     env = read_env(ROOT / ".env")
+    try:
+        require_signing_secret(env)
+        current_release = load_current_release(ROOT)
+    except ValueError as exc:
+        print(json.dumps({"go": False, "errors": [str(exc)]}, ensure_ascii=False))
+        return 1
+
+    report_path = Path(args.report)
+    configured_max_age = str(
+        env.get("PILOT_PROVIDER_EVIDENCE_MAX_AGE_MINUTES", DEFAULT_MAX_AGE_MINUTES)
+    ).strip()
+    try:
+        max_age_minutes = int(args.max_age_minutes or configured_max_age)
+    except ValueError:
+        print(json.dumps({"go": False, "errors": ["provider evidence max age must be an integer"]}))
+        return 1
+    if max_age_minutes < 5 or max_age_minutes > 240:
+        print(json.dumps({"go": False, "errors": ["max age must be between 5 and 240 minutes"]}))
+        return 1
+
+    if args.command == "verify":
+        report, errors = verify_existing_report(
+            report_path,
+            env=env,
+            current_release=current_release,
+            max_age_minutes=max_age_minutes,
+        )
+        summary = _safe_summary(report, errors)
+        if args.verbose and report is not None and not args.quiet:
+            print(json.dumps({"verification": summary, "report": report}, ensure_ascii=False, indent=2))
+        else:
+            print(json.dumps(summary, ensure_ascii=False))
+        return 0 if summary["go"] else 1
+
+    existing, existing_errors = verify_existing_report(
+        report_path,
+        env=env,
+        current_release=current_release,
+        max_age_minutes=max_age_minutes,
+    )
+    if existing is not None and not existing_errors and not args.force:
+        summary = _safe_summary(existing, [])
+        summary["reused"] = True
+        print(json.dumps(summary, ensure_ascii=False))
+        return 0
+    if not args.acknowledge_side_effects:
+        print(
+            json.dumps(
+                {
+                    "go": False,
+                    "errors": [
+                        "Use run --acknowledge-side-effects: YooKassa creates a 1.00 RUB pending payment"
+                    ],
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 1
+
     strict = not args.advisory
+    run_id = uuid.uuid4().hex
+    probe_context = build_probe_context(env, current_release, run_id)
     results: list[dict[str, Any]] = []
     for item in build_probe_plan(env):
         probe = item["probe"]
@@ -234,17 +398,32 @@ def main(argv: list[str] | None = None) -> int:
                 }
             )
             continue
-        results.append(run_probe(probe, env=env, host_python=args.host_python))
+        results.append(
+            run_probe(
+                probe,
+                env=env,
+                host_python=args.host_python,
+                probe_context=probe_context,
+            )
+        )
 
-    report = build_report(results, strict=strict, host_python=args.host_python)
-    json_path, markdown_path = write_report(Path(args.report), report)
+    report = build_report(
+        results,
+        strict=strict,
+        host_python=args.host_python,
+        env=env,
+        current_release=current_release,
+        max_age_minutes=max_age_minutes,
+        run_id=run_id,
+    )
+    json_path, markdown_path = write_report(report_path, report)
     if args.verbose and not args.quiet:
         print(json.dumps(report, ensure_ascii=False, indent=2))
         print({"json": str(json_path), "markdown": str(markdown_path)})
     else:
         print(
             json.dumps(
-                {"go": report["go"], "mode": report["mode"], "summary": report["summary"]},
+                _safe_summary(report, [] if report["go"] else ["one or more probes failed"]),
                 ensure_ascii=False,
             )
         )

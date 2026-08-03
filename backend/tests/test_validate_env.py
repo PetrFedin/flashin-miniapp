@@ -26,6 +26,11 @@ def _valid_production_env() -> dict[str, str]:
         "YOOKASSA_SECRET_KEY": "yookassa-secret",
         "YOOKASSA_RETURN_URL": "https://mini.flashin.store/payment-result",
         "OUTBOX_SIGNING_SECRET": "o" * 48,
+        "PILOT_EVIDENCE_SIGNING_SECRET": "p" * 48,
+        "PILOT_PROVIDER_EVIDENCE_MAX_AGE_MINUTES": "60",
+        "PILOT_LIVE_GATE_MAX_AGE_MINUTES": "30",
+        "PILOT_ADMISSION_MAX_AGE_MINUTES": "60",
+        "PILOT_ROLLBACK_DRILL_MAX_AGE_DAYS": "30",
         "MEDIA_STORAGE": "r2",
         "MEDIA_PUBLIC_BASE_URL": "https://cdn.flashin.store",
         "S3_ENDPOINT_URL": "https://storage.example.com",
@@ -116,3 +121,33 @@ def test_missing_moysklad_sale_price_type_is_rejected(tmp_path):
 
     assert result.returncode == 1
     assert "MOYSKLAD_SALE_PRICE_TYPE" in result.stdout
+
+
+def test_short_pilot_evidence_secret_is_rejected(tmp_path):
+    values = _valid_production_env()
+    values["PILOT_EVIDENCE_SIGNING_SECRET"] = "too-short"
+
+    result = _run_validator(tmp_path, values)
+
+    assert result.returncode == 1
+    assert "PILOT_EVIDENCE_SIGNING_SECRET must contain at least 32 characters" in result.stdout
+
+
+def test_reused_pilot_evidence_secret_is_rejected(tmp_path):
+    values = _valid_production_env()
+    values["PILOT_EVIDENCE_SIGNING_SECRET"] = values["JWT_SECRET"]
+
+    result = _run_validator(tmp_path, values)
+
+    assert result.returncode == 1
+    assert "PILOT_EVIDENCE_SIGNING_SECRET must differ from JWT_SECRET" in result.stdout
+
+
+def test_pilot_evidence_ttl_outside_safe_range_is_rejected(tmp_path):
+    values = _valid_production_env()
+    values["PILOT_LIVE_GATE_MAX_AGE_MINUTES"] = "121"
+
+    result = _run_validator(tmp_path, values)
+
+    assert result.returncode == 1
+    assert "PILOT_LIVE_GATE_MAX_AGE_MINUTES must be between 5 and 120" in result.stdout

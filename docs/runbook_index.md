@@ -1,6 +1,14 @@
 # Runbook Index
 
-## Launch
+## Pilot launch
+
+- `docs/pilot/pilot_launch_runbook.md`
+- `docs/pilot/provider_evidence_and_admission.md`
+- `docs/pilot/provider_probe_runbook.md`
+- `docs/pilot/release_and_rollback_runbook.md`
+- `docs/acceptance/pilot_acceptance_signoff.md`
+
+## Launch and release
 
 - `README.md`
 - `docs/v40_one_command_launch.md`

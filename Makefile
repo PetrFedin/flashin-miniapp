@@ -1,4 +1,4 @@
-.PHONY: help init build up down logs migrate health workers search monitoring backup restore test preflight clean deploy-prod rollback verify-backup seed-admin validate-env openapi release-notes diagnostics setup-wizard check-integrations readiness pilot-sheet readiness-gate pilot-gate loadtest performance-budget security-audit media-jobs loadtest-catalog loadtest-webhooks real-e2e grafana-dashboards simple-start launch-local launch-production connected-audit simplicity-score env-todo pilot-runner pilot-init pilot-record pilot-status pilot-final release-pack release-freeze release-create release-verify release-status pilot-evidence package-audit test-all transaction-integrity
+.PHONY: help init build up down logs migrate health workers search monitoring backup restore test preflight clean deploy-prod rollback rollback-drill rollback-drill-status verify-backup seed-admin validate-env openapi release-notes diagnostics setup-wizard check-integrations provider-probes readiness pilot-sheet readiness-gate pilot-gate loadtest performance-budget security-audit media-jobs loadtest-catalog loadtest-webhooks real-e2e grafana-dashboards simple-start launch-local launch-production connected-audit simplicity-score env-todo pilot-runner pilot-init pilot-record pilot-status pilot-final pilot-admit pilot-admission-status release-create release-verify release-status release-pack release-freeze pilot-evidence package-audit test-all transaction-integrity
 
 help:
 	@echo "FLASHIN commands:"
@@ -14,8 +14,11 @@ help:
 	@echo "  make monitoring            - start Prometheus/Grafana"
 	@echo "  make test                  - run backend tests"
 	@echo "  make readiness-gate        - strict predeploy GO/NO-GO gate"
-	@echo "  make pilot-gate            - strict live pilot GO/NO-GO gate"
-	@echo "  make pilot-runner          - initialize or show executable 20-order pilot control"
+	@echo "  make provider-probes       - run side-effectful live provider probes once"
+	@echo "  make pilot-gate            - verify public endpoints and signed provider evidence"
+	@echo "  make rollback-drill        - execute rollback and record signed drill evidence"
+	@echo "  make pilot-admit           - create signed human/business pilot admission"
+	@echo "  make pilot-runner          - initialize/show admission-gated 20-order control"
 	@echo "  make pilot-status          - recalculate current pilot decision"
 	@echo "  make pilot-final           - require all 20 pilot scenarios and final GO"
 	@echo "  make release-create        - build immutable tracked-files release ZIP"
@@ -78,8 +81,15 @@ deploy-prod:
 	./scripts/deploy_production.sh
 
 rollback:
-	@echo "Usage: make rollback [RELEASE=previous|current|archive.zip] [BACKUP=backup.sql.gz]"
+	@echo "Usage: make rollback RELEASE=previous BACKUP=backups/flashin_xxx.sql.gz"
 	./scripts/rollback.sh $(if $(RELEASE),$(RELEASE),previous) $(BACKUP)
+
+rollback-drill:
+	@echo "Usage: make rollback-drill RELEASE=previous BACKUP=backups/flashin_xxx.sql.gz"
+	ROLLBACK_DRILL=1 ./scripts/rollback.sh $(if $(RELEASE),$(RELEASE),previous) $(BACKUP)
+
+rollback-drill-status:
+	python3 scripts/pilot_evidence.py verify-rollback
 
 verify-backup:
 	@echo "Usage: make verify-backup FILE=backups/flashin_xxx.sql.gz"
@@ -106,7 +116,11 @@ setup-wizard:
 	python3 scripts/setup_wizard.py
 
 check-integrations:
-	python3 scripts/check_integrations.py
+	python3 scripts/check_integrations.py verify
+
+provider-probes:
+	@echo "Creates one idempotent 1.00 RUB YooKassa pending payment for the current release."
+	python3 scripts/check_integrations.py run --acknowledge-side-effects $(ARGS)
 
 readiness:
 	python3 scripts/production_readiness_report.py
@@ -168,10 +182,18 @@ simplicity-score:
 env-todo:
 	python3 scripts/generate_env_todo.py
 
+pilot-admit:
+	@echo "Usage: make pilot-admit ARGS='--business-owner ... --operations-owner ... --technical-owner ... --legal-owner ... --support-owner ... --legal-documents-approved --support-process-ready --rollback-drill-completed --provider-probe-side-effect-understood --pilot-scope-limited-to-20-orders'"
+	python3 scripts/pilot_admission.py create $(ARGS)
+
+pilot-admission-status:
+	python3 scripts/pilot_admission.py verify
+
 pilot-runner:
 	python3 scripts/pilot_runner.py
 
 pilot-init:
+	python3 scripts/pilot_admission.py verify
 	python3 scripts/pilot_control.py init
 
 pilot-record:
@@ -185,7 +207,7 @@ pilot-final:
 	python3 scripts/pilot_control.py validate --final
 
 release-create:
-	python3 scripts/release_control.py create
+	python3 scripts/release_control.py create --print-path
 
 release-verify:
 	@echo "Usage: make release-verify FILE=deploy/release/builds/flashin_xxx.zip"
