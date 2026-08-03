@@ -6,7 +6,7 @@
 
 При `PILOT_RUNTIME_ENFORCED=true` новый checkout закрыт по умолчанию. Он становится доступен только после:
 
-1. успешной production-выкладки;
+1. двух успешных production-выкладок версии с runtime guard — и текущий, и предыдущий immutable release должны поддерживать безопасный откат;
 2. signed admission со статусом GO;
 3. инициализации 20-сценарного pilot state;
 4. явного arm для известных Telegram ID.
@@ -30,7 +30,9 @@
 - signed admission-файл не изменён;
 - HMAC-подпись admission корректна;
 - configuration fingerprint совпадает с текущим production environment;
-- admission относится к текущему immutable release;
+- admission относится к текущему immutable release и тому previous release, который доступен для отката;
+- current и previous release имеют подписанную capability `pilot_runtime_guard`;
+- capability связана с точными SHA-256 архива, Git commit и release ID;
 - provider, live-gate и rollback evidence имеют прежние SHA-256;
 - pilot state не был заменён после arm;
 - решение pilot state не равно `STOP`;
@@ -57,11 +59,30 @@ Backend получает только read-only доступ к:
 
 Allowlist хранится только в БД. Команда status показывает её размер, но не Telegram ID.
 
+### Защищённые current и previous releases
+
+После внедрения runtime guard необходимо выполнить минимум две успешные выкладки этого защищённого кода. При каждой успешной выкладке production script:
+
+1. проверяет immutable ZIP;
+2. убеждается, что в архиве присутствуют migration, runtime service, checkout wiring, read-only evidence mounts и STOP-логика deploy/rollback;
+3. записывает в release pointer HMAC-подписанную capability `pilot_runtime_guard`.
+
+Проверка обоих указателей:
+
+```bash
+python3 scripts/pilot_release_capability.py verify --slot both --env .env
+```
+
+Ожидается `ok=true` для `current` и `previous`. Если previous относится к версии без runtime guard, открывать пилот нельзя: сначала выполните ещё одну успешную защищённую production-выкладку, затем новый rollback drill и admission.
+
+Capability не доверяет одному JSON-флагу: при создании она формируется только после инспекции immutable release ZIP и затем связывается подписью с SHA-256 архива и Git commit.
+
 ## Открытие checkout
 
 Сначала должна быть полностью выполнена admission-последовательность и создан pilot state:
 
 ```bash
+python3 scripts/pilot_release_capability.py verify --slot both --env .env
 make pilot-admission-status
 make pilot-runner
 ```
@@ -102,11 +123,18 @@ make pilot-runtime-status
 - `make rollback`;
 - `make rollback-drill`.
 
+Rollback повторно принудительно переводит восстановленную БД в `stopped` **до запуска публичного backend**, поэтому backup с историческим `active` не создаёт даже короткого окна для нового заказа.
+
 Если backend не может подтвердить остановку существующего active runtime, deploy/rollback завершается ошибкой.
 
 ## Возобновление после исправления
 
-После deploy или rollback старый admission недействителен, потому что изменился current release. Для продолжения необходимо заново выполнить live evidence/admission и затем:
+После deploy или rollback старый admission недействителен, потому что изменился current release. Для продолжения необходимо:
+
+1. проверить capability current и previous;
+2. заново выполнить provider/live evidence и admission;
+3. убедиться, что pilot state не заменён, а STOP-причина устранена;
+4. выполнить resume:
 
 ```bash
 make pilot-runtime-arm ARGS='\
@@ -120,7 +148,7 @@ Resume сохраняет тот же run ID, уже занятые слоты �
 ## Реакция API
 
 - HTTP `423` — runtime закрыт, остановлен, завершён, клиент не в allowlist или pilot state имеет STOP;
-- HTTP `503` — нарушена целостность доказательств, release binding, счётчика или файлов;
+- HTTP `503` — нарушена целостность доказательств, release capability, release binding, счётчика или файлов;
 - успешный idempotent retry ранее созданного заказа возвращает прежний `Order` и не расходует слот.
 
 Клиент получает только общий безопасный текст. Конкретная причина доступна оператору через `make pilot-runtime-status`; Telegram ID и секреты в ответ API не включаются.
@@ -131,7 +159,8 @@ Resume сохраняет тот же run ID, уже занятые слоты �
 
 - отключать `PILOT_RUNTIME_ENFORCED` в production;
 - увеличивать лимит выше 20;
-- редактировать runtime-счётчик или slot rows вручную;
+- открывать пилот, если current или previous не имеют валидной подписанной capability;
+- редактировать release capability, runtime-счётчик или slot rows вручную;
 - заменять pilot state после первого arm;
 - продолжать после STOP без нового admission;
 - публиковать allowlist, admission/evidence или реальные идентификаторы заказов в GitHub.
