@@ -8,8 +8,13 @@ export COMPOSE_FILE=${COMPOSE_FILE:-"docker-compose.yml:docker-compose.productio
 export COMPOSE_PROFILES=${COMPOSE_PROFILES:-"production,workers,scheduler,search"}
 
 CONTROL_SCRIPT="scripts/release_control.py"
+RESTORE_SCRIPT="scripts/restore_postgres.sh"
 if [ ! -f "$CONTROL_SCRIPT" ]; then
   echo "Release control script is missing: $CONTROL_SCRIPT" >&2
+  exit 1
+fi
+if [ ! -f "$RESTORE_SCRIPT" ]; then
+  echo "Safe restore script is missing: $RESTORE_SCRIPT" >&2
   exit 1
 fi
 
@@ -47,6 +52,8 @@ docker compose down
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
 cp "$CONTROL_SCRIPT" "$TMP_DIR/release_control.py"
+cp "$RESTORE_SCRIPT" "$TMP_DIR/restore_postgres.sh"
+chmod +x "$TMP_DIR/restore_postgres.sh"
 python3 "$TMP_DIR/release_control.py" extract --archive "$RELEASE" --destination "$TMP_DIR/release" >/dev/null
 rm -f "$TMP_DIR/release/release_manifest.json"
 
@@ -88,7 +95,7 @@ if ! docker compose exec -T db sh -ec 'pg_isready -U "$POSTGRES_USER" -d "$POSTG
 fi
 
 if [ -n "$BACKUP" ]; then
-  scripts/restore_postgres.sh --yes "$BACKUP"
+  "$TMP_DIR/restore_postgres.sh" --yes "$BACKUP"
 else
   echo "Code-only rollback explicitly authorized; database was not modified."
 fi
