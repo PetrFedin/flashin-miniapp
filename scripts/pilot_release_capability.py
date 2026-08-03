@@ -89,6 +89,10 @@ def inspect_runtime_guard(archive: Path) -> list[str]:
                     content = bundle.read(script).decode("utf-8")
                     if "pilot_runtime.py _stop" not in content:
                         errors.append(f"{script} does not stop active pilot runtime")
+            if "scripts/rollback.sh" in files:
+                rollback = bundle.read("scripts/rollback.sh").decode("utf-8")
+                if "pilot_release_capability.py inspect --archive" not in rollback:
+                    errors.append("scripts/rollback.sh does not reject unguarded target archives")
     except (OSError, KeyError, UnicodeDecodeError, zipfile.BadZipFile, json.JSONDecodeError) as exc:
         errors.append(f"Unable to inspect release runtime capability: {exc}")
     return list(dict.fromkeys(errors))
@@ -168,6 +172,8 @@ def parser() -> argparse.ArgumentParser:
     verify = sub.add_parser("verify", help="Verify signed runtime capabilities")
     verify.add_argument("--slot", choices=("current", "previous", "both"), default="both")
     verify.add_argument("--env", type=Path, default=ROOT / ".env")
+    inspect = sub.add_parser("inspect", help="Reject an immutable archive without runtime guard")
+    inspect.add_argument("--archive", type=Path, required=True)
     return command
 
 
@@ -190,6 +196,19 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
             return 0
+        if args.command == "inspect":
+            errors = inspect_runtime_guard(args.archive)
+            print(
+                json.dumps(
+                    {
+                        "ok": not errors,
+                        "archive": str(args.archive.resolve()),
+                        "errors": errors,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return 1 if errors else 0
         slots = ("current", "previous") if args.slot == "both" else (args.slot,)
         errors = {slot: verify_slot(slot, args.env) for slot in slots}
         failed = {slot: values for slot, values in errors.items() if values}
