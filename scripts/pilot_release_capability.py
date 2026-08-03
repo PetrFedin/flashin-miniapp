@@ -91,8 +91,15 @@ def inspect_runtime_guard(archive: Path) -> list[str]:
                         errors.append(f"{script} does not stop active pilot runtime")
             if "scripts/rollback.sh" in files:
                 rollback = bundle.read("scripts/rollback.sh").decode("utf-8")
-                if "pilot_release_capability.py inspect --archive" not in rollback:
-                    errors.append("scripts/rollback.sh does not reject unguarded target archives")
+                for marker in (
+                    'CAPABILITY_SCRIPT="scripts/pilot_release_capability.py"',
+                    '"$CAPABILITY_SCRIPT" inspect --archive',
+                ):
+                    if marker not in rollback:
+                        errors.append(
+                            "scripts/rollback.sh does not reject unguarded target archives"
+                        )
+                        break
     except (OSError, KeyError, UnicodeDecodeError, zipfile.BadZipFile, json.JSONDecodeError) as exc:
         errors.append(f"Unable to inspect release runtime capability: {exc}")
     return list(dict.fromkeys(errors))
