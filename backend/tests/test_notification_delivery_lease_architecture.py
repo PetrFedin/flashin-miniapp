@@ -3,6 +3,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKER = ROOT / "bot" / "send_notifications.py"
+SERVICE = ROOT / "backend" / "services" / "notification_delivery.py"
 MODEL = ROOT / "backend" / "notification_models.py"
 MIGRATION = (
     ROOT
@@ -29,33 +30,47 @@ def test_notification_delivery_state_maps_indexed_lease_token():
 
 
 def test_claim_rotates_a_unique_token_per_notification():
-    source = WORKER.read_text(encoding="utf-8")
+    service = SERVICE.read_text(encoding="utf-8")
 
-    assert "def _claim_pending_batch_db(" in source
-    assert ".with_for_update(of=Notification, skip_locked=True)" in source
-    assert "lease_token = uuid.uuid4().hex" in source
-    assert "state.lease_token = lease_token" in source
-    assert '"lease_token": lease_token' in source
-    assert "limit < 1 or limit > 200" in source
+    assert "def claim_pending_batch(" in service
+    assert ".with_for_update(of=Notification, skip_locked=True)" in service
+    assert "lease_token = uuid.uuid4().hex" in service
+    assert "state.lease_token = lease_token" in service
+    assert '"lease_token": lease_token' in service
+    assert "limit < 1 or limit > 200" in service
 
 
-def test_send_path_renews_and_finishes_only_current_owner():
-    source = WORKER.read_text(encoding="utf-8")
+def test_service_renews_and_finishes_only_current_owner():
+    service = SERVICE.read_text(encoding="utf-8")
 
-    assert "def _renew_delivery_lease_db(" in source
-    assert "def _finish_delivery_db(" in source
-    assert source.count("NotificationDeliveryState.lease_token == normalized_token") >= 2
-    assert source.count("_renew_delivery_lease(notification_id, lease_token)") >= 2
-    assert "state.lease_token = None" in source
-    assert "await bot.send_message(" in source
-    assert source.index("_renew_delivery_lease(notification_id, lease_token)") < source.index(
+    assert "def renew_delivery_lease(" in service
+    assert "def finish_delivery(" in service
+    assert service.count("NotificationDeliveryState.lease_token == normalized_token") >= 2
+    assert "state.lease_token = None" in service
+    assert "db.delete(state)" in service
+    assert "reset_notification_delivery" in service
+    assert service.count("state.lease_token = None") >= 2
+
+
+def test_bot_is_a_thin_transport_adapter_and_renews_before_send():
+    worker = WORKER.read_text(encoding="utf-8")
+
+    assert "from backend.services.notification_delivery import (" in worker
+    assert "_claim_pending_batch_db = claim_pending_batch" in worker
+    assert "_renew_delivery_lease_db = renew_delivery_lease" in worker
+    assert "_finish_delivery_db = finish_delivery" in worker
+    assert worker.count("_renew_delivery_lease(notification_id, lease_token)") >= 2
+    assert "await bot.send_message(" in worker
+    assert worker.index("_renew_delivery_lease(notification_id, lease_token)") < worker.index(
         "await bot.send_message("
     )
 
 
-def test_stale_worker_smoke_uses_real_transactional_postgres():
+def test_stale_worker_smoke_uses_backend_service_and_transactional_postgres():
     source = SMOKE.read_text(encoding="utf-8")
 
+    assert "from backend.services.notification_delivery import (" in source
+    assert "from bot.send_notifications" not in source
     assert 'join_transaction_mode="create_savepoint"' in source
     assert "outer_transaction.rollback()" in source
     assert "second_token != first_token" in source
