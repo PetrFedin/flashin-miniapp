@@ -1,4 +1,4 @@
-.PHONY: help init build up down logs migrate health workers search monitoring backup restore test preflight clean deploy-prod rollback verify-backup seed-admin validate-env openapi release-notes diagnostics setup-wizard check-integrations readiness pilot-sheet readiness-gate pilot-gate loadtest performance-budget security-audit media-jobs loadtest-catalog loadtest-webhooks real-e2e grafana-dashboards simple-start launch-local launch-production connected-audit simplicity-score env-todo pilot-runner pilot-init pilot-record pilot-status pilot-final release-pack release-freeze pilot-evidence package-audit test-all transaction-integrity
+.PHONY: help init build up down logs migrate health workers search monitoring backup restore test preflight clean deploy-prod rollback verify-backup seed-admin validate-env openapi release-notes diagnostics setup-wizard check-integrations readiness pilot-sheet readiness-gate pilot-gate loadtest performance-budget security-audit media-jobs loadtest-catalog loadtest-webhooks real-e2e grafana-dashboards simple-start launch-local launch-production connected-audit simplicity-score env-todo pilot-runner pilot-init pilot-record pilot-status pilot-final release-pack release-freeze release-create release-verify release-status pilot-evidence package-audit test-all transaction-integrity
 
 help:
 	@echo "FLASHIN commands:"
@@ -18,7 +18,10 @@ help:
 	@echo "  make pilot-runner          - initialize or show executable 20-order pilot control"
 	@echo "  make pilot-status          - recalculate current pilot decision"
 	@echo "  make pilot-final           - require all 20 pilot scenarios and final GO"
+	@echo "  make release-create        - build immutable tracked-files release ZIP"
+	@echo "  make release-status        - show current/previous local release pointers"
 	@echo "  make backup                - backup PostgreSQL"
+	@echo "  make rollback              - restore previous verified release and database backup"
 
 init:
 	./scripts/bootstrap.sh
@@ -75,8 +78,8 @@ deploy-prod:
 	./scripts/deploy_production.sh
 
 rollback:
-	@echo "Usage: make rollback RELEASE=previous.zip BACKUP=backup.sql.gz"
-	./scripts/rollback.sh $(RELEASE) $(BACKUP)
+	@echo "Usage: make rollback [RELEASE=previous|current|archive.zip] [BACKUP=backup.sql.gz]"
+	./scripts/rollback.sh $(if $(RELEASE),$(RELEASE),previous) $(BACKUP)
 
 verify-backup:
 	@echo "Usage: make verify-backup FILE=backups/flashin_xxx.sql.gz"
@@ -181,12 +184,19 @@ pilot-status:
 pilot-final:
 	python3 scripts/pilot_control.py validate --final
 
-release-pack:
-	python3 scripts/generate_release_pack.py
+release-create:
+	python3 scripts/release_control.py create
 
+release-verify:
+	@echo "Usage: make release-verify FILE=deploy/release/builds/flashin_xxx.zip"
+	python3 scripts/release_control.py verify --archive $(FILE)
 
-release-freeze:
-	python3 scripts/release_freeze.py
+release-status:
+	python3 scripts/release_control.py status
+
+release-pack: release-create
+
+release-freeze: release-create
 
 pilot-evidence:
 	python3 scripts/pilot_evidence_log.py
