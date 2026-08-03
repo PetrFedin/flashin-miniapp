@@ -96,7 +96,7 @@ def _artifact_error_codes(errors: list[str]) -> list[str]:
     codes: list[str] = []
     for error in errors:
         value = str(error).lower()
-        if "signing secret" in value:
+        if "signing secret" in value or "signing_secret" in value:
             code = "signing_configuration_invalid"
         elif "configuration fingerprint" in value:
             code = "configuration_fingerprint_mismatch"
