@@ -19,6 +19,7 @@ required = {
         "scripts/launch.py", "scripts/start_simple.sh", "scripts/preflight.py",
         "scripts/readiness_gate.py", "scripts/check_integrations.py",
         "scripts/pilot_evidence.py", "scripts/pilot_admission.py", "scripts/pilot_runtime.py",
+        "scripts/pilot_release_capability.py",
         "scripts/test_all.sh", "scripts/pilot_control.py", "scripts/pilot_runner.py",
         "scripts/generate_20_order_pilot_sheet.py", "scripts/release_control.py",
         "backend/tests/test_pilot_control.py", "backend/tests/test_pilot_readiness.py",
@@ -26,6 +27,7 @@ required = {
         "backend/tests/test_release_shell_safety.py", "backend/tests/test_pilot_evidence.py",
         "backend/tests/test_pilot_admission.py", "backend/tests/test_pilot_runtime.py",
         "backend/tests/test_pilot_runtime_cli.py", "backend/tests/test_pilot_runtime_wiring.py",
+        "backend/tests/test_pilot_release_capability.py",
     ],
     "integrations": [
         "backend/api/payments.py", "backend/api/moysklad.py",
