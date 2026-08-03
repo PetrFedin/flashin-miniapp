@@ -25,6 +25,7 @@ from ..security import get_current_customer
 from ..services.checkout_validation import normalize_checkout_input
 from ..services.delivery import calculate_delivery_price
 from ..services.inventory import reserve_variant
+from ..services.pilot_runtime import acquire_pilot_checkout, record_pilot_order
 from ..services.promos import calculate_discount
 
 router = APIRouter(prefix="/orders", tags=["orders"])
@@ -299,6 +300,11 @@ def checkout(
         if existing_order:
             return existing_order
 
+        pilot_context = acquire_pilot_checkout(
+            db,
+            customer=locked_customer,
+            settings=get_settings(),
+        )
         cart = _load_locked_active_cart(db, customer.id)
         if not cart:
             raise HTTPException(status_code=409, detail="No active cart available for checkout")
@@ -365,6 +371,12 @@ def checkout(
         db.add(order)
         db.flush()
         attempt.order_id = order.id
+        record_pilot_order(
+            db,
+            context=pilot_context,
+            order=order,
+            customer=locked_customer,
+        )
 
         for cart_item in sorted(cart.items, key=lambda item: item.variant_id):
             variant = reserve_variant(db, cart_item.variant_id, cart_item.quantity)
