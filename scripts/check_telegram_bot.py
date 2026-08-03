@@ -28,7 +28,7 @@ def main() -> int:
         return 1
 
     result = payload.get("result") if isinstance(payload, dict) else None
-    if not payload.get("ok") or not isinstance(result, dict) or not result.get("id"):
+    if not isinstance(payload, dict) or not payload.get("ok") or not isinstance(result, dict) or not result.get("id"):
         print("Telegram probe failed: invalid getMe response")
         return 1
     print(
