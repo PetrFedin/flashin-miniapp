@@ -409,6 +409,14 @@ def build_live_checks(root: Path, env: Mapping[str, str] | None = None) -> list[
                 },
             )
         )
+    checks.append(
+        run_command(
+            "live:provider_integrations",
+            ["python3", "scripts/check_integrations.py"],
+            root=root,
+            timeout=300,
+        )
+    )
     return checks
 
 
