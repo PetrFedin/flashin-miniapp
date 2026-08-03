@@ -74,8 +74,12 @@ def _mark_retry_required(db: Session, return_id: int, order_id: int) -> None:
             status_code=503,
             detail="Refund failed and the pilot safety circuit could not be applied",
         ) from exc
-    except Exception:
+    except Exception as exc:
         db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail="Refund retry state and pilot safety stop could not be persisted",
+        ) from exc
 
 
 def _mark_review_required(
@@ -106,8 +110,12 @@ def _mark_review_required(
             status_code=503,
             detail="Refund review failed and the pilot safety circuit could not be applied",
         ) from exc
-    except Exception:
+    except Exception as exc:
         db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail="Refund review state and pilot safety stop could not be persisted",
+        ) from exc
 
 
 def _trip_refund_after_rollback(order_id: int, reason: str, original: HTTPException) -> None:
