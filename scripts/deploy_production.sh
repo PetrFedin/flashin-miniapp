@@ -160,4 +160,5 @@ echo "Deploy completed and release promoted: $release_archive"
 if [ -n "$backup_file" ]; then
   echo "Rollback drill input: scripts/rollback.sh previous '$backup_file'"
 fi
+echo "Run 'make pilot-gate' only after the guarded current and previous releases, rollback drill and provider evidence are ready."
 echo "Pilot runtime remains stopped. Re-run admission and 'make pilot-runtime-arm' before checkout."
