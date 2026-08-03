@@ -6,31 +6,12 @@ from backend.config import get_settings
 from backend.database import utcnow_naive
 from backend.jobs.campaign_jobs import queue_due_campaigns
 from backend.jobs.event_jobs import run_event_dispatcher
+from backend.jobs.moysklad_jobs import sync_moysklad_and_rebuild
 from backend.jobs.ops_jobs import create_inventory_snapshot, queue_abandoned_cart_notifications
 from backend.jobs.outbox_jobs import process_outbox
 from backend.jobs.refund_jobs import reconcile_pending_refunds
 from backend.jobs.scheduler_lock import run_locked_async_db_job, run_locked_db_job
 from backend.jobs.sla_jobs import mark_overdue_sla
-from backend.services.crm import recompute_all_profiles
-from backend.services.moysklad import sync_assortment_to_catalog
-from backend.services.recommendations import rebuild_basic_recommendations
-
-
-async def sync_moysklad_and_rebuild(db):
-    sync_log = await sync_assortment_to_catalog(db, sync_type="scheduled")
-    if sync_log.status != "success":
-        raise RuntimeError(sync_log.error or "MoySklad synchronization failed")
-
-    profiles = recompute_all_profiles(db)
-    recommendations = rebuild_basic_recommendations(db)
-    return {
-        "status": sync_log.status,
-        "products_seen": sync_log.products_seen,
-        "products_upserted": sync_log.products_upserted,
-        "variants_upserted": sync_log.variants_upserted,
-        "crm_profiles": profiles,
-        "recommendations": recommendations,
-    }
 
 
 def _run_db_job(job_name, callback):
