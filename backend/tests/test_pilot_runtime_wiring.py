@@ -34,12 +34,15 @@ def test_deploy_and_rollback_stop_active_pilot_and_sign_release_capability():
     rollback = read("scripts/rollback.sh")
     marker = "pilot_runtime.py _stop"
     capability = "pilot_release_capability.py stamp --slot current"
+    inspect = "pilot_release_capability.py\" inspect --archive"
 
     assert marker in deploy
     assert deploy.index(marker) < deploy.index("readiness_gate.py --phase predeploy")
     assert capability in deploy
     assert deploy.index(capability) > deploy.index("release_control.py promote")
 
+    assert inspect in rollback
+    assert rollback.index(inspect) < rollback.index("docker compose down")
     first_stop = rollback.index(marker)
     restored_stop = rollback.index(marker, first_stop + 1)
     assert first_stop < rollback.index("docker compose down")
@@ -67,6 +70,7 @@ def test_release_capability_requires_runtime_checkout_and_safe_operations():
         "./docs:/app/docs:ro",
         "./deploy/release:/app/deploy/release:ro",
         "pilot_runtime.py _stop",
+        "pilot_release_capability.py inspect --archive",
     ):
         assert marker in source
 
