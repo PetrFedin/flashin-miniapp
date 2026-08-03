@@ -43,11 +43,16 @@ _SUPPORTED_WEBHOOK_EVENTS = {
 _MAX_WEBHOOK_BYTES = 64 * 1024
 
 
-class ProviderPaymentIntegrityError(RuntimeError):
-    def __init__(self, reason: str, detail: str):
+class ProviderPaymentIntegrityError(HTTPException):
+    def __init__(
+        self,
+        reason: str,
+        detail: str,
+        *,
+        status_code: int = 409,
+    ):
         self.reason = reason
-        self.detail = detail
-        super().__init__(detail)
+        super().__init__(status_code=status_code, detail=detail)
 
 
 def _payment_out(order: Order, payment: Payment) -> PaymentOut:
@@ -83,6 +88,11 @@ def _validate_provider_amount(provider_payment: dict, order: Order) -> None:
             "Provider payment amount is invalid",
         ) from exc
 
+    if not provider_amount.is_finite() or not order_amount.is_finite():
+        raise ProviderPaymentIntegrityError(
+            "provider_payment_amount_invalid",
+            "Provider payment amount is invalid",
+        )
     if provider_amount != order_amount or provider_currency != str(order.currency).upper():
         raise ProviderPaymentIntegrityError(
             "provider_payment_amount_or_currency_mismatch",
@@ -98,7 +108,7 @@ def _trip_after_rollback(order_id: int, error: ProviderPaymentIntegrityError) ->
             status_code=503,
             detail="Payment integrity failed and the pilot safety circuit could not be persisted",
         )
-    return HTTPException(status_code=409, detail=error.detail)
+    return HTTPException(status_code=error.status_code, detail=error.detail)
 
 
 async def _reconcile_existing_payment(order: Order, payment: Payment) -> Payment | None:
@@ -251,6 +261,7 @@ async def create_payment(
             raise ProviderPaymentIntegrityError(
                 "provider_payment_id_invalid",
                 "Payment provider returned an invalid payment id",
+                status_code=502,
             )
 
         payment = Payment(
