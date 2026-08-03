@@ -60,23 +60,37 @@ function isObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function isSafeInteger(value) {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
 function safeInteger(value, fallback = 0) {
-  return Number.isSafeInteger(value) && value >= 0 ? value : fallback;
+  return isSafeInteger(value) ? value : fallback;
 }
 
-function safeTimestamp(value) {
-  if (typeof value !== "string" || !value.trim()) return null;
+function normalizedTimestamp(value, { optional = true } = {}) {
+  if (value === null && optional) return { value: null, valid: true };
+  if (typeof value !== "string" || !value.trim()) return { value: null, valid: false };
   const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  if (Number.isNaN(parsed.getTime())) return { value: null, valid: false };
+  return { value: parsed.toISOString(), valid: true };
 }
 
-function safeCodes(value) {
-  if (!Array.isArray(value)) return ["response_contract_invalid"];
-  const known = value.filter((code) => (
-    typeof code === "string" && Object.hasOwn(PILOT_INTEGRITY_LABELS, code)
-  ));
-  if (known.length !== value.length) known.push("response_contract_invalid");
-  return [...new Set(known)];
+function normalizedCodes(value) {
+  if (!Array.isArray(value)) {
+    return { codes: ["response_contract_invalid"], valid: false };
+  }
+  const codes = [];
+  let valid = true;
+  for (const code of value) {
+    if (typeof code === "string" && Object.hasOwn(PILOT_INTEGRITY_LABELS, code)) {
+      codes.push(code);
+    } else {
+      valid = false;
+    }
+  }
+  if (!valid) codes.push("response_contract_invalid");
+  return { codes: [...new Set(codes)], valid };
 }
 
 function fallbackStatus() {
@@ -122,47 +136,107 @@ function fallbackStatus() {
 export function normalizePilotOperationsStatus(payload) {
   if (!isObject(payload) || payload.schema_version !== 1) return fallbackStatus();
 
-  const runtime = isObject(payload.runtime) ? payload.runtime : {};
-  const database = isObject(payload.database_integrity) ? payload.database_integrity : {};
-  const artifacts = isObject(payload.artifact_integrity) ? payload.artifact_integrity : {};
-  const money = isObject(payload.money_attention) ? payload.money_attention : {};
-  const databaseCodes = safeCodes(database.codes);
-  const artifactCodes = safeCodes(artifacts.codes);
-  const status = PILOT_STATUSES.has(runtime.status) ? runtime.status : "not_armed";
-  const runRef = typeof runtime.run_ref === "string" && SAFE_RUN_REF.test(runtime.run_ref)
-    ? runtime.run_ref
-    : null;
-  const stopReason = typeof runtime.stop_reason === "string"
-    && Object.hasOwn(PILOT_STOP_LABELS, runtime.stop_reason)
+  const runtimePresent = isObject(payload.runtime);
+  const databasePresent = isObject(payload.database_integrity);
+  const artifactsPresent = isObject(payload.artifact_integrity);
+  const moneyPresent = isObject(payload.money_attention);
+  const runtime = runtimePresent ? payload.runtime : {};
+  const database = databasePresent ? payload.database_integrity : {};
+  const artifacts = artifactsPresent ? payload.artifact_integrity : {};
+  const money = moneyPresent ? payload.money_attention : {};
+  const databaseResult = normalizedCodes(database.codes);
+  const artifactResult = normalizedCodes(artifacts.codes);
+  const statusValid = typeof runtime.status === "string" && PILOT_STATUSES.has(runtime.status);
+  const status = statusValid ? runtime.status : "not_armed";
+  const runRefValid = runtime.run_ref === null
+    || (typeof runtime.run_ref === "string" && SAFE_RUN_REF.test(runtime.run_ref));
+  const runRef = runRefValid && typeof runtime.run_ref === "string" ? runtime.run_ref : null;
+  const stopReasonValid = runtime.stop_reason === null
+    || (typeof runtime.stop_reason === "string"
+      && Object.hasOwn(PILOT_STOP_LABELS, runtime.stop_reason));
+  const stopReason = stopReasonValid && typeof runtime.stop_reason === "string"
     ? runtime.stop_reason
     : null;
+  const generatedAt = normalizedTimestamp(payload.generated_at, { optional: false });
+  const openedAt = normalizedTimestamp(runtime.opened_at);
+  const stoppedAt = normalizedTimestamp(runtime.stopped_at);
+  const completedAt = normalizedTimestamp(runtime.completed_at);
+  const updatedAt = normalizedTimestamp(runtime.updated_at);
+  const numericValues = [
+    runtime.max_orders,
+    runtime.accepted_orders,
+    runtime.remaining_orders,
+    runtime.slot_count,
+    runtime.historical_slot_count,
+    runtime.allowlist_count,
+    money.payment_review_orders,
+    money.refund_attention_orders,
+    money.reconciliation_mismatches,
+  ];
+  const numericContractValid = numericValues.every(isSafeInteger);
   const expectedDecision = payload.checkout_decision === "GO" || payload.checkout_decision === "NO-GO";
+  const booleanContractValid = typeof payload.enforced === "boolean"
+    && typeof runtime.present === "boolean"
+    && typeof database.healthy === "boolean"
+    && typeof artifacts.applicable === "boolean"
+    && (typeof artifacts.healthy === "boolean" || artifacts.healthy === null)
+    && typeof money.attention_required === "boolean";
+  const integrityCoherent = database.healthy !== true || databaseResult.codes.length === 0;
+  const artifactCoherent = artifacts.healthy !== true || artifactResult.codes.length === 0;
+  const moneyCoherent = money.attention_required === true
+    || (safeInteger(money.payment_review_orders)
+      + safeInteger(money.refund_attention_orders)
+      + safeInteger(money.reconciliation_mismatches) === 0);
+  const runtimeCountsCoherent = !numericContractValid || (
+    runtime.accepted_orders <= runtime.max_orders
+    && runtime.remaining_orders <= runtime.max_orders
+  );
   const contractValid = Boolean(
     expectedDecision
-    && isObject(payload.runtime)
-    && isObject(payload.database_integrity)
-    && isObject(payload.artifact_integrity)
-    && isObject(payload.money_attention)
-    && databaseCodes.length === (Array.isArray(database.codes) ? new Set(database.codes).size : -1)
-    && artifactCodes.length === (Array.isArray(artifacts.codes) ? new Set(artifacts.codes).size : -1)
+    && runtimePresent
+    && databasePresent
+    && artifactsPresent
+    && moneyPresent
+    && statusValid
+    && runRefValid
+    && stopReasonValid
+    && generatedAt.valid
+    && openedAt.valid
+    && stoppedAt.valid
+    && completedAt.valid
+    && updatedAt.valid
+    && numericContractValid
+    && booleanContractValid
+    && databaseResult.valid
+    && artifactResult.valid
+    && integrityCoherent
+    && artifactCoherent
+    && moneyCoherent
+    && runtimeCountsCoherent
   );
 
-  const databaseHealthy = database.healthy === true && !databaseCodes.length;
-  const artifactHealthy = artifacts.healthy === true && !artifactCodes.length;
+  const databaseHealthy = database.healthy === true && databaseResult.codes.length === 0;
+  const artifactHealthy = artifacts.healthy === true && artifactResult.codes.length === 0;
   const attentionRequired = money.attention_required === true;
+  const checkoutCountsSafe = runtime.max_orders === 20
+    && runtime.accepted_orders < runtime.max_orders
+    && runtime.remaining_orders === runtime.max_orders - runtime.accepted_orders
+    && runtime.slot_count === runtime.accepted_orders;
   const decision = payload.checkout_decision === "GO"
     && contractValid
     && payload.enforced === true
     && status === "active"
+    && checkoutCountsSafe
     && databaseHealthy
     && artifactHealthy
     && !attentionRequired
     ? "GO"
     : "NO-GO";
+  const contractCodes = contractValid ? [] : ["response_contract_invalid"];
 
   return {
     decision,
-    generatedAt: safeTimestamp(payload.generated_at),
+    generatedAt: generatedAt.value,
     enforced: payload.enforced === true,
     contractValid,
     runtime: {
@@ -176,25 +250,25 @@ export function normalizePilotOperationsStatus(payload) {
       historicalSlotCount: safeInteger(runtime.historical_slot_count),
       allowlistCount: safeInteger(runtime.allowlist_count),
       stopReason,
-      openedAt: safeTimestamp(runtime.opened_at),
-      stoppedAt: safeTimestamp(runtime.stopped_at),
-      completedAt: safeTimestamp(runtime.completed_at),
-      updatedAt: safeTimestamp(runtime.updated_at),
+      openedAt: openedAt.value,
+      stoppedAt: stoppedAt.value,
+      completedAt: completedAt.value,
+      updatedAt: updatedAt.value,
     },
     databaseIntegrity: {
-      healthy: databaseHealthy,
-      codes: contractValid ? databaseCodes : [...new Set([...databaseCodes, "response_contract_invalid"])],
+      healthy: contractValid && databaseHealthy,
+      codes: [...new Set([...databaseResult.codes, ...contractCodes])],
     },
     artifactIntegrity: {
       applicable: artifacts.applicable === true,
-      healthy: artifacts.healthy === null ? null : artifactHealthy,
-      codes: contractValid ? artifactCodes : [...new Set([...artifactCodes, "response_contract_invalid"])],
+      healthy: artifacts.healthy === null ? null : contractValid && artifactHealthy,
+      codes: [...new Set([...artifactResult.codes, ...contractCodes])],
     },
     moneyAttention: {
       paymentReviewOrders: safeInteger(money.payment_review_orders),
       refundAttentionOrders: safeInteger(money.refund_attention_orders),
       reconciliationMismatches: safeInteger(money.reconciliation_mismatches),
-      attentionRequired,
+      attentionRequired: contractValid ? attentionRequired : true,
     },
   };
 }
