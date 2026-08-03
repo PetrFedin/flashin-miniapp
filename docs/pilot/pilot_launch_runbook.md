@@ -41,8 +41,10 @@ make verify-backup FILE=backups/flashin_YYYYMMDD_HHMMSS.sql.gz
 make rollback-drill RELEASE=previous BACKUP=backups/flashin_YYYYMMDD_HHMMSS.sql.gz
 make rollback-drill-status
 
-# 4. Вернуть актуальный release после drill
-make deploy-prod
+# 4. Вернуть точный исходный immutable release после drill
+# Не использовать deploy-prod: он создаст новый release ID/SHA.
+make rollback RELEASE=previous BACKUP=backups/flashin_YYYYMMDD_HHMMSS.sql.gz
+make release-status
 
 # 5. Внешние probes — единственный шаг, создающий 1 RUB YooKassa payment
 make provider-probes
