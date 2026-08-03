@@ -45,12 +45,13 @@ def test_restore_is_destructive_only_after_validation_and_recreates_database():
     assert "--yes" in script
 
 
-def test_deploy_creates_and_promotes_verified_release_and_backup():
+def test_deploy_creates_inspects_and_promotes_verified_release_and_backup():
     script = read("scripts/deploy_production.sh")
     create_pos = script.index("release_control.py create")
+    inspect_pos = script.index("pilot_release_capability.py inspect --archive")
     migrate_pos = script.index("alembic.ini upgrade head")
     promote_pos = script.index("release_control.py promote")
-    assert create_pos < migrate_pos < promote_pos
+    assert create_pos < inspect_pos < migrate_pos < promote_pos
     assert "backup_postgres.sh --print-path" in script
     assert 'verify_backup.sh "$backup_file"' in script
     assert "scripts/rollback.sh previous" in script

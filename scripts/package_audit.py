@@ -29,12 +29,16 @@ required = {
         "backend/tests/test_pilot_runtime_cli.py", "backend/tests/test_pilot_runtime_wiring.py",
         "backend/tests/test_pilot_release_capability.py",
         "backend/tests/test_pilot_runtime_integrity.py",
+        "backend/tests/test_pilot_payment_circuit_breaker.py",
+        "backend/tests/test_pilot_circuit_breaker_wiring.py",
+        "backend/tests/test_pilot_money_safety_fail_closed.py",
     ],
     "integrations": [
-        "backend/api/payments.py", "backend/api/moysklad.py",
+        "backend/api/payments.py", "backend/api/returns.py", "backend/api/moysklad.py",
         "backend/api/delivery_providers.py", "backend/api/payment_reconciliation.py",
         "backend/api/fulfillment.py", "backend/api/admin_security.py",
-        "backend/services/pilot_runtime.py",
+        "backend/services/pilot_runtime.py", "backend/services/pilot_circuit_breaker.py",
+        "backend/services/payment_reconciliation.py",
         "scripts/check_telegram_bot.py", "scripts/check_yookassa_test.py",
         "scripts/check_moysklad.py", "scripts/check_r2_s3.py",
         "scripts/check_meilisearch.py",
@@ -46,6 +50,7 @@ required = {
         "scripts/check_pilot_runtime_integrity.py",
         "docs/pilot/release_and_rollback_runbook.md",
         "docs/pilot/pilot_runtime_guard.md",
+        "docs/pilot/pilot_payment_circuit_breaker.md",
         "deploy/grafana/dashboards/flashin_operations.json",
     ],
     "docs": [
@@ -53,6 +58,7 @@ required = {
         "docs/v51_pilot_freeze_layer.md", "docs/acceptance/pilot_acceptance_signoff.md",
         "docs/pilot/pilot_launch_runbook.md", "docs/pilot/provider_probe_runbook.md",
         "docs/pilot/provider_evidence_and_admission.md", "docs/pilot/pilot_runtime_guard.md",
+        "docs/pilot/pilot_payment_circuit_breaker.md",
     ],
 }
 

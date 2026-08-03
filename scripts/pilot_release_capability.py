@@ -18,15 +18,19 @@ from release_control import MANIFEST_NAME, sha256_file, verify_release
 ROOT = Path(__file__).resolve().parents[1]
 STATE_DIR = ROOT / "deploy/release/runtime"
 CAPABILITY_NAME = "pilot_runtime_guard"
-CAPABILITY_VERSION = 1
+CAPABILITY_VERSION = 2
 REQUIRED_FILES = {
     "backend/pilot_models.py",
     "backend/services/pilot_runtime.py",
+    "backend/services/pilot_circuit_breaker.py",
+    "backend/services/payment_reconciliation.py",
     "backend/alembic/versions/0022_pilot_runtime_guard.py",
+    "backend/api/orders.py",
+    "backend/api/payments.py",
+    "backend/api/returns.py",
     "scripts/pilot_runtime.py",
     "scripts/check_pilot_runtime_integrity.py",
     "scripts/pilot_release_capability.py",
-    "backend/api/orders.py",
     "docker-compose.production.yml",
     "scripts/deploy_production.sh",
     "scripts/rollback.sh",
@@ -60,6 +64,21 @@ def atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
             os.unlink(temporary_name)
 
 
+def _require_markers(
+    bundle: zipfile.ZipFile,
+    files: Mapping[str, Any],
+    path: str,
+    markers: tuple[str, ...],
+    errors: list[str],
+) -> None:
+    if path not in files:
+        return
+    content = bundle.read(path).decode("utf-8")
+    for marker in markers:
+        if marker not in content:
+            errors.append(f"Pilot runtime capability marker is missing in {path}: {marker}")
+
+
 def inspect_runtime_guard(archive: Path) -> list[str]:
     verification = verify_release(archive)
     errors = [str(item) for item in verification.get("errors", [])]
@@ -75,11 +94,47 @@ def inspect_runtime_guard(archive: Path) -> list[str]:
             missing = sorted(REQUIRED_FILES - set(files))
             if missing:
                 errors.append("Release is missing pilot runtime files: " + ", ".join(missing))
-            if "backend/api/orders.py" in files:
-                orders = bundle.read("backend/api/orders.py").decode("utf-8")
-                for marker in ("acquire_pilot_checkout(", "record_pilot_order("):
-                    if marker not in orders:
-                        errors.append(f"Checkout runtime marker is missing: {marker}")
+
+            _require_markers(
+                bundle,
+                files,
+                "backend/api/orders.py",
+                ("acquire_pilot_checkout(", "record_pilot_order("),
+                errors,
+            )
+            _require_markers(
+                bundle,
+                files,
+                "backend/services/pilot_circuit_breaker.py",
+                ("def stop_pilot_for_order(", "def trip_pilot_circuit_breaker("),
+                errors,
+            )
+            _require_markers(
+                bundle,
+                files,
+                "backend/api/payments.py",
+                (
+                    "ProviderPaymentIntegrityError",
+                    "trip_pilot_circuit_breaker(",
+                    "stop_pilot_for_order(",
+                ),
+                errors,
+            )
+            _require_markers(
+                bundle,
+                files,
+                "backend/api/returns.py",
+                ("trip_pilot_circuit_breaker(", "stop_pilot_for_order("),
+                errors,
+            )
+            _require_markers(
+                bundle,
+                files,
+                "backend/services/payment_reconciliation.py",
+                ("payment_reconciliation_mismatch", "stop_pilot_for_order("),
+                errors,
+            )
+
             if "docker-compose.production.yml" in files:
                 compose = bundle.read("docker-compose.production.yml").decode("utf-8")
                 for marker in ("./docs:/app/docs:ro", "./deploy/release:/app/deploy/release:ro"):

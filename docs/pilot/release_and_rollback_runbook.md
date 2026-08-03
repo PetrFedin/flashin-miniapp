@@ -26,6 +26,27 @@ Local artifacts are stored under:
 
 These paths are deliberately ignored by Git and must be retained by the production host backup policy.
 
+## Signed pilot runtime capability
+
+For the controlled 20-order pilot, a valid archive is not sufficient by itself. Both release pointers must contain a signed `pilot_runtime_guard` capability version 2 bound to the exact release ID, Git commit and archive SHA-256.
+
+Capability v2 proves that the immutable archive contains:
+
+- the DB-backed 20-order runtime guard;
+- the order-scoped payment/refund circuit breaker;
+- payment review and reconciliation STOP wiring;
+- refund retry/review and durable finalization STOP wiring;
+- deploy and rollback runtime-integrity checks.
+
+Inspect and verify:
+
+```bash
+python3 scripts/pilot_release_capability.py inspect --archive deploy/release/builds/flashin_<release>.zip
+python3 scripts/pilot_release_capability.py verify --slot both --env .env
+```
+
+A v1 capability, unsigned pointer, mismatched signature/binding, missing breaker file or missing wiring marker is an immediate NO-GO. The rollback script rejects such an archive before service shutdown.
+
 ## Standard production deployment
 
 Run from a clean production checkout:
@@ -87,7 +108,7 @@ Preferred rollback path:
 make rollback RELEASE=previous BACKUP=backups/flashin_YYYYMMDD_HHMMSS.sql.gz
 ```
 
-The rollback script verifies both artifacts before stopping services. It then safely extracts the target release, synchronizes code while protecting `.git`, `.env`, backups, media, exports, logs, data volumes, release archives and private pilot evidence, restores the database, checks migration compatibility and transaction integrity, starts every production service, runs readiness and smoke checks, and promotes the restored release.
+The rollback script verifies both artifacts and capability v2 before stopping services. It then safely extracts the target release, synchronizes code while protecting `.git`, `.env`, backups, media, exports, logs, data volumes, release archives and private pilot evidence, restores the database, checks migration compatibility and transaction integrity, starts every production service, runs readiness and smoke checks, and promotes the restored release.
 
 An explicit archive may be used instead of `previous`:
 
@@ -103,27 +124,31 @@ Code-only rollback is fail-closed because an older application may be incompatib
 ALLOW_CODE_ONLY_ROLLBACK=1 make rollback RELEASE=previous
 ```
 
-Do not use this override when the failed release applied destructive or non-backward-compatible migrations.
+The override does not bypass capability inspection. Do not use code-only rollback when the failed release applied destructive or non-backward-compatible migrations.
 
 ## Mandatory pilot rollback drill
 
 Before admitting pilot customers:
 
-1. Complete at least two successful deployments so both `current` and `previous` release pointers exist.
-2. Confirm `make release-status` shows valid archive paths retained on the production host.
-3. Create and verify a fresh database backup.
-4. During a maintenance window, run rollback to `previous` with that backup.
-5. Confirm all required services are running.
-6. Confirm `/health` and `/ready` return successful semantic responses.
-7. Run `make pilot-gate` after rollback.
-8. Redeploy the intended pilot release and run `make pilot-gate` again.
-9. Record the drill date, operator, release IDs, backup filename, duration, result and any corrective action in the private pilot evidence log.
+1. Complete two successful deployments from the capability-v2 code line so both `current` and `previous` are v2.
+2. Run `python3 scripts/pilot_release_capability.py verify --slot both --env .env` and retain the output.
+3. Confirm `make release-status` shows two different, retained archive paths on the production host.
+4. Create and verify a fresh database backup.
+5. During a maintenance window, run rollback to `previous` with that backup.
+6. Confirm all required services are running.
+7. Confirm `/health` and `/ready` return successful semantic responses.
+8. Run `make pilot-gate` after rollback.
+9. Redeploy the intended pilot release and run `make pilot-gate` again.
+10. Verify capability v2 for both pointers again.
+11. Record the drill date, operator, release IDs, archive hashes, backup filename, duration, result and any corrective action in the private pilot evidence log.
 
 ## Immediate NO-GO conditions
 
 Do not admit pilot users when any of the following is true:
 
 - no verified release archive exists for the deployed commit;
+- either current or previous release lacks valid signed `pilot_runtime_guard` capability v2;
+- the current and previous release pointers refer to the same archive;
 - the production checkout contains uncommitted tracked changes;
 - `previous_release.json` is missing before a required rollback drill;
 - the database backup has not passed restore verification;
