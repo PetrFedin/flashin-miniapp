@@ -1,4 +1,4 @@
-# FLASHIN Telegram Mini App v40
+# FLASHIN Telegram Mini App
 
 Production-oriented Telegram Mini App for choosing and buying FLASHIN clothes.
 
@@ -53,16 +53,22 @@ make test
 make backup
 ```
 
-## Production start
+## Production and pilot start
 
 ```bash
 cp .env.production.example .env
-# fill all production secrets
-make preflight
-make build
-make migrate
-docker compose --profile production up -d
+# fill every production secret, integration credential and public URL
+
+make readiness-gate  # must return GO before deploy
+make deploy-prod      # backup, migrations, services and internal smoke
+make pilot-gate       # must return GO before admitting pilot users
 ```
+
+`make launch-production` delegates to the same hardened production deploy and cannot bypass the production Compose overlay.
+
+The strict gates intentionally return **NO-GO** while legal pages still contain template wording, seller details are missing, production secrets are unsafe, Compose isolation is broken, migrations are stale or public endpoints are unavailable.
+
+Pilot procedure and stop criteria: `docs/pilot/pilot_launch_runbook.md`.
 
 ## Required production values
 
@@ -71,6 +77,7 @@ TELEGRAM_BOT_TOKEN=
 JWT_SECRET=
 ADMIN_EMAIL=
 ADMIN_PASSWORD=
+ADMIN_TOTP_ENCRYPTION_KEY=
 YOOKASSA_SHOP_ID=
 YOOKASSA_SECRET_KEY=
 MOYSKLAD_TOKEN=
@@ -94,16 +101,7 @@ Do not use `USE_CREATE_ALL=true` in production.
 make workers
 ```
 
-Workers:
-
-```text
-notification_worker
-ops_jobs
-outbox_jobs
-moysklad_sync
-campaign_jobs
-sla_jobs
-```
+The production deployment starts the notification worker and distributed scheduler. Scheduler jobs use PostgreSQL advisory locks to prevent the same job from running concurrently in different containers.
 
 ## Search
 
@@ -133,13 +131,15 @@ http://localhost:3000
 
 ## Legal
 
-Replace these files with final lawyer-approved text before launch:
+These files must contain final approved seller details and text before pilot launch:
 
 ```text
 frontend/public/legal/offer.html
 frontend/public/legal/privacy.html
 frontend/public/legal/returns.html
 ```
+
+The readiness gate detects known placeholder phrases but does not replace legal approval.
 
 ## QA
 
@@ -148,17 +148,19 @@ python tests/e2e_smoke.py
 pytest backend/tests
 ```
 
+CI also runs transactional customer journey, cancellation, payment review, cumulative refund, business event, webhook lease, notification lease, scheduler lock and refund reconciliation smoke scenarios against PostgreSQL.
+
 ## Important
 
-v40 is focused on launch simplicity:
+The current launch path is fail-closed:
 
-- worker containers can find scripts;
-- bot container can import backend models;
-- frontend/admin use production build;
-- env files are separated;
-- bootstrap/migrate/health commands exist;
-- docker healthchecks are configured;
-- README is now the main launch document.
+- production launch cannot use the development Compose graph;
+- only Caddy publishes host ports in production;
+- backend health is based on `/ready`, including database and Alembic state;
+- migrations are checked before application admission;
+- existing databases are audited and backed up before migration;
+- strict predeploy and live pilot reports are written to `docs/`;
+- pilot users are not admitted until both gates return GO.
 
 
 ## v41 — platform maturity layer
@@ -183,7 +185,7 @@ v40 is focused on launch simplicity:
 
 ## v45 — final launch discipline layer
 
-Добавлены readiness gate, launch command center, incident templates, support/admin SOP, data retention policy, post-launch metrics plan, master launch checklist and final acceptance criteria. См. `docs/v45_launch_command_center.md`, `docs/v45_master_launch_checklist.md`, `docs/v45_final_acceptance.md`.
+Добавлены readiness gate, launch command center, incident templates, support/admin SOP, data retention policy, post-launch metrics plan, master launch checklist and final acceptance criteria. См. `docs/v45_launch_command_center.md`, `docs/v45_master_launch_checklist.md` и `docs/v45_final_acceptance.md`.
 
 
 ## v46 — post-launch scale layer
@@ -219,3 +221,8 @@ v40 is focused on launch simplicity:
 ## v52 — final audit and launch sanity layer
 
 Добавлены финальный package audit, test runner, тестовые env defaults для pytest, обновлена версия backend title, `USE_CREATE_ALL` по умолчанию выключен. См. `docs/audit/v52_final_audit_summary.md`.
+
+
+## v53 — executable pilot readiness layer
+
+Readiness переведён из проверки наличия файлов в исполняемый fail-closed процесс. Добавлены строгие predeploy/live gates, контроль финальности юридических страниц, migration-aware `/ready`, безопасный production launcher, расширенный Compose gate и единый pilot launch runbook.
