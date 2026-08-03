@@ -2,9 +2,10 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import sentry_sdk
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.orm import Session
 
 from . import checkout_models as _checkout_models  # noqa: F401
 from . import model_constraints as _model_constraints  # noqa: F401
@@ -56,9 +57,9 @@ from .api.v1.router import router as v1_router
 from .api.webhook_destinations import router as webhook_destinations_router
 from .api.wishlist import router as wishlist_router
 from .config import get_settings
-from .database import Base, SessionLocal, engine
+from .database import Base, SessionLocal, engine, get_db
 from .middleware.admin_order_state_guard import AdminOrderStateGuardMiddleware
-from .middleware.metrics import MetricsMiddleware, metrics_response
+from .middleware.metrics import MetricsMiddleware, collect_pilot_metrics, metrics_response
 from .middleware.rate_limit import InMemoryRateLimitMiddleware
 from .middleware.security_headers import SecurityHeadersMiddleware
 from .seed import bootstrap_admin, seed_products
@@ -182,7 +183,8 @@ app.include_router(delivery_quotes_router, prefix="/api")
 if settings.metrics_enabled:
 
     @app.get("/metrics", include_in_schema=False)
-    def metrics():
+    def metrics(db: Session = Depends(get_db)):
+        collect_pilot_metrics(db, settings)
         return metrics_response()
 
 
