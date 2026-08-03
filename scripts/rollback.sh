@@ -141,6 +141,12 @@ echo "Checking rollback migration compatibility..."
 docker compose run --rm backend alembic -c backend/alembic.ini current
 docker compose run --rm backend python scripts/check_transaction_integrity.py
 
+if [ -f scripts/pilot_runtime.py ]; then
+  echo "Forcing restored pilot runtime to stopped before public services start..."
+  docker compose run --rm backend python scripts/pilot_runtime.py _stop \
+    --reason "rollback database restored"
+fi
+
 echo "Starting rolled-back production services..."
 docker compose up -d db backend frontend admin bot caddy notification_worker scheduler meilisearch
 
@@ -181,6 +187,9 @@ done
 
 docker compose exec -T backend python scripts/container_smoke.py
 python3 "$TMP_DIR/release_control.py" promote --archive "$RELEASE" >/dev/null
+if [ -f scripts/pilot_release_capability.py ]; then
+  python3 scripts/pilot_release_capability.py stamp --slot current --env .env >/dev/null
+fi
 
 if [ "$ROLLBACK_DRILL" = "1" ]; then
   max_age_days=$(python3 - <<'PY'
