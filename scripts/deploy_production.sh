@@ -11,8 +11,28 @@ fi
 export COMPOSE_FILE="docker-compose.yml:docker-compose.production.yml"
 export COMPOSE_PROFILES="production,workers,scheduler,search"
 
+release_archive=""
+backup_file=""
+deploy_failure() {
+  status=$?
+  echo "Production deploy failed with status $status." >&2
+  if [ -n "$backup_file" ]; then
+    echo "Verified pre-migration backup: $backup_file" >&2
+    echo "Recovery command: scripts/rollback.sh previous '$backup_file'" >&2
+  else
+    echo "No database backup was created; failure occurred before an existing schema was migrated." >&2
+  fi
+  exit "$status"
+}
+trap deploy_failure ERR
+
 echo "Running strict predeploy readiness gate..."
 python3 scripts/readiness_gate.py --phase predeploy
+
+echo "Creating immutable release archive from clean tracked files..."
+release_archive=$(python3 scripts/release_control.py create --print-path)
+python3 scripts/release_control.py verify --archive "$release_archive" >/dev/null
+echo "Verified release archive: $release_archive"
 
 echo "Building images..."
 docker compose build
@@ -53,7 +73,9 @@ if [ "$schema_exists" = "t" ]; then
   docker compose run --rm backend python scripts/check_transaction_integrity.py
 
   echo "Backing up database before migration..."
-  scripts/backup_postgres.sh
+  backup_file=$(scripts/backup_postgres.sh --print-path)
+  scripts/verify_backup.sh "$backup_file"
+  echo "Verified pre-migration backup: $backup_file"
 else
   echo "First deploy detected: no existing Alembic schema to back up or audit"
   docker compose run --rm backend python scripts/check_transaction_integrity.py --allow-missing-schema
@@ -117,4 +139,12 @@ done
 echo "Running internal smoke checks..."
 docker compose exec -T backend python scripts/container_smoke.py
 
-echo "Deploy completed. Run 'make pilot-gate' and admit pilot users only after a GO decision."
+echo "Promoting successful release pointer..."
+python3 scripts/release_control.py promote --archive "$release_archive" >/dev/null
+trap - ERR
+
+echo "Deploy completed and release promoted: $release_archive"
+if [ -n "$backup_file" ]; then
+  echo "Rollback drill input: scripts/rollback.sh previous '$backup_file'"
+fi
+echo "Run 'make pilot-gate' and admit pilot users only after a GO decision."
