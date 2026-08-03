@@ -7,6 +7,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
 from backend import checkout_models  # noqa: F401
+from backend import pilot_models  # noqa: F401
 from backend import (  # noqa: F401
     business_event_models,
     model_constraints,

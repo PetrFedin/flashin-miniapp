@@ -7,7 +7,8 @@ ROOT = Path(".")
 required = {
     "core": [
         "backend/main.py", "backend/models.py", "backend/schemas.py", "backend/config.py",
-        "backend/database.py", "backend/alembic.ini", "docker-compose.yml",
+        "backend/database.py", "backend/pilot_models.py", "backend/alembic.ini",
+        "backend/alembic/versions/0022_pilot_runtime_guard.py", "docker-compose.yml",
     ],
     "apps": [
         "frontend/src/App.js", "frontend/package.json",
@@ -17,18 +18,23 @@ required = {
     "launch": [
         "scripts/launch.py", "scripts/start_simple.sh", "scripts/preflight.py",
         "scripts/readiness_gate.py", "scripts/check_integrations.py",
-        "scripts/pilot_evidence.py", "scripts/pilot_admission.py",
+        "scripts/pilot_evidence.py", "scripts/pilot_admission.py", "scripts/pilot_runtime.py",
+        "scripts/pilot_release_capability.py", "scripts/check_pilot_runtime_integrity.py",
         "scripts/test_all.sh", "scripts/pilot_control.py", "scripts/pilot_runner.py",
         "scripts/generate_20_order_pilot_sheet.py", "scripts/release_control.py",
         "backend/tests/test_pilot_control.py", "backend/tests/test_pilot_readiness.py",
         "backend/tests/test_integration_checks.py", "backend/tests/test_release_control.py",
         "backend/tests/test_release_shell_safety.py", "backend/tests/test_pilot_evidence.py",
-        "backend/tests/test_pilot_admission.py",
+        "backend/tests/test_pilot_admission.py", "backend/tests/test_pilot_runtime.py",
+        "backend/tests/test_pilot_runtime_cli.py", "backend/tests/test_pilot_runtime_wiring.py",
+        "backend/tests/test_pilot_release_capability.py",
+        "backend/tests/test_pilot_runtime_integrity.py",
     ],
     "integrations": [
         "backend/api/payments.py", "backend/api/moysklad.py",
         "backend/api/delivery_providers.py", "backend/api/payment_reconciliation.py",
         "backend/api/fulfillment.py", "backend/api/admin_security.py",
+        "backend/services/pilot_runtime.py",
         "scripts/check_telegram_bot.py", "scripts/check_yookassa_test.py",
         "scripts/check_moysklad.py", "scripts/check_r2_s3.py",
         "scripts/check_meilisearch.py",
@@ -37,14 +43,16 @@ required = {
         "scripts/backup_postgres.sh", "scripts/verify_backup.sh",
         "scripts/restore_postgres.sh", "scripts/deploy_production.sh",
         "scripts/rollback.sh", "scripts/release_control.py",
+        "scripts/check_pilot_runtime_integrity.py",
         "docs/pilot/release_and_rollback_runbook.md",
+        "docs/pilot/pilot_runtime_guard.md",
         "deploy/grafana/dashboards/flashin_operations.json",
     ],
     "docs": [
         "README.md", "docs/v49_unified_system_map.md", "docs/v50_final_handover.md",
         "docs/v51_pilot_freeze_layer.md", "docs/acceptance/pilot_acceptance_signoff.md",
         "docs/pilot/pilot_launch_runbook.md", "docs/pilot/provider_probe_runbook.md",
-        "docs/pilot/provider_evidence_and_admission.md",
+        "docs/pilot/provider_evidence_and_admission.md", "docs/pilot/pilot_runtime_guard.md",
     ],
 }
 

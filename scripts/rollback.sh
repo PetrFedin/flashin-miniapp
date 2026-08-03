@@ -11,10 +11,11 @@ export COMPOSE_PROFILES=${COMPOSE_PROFILES:-"production,workers,scheduler,search
 CONTROL_SCRIPT="scripts/release_control.py"
 RESTORE_SCRIPT="scripts/restore_postgres.sh"
 EVIDENCE_SCRIPT="scripts/pilot_evidence.py"
+CAPABILITY_SCRIPT="scripts/pilot_release_capability.py"
 CURRENT_RELEASE_STATE="deploy/release/runtime/current_release.json"
 ROLLBACK_REPORT="docs/pilot/rollback_drill_report.json"
 
-for required_script in "$CONTROL_SCRIPT" "$RESTORE_SCRIPT"; do
+for required_script in "$CONTROL_SCRIPT" "$RESTORE_SCRIPT" "$CAPABILITY_SCRIPT"; do
   if [ ! -f "$required_script" ]; then
     echo "Required rollback script is missing: $required_script" >&2
     exit 1
@@ -54,6 +55,7 @@ else
 fi
 
 python3 "$CONTROL_SCRIPT" verify --archive "$RELEASE" >/dev/null
+python3 "$CAPABILITY_SCRIPT" inspect --archive "$RELEASE" >/dev/null
 if [ -n "$BACKUP" ]; then
   scripts/verify_backup.sh "$BACKUP"
 fi
@@ -73,9 +75,17 @@ if [ "$ROLLBACK_DRILL" = "1" ]; then
   cp "$CURRENT_RELEASE_STATE" "$TMP_DIR/from_release.json"
 fi
 
-echo "Rolling back to verified release: $RELEASE"
+echo "Rolling back to verified runtime-guarded release: $RELEASE"
 [ -z "$BACKUP" ] || echo "Database restore source: $BACKUP"
 [ "$ROLLBACK_DRILL" != "1" ] || echo "Rollback drill evidence recording is enabled"
+
+if docker compose ps --status running --services 2>/dev/null | grep -qx backend; then
+  if docker compose exec -T backend test -f /app/scripts/pilot_runtime.py; then
+    echo "Stopping pilot checkout runtime before rollback..."
+    docker compose exec -T backend python scripts/pilot_runtime.py _stop \
+      --reason "rollback started"
+  fi
+fi
 
 docker compose down
 
@@ -132,6 +142,11 @@ fi
 echo "Checking rollback migration compatibility..."
 docker compose run --rm backend alembic -c backend/alembic.ini current
 docker compose run --rm backend python scripts/check_transaction_integrity.py
+docker compose run --rm backend python scripts/check_pilot_runtime_integrity.py
+
+echo "Forcing restored pilot runtime to stopped before public services start..."
+docker compose run --rm backend python scripts/pilot_runtime.py _stop \
+  --reason "rollback database restored"
 
 echo "Starting rolled-back production services..."
 docker compose up -d db backend frontend admin bot caddy notification_worker scheduler meilisearch
@@ -173,6 +188,7 @@ done
 
 docker compose exec -T backend python scripts/container_smoke.py
 python3 "$TMP_DIR/release_control.py" promote --archive "$RELEASE" >/dev/null
+python3 scripts/pilot_release_capability.py stamp --slot current --env .env >/dev/null
 
 if [ "$ROLLBACK_DRILL" = "1" ]; then
   max_age_days=$(python3 - <<'PY'
@@ -196,3 +212,4 @@ PY
 fi
 
 echo "Rollback completed and release pointer promoted: $RELEASE"
+echo "Pilot runtime remains stopped; a fresh admission is required before resume."

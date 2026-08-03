@@ -90,6 +90,14 @@ class Settings(BaseSettings):
     enable_seed: bool = False
     use_create_all: bool = False
 
+    pilot_evidence_signing_secret: str = ""
+    pilot_runtime_enforced: bool = False
+    pilot_runtime_max_orders: int = 20
+    pilot_admission_manifest_path: str = "docs/pilot/pilot_admission_manifest.json"
+    pilot_state_path: str = "docs/pilot/live_pilot_state.json"
+    pilot_current_release_path: str = "deploy/release/runtime/current_release.json"
+    pilot_previous_release_path: str = "deploy/release/runtime/previous_release.json"
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [value.strip().rstrip("/") for value in self.cors_origins.split(",") if value.strip()]
@@ -129,6 +137,8 @@ class Settings(BaseSettings):
             raise ValueError("MOYSKLAD_SIZE_ATTRIBUTE_NAMES must not be empty")
         if not self.moysklad_color_attribute_names.strip():
             raise ValueError("MOYSKLAD_COLOR_ATTRIBUTE_NAMES must not be empty")
+        if not 1 <= self.pilot_runtime_max_orders <= 20:
+            raise ValueError("PILOT_RUNTIME_MAX_ORDERS must be between 1 and 20")
 
         if self.app_env.strip().lower() != "production":
             return self
@@ -160,6 +170,23 @@ class Settings(BaseSettings):
             errors.append("TELEGRAM_BOT_TOKEN is missing or unsafe")
         if len(self.outbox_signing_secret) < 32 or self.outbox_signing_secret.strip().lower() in weak_values:
             errors.append("OUTBOX_SIGNING_SECRET must be at least 32 characters")
+        if (
+            len(self.pilot_evidence_signing_secret) < 32
+            or self.pilot_evidence_signing_secret.strip().lower() in weak_values
+        ):
+            errors.append("PILOT_EVIDENCE_SIGNING_SECRET must be a unique secret of at least 32 characters")
+        else:
+            for name, value in (
+                ("JWT_SECRET", self.jwt_secret),
+                ("ADMIN_TOTP_ENCRYPTION_KEY", self.admin_totp_encryption_key),
+                ("OUTBOX_SIGNING_SECRET", self.outbox_signing_secret),
+            ):
+                if hmac_compare_secret(self.pilot_evidence_signing_secret, value):
+                    errors.append(f"PILOT_EVIDENCE_SIGNING_SECRET must differ from {name}")
+        if not self.pilot_runtime_enforced:
+            errors.append("PILOT_RUNTIME_ENFORCED must be true in production")
+        if self.pilot_runtime_max_orders != 20:
+            errors.append("PILOT_RUNTIME_MAX_ORDERS must equal 20 in production")
         if self.payment_provider != "yookassa":
             errors.append("PAYMENT_PROVIDER must be yookassa")
         if not self.yookassa_shop_id.strip() or not self.yookassa_secret_key.strip():

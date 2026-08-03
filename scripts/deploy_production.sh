@@ -11,6 +11,14 @@ fi
 export COMPOSE_FILE="docker-compose.yml:docker-compose.production.yml"
 export COMPOSE_PROFILES="production,workers,scheduler,search"
 
+if docker compose ps --status running --services 2>/dev/null | grep -qx backend; then
+  if docker compose exec -T backend test -f /app/scripts/pilot_runtime.py; then
+    echo "Stopping pilot checkout runtime before production deployment..."
+    docker compose exec -T backend python scripts/pilot_runtime.py _stop \
+      --reason "production deployment started"
+  fi
+fi
+
 release_archive=""
 backup_file=""
 deploy_failure() {
@@ -90,6 +98,9 @@ docker compose run --rm backend alembic -c backend/alembic.ini current
 echo "Verifying transaction integrity after migration..."
 docker compose run --rm backend python scripts/check_transaction_integrity.py
 
+echo "Verifying first-20-order runtime integrity..."
+docker compose run --rm backend python scripts/check_pilot_runtime_integrity.py
+
 echo "Starting production services, scheduler, notifications and search..."
 docker compose up -d db backend frontend admin bot caddy notification_worker scheduler meilisearch
 
@@ -141,10 +152,13 @@ docker compose exec -T backend python scripts/container_smoke.py
 
 echo "Promoting successful release pointer..."
 python3 scripts/release_control.py promote --archive "$release_archive" >/dev/null
+echo "Inspecting and signing pilot runtime release capability..."
+python3 scripts/pilot_release_capability.py stamp --slot current --env .env >/dev/null
 trap - ERR
 
 echo "Deploy completed and release promoted: $release_archive"
 if [ -n "$backup_file" ]; then
   echo "Rollback drill input: scripts/rollback.sh previous '$backup_file'"
 fi
-echo "Run 'make pilot-gate' and admit pilot users only after a GO decision."
+echo "Run 'make pilot-gate' only after the guarded current and previous releases, rollback drill and provider evidence are ready."
+echo "Pilot runtime remains stopped. Re-run admission and 'make pilot-runtime-arm' before checkout."

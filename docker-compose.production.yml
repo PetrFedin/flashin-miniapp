@@ -16,6 +16,9 @@ services:
     restart: unless-stopped
     ports: !reset []
     stop_grace_period: 30s
+    volumes:
+      - ./docs:/app/docs:ro
+      - ./deploy/release:/app/deploy/release:ro
 
   frontend:
     restart: unless-stopped

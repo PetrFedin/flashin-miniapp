@@ -1,4 +1,4 @@
-.PHONY: help init build up down logs migrate health workers search monitoring backup restore test preflight clean deploy-prod rollback rollback-drill rollback-drill-status verify-backup seed-admin validate-env openapi release-notes diagnostics setup-wizard check-integrations provider-probes readiness pilot-sheet readiness-gate pilot-gate loadtest performance-budget security-audit media-jobs loadtest-catalog loadtest-webhooks real-e2e grafana-dashboards simple-start launch-local launch-production connected-audit simplicity-score env-todo pilot-runner pilot-init pilot-record pilot-status pilot-final pilot-admit pilot-admission-status release-create release-verify release-status release-pack release-freeze pilot-evidence package-audit test-all transaction-integrity
+.PHONY: help init build up down logs migrate health workers search monitoring backup restore test preflight clean deploy-prod rollback rollback-drill rollback-drill-status verify-backup seed-admin validate-env openapi release-notes diagnostics setup-wizard check-integrations provider-probes readiness pilot-sheet readiness-gate pilot-gate loadtest performance-budget security-audit media-jobs loadtest-catalog loadtest-webhooks real-e2e grafana-dashboards simple-start launch-local launch-production connected-audit simplicity-score env-todo pilot-runner pilot-init pilot-record pilot-status pilot-final pilot-admit pilot-admission-status pilot-runtime-arm pilot-runtime-status pilot-runtime-stop release-create release-verify release-status release-pack release-freeze pilot-evidence package-audit test-all transaction-integrity
 
 help:
 	@echo "FLASHIN commands:"
@@ -19,6 +19,9 @@ help:
 	@echo "  make rollback-drill        - execute rollback and record signed drill evidence"
 	@echo "  make pilot-admit           - create signed human/business pilot admission"
 	@echo "  make pilot-runner          - initialize/show admission-gated 20-order control"
+	@echo "  make pilot-runtime-arm     - open checkout for allowlisted pilot Telegram IDs"
+	@echo "  make pilot-runtime-status  - verify DB counter, evidence binding and remaining slots"
+	@echo "  make pilot-runtime-stop    - immediately block new pilot checkout"
 	@echo "  make pilot-status          - recalculate current pilot decision"
 	@echo "  make pilot-final           - require all 20 pilot scenarios and final GO"
 	@echo "  make release-create        - build immutable tracked-files release ZIP"
@@ -195,6 +198,17 @@ pilot-runner:
 pilot-init:
 	python3 scripts/pilot_admission.py verify
 	python3 scripts/pilot_control.py init
+
+pilot-runtime-arm:
+	@echo "Usage: make pilot-runtime-arm ARGS='--telegram-id 123456789 [--telegram-id ...] [--resume]'"
+	python3 scripts/pilot_runtime.py arm $(ARGS)
+
+pilot-runtime-status:
+	python3 scripts/pilot_runtime.py status
+
+pilot-runtime-stop:
+	@test -n "$(REASON)" || (echo "Usage: make pilot-runtime-stop REASON='operator stop reason'"; exit 1)
+	python3 scripts/pilot_runtime.py stop --reason "$(REASON)"
 
 pilot-record:
 	@echo "Usage: make pilot-record ARGS='--number 1 --result pass ...'"

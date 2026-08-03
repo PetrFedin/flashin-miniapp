@@ -147,6 +147,8 @@ if is_production:
             "PILOT_LIVE_GATE_MAX_AGE_MINUTES",
             "PILOT_ADMISSION_MAX_AGE_MINUTES",
             "PILOT_ROLLBACK_DRILL_MAX_AGE_DAYS",
+            "PILOT_RUNTIME_ENFORCED",
+            "PILOT_RUNTIME_MAX_ORDERS",
             "MEDIA_STORAGE",
             "MEILISEARCH_ENABLED",
             "SCHEDULER_ENABLED",
@@ -215,6 +217,8 @@ if is_production:
         invalid.append("POSTGRES_PASSWORD uses the development password")
     if not is_true(env.get("SCHEDULER_ENABLED")):
         invalid.append("SCHEDULER_ENABLED must be true in production")
+    if not is_true(env.get("PILOT_RUNTIME_ENFORCED")):
+        invalid.append("PILOT_RUNTIME_ENFORCED must be true in production")
     if "localhost" in env.get("CORS_ORIGINS", "") or "127.0.0.1" in env.get("CORS_ORIGINS", ""):
         invalid.append("CORS_ORIGINS contains a local address in production")
 
@@ -251,6 +255,9 @@ provider_age = validate_int(env, "PILOT_PROVIDER_EVIDENCE_MAX_AGE_MINUTES", 5, 2
 live_age = validate_int(env, "PILOT_LIVE_GATE_MAX_AGE_MINUTES", 5, 120, invalid)
 admission_age = validate_int(env, "PILOT_ADMISSION_MAX_AGE_MINUTES", 5, 240, invalid)
 rollback_age = validate_int(env, "PILOT_ROLLBACK_DRILL_MAX_AGE_DAYS", 1, 90, invalid)
+pilot_runtime_max_orders = validate_int(env, "PILOT_RUNTIME_MAX_ORDERS", 1, 20, invalid)
+if is_production and pilot_runtime_max_orders is not None and pilot_runtime_max_orders != 20:
+    invalid.append("PILOT_RUNTIME_MAX_ORDERS must equal 20 in production")
 if initial_backoff is not None and max_backoff is not None and max_backoff < initial_backoff:
     invalid.append("NOTIFICATION_MAX_BACKOFF_SECONDS must be >= NOTIFICATION_INITIAL_BACKOFF_SECONDS")
 
@@ -276,5 +283,7 @@ print(
         "pilot_live_gate_max_age_minutes": live_age,
         "pilot_admission_max_age_minutes": admission_age,
         "pilot_rollback_drill_max_age_days": rollback_age,
+        "pilot_runtime_enforced": is_true(env.get("PILOT_RUNTIME_ENFORCED")),
+        "pilot_runtime_max_orders": pilot_runtime_max_orders,
     }
 )
