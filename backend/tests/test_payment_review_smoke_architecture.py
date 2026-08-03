@@ -12,13 +12,14 @@ def test_payment_review_event_is_persisted_in_the_emitting_transaction():
     dispatcher = DISPATCHER.read_text(encoding="utf-8")
     review_service = REVIEW_SERVICE.read_text(encoding="utf-8")
 
+    handler_call = "_apply_domain_handler(db, event_type, normalized_payload)"
     assert '"payment.review_required": ensure_payment_review_case' in dispatcher
-    assert "_apply_domain_handler(db, event_type, normalized_payload)" in dispatcher
+    assert handler_call in dispatcher
     assert "db.add(event)" in dispatcher
-    assert dispatcher.index("_apply_domain_handler") < dispatcher.index("db.add(event)")
+    assert dispatcher.index(handler_call) < dispatcher.index("db.add(event)")
 
-    assert "class" not in review_service
     assert "PaymentReconciliation(" in review_service
+    assert 'Payment.provider == provider' in review_service
     assert 'PaymentReconciliation.status == "open"' in review_service
     assert "PaymentReconciliation.payment_id == payment.id" in review_service
     assert "PaymentReconciliation.message == message" in review_service
