@@ -60,14 +60,16 @@ make rollback-drill-status
 
 Drill останавливает production-сервисы, проверяет backup, восстанавливает БД, проверяет Alembic и транзакционную целостность, запускает весь production-контур и выполняет container smoke. Только после полного успеха создаётся подписанный rollback report.
 
-После drill система работает на предыдущем release. Поэтому необходимо снова развернуть актуальный код:
+После drill система работает на предыдущем release. Возвращать исходную версию через `deploy-prod` нельзя: новая сборка получит другой release ID и SHA. Нужно вернуть точный исходный архив вторым проверенным rollback, используя тот же backup:
 
 ```bash
-make deploy-prod
+make rollback \
+  RELEASE=previous \
+  BACKUP=backups/flashin_YYYYMMDD_HHMMSS.sql.gz
 make release-status
 ```
 
-После повторной выкладки `current` должен совпадать с исходным release drill, а `previous` — с release, на который выполнялся откат.
+После возврата `current` должен точно совпадать с `from_release` в rollback drill report, а `previous` — с `to_release`.
 
 ### 4. Однократно запустить внешние provider probes
 
