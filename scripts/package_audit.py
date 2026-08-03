@@ -15,6 +15,7 @@ required = {
         "admin/src/main.jsx", "admin/package.json",
         "admin/src/BusinessEventsPanel.jsx", "admin/src/PilotOperationsPanel.jsx",
         "admin/src/pilotOperations.js", "admin/src/pilotOperations.test.js",
+        "admin/src/pilotOperationsPanel.test.js",
         "bot/main.py",
     ],
     "launch": [
