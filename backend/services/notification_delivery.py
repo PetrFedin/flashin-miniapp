@@ -173,7 +173,7 @@ def renew_delivery_lease(
         .with_for_update()
         .first()
     )
-    if not row:
+    if not row or row.status != "processing":
         db.rollback()
         return False
 
@@ -186,7 +186,7 @@ def renew_delivery_lease(
         .with_for_update()
         .first()
     )
-    if not state:
+    if not state or state.lease_token != normalized_token:
         db.rollback()
         return False
 
@@ -216,7 +216,7 @@ def finish_delivery(
         .with_for_update()
         .first()
     )
-    if not row:
+    if not row or row.status != "processing":
         db.rollback()
         return "ignored"
 
@@ -229,7 +229,7 @@ def finish_delivery(
         .with_for_update()
         .first()
     )
-    if not state:
+    if not state or state.lease_token != normalized_token:
         db.rollback()
         return "ignored"
 
