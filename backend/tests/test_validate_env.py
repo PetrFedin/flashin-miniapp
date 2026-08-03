@@ -31,6 +31,8 @@ def _valid_production_env() -> dict[str, str]:
         "PILOT_LIVE_GATE_MAX_AGE_MINUTES": "30",
         "PILOT_ADMISSION_MAX_AGE_MINUTES": "60",
         "PILOT_ROLLBACK_DRILL_MAX_AGE_DAYS": "30",
+        "PILOT_RUNTIME_ENFORCED": "true",
+        "PILOT_RUNTIME_MAX_ORDERS": "20",
         "MEDIA_STORAGE": "r2",
         "MEDIA_PUBLIC_BASE_URL": "https://cdn.flashin.store",
         "S3_ENDPOINT_URL": "https://storage.example.com",
@@ -151,3 +153,23 @@ def test_pilot_evidence_ttl_outside_safe_range_is_rejected(tmp_path):
 
     assert result.returncode == 1
     assert "PILOT_LIVE_GATE_MAX_AGE_MINUTES must be between 5 and 120" in result.stdout
+
+
+def test_disabled_pilot_runtime_is_rejected_in_production(tmp_path):
+    values = _valid_production_env()
+    values["PILOT_RUNTIME_ENFORCED"] = "false"
+
+    result = _run_validator(tmp_path, values)
+
+    assert result.returncode == 1
+    assert "PILOT_RUNTIME_ENFORCED must be true in production" in result.stdout
+
+
+def test_pilot_runtime_limit_must_equal_twenty(tmp_path):
+    values = _valid_production_env()
+    values["PILOT_RUNTIME_MAX_ORDERS"] = "19"
+
+    result = _run_validator(tmp_path, values)
+
+    assert result.returncode == 1
+    assert "PILOT_RUNTIME_MAX_ORDERS must equal 20 in production" in result.stdout
