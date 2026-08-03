@@ -67,13 +67,14 @@ def emit_event(
     aggregate_id: str | int = "",
     payload: dict | None = None,
 ) -> BusinessEvent:
-    normalized_payload = payload or {}
+    normalized_payload = {} if payload is None else payload
+    serialized_payload = _serialize_payload(normalized_payload)
     _apply_domain_handler(db, event_type, normalized_payload)
     event = BusinessEvent(
         event_type=event_type,
         aggregate_type=aggregate_type,
         aggregate_id=str(aggregate_id or ""),
-        payload_json=_serialize_payload(normalized_payload),
+        payload_json=serialized_payload,
         status="pending",
     )
     db.add(event)
