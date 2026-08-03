@@ -46,12 +46,13 @@ def _guarded_repo(tmp_path: Path) -> Path:
         elif relative == "docker-compose.production.yml":
             content = "./docs:/app/docs:ro\n./deploy/release:/app/deploy/release:ro\n"
         elif relative == "scripts/deploy_production.sh":
-            content = "pilot_runtime.py _stop\n"
+            content = "pilot_runtime.py _stop\ncheck_pilot_runtime_integrity.py\n"
         elif relative == "scripts/rollback.sh":
             content = (
                 'CAPABILITY_SCRIPT="scripts/pilot_release_capability.py"\n'
                 'python3 "$CAPABILITY_SCRIPT" inspect --archive "$RELEASE"\n'
                 "pilot_runtime.py _stop\n"
+                "check_pilot_runtime_integrity.py\n"
             )
         path.write_text(content, encoding="utf-8")
     _git(repo, "add", ".")
