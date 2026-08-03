@@ -10,6 +10,7 @@ import {
   setAdminToken,
   uploadAdminFile,
 } from "./api.js";
+import BusinessEventsPanel from "./BusinessEventsPanel.jsx";
 import {
   ORDER_STATUS_LABELS,
   orderAction,
@@ -443,6 +444,8 @@ function App() {
           ))}
         </div>
       </section>
+
+      <BusinessEventsPanel onUnauthorized={logout} />
 
       <section>
         <h2>Audit log</h2>
