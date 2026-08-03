@@ -59,6 +59,12 @@ jobs:
           python scripts/runtime_entrypoint_integrity.py
       - name: Validate shell scripts
         run: find scripts -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+      - name: Run pilot checkout runtime tests
+        run: python -m pytest -q backend/tests/test_pilot_runtime.py backend/tests/test_pilot_runtime_cli.py
+      - name: Run pilot release and database guard tests
+        run: python -m pytest -q backend/tests/test_pilot_release_capability.py backend/tests/test_pilot_runtime_integrity.py backend/tests/test_pilot_runtime_wiring.py
+      - name: Run production pilot environment tests
+        run: python -m pytest -q backend/tests/test_validate_env.py
       - name: Require one Alembic head
         run: |
           set -euo pipefail
