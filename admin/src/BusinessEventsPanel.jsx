@@ -35,11 +35,16 @@ export default function BusinessEventsPanel({ onUnauthorized }) {
   const [notice, setNotice] = useState("");
   const requestSequence = useRef(0);
   const replayLocks = useRef(new Set());
+  const selectedEventRef = useRef(selectedEvent);
   const unauthorizedHandler = useRef(onUnauthorized);
 
   useEffect(() => {
     unauthorizedHandler.current = onUnauthorized;
   }, [onUnauthorized]);
+
+  useEffect(() => {
+    selectedEventRef.current = selectedEvent;
+  }, [selectedEvent]);
 
   function handleFailure(actionError) {
     if (actionError instanceof AdminApiError && actionError.status === 401) {
@@ -63,10 +68,17 @@ export default function BusinessEventsPanel({ onUnauthorized }) {
       if (requestSequence.current !== sequence) return;
       setSummary(nextSummary);
       setEvents(nextEvents);
-      if (selectedEvent && !nextEvents.some((event) => event.id === selectedEvent.id)) {
-        setSelectedEvent(null);
-        setReason("");
-        setReplacementPayload("");
+
+      const currentSelected = selectedEventRef.current;
+      if (currentSelected) {
+        const listVersion = nextEvents.find((event) => event.id === currentSelected.id);
+        if (listVersion) {
+          setSelectedEvent((current) => current ? { ...current, ...listVersion } : current);
+        } else {
+          setSelectedEvent(null);
+          setReason("");
+          setReplacementPayload("");
+        }
       }
     } catch (actionError) {
       if (requestSequence.current === sequence) handleFailure(actionError);
@@ -131,11 +143,13 @@ export default function BusinessEventsPanel({ onUnauthorized }) {
         body: JSON.stringify(body),
         dedupeKey: `business-event-replay:${event.id}`,
       });
+      selectedEventRef.current = replayed;
       setSelectedEvent(replayed);
       setReason("");
       setReplacementPayload("");
       setNotice(`Событие #${event.id} возвращено в очередь. Контролируйте переход в processed.`);
-      await loadEvents(statusFilter, { silent: true });
+      setStatusFilter("");
+      await loadEvents("", { silent: true });
     } catch (actionError) {
       handleFailure(actionError);
     } finally {
