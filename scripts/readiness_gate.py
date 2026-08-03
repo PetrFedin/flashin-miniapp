@@ -13,6 +13,7 @@ from pilot_readiness import (
     build_report,
     write_report,
 )
+from script_time import utc_timestamp
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -32,6 +33,7 @@ def main() -> int:
         checks.extend(build_live_checks(ROOT))
 
     report = build_report(args.phase, checks)
+    report["generated_at"] = utc_timestamp()
     stem = "readiness_gate_report" if args.phase == "predeploy" else "pilot_live_gate_report"
     json_path, markdown_path = write_report(ROOT, report, stem=stem)
     print(json.dumps(report, ensure_ascii=False, indent=2))
