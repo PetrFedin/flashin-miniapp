@@ -114,3 +114,9 @@ def test_final_validation_rejects_incomplete_or_missing_evidence():
     assert report["decision"] == "NO-GO"
     assert any("20 passed scenarios" in error for error in report["errors"])
     assert any("missing evidence" in error for error in report["errors"])
+
+
+def test_live_pilot_artifacts_are_gitignored():
+    ignored = (ROOT / ".gitignore").read_text(encoding="utf-8")
+    assert "docs/pilot/live_pilot_state.json" in ignored
+    assert "docs/pilot/live_pilot_summary.md" in ignored
