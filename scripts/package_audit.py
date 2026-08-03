@@ -18,8 +18,10 @@ required = {
         "scripts/launch.py", "scripts/start_simple.sh", "scripts/preflight.py",
         "scripts/readiness_gate.py", "scripts/check_integrations.py",
         "scripts/test_all.sh", "scripts/pilot_control.py", "scripts/pilot_runner.py",
-        "scripts/generate_20_order_pilot_sheet.py", "backend/tests/test_pilot_control.py",
-        "backend/tests/test_pilot_readiness.py", "backend/tests/test_integration_checks.py",
+        "scripts/generate_20_order_pilot_sheet.py", "scripts/release_control.py",
+        "backend/tests/test_pilot_control.py", "backend/tests/test_pilot_readiness.py",
+        "backend/tests/test_integration_checks.py", "backend/tests/test_release_control.py",
+        "backend/tests/test_release_shell_safety.py",
     ],
     "integrations": [
         "backend/api/payments.py", "backend/api/moysklad.py",
@@ -30,14 +32,16 @@ required = {
         "scripts/check_meilisearch.py",
     ],
     "ops": [
-        "scripts/backup_postgres.sh", "scripts/restore_postgres.sh",
-        "scripts/deploy_production.sh", "scripts/rollback.sh",
+        "scripts/backup_postgres.sh", "scripts/verify_backup.sh",
+        "scripts/restore_postgres.sh", "scripts/deploy_production.sh",
+        "scripts/rollback.sh", "docs/pilot/release_and_rollback_runbook.md",
         "deploy/grafana/dashboards/flashin_operations.json",
     ],
     "docs": [
         "README.md", "docs/v49_unified_system_map.md", "docs/v50_final_handover.md",
         "docs/v51_pilot_freeze_layer.md", "docs/acceptance/pilot_acceptance_signoff.md",
         "docs/pilot/pilot_launch_runbook.md", "docs/pilot/provider_probe_runbook.md",
+        "docs/pilot/release_and_rollback_runbook.md",
     ],
 }
 
