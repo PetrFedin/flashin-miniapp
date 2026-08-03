@@ -1,4 +1,4 @@
-.PHONY: help init build up down logs migrate health workers search monitoring backup restore test preflight clean deploy-prod rollback verify-backup seed-admin validate-env openapi release-notes diagnostics setup-wizard check-integrations readiness pilot-sheet readiness-gate pilot-gate loadtest performance-budget security-audit media-jobs loadtest-catalog loadtest-webhooks real-e2e grafana-dashboards simple-start launch-local launch-production connected-audit simplicity-score env-todo pilot-runner release-pack release-freeze pilot-evidence package-audit test-all transaction-integrity
+.PHONY: help init build up down logs migrate health workers search monitoring backup restore test preflight clean deploy-prod rollback verify-backup seed-admin validate-env openapi release-notes diagnostics setup-wizard check-integrations readiness pilot-sheet readiness-gate pilot-gate loadtest performance-budget security-audit media-jobs loadtest-catalog loadtest-webhooks real-e2e grafana-dashboards simple-start launch-local launch-production connected-audit simplicity-score env-todo pilot-runner pilot-init pilot-record pilot-status pilot-final release-pack release-freeze pilot-evidence package-audit test-all transaction-integrity
 
 help:
 	@echo "FLASHIN commands:"
@@ -15,6 +15,9 @@ help:
 	@echo "  make test                  - run backend tests"
 	@echo "  make readiness-gate        - strict predeploy GO/NO-GO gate"
 	@echo "  make pilot-gate            - strict live pilot GO/NO-GO gate"
+	@echo "  make pilot-runner          - initialize or show executable 20-order pilot control"
+	@echo "  make pilot-status          - recalculate current pilot decision"
+	@echo "  make pilot-final           - require all 20 pilot scenarios and final GO"
 	@echo "  make backup                - backup PostgreSQL"
 
 init:
@@ -164,6 +167,19 @@ env-todo:
 
 pilot-runner:
 	python3 scripts/pilot_runner.py
+
+pilot-init:
+	python3 scripts/pilot_control.py init
+
+pilot-record:
+	@echo "Usage: make pilot-record ARGS='--number 1 --result pass ...'"
+	python3 scripts/pilot_control.py record $(ARGS)
+
+pilot-status:
+	python3 scripts/pilot_control.py status
+
+pilot-final:
+	python3 scripts/pilot_control.py validate --final
 
 release-pack:
 	python3 scripts/generate_release_pack.py
