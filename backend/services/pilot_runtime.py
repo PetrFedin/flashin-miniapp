@@ -93,7 +93,7 @@ def _validate_release_capability(
         "schema_version": 1,
         "kind": "release_capability",
         "name": "pilot_runtime_guard",
-        "version": 1,
+        "version": 2,
         "archive_sha256": release_state.get("sha256"),
         "git_commit": release_state.get("git_commit"),
         "release_id": release_state.get("release_id"),
