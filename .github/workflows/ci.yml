@@ -80,6 +80,8 @@ jobs:
         run: python scripts/business_event_worker_smoke.py
       - name: Run owned webhook outbox lease smoke
         run: python scripts/webhook_outbox_lease_smoke.py
+      - name: Run owned notification delivery lease smoke
+        run: python scripts/notification_delivery_lease_smoke.py
       - name: Run backend tests
         run: python -m pytest -q backend/tests
 

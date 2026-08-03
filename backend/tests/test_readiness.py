@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from backend.api import health
 
 
-CURRENT_HEAD = "0019_webhook_outbox_lease_tokens"
+CURRENT_HEAD = "0020_notification_delivery_lease_tokens"
 
 
 class ScalarResult:
@@ -58,7 +58,7 @@ def test_not_ready_when_database_revision_is_old(monkeypatch):
         "_expected_migration_heads",
         lambda: frozenset({CURRENT_HEAD}),
     )
-    db = FakeDb(["0018_notification_event_keys"])
+    db = FakeDb(["0019_webhook_outbox_lease_tokens"])
 
     with pytest.raises(HTTPException) as exc_info:
         health.ready(db)
