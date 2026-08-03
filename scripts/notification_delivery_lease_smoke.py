@@ -18,10 +18,10 @@ if str(ROOT) not in sys.path:
 from backend.database import engine, utcnow_naive
 from backend.models import Notification
 from backend.notification_models import NotificationDeliveryState
-from bot.send_notifications import (
-    _claim_pending_batch_db,
-    _finish_delivery_db,
-    _renew_delivery_lease_db,
+from backend.services.notification_delivery import (
+    claim_pending_batch as _claim_pending_batch_db,
+    finish_delivery as _finish_delivery_db,
+    renew_delivery_lease as _renew_delivery_lease_db,
 )
 
 
