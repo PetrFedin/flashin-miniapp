@@ -149,6 +149,8 @@ docker compose exec -T backend python scripts/container_smoke.py
 
 echo "Promoting successful release pointer..."
 python3 scripts/release_control.py promote --archive "$release_archive" >/dev/null
+echo "Inspecting and signing pilot runtime release capability..."
+python3 scripts/pilot_release_capability.py stamp --slot current --env .env >/dev/null
 trap - ERR
 
 echo "Deploy completed and release promoted: $release_archive"
