@@ -45,8 +45,9 @@ def _guarded_repo(tmp_path: Path) -> Path:
             content = "pilot_runtime.py _stop\n"
         elif relative == "scripts/rollback.sh":
             content = (
+                'CAPABILITY_SCRIPT="scripts/pilot_release_capability.py"\n'
+                'python3 "$CAPABILITY_SCRIPT" inspect --archive "$RELEASE"\n'
                 "pilot_runtime.py _stop\n"
-                "pilot_release_capability.py inspect --archive\n"
             )
         path.write_text(content, encoding="utf-8")
     _git(repo, "add", ".")
