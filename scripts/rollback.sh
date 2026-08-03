@@ -3,19 +3,38 @@ set -euo pipefail
 
 RELEASE_REF=${1:-previous}
 BACKUP=${2:-}
+ROLLBACK_DRILL=${ROLLBACK_DRILL:-0}
 
 export COMPOSE_FILE=${COMPOSE_FILE:-"docker-compose.yml:docker-compose.production.yml"}
 export COMPOSE_PROFILES=${COMPOSE_PROFILES:-"production,workers,scheduler,search"}
 
 CONTROL_SCRIPT="scripts/release_control.py"
 RESTORE_SCRIPT="scripts/restore_postgres.sh"
-if [ ! -f "$CONTROL_SCRIPT" ]; then
-  echo "Release control script is missing: $CONTROL_SCRIPT" >&2
-  exit 1
-fi
-if [ ! -f "$RESTORE_SCRIPT" ]; then
-  echo "Safe restore script is missing: $RESTORE_SCRIPT" >&2
-  exit 1
+EVIDENCE_SCRIPT="scripts/pilot_evidence.py"
+CURRENT_RELEASE_STATE="deploy/release/runtime/current_release.json"
+ROLLBACK_REPORT="docs/pilot/rollback_drill_report.json"
+
+for required_script in "$CONTROL_SCRIPT" "$RESTORE_SCRIPT"; do
+  if [ ! -f "$required_script" ]; then
+    echo "Required rollback script is missing: $required_script" >&2
+    exit 1
+  fi
+done
+
+if [ "$ROLLBACK_DRILL" = "1" ]; then
+  if [ ! -f "$EVIDENCE_SCRIPT" ]; then
+    echo "Pilot evidence script is missing: $EVIDENCE_SCRIPT" >&2
+    exit 1
+  fi
+  if [ -z "$BACKUP" ]; then
+    echo "A rollback drill must restore a verified database backup" >&2
+    exit 1
+  fi
+  if [ ! -f "$CURRENT_RELEASE_STATE" ]; then
+    echo "Current release state is missing; cannot record rollback drill origin" >&2
+    exit 1
+  fi
+  python3 "$EVIDENCE_SCRIPT" validate-secret --env .env >/dev/null
 fi
 
 if [ "$RELEASE_REF" = "current" ] || [ "$RELEASE_REF" = "previous" ]; then
@@ -44,16 +63,22 @@ if ! command -v rsync >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "Rolling back to verified release: $RELEASE"
-[ -z "$BACKUP" ] || echo "Database restore source: $BACKUP"
-
-docker compose down
-
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
 cp "$CONTROL_SCRIPT" "$TMP_DIR/release_control.py"
 cp "$RESTORE_SCRIPT" "$TMP_DIR/restore_postgres.sh"
 chmod +x "$TMP_DIR/restore_postgres.sh"
+if [ "$ROLLBACK_DRILL" = "1" ]; then
+  cp "$EVIDENCE_SCRIPT" "$TMP_DIR/pilot_evidence.py"
+  cp "$CURRENT_RELEASE_STATE" "$TMP_DIR/from_release.json"
+fi
+
+echo "Rolling back to verified release: $RELEASE"
+[ -z "$BACKUP" ] || echo "Database restore source: $BACKUP"
+[ "$ROLLBACK_DRILL" != "1" ] || echo "Rollback drill evidence recording is enabled"
+
+docker compose down
+
 python3 "$TMP_DIR/release_control.py" extract --archive "$RELEASE" --destination "$TMP_DIR/release" >/dev/null
 rm -f "$TMP_DIR/release/release_manifest.json"
 
@@ -74,6 +99,10 @@ rsync -a --delete \
   --exclude 'docs/pilot/live_pilot_summary.md' \
   --exclude 'docs/pilot/integration_check_report.json' \
   --exclude 'docs/pilot/integration_check_report.md' \
+  --exclude 'docs/pilot/rollback_drill_report.json' \
+  --exclude 'docs/pilot/rollback_drill_report.md' \
+  --exclude 'docs/pilot/pilot_admission_manifest.json' \
+  --exclude 'docs/pilot/pilot_admission_manifest.md' \
   --exclude 'docs/readiness_gate_report.json' \
   --exclude 'docs/readiness_gate_report.md' \
   --exclude 'docs/pilot_live_gate_report.json' \
@@ -144,5 +173,26 @@ done
 
 docker compose exec -T backend python scripts/container_smoke.py
 python3 "$TMP_DIR/release_control.py" promote --archive "$RELEASE" >/dev/null
+
+if [ "$ROLLBACK_DRILL" = "1" ]; then
+  max_age_days=$(python3 - <<'PY'
+from pathlib import Path
+value = "30"
+for raw in Path(".env").read_text(encoding="utf-8").splitlines():
+    line = raw.strip()
+    if line.startswith("PILOT_ROLLBACK_DRILL_MAX_AGE_DAYS="):
+        value = line.split("=", 1)[1].strip().strip('"').strip("'") or "30"
+        break
+print(value)
+PY
+)
+  python3 "$TMP_DIR/pilot_evidence.py" record-rollback \
+    --env "$(pwd)/.env" \
+    --from-release-state "$TMP_DIR/from_release.json" \
+    --to-release-state "$(pwd)/$CURRENT_RELEASE_STATE" \
+    --backup "$BACKUP" \
+    --report "$(pwd)/$ROLLBACK_REPORT" \
+    --max-age-days "$max_age_days"
+fi
 
 echo "Rollback completed and release pointer promoted: $RELEASE"
