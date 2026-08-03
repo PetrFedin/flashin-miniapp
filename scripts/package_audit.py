@@ -37,7 +37,7 @@ required = {
     "docs": [
         "README.md", "docs/v49_unified_system_map.md", "docs/v50_final_handover.md",
         "docs/v51_pilot_freeze_layer.md", "docs/acceptance/pilot_acceptance_signoff.md",
-        "docs/pilot/pilot_launch_runbook.md",
+        "docs/pilot/pilot_launch_runbook.md", "docs/pilot/provider_probe_runbook.md",
     ],
 }
 
