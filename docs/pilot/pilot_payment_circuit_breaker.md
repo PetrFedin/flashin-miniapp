@@ -47,7 +47,7 @@ Runtime guard ограничивает checkout первыми 20 заказам
 - `refund_retry_required`;
 - `refund_review_required`.
 
-Статус операции и остановка пилота либо фиксируются вместе, либо откатываются вместе.
+Статус операции и остановка пилота либо фиксируются вместе, либо откатываются вместе. Ошибка записи retry/review state не подавляется: endpoint возвращает `503`.
 
 ### Durable STOP после rollback
 
@@ -59,6 +59,25 @@ Runtime guard ограничивает checkout первыми 20 заказам
 4. сохраняет нормализованный `auto:<reason>`.
 
 Если STOP нельзя надёжно записать, API возвращает `503`, а не маскирует проблему обычным `409`/`502`.
+
+## Release capability v2
+
+Circuit breaker является обязательной частью подписанной capability `pilot_runtime_guard` версии 2. Immutable archive принимается для deploy или rollback только при наличии и wiring следующих файлов:
+
+- `backend/services/pilot_circuit_breaker.py`;
+- `backend/api/payments.py`;
+- `backend/api/returns.py`;
+- `backend/services/payment_reconciliation.py`.
+
+Pilot checkout проверяет capability v2 одновременно у `current` и `previous` release pointer. Версия v1, отсутствующая подпись, несовпадающий release binding или архив без breaker wiring блокируют checkout с `503`.
+
+Перед arm необходимо выполнить два успешных production deploy одной v2-линии. После этого текущий и предыдущий immutable releases должны отдельно пройти:
+
+```bash
+python3 scripts/pilot_release_capability.py verify --slot both --env .env
+```
+
+Rollback на v1 или на архив без payment/refund circuit breaker запрещён до остановки сервисов.
 
 ## Почему completed также может стать stopped
 
