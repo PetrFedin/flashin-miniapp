@@ -31,6 +31,7 @@ required = {
         "backend/tests/test_pilot_runtime_integrity.py",
         "backend/tests/test_pilot_payment_circuit_breaker.py",
         "backend/tests/test_pilot_circuit_breaker_wiring.py",
+        "backend/tests/test_pilot_money_safety_fail_closed.py",
     ],
     "integrations": [
         "backend/api/payments.py", "backend/api/returns.py", "backend/api/moysklad.py",
