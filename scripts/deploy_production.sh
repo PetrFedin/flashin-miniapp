@@ -11,12 +11,8 @@ fi
 export COMPOSE_FILE="docker-compose.yml:docker-compose.production.yml"
 export COMPOSE_PROFILES="production,workers,scheduler,search"
 
-python3 scripts/validate_env.py
-python3 scripts/preflight.py
-
-echo "Validating production Compose configuration..."
-docker compose config --quiet
-python3 scripts/check_production_compose.py
+echo "Running strict predeploy readiness gate..."
+python3 scripts/readiness_gate.py --phase predeploy
 
 echo "Building images..."
 docker compose build
@@ -75,18 +71,18 @@ docker compose run --rm backend python scripts/check_transaction_integrity.py
 echo "Starting production services, scheduler, notifications and search..."
 docker compose up -d db backend frontend admin bot caddy notification_worker scheduler meilisearch
 
-echo "Waiting for backend inside Docker network..."
-backend_healthy=0
+echo "Waiting for migration-aware backend readiness inside Docker network..."
+backend_ready=0
 for _ in $(seq 1 90); do
-  if docker compose exec -T backend curl -fsS http://localhost:8000/health >/dev/null 2>&1; then
-    backend_healthy=1
-    echo "Backend healthy"
+  if docker compose exec -T backend curl -fsS http://localhost:8000/ready >/dev/null 2>&1; then
+    backend_ready=1
+    echo "Backend ready"
     break
   fi
   sleep 2
 done
-if [ "$backend_healthy" -ne 1 ]; then
-  echo "Backend did not become healthy"
+if [ "$backend_ready" -ne 1 ]; then
+  echo "Backend did not become ready"
   docker compose logs backend
   exit 1
 fi
@@ -121,4 +117,4 @@ done
 echo "Running internal smoke checks..."
 docker compose exec -T backend python scripts/container_smoke.py
 
-echo "Deploy completed"
+echo "Deploy completed. Run 'make pilot-gate' and admit pilot users only after a GO decision."
