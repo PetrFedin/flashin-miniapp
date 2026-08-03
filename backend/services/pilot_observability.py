@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from datetime import datetime, timezone
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
     from ..config import Settings
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
+_SAFE_AUTO_STOP_REASON = re.compile(r"^auto:[a-z0-9:._-]{1,160}$")
 _PAYMENT_REVIEW_STATUSES = {"paid_review_required", "payment_review_required"}
 _REFUND_ATTENTION_STATUSES = {"refund_retry_required", "refund_review_required"}
 
@@ -34,6 +36,22 @@ def _generated_at() -> str:
 
 def _valid_sha256(value: object) -> bool:
     return bool(_HEX64.fullmatch(str(value or "").strip().lower()))
+
+
+def _run_ref(run_id: str) -> str | None:
+    value = str(run_id or "").strip()
+    if not value:
+        return None
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+
+
+def _safe_stop_reason(reason: str) -> str | None:
+    value = str(reason or "").strip().lower()
+    if not value:
+        return None
+    if _SAFE_AUTO_STOP_REASON.fullmatch(value):
+        return value
+    return "operator_stop"
 
 
 def _allowlist_summary(raw: str) -> tuple[int, list[str]]:
@@ -149,7 +167,7 @@ def build_pilot_operations_status(
             "runtime": {
                 "present": False,
                 "status": "not_armed",
-                "run_id": None,
+                "run_ref": None,
                 "max_orders": 20,
                 "accepted_orders": 0,
                 "remaining_orders": 20,
@@ -257,14 +275,14 @@ def build_pilot_operations_status(
         "runtime": {
             "present": True,
             "status": state.status,
-            "run_id": state.run_id or None,
+            "run_ref": _run_ref(state.run_id),
             "max_orders": int(state.max_orders),
             "accepted_orders": int(state.accepted_orders),
             "remaining_orders": remaining_orders,
             "slot_count": len(slots),
             "historical_slot_count": int(historical_slot_count),
             "allowlist_count": allowlist_count,
-            "stop_reason": str(state.stop_reason or "").strip() or None,
+            "stop_reason": _safe_stop_reason(state.stop_reason),
             "opened_at": _timestamp(state.opened_at),
             "stopped_at": _timestamp(state.stopped_at),
             "completed_at": _timestamp(state.completed_at),
