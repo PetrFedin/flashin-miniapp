@@ -106,10 +106,11 @@ def redact(text: str, env: Mapping[str, str]) -> str:
 def build_probe_context(env: Mapping[str, str], release: Mapping[str, Any], run_id: str) -> dict[str, str]:
     shop_id = str(env.get("YOOKASSA_SHOP_ID", "")).strip()
     git_commit = str(release.get("git_commit", "")).strip()
+    return_url = str(env.get("YOOKASSA_RETURN_URL", "")).strip()
     idempotence_key = str(
         uuid.uuid5(
             uuid.NAMESPACE_URL,
-            f"flashin:pilot-provider-probe:yookassa:{shop_id}:{git_commit}",
+            f"flashin:pilot-provider-probe:yookassa:{shop_id}:{git_commit}:{return_url}",
         )
     )
     return {
@@ -224,7 +225,7 @@ def build_report(
             "failed": len(failed),
         },
         "side_effects": {
-            "yookassa": "1.00 RUB pending test payment; idempotent per release",
+            "yookassa": "1.00 RUB pending test payment; idempotent per release and return URL",
         },
         "results": list(results),
     }
@@ -245,7 +246,7 @@ def write_report(path: Path, report: Mapping[str, Any]) -> tuple[Path, Path]:
         f"Expires: `{report.get('expires_at')}`",
         f"Release: `{release.get('release_id', 'unknown')}` / `{release.get('git_commit', 'unknown')}`",
         "",
-        "YooKassa probe creates one 1.00 RUB pending payment idempotently per release.",
+        "YooKassa probe creates one 1.00 RUB pending payment idempotently per release and return URL.",
         "",
     ]
     for result in report.get("results", []):
