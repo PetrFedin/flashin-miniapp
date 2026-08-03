@@ -77,6 +77,14 @@ echo "Rolling back to verified release: $RELEASE"
 [ -z "$BACKUP" ] || echo "Database restore source: $BACKUP"
 [ "$ROLLBACK_DRILL" != "1" ] || echo "Rollback drill evidence recording is enabled"
 
+if docker compose ps --status running --services 2>/dev/null | grep -qx backend; then
+  if docker compose exec -T backend test -f /app/scripts/pilot_runtime.py; then
+    echo "Stopping pilot checkout runtime before rollback..."
+    docker compose exec -T backend python scripts/pilot_runtime.py _stop \
+      --reason "rollback started"
+  fi
+fi
+
 docker compose down
 
 python3 "$TMP_DIR/release_control.py" extract --archive "$RELEASE" --destination "$TMP_DIR/release" >/dev/null
@@ -196,3 +204,4 @@ PY
 fi
 
 echo "Rollback completed and release pointer promoted: $RELEASE"
+echo "Pilot runtime remains stopped; a fresh admission is required before resume."
