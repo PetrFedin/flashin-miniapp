@@ -1,0 +1,80 @@
+groups:
+  - name: flashin-controlled-pilot
+    interval: 15s
+    rules:
+      - alert: FlashinPilotMetricsUnavailable
+        expr: absent(flashin_pilot_metrics_collection_success) or flashin_pilot_metrics_collection_success == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: flashin-backend
+          component: pilot-runtime
+        annotations:
+          summary: Controlled pilot metrics are unavailable
+          description: Prometheus cannot confirm the current pilot runtime and checkout must remain closed.
+
+      - alert: FlashinPilotRuntimeStopped
+        expr: (flashin_pilot_runtime_enforced == 1) and on() (flashin_pilot_runtime_status{status="stopped"} == 1)
+        for: 0m
+        labels:
+          severity: critical
+          service: flashin-backend
+          component: pilot-runtime
+        annotations:
+          summary: Controlled pilot runtime is stopped
+          description: A manual or automatic safety stop is active. Do not admit another checkout.
+
+      - alert: FlashinPilotDatabaseIntegrityFailed
+        expr: (flashin_pilot_runtime_enforced == 1) and on() (flashin_pilot_database_integrity_healthy == 0)
+        for: 0m
+        labels:
+          severity: critical
+          service: flashin-backend
+          component: pilot-runtime
+        annotations:
+          summary: Pilot database integrity check failed
+          description: Runtime state, order counters or slot bindings are inconsistent. Checkout must remain closed.
+
+      - alert: FlashinPilotArtifactIntegrityFailed
+        expr: (flashin_pilot_runtime_enforced == 1) and on() (flashin_pilot_artifact_integrity_applicable == 1) and on() (flashin_pilot_artifact_integrity_healthy == 0)
+        for: 0m
+        labels:
+          severity: critical
+          service: flashin-backend
+          component: pilot-runtime
+        annotations:
+          summary: Pilot admission or release evidence is invalid
+          description: Signed admission, evidence or current/previous capability-v2 release bindings are not confirmed.
+
+      - alert: FlashinPilotMoneyAttentionRequired
+        expr: sum(flashin_pilot_money_attention) > 0
+        for: 0m
+        labels:
+          severity: critical
+          service: flashin-backend
+          component: pilot-money-integrity
+        annotations:
+          summary: A pilot payment or refund requires review
+          description: At least one payment review, refund review/retry or reconciliation mismatch is unresolved.
+
+      - alert: FlashinPilotUnexpectedNoGo
+        expr: (flashin_pilot_runtime_enforced == 1) and on() (flashin_pilot_runtime_status{status="active"} == 1) and on() (flashin_pilot_checkout_ready == 0)
+        for: 1m
+        labels:
+          severity: critical
+          service: flashin-backend
+          component: pilot-runtime
+        annotations:
+          summary: Active pilot runtime is not ready for checkout
+          description: The runtime reports active but one or more fail-closed admission conditions are not satisfied.
+
+      - alert: FlashinPilotCapacityLow
+        expr: (flashin_pilot_runtime_status{status="active"} == 1) and on() (flashin_pilot_orders_remaining > 0) and on() (flashin_pilot_orders_remaining <= 3)
+        for: 0m
+        labels:
+          severity: warning
+          service: flashin-backend
+          component: pilot-runtime
+        annotations:
+          summary: Controlled pilot is close to the 20-order limit
+          description: Three or fewer controlled checkout slots remain. Prepare final reconciliation and closure.
