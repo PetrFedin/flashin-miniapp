@@ -54,7 +54,7 @@ def stop_pilot_for_order(
     if state.run_id != slot.run_id:
         normalized_reason = "pilot_slot_runtime_mismatch"
 
-    changed = state.status == "active"
+    changed = state.status in {"active", "completed"}
     if changed:
         state.status = "stopped"
         state.stopped_at = utcnow_naive()
