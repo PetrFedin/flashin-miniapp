@@ -77,6 +77,33 @@ def _resolve_evidence_path(manifest_path: Path, raw_path: object) -> Path:
     return manifest_path.parent.parent / name
 
 
+def _validate_release_capability(
+    release_state: Mapping[str, Any],
+    secret: str,
+    label: str,
+) -> list[str]:
+    capabilities = release_state.get("capabilities")
+    capability = capabilities.get("pilot_runtime_guard") if isinstance(capabilities, Mapping) else None
+    if not isinstance(capability, Mapping):
+        return [f"{label} release is missing signed pilot_runtime_guard capability"]
+    errors: list[str] = []
+    if not verify_payload_signature(capability, secret):
+        errors.append(f"{label} release runtime capability signature is invalid")
+    expected = {
+        "schema_version": 1,
+        "kind": "release_capability",
+        "name": "pilot_runtime_guard",
+        "version": 1,
+        "archive_sha256": release_state.get("sha256"),
+        "git_commit": release_state.get("git_commit"),
+        "release_id": release_state.get("release_id"),
+    }
+    for key, value in expected.items():
+        if capability.get(key) != value:
+            errors.append(f"{label} release runtime capability {key} mismatch")
+    return errors
+
+
 def validate_runtime_files(
     state: PilotRuntimeState,
     settings: "Settings",
@@ -86,18 +113,21 @@ def validate_runtime_files(
     errors: list[str] = []
     runtime_env: Mapping[str, str] = env or os.environ
     manifest_path = Path(settings.pilot_admission_manifest_path)
-    release_path = Path(settings.pilot_current_release_path)
+    current_path = Path(settings.pilot_current_release_path)
+    previous_path = Path(settings.pilot_previous_release_path)
     pilot_state_path = Path(settings.pilot_state_path)
 
     manifest, manifest_errors = _load_json(manifest_path, "pilot admission manifest")
-    current_release, release_errors = _load_json(release_path, "current release pointer")
+    current_release, current_errors = _load_json(current_path, "current release pointer")
+    previous_release, previous_errors = _load_json(previous_path, "previous release pointer")
     pilot_state, pilot_errors = _load_json(pilot_state_path, "pilot control state")
-    errors.extend(manifest_errors + release_errors + pilot_errors)
+    errors.extend(manifest_errors + current_errors + previous_errors + pilot_errors)
     if errors:
         return list(dict.fromkeys(errors))
 
     assert manifest is not None
     assert current_release is not None
+    assert previous_release is not None
     assert pilot_state is not None
 
     try:
@@ -108,8 +138,7 @@ def validate_runtime_files(
             }
         )
     except ValueError as exc:
-        errors.append(str(exc))
-        return errors
+        return [str(exc)]
 
     if manifest.get("kind") != "pilot_admission" or manifest.get("decision") != "GO":
         errors.append("pilot admission manifest is not GO")
@@ -121,13 +150,22 @@ def validate_runtime_files(
     if sha256_file(manifest_path) != state.admission_sha256:
         errors.append("pilot admission file does not match the armed runtime")
 
-    release_binding = manifest.get("release")
-    if not isinstance(release_binding, Mapping):
-        errors.append("pilot admission release binding is missing")
-    elif str(release_binding.get("sha256", "")) != state.release_sha256:
-        errors.append("pilot admission release does not match the armed runtime")
+    current_binding = manifest.get("release")
+    previous_binding = manifest.get("previous_release")
+    if not isinstance(current_binding, Mapping):
+        errors.append("pilot admission current release binding is missing")
+    elif str(current_binding.get("sha256", "")) != state.release_sha256:
+        errors.append("pilot admission current release does not match the armed runtime")
+    if not isinstance(previous_binding, Mapping):
+        errors.append("pilot admission previous release binding is missing")
+    elif str(previous_binding.get("sha256", "")) != str(previous_release.get("sha256", "")):
+        errors.append("pilot admission previous release does not match the rollback pointer")
     if str(current_release.get("sha256", "")) != state.release_sha256:
         errors.append("current release pointer does not match the armed runtime")
+    if str(current_release.get("sha256", "")) == str(previous_release.get("sha256", "")):
+        errors.append("current and previous release pointers must be different")
+    errors.extend(_validate_release_capability(current_release, secret, "current"))
+    errors.extend(_validate_release_capability(previous_release, secret, "previous"))
 
     evidence = manifest.get("evidence")
     if not isinstance(evidence, Mapping):
