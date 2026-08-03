@@ -26,6 +26,7 @@ def production_env() -> dict[str, str]:
         "TELEGRAM_BOT_TOKEN": "telegram-secret-123",
         "YOOKASSA_SHOP_ID": "shop-1",
         "YOOKASSA_SECRET_KEY": "yookassa-secret-456",
+        "YOOKASSA_RETURN_URL": "https://mini.flashin.store/payment-result",
         "MOYSKLAD_TOKEN": "moy-token",
         "MEDIA_STORAGE": "r2",
         "S3_BUCKET": "bucket",
@@ -112,12 +113,18 @@ def test_host_probe_receives_dotenv_and_probe_context():
     assert captured["env"]["FLASHIN_PROBE_RUN_ID"] == "run-1"
 
 
-def test_probe_context_and_yookassa_idempotence_are_stable_per_release():
+def test_probe_context_and_yookassa_idempotence_are_stable_per_payload():
     first = build_probe_context(production_env(), current_release(), "run-1")
     second = build_probe_context(production_env(), current_release(), "run-2")
     assert first["FLASHIN_YOOKASSA_IDEMPOTENCE_KEY"] == second["FLASHIN_YOOKASSA_IDEMPOTENCE_KEY"]
     assert first["FLASHIN_PROBE_RUN_ID"] != second["FLASHIN_PROBE_RUN_ID"]
-    assert build_idempotence_key("shop-1", "a" * 40) == first["FLASHIN_YOOKASSA_IDEMPOTENCE_KEY"]
+    assert build_idempotence_key(
+        "shop-1", "a" * 40, "https://mini.flashin.store/payment-result"
+    ) == first["FLASHIN_YOOKASSA_IDEMPOTENCE_KEY"]
+    changed = production_env()
+    changed["YOOKASSA_RETURN_URL"] = "https://mini.flashin.store/new-result"
+    third = build_probe_context(changed, current_release(), "run-3")
+    assert third["FLASHIN_YOOKASSA_IDEMPOTENCE_KEY"] != first["FLASHIN_YOOKASSA_IDEMPOTENCE_KEY"]
 
 
 def test_signed_strict_report_is_accepted_by_verifier():
