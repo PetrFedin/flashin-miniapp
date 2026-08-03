@@ -1,43 +1,19 @@
-import asyncio
 from datetime import timedelta
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
 from backend.config import get_settings
-from backend.database import SessionLocal, utcnow_naive
+from backend.database import utcnow_naive
 from backend.jobs.campaign_jobs import queue_due_campaigns
 from backend.jobs.event_jobs import run_event_dispatcher
 from backend.jobs.ops_jobs import create_inventory_snapshot, queue_abandoned_cart_notifications
 from backend.jobs.outbox_jobs import process_outbox
 from backend.jobs.refund_jobs import reconcile_pending_refunds
+from backend.jobs.scheduler_lock import run_locked_async_db_job, run_locked_db_job
 from backend.jobs.sla_jobs import mark_overdue_sla
 from backend.services.crm import recompute_all_profiles
 from backend.services.moysklad import sync_assortment_to_catalog
 from backend.services.recommendations import rebuild_basic_recommendations
-
-
-def with_db(fn):
-    db = SessionLocal()
-    try:
-        result = fn(db)
-        print(fn.__name__, result)
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
-
-
-def with_async_db(fn):
-    db = SessionLocal()
-    try:
-        result = asyncio.run(fn(db))
-        print(fn.__name__, result)
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
 
 
 async def sync_moysklad_and_rebuild(db):
@@ -57,6 +33,18 @@ async def sync_moysklad_and_rebuild(db):
     }
 
 
+def _run_db_job(job_name, callback):
+    outcome = run_locked_db_job(job_name, callback)
+    print(job_name, outcome)
+    return outcome
+
+
+def _run_async_db_job(job_name, callback):
+    outcome = run_locked_async_db_job(job_name, callback)
+    print(job_name, outcome)
+    return outcome
+
+
 def main():
     settings = get_settings()
     if not settings.scheduler_enabled:
@@ -70,30 +58,59 @@ def main():
             "misfire_grace_time": 300,
         }
     )
-    scheduler.add_job(lambda: with_db(queue_due_campaigns), "interval", minutes=5, id="campaigns")
-    scheduler.add_job(lambda: with_db(run_event_dispatcher), "interval", minutes=2, id="events")
     scheduler.add_job(
-        lambda: with_db(queue_abandoned_cart_notifications),
+        lambda: _run_db_job("campaigns", queue_due_campaigns),
+        "interval",
+        minutes=5,
+        id="campaigns",
+    )
+    scheduler.add_job(
+        lambda: _run_db_job("events", run_event_dispatcher),
+        "interval",
+        minutes=2,
+        id="events",
+    )
+    scheduler.add_job(
+        lambda: _run_db_job(
+            "abandoned-carts",
+            queue_abandoned_cart_notifications,
+        ),
         "interval",
         minutes=30,
         id="abandoned-carts",
     )
     scheduler.add_job(
-        lambda: with_db(create_inventory_snapshot),
+        lambda: _run_db_job("inventory-snapshot", create_inventory_snapshot),
         "interval",
         hours=6,
         id="inventory-snapshot",
     )
-    scheduler.add_job(lambda: with_db(mark_overdue_sla), "interval", minutes=5, id="sla")
-    scheduler.add_job(lambda: with_async_db(process_outbox), "interval", minutes=5, id="outbox")
     scheduler.add_job(
-        lambda: with_async_db(reconcile_pending_refunds),
+        lambda: _run_db_job("sla", mark_overdue_sla),
+        "interval",
+        minutes=5,
+        id="sla",
+    )
+    scheduler.add_job(
+        lambda: _run_async_db_job("outbox", process_outbox),
+        "interval",
+        minutes=5,
+        id="outbox",
+    )
+    scheduler.add_job(
+        lambda: _run_async_db_job(
+            "refund-reconciliation",
+            reconcile_pending_refunds,
+        ),
         "interval",
         minutes=5,
         id="refund-reconciliation",
     )
     scheduler.add_job(
-        lambda: with_async_db(sync_moysklad_and_rebuild),
+        lambda: _run_async_db_job(
+            "moysklad-sync",
+            sync_moysklad_and_rebuild,
+        ),
         "interval",
         minutes=moysklad_interval,
         id="moysklad-sync",
