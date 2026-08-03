@@ -18,6 +18,21 @@ from backend.services.pilot_runtime import (
 from scripts.pilot_evidence import configuration_fingerprint, sign_payload
 
 
+def _capability(state: dict, secret: str) -> dict:
+    return sign_payload(
+        {
+            "schema_version": 1,
+            "kind": "release_capability",
+            "name": "pilot_runtime_guard",
+            "version": 1,
+            "archive_sha256": state["sha256"],
+            "git_commit": state["git_commit"],
+            "release_id": state["release_id"],
+        },
+        secret,
+    )
+
+
 def _runtime(tmp_path: Path, *, accepted_orders: int = 0):
     docs = tmp_path / "docs"
     pilot_docs = docs / "pilot"
@@ -32,6 +47,7 @@ def _runtime(tmp_path: Path, *, accepted_orders: int = 0):
         "MINI_APP_URL": "https://mini.flashin.store",
         "ADMIN_URL": "https://admin.flashin.store",
     }
+    secret = env["PILOT_EVIDENCE_SIGNING_SECRET"]
     evidence_paths = {
         "provider_report": pilot_docs / "integration_check_report.json",
         "live_gate_report": docs / "pilot_live_gate_report.json",
@@ -40,9 +56,22 @@ def _runtime(tmp_path: Path, *, accepted_orders: int = 0):
     for key, path in evidence_paths.items():
         path.write_text(json.dumps({"kind": key}), encoding="utf-8")
 
-    release_sha = "r" * 64
-    release_path = releases / "current_release.json"
-    release_path.write_text(json.dumps({"sha256": release_sha}), encoding="utf-8")
+    current = {
+        "release_id": "current-release",
+        "git_commit": "c" * 40,
+        "sha256": "r" * 64,
+    }
+    current["capabilities"] = {"pilot_runtime_guard": _capability(current, secret)}
+    previous = {
+        "release_id": "previous-release",
+        "git_commit": "p" * 40,
+        "sha256": "q" * 64,
+    }
+    previous["capabilities"] = {"pilot_runtime_guard": _capability(previous, secret)}
+    current_path = releases / "current_release.json"
+    previous_path = releases / "previous_release.json"
+    current_path.write_text(json.dumps(current), encoding="utf-8")
+    previous_path.write_text(json.dumps(previous), encoding="utf-8")
 
     pilot_created_at = "2026-08-03T18:00:00Z"
     pilot_path = pilot_docs / "live_pilot_state.json"
@@ -62,17 +91,16 @@ def _runtime(tmp_path: Path, *, accepted_orders: int = 0):
     manifest = {
         "kind": "pilot_admission",
         "decision": "GO",
-        "configuration_fingerprint": configuration_fingerprint(
-            env, env["PILOT_EVIDENCE_SIGNING_SECRET"]
-        ),
-        "release": {"sha256": release_sha},
+        "configuration_fingerprint": configuration_fingerprint(env, secret),
+        "release": current,
+        "previous_release": previous,
         "evidence": {
             key: {"path": str(path), "sha256": sha256_file(path)}
             for key, path in evidence_paths.items()
         },
     }
     manifest_path.write_text(
-        json.dumps(sign_payload(manifest, env["PILOT_EVIDENCE_SIGNING_SECRET"])),
+        json.dumps(sign_payload(manifest, secret)),
         encoding="utf-8",
     )
 
@@ -80,9 +108,10 @@ def _runtime(tmp_path: Path, *, accepted_orders: int = 0):
         pilot_runtime_enforced=True,
         pilot_runtime_max_orders=20,
         pilot_admission_manifest_path=str(manifest_path),
-        pilot_current_release_path=str(release_path),
+        pilot_current_release_path=str(current_path),
+        pilot_previous_release_path=str(previous_path),
         pilot_state_path=str(pilot_path),
-        pilot_evidence_signing_secret=env["PILOT_EVIDENCE_SIGNING_SECRET"],
+        pilot_evidence_signing_secret=secret,
     )
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
@@ -95,7 +124,7 @@ def _runtime(tmp_path: Path, *, accepted_orders: int = 0):
         run_id="pilot-run",
         status="active",
         admission_sha256=sha256_file(manifest_path),
-        release_sha256=release_sha,
+        release_sha256=current["sha256"],
         pilot_state_created_at=pilot_created_at,
         max_orders=20,
         accepted_orders=accepted_orders,
@@ -116,11 +145,11 @@ def _runtime(tmp_path: Path, *, accepted_orders: int = 0):
             )
         )
     session.commit()
-    return session, customer, settings, env, pilot_path, manifest_path
+    return session, customer, settings, env, pilot_path, manifest_path, previous_path
 
 
 def test_allowlisted_checkout_consumes_one_atomic_slot(tmp_path):
-    db, customer, settings, env, _pilot_path, _manifest_path = _runtime(tmp_path)
+    db, customer, settings, env, *_ = _runtime(tmp_path)
 
     context = acquire_pilot_checkout(db, customer=customer, settings=settings, env=env)
     order = Order(customer_id=customer.id, total_amount=100, currency="RUB")
@@ -136,7 +165,7 @@ def test_allowlisted_checkout_consumes_one_atomic_slot(tmp_path):
 
 
 def test_non_allowlisted_customer_and_stop_decision_are_blocked(tmp_path):
-    db, customer, settings, env, pilot_path, _manifest_path = _runtime(tmp_path)
+    db, customer, settings, env, pilot_path, *_ = _runtime(tmp_path)
     customer.telegram_id = "999999"
     db.commit()
 
@@ -154,14 +183,14 @@ def test_non_allowlisted_customer_and_stop_decision_are_blocked(tmp_path):
     assert stopped.value.status_code == 423
 
 
-def test_tampered_admission_and_counter_drift_fail_closed(tmp_path):
-    db, customer, settings, env, _pilot_path, manifest_path = _runtime(tmp_path)
+def test_tampered_admission_counter_or_rollback_capability_fail_closed(tmp_path):
+    db, customer, settings, env, _pilot_path, manifest_path, _previous_path = _runtime(tmp_path)
     manifest_path.write_text("{}", encoding="utf-8")
     with pytest.raises(HTTPException) as tampered:
         acquire_pilot_checkout(db, customer=customer, settings=settings, env=env)
     assert tampered.value.status_code == 503
 
-    db, customer, settings, env, _pilot_path, _manifest_path = _runtime(tmp_path / "drift")
+    db, customer, settings, env, *_ = _runtime(tmp_path / "drift")
     state = db.get(PilotRuntimeState, 1)
     state.accepted_orders = 1
     db.commit()
@@ -169,11 +198,17 @@ def test_tampered_admission_and_counter_drift_fail_closed(tmp_path):
         acquire_pilot_checkout(db, customer=customer, settings=settings, env=env)
     assert drift.value.status_code == 503
 
+    db, customer, settings, env, _pilot, _manifest, previous_path = _runtime(tmp_path / "capability")
+    previous = json.loads(previous_path.read_text(encoding="utf-8"))
+    previous["capabilities"] = {}
+    previous_path.write_text(json.dumps(previous), encoding="utf-8")
+    with pytest.raises(HTTPException) as unsafe_rollback:
+        acquire_pilot_checkout(db, customer=customer, settings=settings, env=env)
+    assert unsafe_rollback.value.status_code == 503
+
 
 def test_twentieth_order_closes_runtime_without_exceeding_limit(tmp_path):
-    db, customer, settings, env, _pilot_path, _manifest_path = _runtime(
-        tmp_path, accepted_orders=19
-    )
+    db, customer, settings, env, *_ = _runtime(tmp_path, accepted_orders=19)
 
     context = acquire_pilot_checkout(db, customer=customer, settings=settings, env=env)
     assert context.sequence == 20
@@ -192,6 +227,6 @@ def test_twentieth_order_closes_runtime_without_exceeding_limit(tmp_path):
 
 
 def test_development_runtime_can_remain_disabled(tmp_path):
-    db, customer, settings, env, _pilot_path, _manifest_path = _runtime(tmp_path)
+    db, customer, settings, env, *_ = _runtime(tmp_path)
     settings.pilot_runtime_enforced = False
     assert acquire_pilot_checkout(db, customer=customer, settings=settings, env=env) is None
