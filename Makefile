@@ -1,4 +1,4 @@
-.PHONY: help init build up down logs migrate health workers search monitoring backup restore test preflight clean deploy-prod rollback verify-backup seed-admin validate-env openapi release-notes diagnostics setup-wizard check-integrations readiness pilot-sheet readiness-gate loadtest performance-budget security-audit media-jobs loadtest-catalog loadtest-webhooks real-e2e grafana-dashboards simple-start launch-local launch-production connected-audit simplicity-score env-todo pilot-runner release-pack release-freeze pilot-evidence package-audit test-all transaction-integrity
+.PHONY: help init build up down logs migrate health workers search monitoring backup restore test preflight clean deploy-prod rollback verify-backup seed-admin validate-env openapi release-notes diagnostics setup-wizard check-integrations readiness pilot-sheet readiness-gate pilot-gate loadtest performance-budget security-audit media-jobs loadtest-catalog loadtest-webhooks real-e2e grafana-dashboards simple-start launch-local launch-production connected-audit simplicity-score env-todo pilot-runner release-pack release-freeze pilot-evidence package-audit test-all transaction-integrity
 
 help:
 	@echo "FLASHIN commands:"
@@ -13,6 +13,8 @@ help:
 	@echo "  make search                - start Meilisearch"
 	@echo "  make monitoring            - start Prometheus/Grafana"
 	@echo "  make test                  - run backend tests"
+	@echo "  make readiness-gate        - strict predeploy GO/NO-GO gate"
+	@echo "  make pilot-gate            - strict live pilot GO/NO-GO gate"
 	@echo "  make backup                - backup PostgreSQL"
 
 init:
@@ -108,7 +110,10 @@ pilot-sheet:
 
 
 readiness-gate:
-	python3 scripts/readiness_gate.py
+	python3 scripts/readiness_gate.py --phase predeploy
+
+pilot-gate:
+	python3 scripts/readiness_gate.py --phase live
 
 
 loadtest:
