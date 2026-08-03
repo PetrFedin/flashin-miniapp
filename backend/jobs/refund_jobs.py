@@ -13,7 +13,6 @@ _PENDING_STATUSES = {
     "processing",
     "refund_pending",
     "refund_retry_required",
-    "refund_review_required",
 }
 _FINAL_STATUSES = {"approved", "approved_partial", "failed"}
 
