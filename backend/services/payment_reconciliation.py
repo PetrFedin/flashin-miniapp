@@ -1,13 +1,28 @@
 from sqlalchemy.orm import Session
 
 from ..database import utcnow_naive
-from ..models import Order, Payment, PaymentReconciliation
+from ..models import Payment, PaymentReconciliation
+from .pilot_circuit_breaker import stop_pilot_for_order
 
 
-def create_reconciliation_row(db: Session, payment: Payment, provider_status: str, provider_amount: float) -> PaymentReconciliation:
-    order = db.query(Order).filter(Order.id == payment.order_id).first()
+def create_reconciliation_row(
+    db: Session,
+    payment: Payment,
+    provider_status: str,
+    provider_amount: float,
+) -> PaymentReconciliation:
     local_amount = payment.amount
-    status = "matched" if payment.status == provider_status and abs(local_amount - provider_amount) < 0.01 else "mismatch"
+    status = (
+        "matched"
+        if payment.status == provider_status and abs(local_amount - provider_amount) < 0.01
+        else "mismatch"
+    )
+    if status == "mismatch":
+        stop_pilot_for_order(
+            db,
+            order_id=payment.order_id,
+            reason="payment_reconciliation_mismatch",
+        )
     row = PaymentReconciliation(
         payment_id=payment.id,
         order_id=payment.order_id,
