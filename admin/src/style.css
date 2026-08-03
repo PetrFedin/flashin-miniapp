@@ -50,9 +50,46 @@ textarea { width: 100%; min-height: 90px; padding: 10px 12px; border-radius: 10p
 .event-replay-form label { display: grid; gap: 6px; margin: 12px 0; font-weight: 700; }
 .event-replay-form textarea { font-weight: 400; }
 .event-payload-input { min-height: 150px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.pilot-panel { border: 1px solid #dedede; }
+.pilot-decision { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin: 16px 0; padding: 18px; border: 1px solid; border-radius: 14px; }
+.pilot-decision.go { background: #edf9f0; border-color: #b9dfc2; color: #17632a; }
+.pilot-decision.no-go { background: #fff0f0; border-color: #efc0c0; color: #8b1010; }
+.pilot-decision > div:first-child { display: grid; gap: 4px; }
+.pilot-decision-label { font-size: 13px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; }
+.pilot-decision strong { font-size: 36px; line-height: 1; }
+.pilot-decision-meta { display: grid; gap: 5px; text-align: right; font-size: 13px; }
+.pilot-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 16px 0; }
+.pilot-kpis article { display: grid; gap: 8px; min-height: 76px; padding: 14px; border: 1px solid #e4e4e4; border-radius: 12px; background: #fafafa; }
+.pilot-kpis span { color: #666; font-size: 13px; }
+.pilot-kpis strong { font-size: 24px; }
+.pilot-runtime-meta { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 14px 0 18px; }
+.pilot-runtime-meta div { display: grid; gap: 5px; padding: 10px 12px; border-left: 3px solid #d8d8d8; background: #fafafa; overflow-wrap: anywhere; }
+.pilot-runtime-meta span { color: #666; font-size: 12px; }
+.pilot-runtime-meta b { font-size: 13px; }
+.pilot-integrity-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.pilot-integrity-card { min-height: 145px; padding: 14px; border: 1px solid #e3e3e3; border-radius: 14px; background: #fafafa; }
+.pilot-integrity-card.healthy { border-color: #b9dfc2; background: #f4fbf6; }
+.pilot-integrity-card.failed { border-color: #efc0c0; background: #fff7f7; }
+.pilot-integrity-card.not-applicable { border-color: #ddd; background: #f7f7f7; }
+.pilot-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.pilot-card-heading h3 { margin: 0; font-size: 16px; }
+.pilot-integrity-card p { color: #666; }
+.pilot-integrity-card ul { margin: 12px 0 0; padding-left: 20px; }
+.pilot-integrity-card li { margin: 6px 0; }
+.pilot-badge { display: inline-flex; width: fit-content; align-items: center; border-radius: 999px; padding: 4px 9px; font-size: 11px; font-weight: 800; white-space: nowrap; }
+.pilot-badge.healthy { background: #dff2e4; color: #17632a; }
+.pilot-badge.failed { background: #ffe0e0; color: #8b1010; }
+.pilot-badge.not-applicable { background: #e8e8e8; color: #555; }
+.pilot-metrics-list { display: grid; gap: 8px; margin: 14px 0 0; }
+.pilot-metrics-list div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.pilot-metrics-list dt { color: #555; }
+.pilot-metrics-list dd { margin: 0; font-size: 18px; font-weight: 800; }
+.pilot-inline-error { margin-top: 14px; padding: 12px; border-left: 4px solid #9b1111; border-radius: 8px; background: #fff0f0; color: #8b1010; font-weight: 700; }
 @media (max-width: 900px) {
   .event-layout { grid-template-columns: 1fr; }
   .event-detail { position: static; }
+  .pilot-kpis, .pilot-runtime-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pilot-integrity-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 760px) {
   main { padding: 14px; }
@@ -62,5 +99,8 @@ textarea { width: 100%; min-height: 90px; padding: 10px 12px; border-radius: 10p
   .kpis { grid-template-columns: 1fr 1fr; }
   .section-heading { flex-direction: column; }
   .event-metadata div { grid-template-columns: 1fr; gap: 2px; }
+  .pilot-decision { align-items: flex-start; flex-direction: column; }
+  .pilot-decision-meta { text-align: left; }
+  .pilot-kpis, .pilot-runtime-meta { grid-template-columns: 1fr; }
   input, select, button { max-width: 100%; box-sizing: border-box; }
 }

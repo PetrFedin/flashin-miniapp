@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 
 import { AdminApiError, adminJson } from "./api.js";
+import PilotOperationsPanel from "./PilotOperationsPanel.jsx";
 import {
   buildBusinessEventReplayBody,
   canReplayBusinessEvent,
@@ -21,7 +22,7 @@ function payloadPreview(event) {
   return JSON.stringify(event.payload || {}, null, 2);
 }
 
-export default function BusinessEventsPanel({ onUnauthorized }) {
+function BusinessEventsRecoveryPanel({ onUnauthorized }) {
   const [summary, setSummary] = useState(null);
   const [events, setEvents] = useState([]);
   const [statusFilter, setStatusFilter] = useState("failed");
@@ -294,5 +295,14 @@ export default function BusinessEventsPanel({ onUnauthorized }) {
         </aside>
       </div>
     </section>
+  );
+}
+
+export default function BusinessEventsPanel({ onUnauthorized }) {
+  return (
+    <>
+      <PilotOperationsPanel onUnauthorized={onUnauthorized} />
+      <BusinessEventsRecoveryPanel onUnauthorized={onUnauthorized} />
+    </>
   );
 }

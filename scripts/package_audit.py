@@ -13,6 +13,9 @@ required = {
     "apps": [
         "frontend/src/App.js", "frontend/package.json",
         "admin/src/main.jsx", "admin/package.json",
+        "admin/src/BusinessEventsPanel.jsx", "admin/src/PilotOperationsPanel.jsx",
+        "admin/src/pilotOperations.js", "admin/src/pilotOperations.test.js",
+        "admin/src/pilotOperationsPanel.test.js",
         "bot/main.py",
     ],
     "launch": [
@@ -46,6 +49,7 @@ required = {
     ],
     "ops": [
         "backend/api/ops.py", "backend/services/pilot_observability.py",
+        "admin/src/PilotOperationsPanel.jsx", "admin/src/pilotOperations.js",
         "scripts/backup_postgres.sh", "scripts/verify_backup.sh",
         "scripts/restore_postgres.sh", "scripts/deploy_production.sh",
         "scripts/rollback.sh", "scripts/release_control.py",
@@ -54,6 +58,7 @@ required = {
         "docs/pilot/pilot_runtime_guard.md",
         "docs/pilot/pilot_payment_circuit_breaker.md",
         "docs/pilot/pilot_operations_observability.md",
+        "docs/pilot/pilot_admin_operations_panel.md",
         "deploy/grafana/dashboards/flashin_operations.json",
     ],
     "docs": [
@@ -63,6 +68,7 @@ required = {
         "docs/pilot/provider_evidence_and_admission.md", "docs/pilot/pilot_runtime_guard.md",
         "docs/pilot/pilot_payment_circuit_breaker.md",
         "docs/pilot/pilot_operations_observability.md",
+        "docs/pilot/pilot_admin_operations_panel.md",
     ],
 }
 
