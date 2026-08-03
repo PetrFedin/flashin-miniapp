@@ -69,6 +69,7 @@ test("malformed response is forced to NO-GO", () => {
   assert.equal(status.decision, "NO-GO");
   assert.equal(status.contractValid, false);
   assert.deepEqual(status.databaseIntegrity.codes, ["response_contract_invalid"]);
+  assert.equal(status.moneyAttention.attentionRequired, false);
   assert.doesNotMatch(JSON.stringify(status), /must-not-survive/);
 });
 
@@ -88,12 +89,37 @@ test("GO is downgraded when any safety condition is not confirmed", () => {
       payload.money_attention.attention_required = true;
       payload.money_attention.payment_review_orders = 1;
     },
+    (payload) => { payload.runtime.remaining_orders = 16; },
+    (payload) => { payload.runtime.slot_count = 2; },
   ];
 
   for (const mutate of cases) {
     const payload = healthyPayload();
     mutate(payload);
     assert.equal(normalizePilotOperationsStatus(payload).decision, "NO-GO");
+  }
+});
+
+test("invalid numeric, timestamp, run and stop fields invalidate the contract", () => {
+  const cases = [
+    (payload) => { payload.runtime.accepted_orders = "3"; },
+    (payload) => { payload.money_attention.refund_attention_orders = -1; },
+    (payload) => { payload.generated_at = "not-a-date"; },
+    (payload) => { payload.runtime.updated_at = "not-a-date"; },
+    (payload) => { payload.runtime.run_ref = "raw-run-id"; },
+    (payload) => { payload.runtime.stop_reason = "customer 123456789"; },
+    (payload) => { payload.database_integrity.codes = ["unknown_private_code"]; },
+  ];
+
+  for (const mutate of cases) {
+    const payload = healthyPayload();
+    mutate(payload);
+    const status = normalizePilotOperationsStatus(payload);
+    assert.equal(status.decision, "NO-GO");
+    assert.equal(status.contractValid, false);
+    assert.ok(status.databaseIntegrity.codes.includes("response_contract_invalid"));
+    assert.equal(status.moneyAttention.attentionRequired, true);
+    assert.doesNotMatch(JSON.stringify(status), /123456789|raw-run-id|unknown_private_code/);
   }
 });
 
@@ -110,6 +136,7 @@ test("unknown integrity codes and stop reasons never render raw text", () => {
   const status = normalizePilotOperationsStatus(payload);
   const labels = pilotIntegrityLabels(status.databaseIntegrity.codes);
 
+  assert.equal(status.contractValid, false);
   assert.equal(status.runtime.stopReason, null);
   assert.deepEqual(labels, ["Ответ pilot status имеет неверный формат"]);
   const serialized = JSON.stringify({ status, labels });
