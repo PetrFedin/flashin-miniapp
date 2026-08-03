@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
-from backend.database import SessionLocal
 from backend.jobs.event_jobs import run_event_dispatcher
+from backend.jobs.scheduler_lock import run_locked_db_job
+
 
 if __name__ == "__main__":
-    db = SessionLocal()
-    try:
-        print({"processed_events": run_event_dispatcher(db)})
-    finally:
-        db.close()
+    print(run_locked_db_job("events", run_event_dispatcher))
