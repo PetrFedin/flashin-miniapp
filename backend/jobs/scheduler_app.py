@@ -6,12 +6,24 @@ from backend.config import get_settings
 from backend.database import utcnow_naive
 from backend.jobs.campaign_jobs import queue_due_campaigns
 from backend.jobs.event_jobs import run_event_dispatcher
-from backend.jobs.moysklad_jobs import sync_moysklad_and_rebuild
+from backend.jobs.moysklad_jobs import run_moysklad_pipeline
 from backend.jobs.ops_jobs import create_inventory_snapshot, queue_abandoned_cart_notifications
 from backend.jobs.outbox_jobs import process_outbox
 from backend.jobs.refund_jobs import reconcile_pending_refunds
 from backend.jobs.scheduler_lock import run_locked_async_db_job, run_locked_db_job
 from backend.jobs.sla_jobs import mark_overdue_sla
+from backend.services.crm import recompute_all_profiles
+from backend.services.moysklad import sync_assortment_to_catalog
+from backend.services.recommendations import rebuild_basic_recommendations
+
+
+async def sync_moysklad_and_rebuild(db):
+    return await run_moysklad_pipeline(
+        db,
+        sync_callback=sync_assortment_to_catalog,
+        crm_callback=recompute_all_profiles,
+        recommendations_callback=rebuild_basic_recommendations,
+    )
 
 
 def _run_db_job(job_name, callback):
