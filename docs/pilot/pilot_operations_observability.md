@@ -22,7 +22,7 @@ Endpoint ничего не изменяет, не arm/resume/stop runtime и н�
 
 ### `checkout_decision`
 
-- `GO` — только когда runtime enforcement включён, статус `active`, есть свободные slots, DB и artifact integrity полностью подтверждены, а незакрытых денежных review-сигналов нет;
+- `GO` — только когда runtime enforcement включён, настроенный и фактический лимит равны 20, статус `active`, есть свободные slots, DB и artifact integrity полностью подтверждены, а незакрытых денежных review-сигналов нет;
 - `NO-GO` — во всех остальных случаях.
 
 Это оперативный индикатор, а не замена signed admission. Runtime checkout всё равно повторно выполняет собственную fail-closed проверку.
@@ -37,15 +37,25 @@ Endpoint ничего не изменяет, не arm/resume/stop runtime и н�
 - число фактических slots;
 - число исторических slots других run ID;
 - количество разрешённых пользователей без самих Telegram ID;
-- STOP-причина: только нормализованный автоматический `auto:*` код либо обезличенный `operator_stop` для любого ручного текста;
+- STOP-причина из конечного списка безопасных категорий;
 - timestamps открытия, остановки, завершения и последнего обновления.
+
+Правила STOP-причины:
+
+- ручной текст всегда заменяется на `operator_stop`;
+- известный автоматический код возвращается без динамического хвоста;
+- неизвестный `auto:*` превращается в `auto:integrity_failure`.
+
+Поэтому ошибочно записанный customer/provider ID не может попасть в ответ через stop reason.
 
 ### `database_integrity`
 
 Возвращает `healthy` и стабильные machine-readable codes. Проверяются:
 
-- singleton runtime state;
-- лимит ровно 20;
+- singleton runtime state с обязательным ID `1`;
+- отсутствие orphan slots при отсутствующем runtime state;
+- настроенный и фактический лимит ровно 20;
+- соответствие лимита приложения лимиту DB state;
 - диапазон accepted counter;
 - равенство counter и slot count;
 - непрерывная последовательность slots;
@@ -86,7 +96,7 @@ Order ID, customer ID, Telegram ID, provider payment/refund ID и payload не �
 При `NO-GO`:
 
 1. не пытаться обходить runtime через прямой API/SQL;
-2. проверить machine codes и STOP-причину;
+2. проверить machine codes и STOP-категорию;
 3. завершить payment/refund reconciliation;
 4. при artifact error повторить capability/evidence verification;
 5. после устранения причины выпустить свежие evidence и admission;
@@ -99,7 +109,7 @@ Endpoint не должен:
 - возвращать `allowed_telegram_ids`;
 - возвращать любые Telegram ID или customer identifiers;
 - возвращать raw run ID;
-- возвращать произвольный ручной STOP-текст;
+- возвращать произвольный ручной или неизвестный автоматический STOP-текст;
 - возвращать provider payment/refund IDs;
 - возвращать абсолютные пути private evidence;
 - возвращать signing secret, signature или raw admission manifest;
