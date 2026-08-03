@@ -72,6 +72,8 @@ jobs:
         run: python scripts/customer_journey_smoke.py
       - name: Run transactional order cancellation smoke
         run: python scripts/order_cancellation_smoke.py
+      - name: Run transactional payment review smoke
+        run: python scripts/payment_review_smoke.py
       - name: Run backend tests
         run: python -m pytest -q backend/tests
 
