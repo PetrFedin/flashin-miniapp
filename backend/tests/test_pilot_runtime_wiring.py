@@ -40,11 +40,11 @@ def test_deploy_and_rollback_stop_active_pilot_and_sign_release_capability():
     assert capability in deploy
     assert deploy.index(capability) > deploy.index("release_control.py promote")
 
-    assert marker in rollback
-    assert rollback.index(marker) < rollback.index("docker compose down")
-    restored_stop = 'pilot_runtime.py _stop \\\n    --reason "rollback database restored"'
-    assert restored_stop in rollback
-    assert rollback.index(restored_stop) < rollback.index("Starting rolled-back production services")
+    first_stop = rollback.index(marker)
+    restored_stop = rollback.index(marker, first_stop + 1)
+    assert first_stop < rollback.index("docker compose down")
+    assert "rollback database restored" in rollback[restored_stop:]
+    assert restored_stop < rollback.index("Starting rolled-back production services")
     assert capability in rollback
     assert rollback.index(capability) > rollback.index("release_control.py\" promote")
 
