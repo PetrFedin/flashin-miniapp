@@ -58,6 +58,11 @@ export default function PilotOperationsPanel({ onUnauthorized }) {
   const [loadError, setLoadError] = useState("");
   const inFlight = useRef(false);
   const mounted = useRef(true);
+  const unauthorizedHandler = useRef(onUnauthorized);
+
+  useEffect(() => {
+    unauthorizedHandler.current = onUnauthorized;
+  }, [onUnauthorized]);
 
   const loadStatus = useCallback(async () => {
     if (inFlight.current) return;
@@ -76,7 +81,7 @@ export default function PilotOperationsPanel({ onUnauthorized }) {
     } catch (error) {
       if (!mounted.current) return;
       if (error instanceof AdminApiError && error.status === 401) {
-        onUnauthorized?.("Сессия администратора истекла. Войдите снова.");
+        unauthorizedHandler.current?.("Сессия администратора истекла. Войдите снова.");
         return;
       }
       if (error instanceof AdminApiError && error.status === 403) {
@@ -90,7 +95,7 @@ export default function PilotOperationsPanel({ onUnauthorized }) {
       inFlight.current = false;
       if (mounted.current) setLoading(false);
     }
-  }, [onUnauthorized]);
+  }, []);
 
   useEffect(() => {
     mounted.current = true;
