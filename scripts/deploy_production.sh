@@ -98,6 +98,9 @@ docker compose run --rm backend alembic -c backend/alembic.ini current
 echo "Verifying transaction integrity after migration..."
 docker compose run --rm backend python scripts/check_transaction_integrity.py
 
+echo "Verifying first-20-order runtime integrity..."
+docker compose run --rm backend python scripts/check_pilot_runtime_integrity.py
+
 echo "Starting production services, scheduler, notifications and search..."
 docker compose up -d db backend frontend admin bot caddy notification_worker scheduler meilisearch
 
