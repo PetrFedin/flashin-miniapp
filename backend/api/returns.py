@@ -8,6 +8,11 @@ from ..schemas import RefundApproveIn, ReturnCreate, ReturnOut
 from ..security import get_current_admin, get_current_customer
 from ..services.audit import log_admin_action
 from ..services.payments import create_yookassa_refund, fetch_yookassa_refund
+from ..services.pilot_circuit_breaker import (
+    PilotCircuitBreakerError,
+    stop_pilot_for_order,
+    trip_pilot_circuit_breaker,
+)
 from ..services.rbac import require_permission
 from ..services.refund_state import (
     apply_provider_refund_status,
@@ -57,7 +62,18 @@ def _mark_retry_required(db: Session, return_id: int, order_id: int) -> None:
         if order and order.payment_status == "refund_processing":
             order.status = "refund_requested"
             order.payment_status = "refund_pending"
+            stop_pilot_for_order(
+                db,
+                order_id=order.id,
+                reason="refund_retry_required",
+            )
         db.commit()
+    except PilotCircuitBreakerError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail="Refund failed and the pilot safety circuit could not be applied",
+        ) from exc
     except Exception:
         db.rollback()
 
@@ -78,9 +94,31 @@ def _mark_review_required(
         if order:
             order.status = "refund_requested"
             order.payment_status = "refund_review_required"
+            stop_pilot_for_order(
+                db,
+                order_id=order.id,
+                reason="refund_review_required",
+            )
         db.commit()
+    except PilotCircuitBreakerError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail="Refund review failed and the pilot safety circuit could not be applied",
+        ) from exc
     except Exception:
         db.rollback()
+
+
+def _trip_refund_after_rollback(order_id: int, reason: str, original: HTTPException) -> None:
+    try:
+        trip_pilot_circuit_breaker(order_id=order_id, reason=reason)
+    except PilotCircuitBreakerError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Refund integrity failed and the pilot safety circuit could not be persisted",
+        ) from exc
+    raise original
 
 
 @router.post("", response_model=ReturnOut)
@@ -321,12 +359,27 @@ async def approve_return(
         )
         db.commit()
         return _refund_response(ret, provider_status)
-    except HTTPException:
+    except HTTPException as exc:
         db.rollback()
-        raise
+        _trip_refund_after_rollback(
+            order_id,
+            "refund_finalization_integrity_failure",
+            exc,
+        )
+    except PilotCircuitBreakerError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail="Pilot safety circuit could not be applied",
+        ) from exc
     except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(status_code=409, detail="Refund was already finalized") from exc
+        integrity_error = HTTPException(status_code=409, detail="Refund was already finalized")
+        _trip_refund_after_rollback(
+            order_id,
+            "refund_finalization_integrity_conflict",
+            integrity_error,
+        )
     except Exception:
         db.rollback()
         raise
