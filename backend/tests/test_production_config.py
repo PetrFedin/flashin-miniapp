@@ -17,6 +17,9 @@ def _safe_production_settings(**overrides):
         "admin_password": "Strong-Admin-Password-2026",
         "admin_totp_encryption_key": "t" * 48,
         "outbox_signing_secret": "o" * 48,
+        "pilot_evidence_signing_secret": "p" * 48,
+        "pilot_runtime_enforced": True,
+        "pilot_runtime_max_orders": 20,
         "payment_provider": "yookassa",
         "yookassa_shop_id": "shop-123",
         "yookassa_secret_key": "secret-123",
@@ -37,6 +40,8 @@ def test_safe_production_configuration_is_accepted():
     assert settings.jwt_algorithm == "HS256"
     assert settings.admin_jwt_expire_minutes == 480
     assert settings.admin_totp_encryption_key != settings.jwt_secret
+    assert settings.pilot_runtime_enforced is True
+    assert settings.pilot_runtime_max_orders == 20
 
 
 def test_default_production_secrets_are_rejected():
@@ -46,6 +51,7 @@ def test_default_production_secrets_are_rejected():
             admin_password="change-me-now",
             admin_totp_encryption_key="change-me",
             outbox_signing_secret="change-me-outbox-secret",
+            pilot_evidence_signing_secret="change-me",
         )
 
     message = str(exc_info.value)
@@ -53,6 +59,7 @@ def test_default_production_secrets_are_rejected():
     assert "ADMIN_PASSWORD" in message
     assert "ADMIN_TOTP_ENCRYPTION_KEY" in message
     assert "OUTBOX_SIGNING_SECRET" in message
+    assert "PILOT_EVIDENCE_SIGNING_SECRET" in message
 
 
 def test_totp_encryption_key_must_differ_from_jwt_secret():
@@ -63,6 +70,23 @@ def test_totp_encryption_key_must_differ_from_jwt_secret():
         )
 
     assert "must differ from JWT_SECRET" in str(exc_info.value)
+
+
+def test_pilot_evidence_secret_must_differ_from_other_secrets():
+    with pytest.raises(ValidationError) as exc_info:
+        _safe_production_settings(pilot_evidence_signing_secret="j" * 48)
+
+    assert "PILOT_EVIDENCE_SIGNING_SECRET must differ from JWT_SECRET" in str(exc_info.value)
+
+
+def test_production_requires_fail_closed_pilot_runtime():
+    with pytest.raises(ValidationError) as disabled:
+        _safe_production_settings(pilot_runtime_enforced=False)
+    assert "PILOT_RUNTIME_ENFORCED" in str(disabled.value)
+
+    with pytest.raises(ValidationError) as wrong_limit:
+        _safe_production_settings(pilot_runtime_max_orders=19)
+    assert "PILOT_RUNTIME_MAX_ORDERS" in str(wrong_limit.value)
 
 
 def test_production_requires_explicit_https_cors_origins():
