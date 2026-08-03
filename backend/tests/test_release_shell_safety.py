@@ -21,6 +21,8 @@ def test_rollback_protects_server_state_and_requires_explicit_code_only_mode():
     assert "ALLOW_CODE_ONLY_ROLLBACK" in script
     assert '"$CONTROL_SCRIPT" verify' in script
     assert 'release_control.py" extract' in script
+    assert 'cp "$RESTORE_SCRIPT" "$TMP_DIR/restore_postgres.sh"' in script
+    assert '"$TMP_DIR/restore_postgres.sh" --yes "$BACKUP"' in script
 
 
 def test_restore_is_destructive_only_after_validation_and_recreates_database():
