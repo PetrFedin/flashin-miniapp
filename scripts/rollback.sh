@@ -142,6 +142,7 @@ fi
 echo "Checking rollback migration compatibility..."
 docker compose run --rm backend alembic -c backend/alembic.ini current
 docker compose run --rm backend python scripts/check_transaction_integrity.py
+docker compose run --rm backend python scripts/check_pilot_runtime_integrity.py
 
 echo "Forcing restored pilot runtime to stopped before public services start..."
 docker compose run --rm backend python scripts/pilot_runtime.py _stop \
