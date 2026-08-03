@@ -99,6 +99,20 @@ def validate_database_credentials(env: dict[str, str], invalid: list[str]) -> No
         invalid.append("DATABASE_URL database does not match POSTGRES_DB")
 
 
+def distinct_secret(
+    env: dict[str, str],
+    left: str,
+    right: str,
+    invalid: list[str],
+) -> None:
+    left_value = env.get(left, "")
+    right_value = env.get(right, "")
+    if left_value and right_value and hmac.compare_digest(
+        left_value.encode("utf-8"), right_value.encode("utf-8")
+    ):
+        invalid.append(f"{left} must differ from {right}")
+
+
 if not ENV_PATH.exists():
     print(".env not found")
     sys.exit(1)
@@ -123,10 +137,18 @@ if is_production:
             "POSTGRES_USER",
             "POSTGRES_PASSWORD",
             "CORS_ORIGINS",
+            "ADMIN_URL",
             "YOOKASSA_SHOP_ID",
             "YOOKASSA_SECRET_KEY",
             "OUTBOX_SIGNING_SECRET",
             "ADMIN_TOTP_ENCRYPTION_KEY",
+            "PILOT_EVIDENCE_SIGNING_SECRET",
+            "PILOT_PROVIDER_EVIDENCE_MAX_AGE_MINUTES",
+            "PILOT_LIVE_GATE_MAX_AGE_MINUTES",
+            "PILOT_ADMISSION_MAX_AGE_MINUTES",
+            "PILOT_ROLLBACK_DRILL_MAX_AGE_DAYS",
+            "MEDIA_STORAGE",
+            "MEILISEARCH_ENABLED",
             "SCHEDULER_ENABLED",
             "MOYSKLAD_SYNC_INTERVAL_MINUTES",
             "MOYSKLAD_SALE_PRICE_TYPE",
@@ -173,19 +195,18 @@ if is_production:
     totp_encryption_key = env.get("ADMIN_TOTP_ENCRYPTION_KEY", "")
     if totp_encryption_key and len(totp_encryption_key) < 32:
         invalid.append("ADMIN_TOTP_ENCRYPTION_KEY must contain at least 32 characters")
-    if (
-        totp_encryption_key
-        and jwt_secret
-        and hmac.compare_digest(
-            totp_encryption_key.encode("utf-8"),
-            jwt_secret.encode("utf-8"),
-        )
-    ):
-        invalid.append("ADMIN_TOTP_ENCRYPTION_KEY must differ from JWT_SECRET")
 
     outbox_secret = env.get("OUTBOX_SIGNING_SECRET", "")
     if outbox_secret and len(outbox_secret) < 32:
         invalid.append("OUTBOX_SIGNING_SECRET must contain at least 32 characters")
+
+    pilot_secret = env.get("PILOT_EVIDENCE_SIGNING_SECRET", "")
+    if pilot_secret and len(pilot_secret) < 32:
+        invalid.append("PILOT_EVIDENCE_SIGNING_SECRET must contain at least 32 characters")
+    for other in ("JWT_SECRET", "ADMIN_TOTP_ENCRYPTION_KEY", "OUTBOX_SIGNING_SECRET"):
+        distinct_secret(env, "PILOT_EVIDENCE_SIGNING_SECRET", other, invalid)
+    distinct_secret(env, "ADMIN_TOTP_ENCRYPTION_KEY", "JWT_SECRET", invalid)
+    distinct_secret(env, "OUTBOX_SIGNING_SECRET", "JWT_SECRET", invalid)
 
     validate_database_credentials(env, invalid)
     if "flashin:flashin@" in env.get("DATABASE_URL", ""):
@@ -199,8 +220,14 @@ if is_production:
 
     for url_key in ("MINI_APP_URL", "API_PUBLIC_URL", "ADMIN_URL", "YOOKASSA_RETURN_URL"):
         require_https(env, url_key, invalid)
-    if media_storage in {"s3", "r2"}:
+
+    if media_storage not in {"s3", "r2"}:
+        invalid.append("MEDIA_STORAGE must be r2 or s3 in production")
+    else:
         require_https(env, "MEDIA_PUBLIC_BASE_URL", invalid)
+
+    if not is_true(env.get("MEILISEARCH_ENABLED")):
+        invalid.append("MEILISEARCH_ENABLED must be true in production")
 
     if not env.get("MOYSKLAD_TOKEN") and not (
         env.get("MOYSKLAD_LOGIN") and env.get("MOYSKLAD_PASSWORD")
@@ -220,6 +247,10 @@ max_attempts = validate_int(env, "NOTIFICATION_MAX_ATTEMPTS", 1, 20, invalid)
 initial_backoff = validate_int(env, "NOTIFICATION_INITIAL_BACKOFF_SECONDS", 5, 86400, invalid)
 max_backoff = validate_int(env, "NOTIFICATION_MAX_BACKOFF_SECONDS", 5, 604800, invalid)
 moysklad_interval = validate_int(env, "MOYSKLAD_SYNC_INTERVAL_MINUTES", 5, 1440, invalid)
+provider_age = validate_int(env, "PILOT_PROVIDER_EVIDENCE_MAX_AGE_MINUTES", 5, 240, invalid)
+live_age = validate_int(env, "PILOT_LIVE_GATE_MAX_AGE_MINUTES", 5, 120, invalid)
+admission_age = validate_int(env, "PILOT_ADMISSION_MAX_AGE_MINUTES", 5, 240, invalid)
+rollback_age = validate_int(env, "PILOT_ROLLBACK_DRILL_MAX_AGE_DAYS", 1, 90, invalid)
 if initial_backoff is not None and max_backoff is not None and max_backoff < initial_backoff:
     invalid.append("NOTIFICATION_MAX_BACKOFF_SECONDS must be >= NOTIFICATION_INITIAL_BACKOFF_SECONDS")
 
@@ -241,5 +272,9 @@ print(
         "notification_poll_seconds": poll_seconds,
         "notification_max_attempts": max_attempts,
         "moysklad_sync_interval_minutes": moysklad_interval,
+        "pilot_provider_evidence_max_age_minutes": provider_age,
+        "pilot_live_gate_max_age_minutes": live_age,
+        "pilot_admission_max_age_minutes": admission_age,
+        "pilot_rollback_drill_max_age_days": rollback_age,
     }
 )
