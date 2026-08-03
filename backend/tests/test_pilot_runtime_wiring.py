@@ -35,9 +35,12 @@ def test_deploy_and_rollback_stop_active_pilot_and_sign_release_capability():
     marker = "pilot_runtime.py _stop"
     capability = "pilot_release_capability.py stamp --slot current"
     inspect = '"$CAPABILITY_SCRIPT" inspect --archive'
+    integrity = "check_pilot_runtime_integrity.py"
 
     assert marker in deploy
     assert deploy.index(marker) < deploy.index("readiness_gate.py --phase predeploy")
+    assert integrity in deploy
+    assert deploy.index(integrity) < deploy.index("Starting production services")
     assert capability in deploy
     assert deploy.index(capability) > deploy.index("release_control.py promote")
 
@@ -47,6 +50,8 @@ def test_deploy_and_rollback_stop_active_pilot_and_sign_release_capability():
     first_stop = rollback.index(marker)
     restored_stop = rollback.index(marker, first_stop + 1)
     assert first_stop < rollback.index("docker compose down")
+    assert integrity in rollback
+    assert rollback.index(integrity) < restored_stop
     assert "rollback database restored" in rollback[restored_stop:]
     assert restored_stop < rollback.index("Starting rolled-back production services")
     assert capability in rollback
@@ -59,6 +64,7 @@ def test_release_capability_requires_runtime_checkout_and_safe_operations():
         "backend/pilot_models.py",
         "backend/services/pilot_runtime.py",
         "backend/alembic/versions/0022_pilot_runtime_guard.py",
+        "scripts/check_pilot_runtime_integrity.py",
         "backend/api/orders.py",
         "docker-compose.production.yml",
         "scripts/deploy_production.sh",
@@ -71,6 +77,7 @@ def test_release_capability_requires_runtime_checkout_and_safe_operations():
         "./docs:/app/docs:ro",
         "./deploy/release:/app/deploy/release:ro",
         "pilot_runtime.py _stop",
+        "check_pilot_runtime_integrity.py",
         '"$CAPABILITY_SCRIPT" inspect --archive',
     ):
         assert marker in source
