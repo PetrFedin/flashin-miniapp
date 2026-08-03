@@ -7,6 +7,7 @@ from ..models import Order, Payment, PaymentReconciliation
 
 _MONEY_STEP = Decimal("0.01")
 _REVIEW_EVENT = "payment.review_required"
+_DEFAULT_PROVIDER = "yookassa"
 
 
 def _positive_int(value: object, field: str) -> int:
@@ -31,6 +32,13 @@ def _money(value: object, field: str) -> float:
     return float(amount)
 
 
+def _provider(value: object) -> str:
+    normalized = str(value or _DEFAULT_PROVIDER).strip().lower()
+    if not normalized or len(normalized) > 64:
+        raise ValueError("Payment provider is invalid")
+    return normalized
+
+
 def _review_message(reason: object) -> str:
     normalized = " ".join(str(reason or "").strip().split())
     if not normalized:
@@ -52,6 +60,7 @@ def ensure_payment_review_case(
         raise ValueError("Payment review payload must be an object")
 
     order_id = _positive_int(payload.get("order_id"), "order_id")
+    provider = _provider(payload.get("provider"))
     provider_payment_id = str(payload.get("provider_payment_id") or "").strip()
     if not provider_payment_id or len(provider_payment_id) > 255:
         raise ValueError("provider_payment_id is invalid")
@@ -61,6 +70,7 @@ def ensure_payment_review_case(
         db.query(Payment)
         .filter(
             Payment.order_id == order_id,
+            Payment.provider == provider,
             Payment.provider_payment_id == provider_payment_id,
         )
         .with_for_update()
