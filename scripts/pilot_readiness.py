@@ -7,13 +7,16 @@ fresh production host before application containers are started.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import subprocess
 import urllib.error
 import urllib.request
+from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
+from urllib.parse import urlparse
 
 LEGAL_DOCUMENTS = (
     "frontend/public/legal/offer.html",
@@ -31,6 +34,12 @@ LEGAL_PLACEHOLDER_MARKERS = (
     "todo",
     "replace me",
 )
+PUBLIC_URL_KEYS = ("API_PUBLIC_URL", "MINI_APP_URL", "ADMIN_URL")
+COMMON_SECURITY_HEADERS = {
+    "strict-transport-security": "max-age=",
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "strict-origin-when-cross-origin",
+}
 
 
 @dataclass(frozen=True)
@@ -67,6 +76,18 @@ def check_required_file(root: Path, relative_path: str, *, critical: bool = True
     )
 
 
+def check_env_exact(
+    name: str,
+    value: str | None,
+    expected: str,
+    *,
+    critical: bool = True,
+) -> CheckResult:
+    actual = str(value or "").strip()
+    ok = actual.lower() == expected.lower()
+    return CheckResult(name, ok, critical, f"value={actual or 'missing'}, expected={expected}")
+
+
 def check_legal_document(root: Path, relative_path: str) -> CheckResult:
     path = root / relative_path
     if not path.is_file():
@@ -90,6 +111,76 @@ def check_legal_document(root: Path, relative_path: str) -> CheckResult:
             "placeholder markers: " + ", ".join(markers),
         )
     return CheckResult(f"legal:{relative_path}", True, True, "final text detected")
+
+
+def check_public_https_url(name: str, value: str | None, *, critical: bool = True) -> CheckResult:
+    raw = str(value or "").strip()
+    if not raw:
+        return CheckResult(name, False, critical, "missing")
+
+    try:
+        parsed = urlparse(raw)
+        port = parsed.port
+    except ValueError as exc:
+        return CheckResult(name, False, critical, f"invalid URL: {exc}")
+
+    if parsed.scheme.lower() != "https":
+        return CheckResult(name, False, critical, "production URL must use https")
+    if not parsed.hostname:
+        return CheckResult(name, False, critical, "hostname is missing")
+    if parsed.username or parsed.password:
+        return CheckResult(name, False, critical, "embedded credentials are forbidden")
+    if parsed.query or parsed.fragment:
+        return CheckResult(name, False, critical, "base URL must not contain query or fragment")
+    if parsed.path not in ("", "/"):
+        return CheckResult(name, False, critical, "base URL must not contain a path")
+    if port not in (None, 443):
+        return CheckResult(name, False, critical, f"unexpected HTTPS port: {port}")
+
+    host = parsed.hostname.rstrip(".").lower()
+    blocked_suffixes = (".localhost", ".local", ".internal", ".test", ".invalid", ".example")
+    if host == "localhost" or host.endswith(blocked_suffixes):
+        return CheckResult(name, False, critical, f"non-public hostname: {host}")
+
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        if "." not in host:
+            return CheckResult(name, False, critical, f"unqualified hostname: {host}")
+    else:
+        if not address.is_global:
+            return CheckResult(name, False, critical, f"non-public IP address: {host}")
+
+    return CheckResult(name, True, critical, f"public HTTPS base URL: {host}")
+
+
+def check_distinct_hosts(
+    name: str,
+    values: Mapping[str, str],
+    *,
+    critical: bool = True,
+) -> CheckResult:
+    hosts: dict[str, str] = {}
+    missing: list[str] = []
+    for key, value in values.items():
+        try:
+            host = (urlparse(value).hostname or "").rstrip(".").lower() if value else ""
+        except ValueError:
+            host = ""
+        if not host:
+            missing.append(key)
+        else:
+            hosts[key] = host
+    duplicates = sorted(host for host, count in Counter(hosts.values()).items() if count > 1)
+    ok = not missing and not duplicates and len(hosts) == len(values)
+    detail_parts = []
+    if missing:
+        detail_parts.append("missing: " + ", ".join(sorted(missing)))
+    if duplicates:
+        detail_parts.append("duplicate hosts: " + ", ".join(duplicates))
+    if ok:
+        detail_parts.append(", ".join(f"{key}={host}" for key, host in sorted(hosts.items())))
+    return CheckResult(name, ok, critical, "; ".join(detail_parts) or "invalid public hosts")
 
 
 def run_command(
@@ -123,6 +214,26 @@ def run_command(
     )
 
 
+def _fetch_http(url: str, *, timeout: int) -> tuple[int, bytes, dict[str, str]]:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/json,text/html;q=0.9,*/*;q=0.8",
+            "User-Agent": "flashin-pilot-readiness/2.0",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            status = response.status
+            body = response.read(1_048_577)
+            headers = {key.lower(): value for key, value in response.headers.items()}
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+        body = exc.read(1_048_577)
+        headers = {key.lower(): value for key, value in exc.headers.items()}
+    return status, body, headers
+
+
 def check_http(
     name: str,
     url: str,
@@ -130,34 +241,70 @@ def check_http(
     expected_status: int = 200,
     critical: bool = True,
     timeout: int = 15,
+    minimum_body_bytes: int = 1,
+    expected_content_type: str | None = None,
+    required_headers: Mapping[str, str | None] | None = None,
+    expected_json: Mapping[str, object] | None = None,
+    expected_json_type: type | tuple[type, ...] | None = None,
+    require_non_empty_json: bool = False,
 ) -> CheckResult:
-    request = urllib.request.Request(
-        url,
-        headers={
-            "Accept": "application/json,text/html;q=0.9,*/*;q=0.8",
-            "User-Agent": "flashin-pilot-readiness/1.0",
-        },
-    )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            status = response.status
-            body = response.read(4096)
-    except urllib.error.HTTPError as exc:
-        status = exc.code
-        body = exc.read(4096)
+        status, body, headers = _fetch_http(url, timeout=timeout)
     except Exception as exc:
         return CheckResult(name, False, critical, f"{exc.__class__.__name__}: {exc}")
 
-    ok = status == expected_status and bool(body)
-    return CheckResult(
-        name=name,
-        ok=ok,
-        critical=critical,
-        detail=f"status={status}, bytes={len(body)}",
-    )
+    failures: list[str] = []
+    if status != expected_status:
+        failures.append(f"status={status}, expected={expected_status}")
+    if len(body) < minimum_body_bytes:
+        failures.append(f"body too short: {len(body)} < {minimum_body_bytes}")
+    if len(body) > 1_048_576:
+        failures.append("body exceeds 1 MiB gate limit")
+
+    content_type = headers.get("content-type", "")
+    if expected_content_type and expected_content_type.lower() not in content_type.lower():
+        failures.append(f"content-type={content_type or 'missing'}, expected {expected_content_type}")
+
+    for header_name, expected_value in (required_headers or {}).items():
+        actual = headers.get(header_name.lower(), "")
+        if not actual:
+            failures.append(f"missing header {header_name}")
+        elif expected_value and expected_value.lower() not in actual.lower():
+            failures.append(f"header {header_name}={actual!r}, expected to contain {expected_value!r}")
+
+    payload: object | None = None
+    needs_json = expected_json is not None or expected_json_type is not None or require_non_empty_json
+    if needs_json:
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            failures.append(f"invalid JSON: {exc}")
+        else:
+            if expected_json_type is not None and not isinstance(payload, expected_json_type):
+                failures.append(f"JSON type={type(payload).__name__}, expected={expected_json_type}")
+            if expected_json is not None:
+                if not isinstance(payload, Mapping):
+                    failures.append("JSON payload is not an object")
+                else:
+                    for key, expected in expected_json.items():
+                        if payload.get(key) != expected:
+                            failures.append(f"JSON {key}={payload.get(key)!r}, expected={expected!r}")
+            if require_non_empty_json and not payload:
+                failures.append("JSON payload is empty")
+
+    detail = f"status={status}, bytes={len(body)}, content-type={content_type or 'missing'}"
+    if failures:
+        detail += "; " + "; ".join(failures)
+    return CheckResult(name=name, ok=not failures, critical=critical, detail=detail)
+
+
+def _public_urls(values: Mapping[str, str]) -> dict[str, str]:
+    return {key: str(values.get(key, "")).rstrip("/") for key in PUBLIC_URL_KEYS}
 
 
 def build_predeploy_checks(root: Path) -> list[CheckResult]:
+    values = read_env(root / ".env")
+    public_urls = _public_urls(values)
     checks = [
         check_required_file(root, ".env"),
         check_required_file(root, "docker-compose.yml"),
@@ -167,7 +314,12 @@ def build_predeploy_checks(root: Path) -> list[CheckResult]:
         check_required_file(root, "scripts/restore_postgres.sh"),
         check_required_file(root, "scripts/rollback.sh"),
         check_required_file(root, "docs/runbook_index.md"),
+        check_env_exact("env:APP_ENV", values.get("APP_ENV"), "production"),
+        check_env_exact("env:USE_CREATE_ALL", values.get("USE_CREATE_ALL"), "false"),
+        check_env_exact("env:ENABLE_SEED", values.get("ENABLE_SEED"), "false"),
     ]
+    checks.extend(check_public_https_url(f"env:{key}", value) for key, value in public_urls.items())
+    checks.append(check_distinct_hosts("env:public_hosts_distinct", public_urls))
     checks.extend(check_legal_document(root, path) for path in LEGAL_DOCUMENTS)
     checks.extend(
         [
@@ -185,31 +337,78 @@ def build_predeploy_checks(root: Path) -> list[CheckResult]:
 
 def build_live_checks(root: Path, env: Mapping[str, str] | None = None) -> list[CheckResult]:
     values = dict(env or read_env(root / ".env"))
-    api_base = values.get("API_PUBLIC_URL", "").rstrip("/")
-    mini_app_url = values.get("MINI_APP_URL", "").rstrip("/")
-    admin_url = values.get("ADMIN_URL", "").rstrip("/")
+    public_urls = _public_urls(values)
+    checks = [check_public_https_url(f"live:url:{key}", value) for key, value in public_urls.items()]
+    checks.append(check_distinct_hosts("live:public_hosts_distinct", public_urls))
 
-    checks: list[CheckResult] = []
-    for key, value in (
-        ("API_PUBLIC_URL", api_base),
-        ("MINI_APP_URL", mini_app_url),
-        ("ADMIN_URL", admin_url),
-    ):
-        checks.append(CheckResult(f"env:{key}", bool(value), True, value or "missing"))
+    api_base = public_urls["API_PUBLIC_URL"]
+    mini_app_url = public_urls["MINI_APP_URL"]
+    admin_url = public_urls["ADMIN_URL"]
+    valid = {key: check_public_https_url(key, value).ok for key, value in public_urls.items()}
 
-    if api_base:
+    api_headers = {
+        **COMMON_SECURITY_HEADERS,
+        "x-frame-options": "deny",
+        "cache-control": "no-store",
+    }
+    if valid["API_PUBLIC_URL"]:
         checks.extend(
             [
-                check_http("live:api_health", f"{api_base}/health"),
-                check_http("live:api_ready", f"{api_base}/ready"),
-                check_http("live:catalog", f"{api_base}/api/products"),
-                check_http("live:looks", f"{api_base}/api/looks"),
+                check_http(
+                    "live:api_health",
+                    f"{api_base}/health",
+                    expected_content_type="application/json",
+                    required_headers=api_headers,
+                    expected_json={"status": "ok"},
+                ),
+                check_http(
+                    "live:api_ready",
+                    f"{api_base}/ready",
+                    expected_content_type="application/json",
+                    required_headers=api_headers,
+                    expected_json={"status": "ready", "database": "ok", "migrations": "current"},
+                ),
+                check_http(
+                    "live:catalog",
+                    f"{api_base}/api/products",
+                    expected_content_type="application/json",
+                    required_headers=api_headers,
+                    expected_json_type=list,
+                    require_non_empty_json=True,
+                ),
+                check_http(
+                    "live:looks",
+                    f"{api_base}/api/looks",
+                    expected_content_type="application/json",
+                    required_headers=api_headers,
+                    expected_json_type=list,
+                ),
             ]
         )
-    if mini_app_url:
-        checks.append(check_http("live:mini_app", f"{mini_app_url}/"))
-    if admin_url:
-        checks.append(check_http("live:admin", f"{admin_url}/"))
+    if valid["MINI_APP_URL"]:
+        checks.append(
+            check_http(
+                "live:mini_app",
+                f"{mini_app_url}/",
+                minimum_body_bytes=100,
+                expected_content_type="text/html",
+                required_headers={**COMMON_SECURITY_HEADERS, "x-frame-options": "sameorigin"},
+            )
+        )
+    if valid["ADMIN_URL"]:
+        checks.append(
+            check_http(
+                "live:admin",
+                f"{admin_url}/",
+                minimum_body_bytes=100,
+                expected_content_type="text/html",
+                required_headers={
+                    **COMMON_SECURITY_HEADERS,
+                    "x-frame-options": "deny",
+                    "cache-control": "no-store",
+                },
+            )
+        )
     return checks
 
 
