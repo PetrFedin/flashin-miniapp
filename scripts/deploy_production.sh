@@ -11,6 +11,14 @@ fi
 export COMPOSE_FILE="docker-compose.yml:docker-compose.production.yml"
 export COMPOSE_PROFILES="production,workers,scheduler,search"
 
+if docker compose ps --status running --services 2>/dev/null | grep -qx backend; then
+  if docker compose exec -T backend test -f /app/scripts/pilot_runtime.py; then
+    echo "Stopping pilot checkout runtime before production deployment..."
+    docker compose exec -T backend python scripts/pilot_runtime.py _stop \
+      --reason "production deployment started"
+  fi
+fi
+
 release_archive=""
 backup_file=""
 deploy_failure() {
@@ -147,4 +155,4 @@ echo "Deploy completed and release promoted: $release_archive"
 if [ -n "$backup_file" ]; then
   echo "Rollback drill input: scripts/rollback.sh previous '$backup_file'"
 fi
-echo "Run 'make pilot-gate' and admit pilot users only after a GO decision."
+echo "Pilot runtime remains stopped. Re-run admission and 'make pilot-runtime-arm' before checkout."
