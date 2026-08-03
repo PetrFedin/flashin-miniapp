@@ -23,6 +23,11 @@ from ..services.payment_settlement import (
     settle_paid_order,
 )
 from ..services.payments import create_yookassa_payment, fetch_yookassa_payment
+from ..services.pilot_circuit_breaker import (
+    PilotCircuitBreakerError,
+    stop_pilot_for_order,
+    trip_pilot_circuit_breaker,
+)
 
 router = APIRouter(prefix="/payments", tags=["payments"])
 
@@ -36,6 +41,13 @@ _SUPPORTED_WEBHOOK_EVENTS = {
     "payment.canceled",
 }
 _MAX_WEBHOOK_BYTES = 64 * 1024
+
+
+class ProviderPaymentIntegrityError(RuntimeError):
+    def __init__(self, reason: str, detail: str):
+        self.reason = reason
+        self.detail = detail
+        super().__init__(detail)
 
 
 def _payment_out(order: Order, payment: Payment) -> PaymentOut:
@@ -65,11 +77,28 @@ def _validate_provider_amount(provider_payment: dict, order: Order) -> None:
     try:
         provider_amount = Decimal(str(amount.get("value"))).quantize(Decimal("0.01"))
         order_amount = Decimal(str(order.total_amount)).quantize(Decimal("0.01"))
-    except (InvalidOperation, TypeError, ValueError):
-        raise HTTPException(status_code=409, detail="Provider payment amount is invalid")
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ProviderPaymentIntegrityError(
+            "provider_payment_amount_invalid",
+            "Provider payment amount is invalid",
+        ) from exc
 
     if provider_amount != order_amount or provider_currency != str(order.currency).upper():
-        raise HTTPException(status_code=409, detail="Provider payment amount or currency does not match order")
+        raise ProviderPaymentIntegrityError(
+            "provider_payment_amount_or_currency_mismatch",
+            "Provider payment amount or currency does not match order",
+        )
+
+
+def _trip_after_rollback(order_id: int, error: ProviderPaymentIntegrityError) -> HTTPException:
+    try:
+        trip_pilot_circuit_breaker(order_id=order_id, reason=error.reason)
+    except PilotCircuitBreakerError as exc:
+        return HTTPException(
+            status_code=503,
+            detail="Payment integrity failed and the pilot safety circuit could not be persisted",
+        )
+    return HTTPException(status_code=409, detail=error.detail)
 
 
 async def _reconcile_existing_payment(order: Order, payment: Payment) -> Payment | None:
@@ -90,7 +119,10 @@ async def _reconcile_existing_payment(order: Order, payment: Payment) -> Payment
         raise
 
     if _provider_order_id(provider_payment) != order.id:
-        raise HTTPException(status_code=409, detail="Provider payment belongs to another order")
+        raise ProviderPaymentIntegrityError(
+            "provider_payment_order_reference_mismatch",
+            "Provider payment belongs to another order",
+        )
     _validate_provider_amount(provider_payment, order)
 
     resolution = resolve_provider_payment_attempt(
@@ -98,14 +130,14 @@ async def _reconcile_existing_payment(order: Order, payment: Payment) -> Payment
         stored_confirmation_url=payment.confirmation_url,
     )
     if resolution.outcome == "unavailable":
-        raise HTTPException(
-            status_code=409,
-            detail="Payment is active but has no confirmation URL. Retry later or contact support.",
+        raise ProviderPaymentIntegrityError(
+            "provider_payment_confirmation_missing",
+            "Payment is active but has no confirmation URL. Retry later or contact support.",
         )
     if resolution.outcome == "review":
-        raise HTTPException(
-            status_code=409,
-            detail=f"Provider payment status requires review: {resolution.status}",
+        raise ProviderPaymentIntegrityError(
+            "provider_payment_status_requires_review",
+            f"Provider payment status requires review: {resolution.status}",
         )
 
     payment.status = resolution.status
@@ -141,6 +173,11 @@ def _parse_webhook_payload(raw_body: bytes) -> tuple[dict, str, dict, str]:
 
 
 def _queue_payment_review(db: Session, order: Order, payment_id: str, reason: str) -> None:
+    stop_pilot_for_order(
+        db,
+        order_id=order.id,
+        reason=f"payment_review:{reason}",
+    )
     payload = {
         "order_id": order.id,
         "provider_payment_id": payment_id,
@@ -162,6 +199,7 @@ async def create_payment(
     db: Session = Depends(get_db),
 ):
     provider_payment_id = ""
+    order_id_for_integrity = payload.order_id
     try:
         order = (
             db.query(Order)
@@ -210,7 +248,10 @@ async def create_payment(
         )
         provider_payment_id = str(data.get("provider_payment_id") or "").strip()
         if not provider_payment_id or len(provider_payment_id) > 255:
-            raise HTTPException(status_code=502, detail="Payment provider returned an invalid payment id")
+            raise ProviderPaymentIntegrityError(
+                "provider_payment_id_invalid",
+                "Payment provider returned an invalid payment id",
+            )
 
         payment = Payment(
             order_id=order.id,
@@ -227,6 +268,15 @@ async def create_payment(
             settle_paid_order(db, order)
         db.commit()
         return _payment_out(order, payment)
+    except ProviderPaymentIntegrityError as exc:
+        db.rollback()
+        raise _trip_after_rollback(order_id_for_integrity, exc)
+    except PilotCircuitBreakerError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail="Pilot safety circuit could not be applied",
+        ) from exc
     except HTTPException:
         db.rollback()
         raise
@@ -268,11 +318,15 @@ async def yookassa_webhook(request: Request, db: Session = Depends(get_db)):
 
     provider_payment = await fetch_yookassa_payment(payment_id)
     provider_order_id = _provider_order_id(provider_payment)
-    provider_status = str(provider_payment.get("status") or obj.get("status") or "").strip()
-    if not provider_status or len(provider_status) > 64:
-        raise HTTPException(status_code=409, detail="Provider payment has no valid status")
 
     try:
+        provider_status = str(provider_payment.get("status") or obj.get("status") or "").strip()
+        if not provider_status or len(provider_status) > 64:
+            raise ProviderPaymentIntegrityError(
+                "provider_payment_status_invalid",
+                "Provider payment has no valid status",
+            )
+
         order = db.query(Order).filter(Order.id == provider_order_id).with_for_update().first()
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
@@ -285,7 +339,10 @@ async def yookassa_webhook(request: Request, db: Session = Depends(get_db)):
             .first()
         )
         if payment and payment.order_id != order.id:
-            raise HTTPException(status_code=409, detail="Payment belongs to another order")
+            raise ProviderPaymentIntegrityError(
+                "stored_payment_order_mismatch",
+                "Payment belongs to another order",
+            )
 
         latest_order_payment = (
             db.query(Payment)
@@ -374,6 +431,15 @@ async def yookassa_webhook(request: Request, db: Session = Depends(get_db)):
         payment_event.processed = True
         db.commit()
         return {"ok": True}
+    except ProviderPaymentIntegrityError as exc:
+        db.rollback()
+        raise _trip_after_rollback(provider_order_id, exc)
+    except PilotCircuitBreakerError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail="Pilot safety circuit could not be applied",
+        ) from exc
     except HTTPException:
         db.rollback()
         raise
