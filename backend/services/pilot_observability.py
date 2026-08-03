@@ -17,9 +17,27 @@ if TYPE_CHECKING:
     from ..config import Settings
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
-_SAFE_AUTO_STOP_REASON = re.compile(r"^auto:[a-z0-9:._-]{1,160}$")
 _PAYMENT_REVIEW_STATUSES = {"paid_review_required", "payment_review_required"}
 _REFUND_ATTENTION_STATUSES = {"refund_retry_required", "refund_review_required"}
+_SAFE_AUTO_STOP_REASONS = (
+    "provider_payment_amount_invalid",
+    "provider_payment_amount_or_currency_mismatch",
+    "provider_payment_order_reference_mismatch",
+    "provider_payment_confirmation_missing",
+    "provider_payment_status_requires_review",
+    "provider_payment_id_invalid",
+    "provider_payment_status_invalid",
+    "stored_payment_order_mismatch",
+    "payment_review:paid_after_cancel",
+    "payment_review:canceled_after_settlement",
+    "payment_review:provider_cancel_conflict",
+    "payment_reconciliation_mismatch",
+    "refund_retry_required",
+    "refund_review_required",
+    "refund_finalization_integrity_failure",
+    "refund_finalization_integrity_conflict",
+    "pilot_slot_runtime_mismatch",
+)
 
 
 def _timestamp(value: datetime | None) -> str | None:
@@ -49,9 +67,13 @@ def _safe_stop_reason(reason: str) -> str | None:
     value = str(reason or "").strip().lower()
     if not value:
         return None
-    if _SAFE_AUTO_STOP_REASON.fullmatch(value):
-        return value
-    return "operator_stop"
+    if not value.startswith("auto:"):
+        return "operator_stop"
+    normalized = value.removeprefix("auto:")
+    for safe_reason in _SAFE_AUTO_STOP_REASONS:
+        if normalized == safe_reason or normalized.startswith(f"{safe_reason}:"):
+            return f"auto:{safe_reason}"
+    return "auto:integrity_failure"
 
 
 def _allowlist_summary(raw: str) -> tuple[int, list[str]]:
@@ -154,11 +176,21 @@ def build_pilot_operations_status(
     env: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     enforced = bool(settings.pilot_runtime_enforced)
+    configured_max_orders = int(getattr(settings, "pilot_runtime_max_orders", 20))
     state_count = db.query(func.count(PilotRuntimeState.id)).scalar() or 0
     state = db.get(PilotRuntimeState, 1)
 
     if state is None:
-        database_codes = ["runtime_state_missing"] if enforced else []
+        orphan_slot_count = int(db.query(func.count(PilotOrderSlot.id)).scalar() or 0)
+        database_codes: list[str] = []
+        if enforced:
+            database_codes.append("runtime_state_missing")
+        if state_count:
+            database_codes.append("runtime_state_id_invalid")
+        if orphan_slot_count:
+            database_codes.append("orphan_slots_without_runtime_state")
+        if configured_max_orders != 20:
+            database_codes.append("configured_max_orders_not_twenty")
         return {
             "schema_version": 1,
             "generated_at": _generated_at(),
@@ -172,7 +204,7 @@ def build_pilot_operations_status(
                 "accepted_orders": 0,
                 "remaining_orders": 20,
                 "slot_count": 0,
-                "historical_slot_count": int(db.query(func.count(PilotOrderSlot.id)).scalar() or 0),
+                "historical_slot_count": orphan_slot_count,
                 "allowlist_count": 0,
                 "stop_reason": None,
                 "opened_at": None,
@@ -210,6 +242,10 @@ def build_pilot_operations_status(
 
     if state_count != 1:
         database_codes.append("runtime_state_not_singleton")
+    if configured_max_orders != 20:
+        database_codes.append("configured_max_orders_not_twenty")
+    if state.max_orders != configured_max_orders:
+        database_codes.append("runtime_config_max_orders_mismatch")
     if state.max_orders != 20:
         database_codes.append("max_orders_not_twenty")
     if state.accepted_orders < 0 or state.accepted_orders > state.max_orders:
