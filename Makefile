@@ -54,24 +54,6 @@ health:
 	./scripts/healthcheck.sh
 
 workers:
-	./scripts/healthcheck.sh
-
-down:
-	docker compose down
-
-logs:
-	docker compose logs -f
-
-migrate:
-	./scripts/migrate.sh
-
-transaction-integrity:
-	docker compose run --rm backend python scripts/check_transaction_integrity.py
-
-health:
-	./scripts/healthcheck.sh
-
-workers:
 	docker compose --profile workers up -d
 
 search:
