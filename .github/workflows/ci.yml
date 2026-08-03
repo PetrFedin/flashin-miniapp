@@ -131,10 +131,10 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: backend/requirements.txt
-      - name: Install backend dependencies
-        run: pip install -r backend/requirements.txt
-      - name: Apply database migrations
-        run: alembic -c backend/alembic.ini upgrade head
+      - name: Install backend dependencies quietly
+        run: pip install -q -r backend/requirements.txt
+      - name: Apply database migrations quietly
+        run: alembic -c backend/alembic.ini upgrade head >/dev/null
       - name: Run complete backend pytest suite
         run: python -m pytest -q backend/tests
 
