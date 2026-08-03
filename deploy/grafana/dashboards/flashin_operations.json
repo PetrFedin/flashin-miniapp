@@ -1,61 +1,165 @@
 {
-  "title": "FLASHIN Operations",
+  "annotations": {
+    "list": []
+  },
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
   "panels": [
     {
-      "type": "stat",
-      "title": "HTTP Requests",
-      "targets": [
-        {
-          "expr": "sum(rate(flashin_http_requests_total[5m]))"
-        }
-      ]
+      "datasource": {"type": "prometheus", "uid": "flashin-prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "options": {
+                "0": {"color": "red", "index": 0, "text": "NO-GO"},
+                "1": {"color": "green", "index": 1, "text": "GO"}
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": null},
+              {"color": "green", "value": 1}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 0},
+      "id": 1,
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "flashin_pilot_checkout_ready", "refId": "A"}],
+      "title": "Pilot checkout",
+      "type": "stat"
     },
     {
-      "type": "stat",
+      "datasource": {"type": "prometheus", "uid": "flashin-prometheus"},
+      "fieldConfig": {"defaults": {"mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 0},
+      "id": 2,
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "name"},
+      "targets": [{"expr": "flashin_pilot_runtime_status == 1", "legendFormat": "{{status}}", "refId": "A"}],
+      "title": "Pilot runtime status",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "flashin-prometheus"},
+      "fieldConfig": {"defaults": {"mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 17}, {"color": "red", "value": 20}]}}, "overrides": []},
+      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 0},
+      "id": 3,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "flashin_pilot_orders_accepted", "refId": "A"}],
+      "title": "Orders accepted / 20",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "flashin-prometheus"},
+      "fieldConfig": {"defaults": {"mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "orange", "value": 1}, {"color": "green", "value": 4}]}}, "overrides": []},
+      "gridPos": {"h": 5, "w": 6, "x": 18, "y": 0},
+      "id": 4,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "flashin_pilot_orders_remaining", "refId": "A"}],
+      "title": "Slots remaining",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "flashin-prometheus"},
+      "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"color": "red", "index": 0, "text": "FAILED"}, "1": {"color": "green", "index": 1, "text": "HEALTHY"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 5},
+      "id": 5,
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "flashin_pilot_database_integrity_healthy", "refId": "A"}],
+      "title": "Pilot DB integrity",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "flashin-prometheus"},
+      "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"color": "red", "index": 0, "text": "FAILED"}, "1": {"color": "green", "index": 1, "text": "HEALTHY"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 5},
+      "id": 6,
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "flashin_pilot_artifact_integrity_healthy", "refId": "A"}],
+      "title": "Evidence / release integrity",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "flashin-prometheus"},
+      "fieldConfig": {"defaults": {"mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 5},
+      "id": 7,
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "sum(flashin_pilot_money_attention)", "refId": "A"}],
+      "title": "Money attention signals",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "flashin-prometheus"},
+      "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"color": "red", "index": 0, "text": "FAILED"}, "1": {"color": "green", "index": 1, "text": "OK"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 5, "w": 6, "x": 18, "y": 5},
+      "id": 8,
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "targets": [{"expr": "flashin_pilot_metrics_collection_success", "refId": "A"}],
+      "title": "Pilot metrics collection",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "flashin-prometheus"},
+      "fieldConfig": {"defaults": {"mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 10},
+      "id": 9,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"expr": "flashin_pilot_money_attention", "legendFormat": "{{kind}}", "refId": "A"}],
+      "title": "Pilot money-integrity signals",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "flashin-prometheus"},
+      "fieldConfig": {"defaults": {"mappings": [], "unit": "reqps"}, "overrides": []},
+      "gridPos": {"h": 6, "w": 6, "x": 12, "y": 10},
+      "id": 10,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"expr": "sum(rate(flashin_http_requests_total[5m]))", "refId": "A"}],
+      "title": "HTTP requests",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "flashin-prometheus"},
+      "fieldConfig": {"defaults": {"mappings": [], "unit": "s"}, "overrides": []},
+      "gridPos": {"h": 6, "w": 6, "x": 18, "y": 10},
+      "id": 11,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"expr": "histogram_quantile(0.95, sum(rate(flashin_http_request_latency_seconds_bucket[5m])) by (le))", "refId": "A"}],
       "title": "HTTP p95 latency",
-      "targets": [
-        {
-          "expr": "histogram_quantile(0.95, sum(rate(flashin_http_request_latency_seconds_bucket[5m])) by (le))"
-        }
-      ]
+      "type": "timeseries"
     },
     {
-      "type": "stat",
-      "title": "Webhook failures",
-      "targets": [
-        {
-          "expr": "sum(flashin_webhook_failures_total)"
-        }
-      ]
-    },
-    {
-      "type": "stat",
-      "title": "Payment failures",
-      "targets": [
-        {
-          "expr": "sum(flashin_payment_failures_total)"
-        }
-      ]
-    },
-    {
-      "type": "stat",
-      "title": "SLA overdue",
-      "targets": [
-        {
-          "expr": "sum(flashin_sla_overdue_total)"
-        }
-      ]
-    },
-    {
-      "type": "stat",
-      "title": "MoySklad conflicts",
-      "targets": [
-        {
-          "expr": "sum(flashin_moysklad_conflicts_total)"
-        }
-      ]
+      "datasource": {"type": "prometheus", "uid": "flashin-prometheus"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 7, "w": 24, "x": 0, "y": 16},
+      "id": 12,
+      "options": {"cellHeight": "sm", "footer": {"countRows": false, "fields": "", "reducer": ["sum"], "show": false}, "showHeader": true},
+      "targets": [{"expr": "ALERTS{alertstate=\"firing\",component=~\"pilot.*\"}", "format": "table", "instant": true, "refId": "A"}],
+      "title": "Firing pilot alerts",
+      "type": "table"
     }
   ],
+  "refresh": "15s",
   "schemaVersion": 39,
-  "version": 1
+  "style": "dark",
+  "tags": ["flashin", "operations", "controlled-pilot"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "FLASHIN Operations",
+  "uid": "flashin-operations",
+  "version": 2,
+  "weekStart": ""
 }
