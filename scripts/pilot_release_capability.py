@@ -24,6 +24,7 @@ REQUIRED_FILES = {
     "backend/services/pilot_runtime.py",
     "backend/alembic/versions/0022_pilot_runtime_guard.py",
     "scripts/pilot_runtime.py",
+    "scripts/check_pilot_runtime_integrity.py",
     "scripts/pilot_release_capability.py",
     "backend/api/orders.py",
     "docker-compose.production.yml",
@@ -89,6 +90,8 @@ def inspect_runtime_guard(archive: Path) -> list[str]:
                     content = bundle.read(script).decode("utf-8")
                     if "pilot_runtime.py _stop" not in content:
                         errors.append(f"{script} does not stop active pilot runtime")
+                    if "check_pilot_runtime_integrity.py" not in content:
+                        errors.append(f"{script} does not audit pilot runtime database integrity")
             if "scripts/rollback.sh" in files:
                 rollback = bundle.read("scripts/rollback.sh").decode("utf-8")
                 for marker in (
