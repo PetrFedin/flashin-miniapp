@@ -17,11 +17,13 @@ required = {
     "launch": [
         "scripts/launch.py", "scripts/start_simple.sh", "scripts/preflight.py",
         "scripts/readiness_gate.py", "scripts/check_integrations.py",
+        "scripts/pilot_evidence.py", "scripts/pilot_admission.py",
         "scripts/test_all.sh", "scripts/pilot_control.py", "scripts/pilot_runner.py",
         "scripts/generate_20_order_pilot_sheet.py", "scripts/release_control.py",
         "backend/tests/test_pilot_control.py", "backend/tests/test_pilot_readiness.py",
         "backend/tests/test_integration_checks.py", "backend/tests/test_release_control.py",
-        "backend/tests/test_release_shell_safety.py",
+        "backend/tests/test_release_shell_safety.py", "backend/tests/test_pilot_evidence.py",
+        "backend/tests/test_pilot_admission.py",
     ],
     "integrations": [
         "backend/api/payments.py", "backend/api/moysklad.py",
@@ -34,14 +36,15 @@ required = {
     "ops": [
         "scripts/backup_postgres.sh", "scripts/verify_backup.sh",
         "scripts/restore_postgres.sh", "scripts/deploy_production.sh",
-        "scripts/rollback.sh", "docs/pilot/release_and_rollback_runbook.md",
+        "scripts/rollback.sh", "scripts/release_control.py",
+        "docs/pilot/release_and_rollback_runbook.md",
         "deploy/grafana/dashboards/flashin_operations.json",
     ],
     "docs": [
         "README.md", "docs/v49_unified_system_map.md", "docs/v50_final_handover.md",
         "docs/v51_pilot_freeze_layer.md", "docs/acceptance/pilot_acceptance_signoff.md",
         "docs/pilot/pilot_launch_runbook.md", "docs/pilot/provider_probe_runbook.md",
-        "docs/pilot/release_and_rollback_runbook.md",
+        "docs/pilot/provider_evidence_and_admission.md",
     ],
 }
 
@@ -58,6 +61,7 @@ def run(cmd):
 
 report["preflight"] = run("python3 scripts/preflight.py")
 report["compile"] = run("python3 -m compileall -q backend bot scripts")
+report["shell_syntax"] = run("find scripts -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n")
 
 Path("docs/audit/package_audit_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 Path("docs/audit/package_audit_report.md").write_text(
