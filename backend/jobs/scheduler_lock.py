@@ -1,21 +1,23 @@
 """PostgreSQL-backed ownership for scheduled jobs.
 
 APScheduler's ``max_instances`` protects only one Python process. Session-level
-advisory locks keep a job single-owner across all scheduler containers while
-allowing unrelated jobs to run concurrently.
+advisory locks keep a job single-owner across scheduler containers, one-shot
+worker entrypoints, and manual operations while unrelated jobs remain parallel.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import re
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session
 
-from ..database import engine
+from ..database import SessionLocal, engine
 
 
 T = TypeVar("T")
@@ -93,3 +95,61 @@ def run_with_scheduler_lock(
             connection.commit()
             if not released:
                 connection.invalidate()
+
+
+def _call_with_db(
+    callback: Callable[[Session], T],
+    *,
+    session_factory: Callable[[], Session] = SessionLocal,
+) -> T:
+    db = session_factory()
+    try:
+        return callback(db)
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def _call_with_async_db(
+    callback: Callable[[Session], Awaitable[T]],
+    *,
+    session_factory: Callable[[], Session] = SessionLocal,
+) -> T:
+    db = session_factory()
+    try:
+        return asyncio.run(callback(db))
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def run_locked_db_job(
+    job_name: str,
+    callback: Callable[[Session], T],
+    *,
+    database_engine: Engine = engine,
+    session_factory: Callable[[], Session] = SessionLocal,
+) -> dict[str, Any]:
+    return run_with_scheduler_lock(
+        job_name,
+        lambda: _call_with_db(callback, session_factory=session_factory),
+        database_engine=database_engine,
+    )
+
+
+def run_locked_async_db_job(
+    job_name: str,
+    callback: Callable[[Session], Awaitable[T]],
+    *,
+    database_engine: Engine = engine,
+    session_factory: Callable[[], Session] = SessionLocal,
+) -> dict[str, Any]:
+    return run_with_scheduler_lock(
+        job_name,
+        lambda: _call_with_async_db(callback, session_factory=session_factory),
+        database_engine=database_engine,
+    )
