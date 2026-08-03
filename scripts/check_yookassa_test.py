@@ -15,11 +15,11 @@ from typing import Any, Mapping
 ALLOWED_STATUSES = {"pending", "waiting_for_capture", "succeeded"}
 
 
-def build_idempotence_key(shop_id: str, release_commit: str) -> str:
+def build_idempotence_key(shop_id: str, release_commit: str, return_url: str = "") -> str:
     return str(
         uuid.uuid5(
             uuid.NAMESPACE_URL,
-            f"flashin:pilot-provider-probe:yookassa:{shop_id}:{release_commit}",
+            f"flashin:pilot-provider-probe:yookassa:{shop_id}:{release_commit}:{return_url}",
         )
     )
 
@@ -65,7 +65,7 @@ def main() -> int:
         print(json.dumps({"ok": False, "error": "YOOKASSA_SHOP_ID and YOOKASSA_SECRET_KEY are required"}))
         return 1
     if not idempotence_key:
-        idempotence_key = build_idempotence_key(shop_id, release_commit)
+        idempotence_key = build_idempotence_key(shop_id, release_commit, return_url)
 
     payload = {
         "amount": {"value": "1.00", "currency": "RUB"},
@@ -111,7 +111,7 @@ def main() -> int:
         "amount": (body.get("amount") or {}).get("value"),
         "currency": (body.get("amount") or {}).get("currency"),
         "confirmation_required": body.get("status") == "pending",
-        "idempotence_scope": "current-release",
+        "idempotence_scope": "current-release-and-return-url",
         "errors": errors,
     }
     print(json.dumps(safe, ensure_ascii=False))
