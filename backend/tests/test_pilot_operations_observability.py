@@ -65,7 +65,7 @@ def _active_runtime(db, *, accepted_orders: int = 2):
     return state, customer, orders
 
 
-def test_healthy_active_runtime_is_go_without_exposing_allowlist(monkeypatch):
+def test_healthy_active_runtime_is_go_without_exposing_allowlist_or_raw_run_id(monkeypatch):
     db = _database()
     _state, _customer, _orders = _active_runtime(db)
     monkeypatch.setattr(pilot_observability, "validate_runtime_files", lambda *_args, **_kwargs: [])
@@ -77,6 +77,7 @@ def test_healthy_active_runtime_is_go_without_exposing_allowlist(monkeypatch):
     assert snapshot["runtime"]["remaining_orders"] == 18
     assert snapshot["runtime"]["slot_count"] == 2
     assert snapshot["runtime"]["allowlist_count"] == 2
+    assert len(snapshot["runtime"]["run_ref"]) == 12
     assert snapshot["database_integrity"] == {"healthy": True, "codes": []}
     assert snapshot["artifact_integrity"] == {
         "applicable": True,
@@ -86,7 +87,9 @@ def test_healthy_active_runtime_is_go_without_exposing_allowlist(monkeypatch):
     serialized = json.dumps(snapshot, ensure_ascii=False)
     assert "123456789" not in serialized
     assert "987654321" not in serialized
+    assert "pilot-run-2026" not in serialized
     assert "allowed_telegram_ids" not in serialized
+    assert '"run_id"' not in serialized
     assert "telegram" not in serialized.lower()
 
 
@@ -171,12 +174,36 @@ def test_artifact_failures_are_reduced_to_safe_machine_codes(monkeypatch):
     assert "PILOT_EVIDENCE_SIGNING_SECRET" not in serialized
 
 
+def test_manual_stop_reason_is_not_exposed(monkeypatch):
+    db = _database()
+    state, _customer, _orders = _active_runtime(db)
+    state.status = "stopped"
+    state.stop_reason = "Call customer 123456789 about secret provider incident"
+    db.commit()
+    monkeypatch.setattr(pilot_observability, "validate_runtime_files", lambda *_args, **_kwargs: [])
+
+    snapshot = pilot_observability.build_pilot_operations_status(db, _settings())
+
+    assert snapshot["runtime"]["stop_reason"] == "operator_stop"
+    serialized = json.dumps(snapshot)
+    assert "123456789" not in serialized
+    assert "secret provider incident" not in serialized
+
+    state.stop_reason = "auto:provider_payment_amount_or_currency_mismatch"
+    db.commit()
+    snapshot = pilot_observability.build_pilot_operations_status(db, _settings())
+    assert snapshot["runtime"]["stop_reason"] == (
+        "auto:provider_payment_amount_or_currency_mismatch"
+    )
+
+
 def test_missing_runtime_is_no_go_when_enforcement_is_enabled():
     db = _database()
 
     snapshot = pilot_observability.build_pilot_operations_status(db, _settings(enforced=True))
 
     assert snapshot["runtime"]["present"] is False
+    assert snapshot["runtime"]["run_ref"] is None
     assert snapshot["checkout_decision"] == "NO-GO"
     assert snapshot["database_integrity"] == {
         "healthy": False,
