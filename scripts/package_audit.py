@@ -32,6 +32,7 @@ required = {
         "backend/tests/test_pilot_payment_circuit_breaker.py",
         "backend/tests/test_pilot_circuit_breaker_wiring.py",
         "backend/tests/test_pilot_money_safety_fail_closed.py",
+        "backend/tests/test_pilot_operations_observability.py",
     ],
     "integrations": [
         "backend/api/payments.py", "backend/api/returns.py", "backend/api/moysklad.py",
@@ -44,6 +45,7 @@ required = {
         "scripts/check_meilisearch.py",
     ],
     "ops": [
+        "backend/api/ops.py", "backend/services/pilot_observability.py",
         "scripts/backup_postgres.sh", "scripts/verify_backup.sh",
         "scripts/restore_postgres.sh", "scripts/deploy_production.sh",
         "scripts/rollback.sh", "scripts/release_control.py",
@@ -51,6 +53,7 @@ required = {
         "docs/pilot/release_and_rollback_runbook.md",
         "docs/pilot/pilot_runtime_guard.md",
         "docs/pilot/pilot_payment_circuit_breaker.md",
+        "docs/pilot/pilot_operations_observability.md",
         "deploy/grafana/dashboards/flashin_operations.json",
     ],
     "docs": [
@@ -59,6 +62,7 @@ required = {
         "docs/pilot/pilot_launch_runbook.md", "docs/pilot/provider_probe_runbook.md",
         "docs/pilot/provider_evidence_and_admission.md", "docs/pilot/pilot_runtime_guard.md",
         "docs/pilot/pilot_payment_circuit_breaker.md",
+        "docs/pilot/pilot_operations_observability.md",
     ],
 }
 
