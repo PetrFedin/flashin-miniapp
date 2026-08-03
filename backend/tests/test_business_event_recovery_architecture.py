@@ -13,6 +13,8 @@ def test_payload_helpers_reject_non_objects_and_non_finite_numbers():
     with pytest.raises(event_dispatcher.BusinessEventPayloadError):
         event_dispatcher._parse_payload("not-json")
     with pytest.raises(event_dispatcher.BusinessEventPayloadError):
+        event_dispatcher._parse_payload('{"invalid": NaN}')
+    with pytest.raises(event_dispatcher.BusinessEventPayloadError):
         event_dispatcher._serialize_payload({"invalid": float("nan")})
 
 
