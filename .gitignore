@@ -23,6 +23,10 @@ exports/
 backups/
 *.log
 
+# Live pilot evidence contains real operational identifiers and must remain local/private.
+docs/pilot/live_pilot_state.json
+docs/pilot/live_pilot_summary.md
+
 postgres-data/
 meili_data/
 grafana-data/
