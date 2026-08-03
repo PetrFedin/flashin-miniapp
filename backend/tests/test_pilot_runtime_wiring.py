@@ -29,14 +29,46 @@ def test_runtime_state_is_migrated_and_private_evidence_is_read_only():
     assert "./deploy/release:/app/deploy/release:ro" in compose
 
 
-def test_deploy_and_rollback_stop_active_pilot_before_code_changes():
+def test_deploy_and_rollback_stop_active_pilot_and_sign_release_capability():
     deploy = read("scripts/deploy_production.sh")
     rollback = read("scripts/rollback.sh")
     marker = "pilot_runtime.py _stop"
+    capability = "pilot_release_capability.py stamp --slot current"
+
     assert marker in deploy
     assert deploy.index(marker) < deploy.index("readiness_gate.py --phase predeploy")
+    assert capability in deploy
+    assert deploy.index(capability) > deploy.index("release_control.py promote")
+
     assert marker in rollback
     assert rollback.index(marker) < rollback.index("docker compose down")
+    restored_stop = 'pilot_runtime.py _stop \\\n    --reason "rollback database restored"'
+    assert restored_stop in rollback
+    assert rollback.index(restored_stop) < rollback.index("Starting rolled-back production services")
+    assert capability in rollback
+    assert rollback.index(capability) > rollback.index("release_control.py\" promote")
+
+
+def test_release_capability_requires_runtime_checkout_and_safe_operations():
+    source = read("scripts/pilot_release_capability.py")
+    for required in (
+        "backend/pilot_models.py",
+        "backend/services/pilot_runtime.py",
+        "backend/alembic/versions/0022_pilot_runtime_guard.py",
+        "backend/api/orders.py",
+        "docker-compose.production.yml",
+        "scripts/deploy_production.sh",
+        "scripts/rollback.sh",
+    ):
+        assert required in source
+    for marker in (
+        "acquire_pilot_checkout(",
+        "record_pilot_order(",
+        "./docs:/app/docs:ro",
+        "./deploy/release:/app/deploy/release:ro",
+        "pilot_runtime.py _stop",
+    ):
+        assert marker in source
 
 
 def test_production_environment_requires_exact_twenty_order_guard():
