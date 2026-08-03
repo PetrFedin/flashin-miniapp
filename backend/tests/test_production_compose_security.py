@@ -6,14 +6,34 @@ from scripts import check_production_compose
 
 def _safe_config():
     services = {
-        name: {}
+        name: {"restart": "unless-stopped"}
         for name in check_production_compose.REQUIRED_INTERNAL_SERVICES
     }
+    services["backend"].update(
+        {
+            "healthcheck": {
+                "test": ["CMD-SHELL", "curl -fsS http://localhost:8000/ready"]
+            },
+            "depends_on": {"db": {"condition": "service_healthy"}},
+        }
+    )
+    services["notification_worker"]["depends_on"] = {
+        "db": {"condition": "service_healthy"}
+    }
+    services["scheduler"]["depends_on"] = {
+        "db": {"condition": "service_healthy"}
+    }
     services[check_production_compose.PUBLIC_SERVICE] = {
+        "restart": "unless-stopped",
         "ports": [
             {"published": "80", "target": 80, "protocol": "tcp"},
             {"published": "443", "target": 443, "protocol": "tcp"},
-        ]
+        ],
+        "depends_on": {
+            "frontend": {"condition": "service_started"},
+            "admin": {"condition": "service_started"},
+            "backend": {"condition": "service_started"},
+        },
     }
     return {"services": services}
 
