@@ -96,6 +96,7 @@ class Settings(BaseSettings):
     pilot_admission_manifest_path: str = "docs/pilot/pilot_admission_manifest.json"
     pilot_state_path: str = "docs/pilot/live_pilot_state.json"
     pilot_current_release_path: str = "deploy/release/runtime/current_release.json"
+    pilot_previous_release_path: str = "deploy/release/runtime/previous_release.json"
 
     @property
     def cors_origin_list(self) -> list[str]:
