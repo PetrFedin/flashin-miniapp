@@ -51,6 +51,7 @@ def _parse_payload(payload_json: str) -> dict:
         raise BusinessEventPayloadError("Stored business event payload is invalid JSON") from exc
     if not isinstance(payload, dict):
         raise BusinessEventPayloadError("Business event payload must be an object")
+    _serialize_payload(payload)
     return payload
 
 
