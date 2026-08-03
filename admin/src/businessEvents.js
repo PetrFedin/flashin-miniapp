@@ -32,7 +32,8 @@ export function compactEventError(value, maxLength = 160) {
 export function buildBusinessEventReplayBody(reason, payloadText = "") {
   const normalizedReason = String(reason || "").trim();
   if (normalizedReason.length < 5) {
-    throw new Error("Укажите конкретную причину повторной обработки (минимум 5 символов)."
+    throw new Error(
+      "Укажите конкретную причину повторной обработки (минимум 5 символов).",
     );
   }
   if (normalizedReason.length > 500) {
