@@ -32,6 +32,10 @@ docs/pilot/live_pilot_state.json
 docs/pilot/live_pilot_summary.md
 docs/pilot/integration_check_report.json
 docs/pilot/integration_check_report.md
+docs/pilot/rollback_drill_report.json
+docs/pilot/rollback_drill_report.md
+docs/pilot/pilot_admission_manifest.json
+docs/pilot/pilot_admission_manifest.md
 docs/readiness_gate_report.json
 docs/readiness_gate_report.md
 docs/pilot_live_gate_report.json
