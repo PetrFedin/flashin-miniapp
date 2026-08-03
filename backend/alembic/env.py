@@ -6,7 +6,13 @@ from sqlalchemy import create_engine, pool
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
-from backend import checkout_models, model_constraints, models, notification_models  # noqa: F401
+from backend import checkout_models  # noqa: F401
+from backend import (  # noqa: F401
+    business_event_models,
+    model_constraints,
+    models,
+    notification_models,
+)
 from backend.database import Base
 
 config = context.config

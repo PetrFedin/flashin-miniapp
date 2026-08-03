@@ -15,9 +15,9 @@ def test_event_worker_claims_disjoint_rows_and_isolates_each_event():
     assert ".order_by(BusinessEvent.id.asc())" in source
     assert "with db.begin_nested():" in source
     assert "process_event(db, row)" in source
-    assert "_record_failed_attempt(row)" in source
+    assert "_record_failed_attempt(db, row, exc)" in source
     assert source.index("with db.begin_nested():") < source.index(
-        "_record_failed_attempt(row)"
+        "_record_failed_attempt(db, row, exc)"
     )
     assert "db.commit()" in source
     assert "_MAX_EVENT_ATTEMPTS = 10" in source

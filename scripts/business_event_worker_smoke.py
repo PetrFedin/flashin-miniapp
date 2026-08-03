@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Verify atomic and retry-safe BusinessEvent dispatch on PostgreSQL.
+"""Verify atomic, retry-safe and diagnosable BusinessEvent dispatch on PostgreSQL.
 
 The worker processes one healthy event and one poison event. The poison handler
 creates a real webhook outbox row and then raises. A per-event savepoint must
-remove that partial outbox row while preserving the successful event and the
-poison event's retry counter.
+remove that partial outbox row while preserving the successful event, retry
+counter and durable failure diagnostics.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ if str(ROOT) not in sys.path:
 
 from sqlalchemy.orm import Session
 
+from backend.business_event_models import BusinessEventRecoveryState
 from backend.database import engine
 from backend.models import BusinessEvent, WebhookDestination, WebhookOutbox
 from backend.services import event_dispatcher
@@ -91,6 +92,11 @@ def main() -> int:
         db.expire_all()
         healthy = db.query(BusinessEvent).filter(BusinessEvent.id == healthy_id).one()
         poison = db.query(BusinessEvent).filter(BusinessEvent.id == poison_id).one()
+        first_recovery = (
+            db.query(BusinessEventRecoveryState)
+            .filter(BusinessEventRecoveryState.business_event_id == poison_id)
+            .one()
+        )
         first_outboxes = (
             db.query(WebhookOutbox)
             .filter(WebhookOutbox.event_type.in_([healthy_type, poison_type]))
@@ -104,6 +110,10 @@ def main() -> int:
         assert poison.status == "pending"
         assert poison.attempts == 1
         assert poison.processed_at is None
+        assert "intentional poison event" in first_recovery.last_error
+        assert first_recovery.last_attempt_at is not None
+        assert first_recovery.failed_at is None
+        assert first_recovery.resolved_at is None
         assert len(first_outboxes) == 1
         assert first_outboxes[0].event_type == healthy_type
         assert first_outboxes[0].status == "pending"
@@ -117,10 +127,21 @@ def main() -> int:
             assert processed == 0
             db.expire_all()
             poison = db.query(BusinessEvent).filter(BusinessEvent.id == poison_id).one()
+            recovery = (
+                db.query(BusinessEventRecoveryState)
+                .filter(BusinessEventRecoveryState.business_event_id == poison_id)
+                .one()
+            )
             assert poison.attempts == expected_attempt
             expected_status = "failed" if expected_attempt == 10 else "pending"
             assert poison.status == expected_status
             assert poison.processed_at is None
+            assert recovery.last_attempt_at is not None
+            assert "RuntimeError" in recovery.last_error
+            if expected_status == "failed":
+                assert recovery.failed_at is not None
+            else:
+                assert recovery.failed_at is None
             assert (
                 db.query(WebhookOutbox)
                 .filter(WebhookOutbox.event_type == poison_type)
@@ -135,6 +156,11 @@ def main() -> int:
         db.expire_all()
         healthy = db.query(BusinessEvent).filter(BusinessEvent.id == healthy_id).one()
         poison = db.query(BusinessEvent).filter(BusinessEvent.id == poison_id).one()
+        recovery = (
+            db.query(BusinessEventRecoveryState)
+            .filter(BusinessEventRecoveryState.business_event_id == poison_id)
+            .one()
+        )
         outboxes = (
             db.query(WebhookOutbox)
             .filter(WebhookOutbox.event_type.in_([healthy_type, poison_type]))
@@ -149,6 +175,8 @@ def main() -> int:
         assert healthy.status == "processed"
         assert poison.status == "failed"
         assert poison.attempts == 10
+        assert recovery.failed_at is not None
+        assert recovery.resolved_at is None
         assert len(outboxes) == 1
         assert outboxes[0].event_type == healthy_type
         assert persisted_destination.active is True
@@ -160,6 +188,7 @@ def main() -> int:
                     "healthy_event": healthy.status,
                     "poison_event": poison.status,
                     "poison_attempts": poison.attempts,
+                    "diagnostics_persisted": True,
                     "persisted_outboxes": len(outboxes),
                     "partial_poison_outboxes": 0,
                 },
