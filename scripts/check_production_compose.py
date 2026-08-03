@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 PUBLIC_SERVICE = "caddy"
@@ -22,6 +22,7 @@ REQUIRED_INTERNAL_SERVICES = {
 }
 EXPECTED_PUBLIC_PORTS = {(80, "tcp"), (443, "tcp")}
 PRODUCTION_PROFILES = ("production", "workers", "scheduler", "search")
+RESTART_POLICY = "unless-stopped"
 
 
 def _published_ports(service: Mapping) -> set[tuple[int, str]]:
@@ -41,13 +42,38 @@ def _published_ports(service: Mapping) -> set[tuple[int, str]]:
     return published
 
 
+def _healthcheck_text(service: Mapping) -> str:
+    healthcheck = service.get("healthcheck")
+    if not isinstance(healthcheck, Mapping):
+        return ""
+    test = healthcheck.get("test")
+    if isinstance(test, str):
+        return test
+    if isinstance(test, Sequence) and not isinstance(test, (str, bytes)):
+        return " ".join(str(value) for value in test)
+    return ""
+
+
+def _dependency_condition(service: Mapping, dependency: str) -> str | None:
+    depends_on = service.get("depends_on")
+    if not isinstance(depends_on, Mapping):
+        return None
+    value = depends_on.get(dependency)
+    if isinstance(value, Mapping):
+        return str(value.get("condition") or "service_started")
+    if value is not None:
+        return "service_started"
+    return None
+
+
 def validate_config(config: Mapping) -> list[str]:
     services = config.get("services")
     if not isinstance(services, Mapping):
         return ["Compose configuration has no services map"]
 
     errors: list[str] = []
-    missing = sorted((REQUIRED_INTERNAL_SERVICES | {PUBLIC_SERVICE}) - set(services))
+    required_services = REQUIRED_INTERNAL_SERVICES | {PUBLIC_SERVICE}
+    missing = sorted(required_services - set(services))
     if missing:
         errors.append("Missing production services: " + ", ".join(missing))
 
@@ -72,6 +98,27 @@ def validate_config(config: Mapping) -> list[str]:
 
         if service.get("network_mode") == "host":
             errors.append(f"Service {name} must not use host network mode")
+
+        if name in required_services and service.get("restart") != RESTART_POLICY:
+            errors.append(f"Service {name} must use restart: {RESTART_POLICY}")
+
+    backend = services.get("backend")
+    if isinstance(backend, Mapping):
+        if "/ready" not in _healthcheck_text(backend):
+            errors.append("Backend healthcheck must use /ready, not only liveness")
+        if _dependency_condition(backend, "db") != "service_healthy":
+            errors.append("Backend must wait for a healthy database")
+
+    for worker_name in ("notification_worker", "scheduler"):
+        worker = services.get(worker_name)
+        if isinstance(worker, Mapping) and _dependency_condition(worker, "db") != "service_healthy":
+            errors.append(f"{worker_name} must wait for a healthy database")
+
+    caddy = services.get(PUBLIC_SERVICE)
+    if isinstance(caddy, Mapping):
+        for dependency in ("frontend", "admin", "backend"):
+            if _dependency_condition(caddy, dependency) is None:
+                errors.append(f"Caddy must depend on {dependency}")
 
     return errors
 
@@ -129,6 +176,8 @@ def main() -> int:
             "public_service": PUBLIC_SERVICE,
             "ports": [80, 443],
             "profiles": list(PRODUCTION_PROFILES),
+            "backend_healthcheck": "/ready",
+            "restart_policy": RESTART_POLICY,
         }
     )
     return 0

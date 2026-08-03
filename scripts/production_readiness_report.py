@@ -1,38 +1,23 @@
 #!/usr/bin/env python3
-from pathlib import Path
+"""Generate a truthful production-readiness report using the strict predeploy gate."""
+
+from __future__ import annotations
+
 import json
+from pathlib import Path
 
-items = {
-    "env_exists": Path(".env").exists(),
-    "docker_compose": Path("docker-compose.yml").exists(),
-    "migrations": bool(list(Path("backend/alembic/versions").glob("*.py"))),
-    "legal_offer": Path("frontend/public/legal/offer.html").exists(),
-    "legal_privacy": Path("frontend/public/legal/privacy.html").exists(),
-    "legal_returns": Path("frontend/public/legal/returns.html").exists(),
-    "backup_script": Path("scripts/backup_postgres.sh").exists(),
-    "restore_script": Path("scripts/restore_postgres.sh").exists(),
-    "deploy_script": Path("scripts/deploy_production.sh").exists(),
-    "rollback_script": Path("scripts/rollback.sh").exists(),
-    "preflight": Path("scripts/preflight.py").exists(),
-    "e2e_smoke": Path("tests/e2e_smoke.py").exists(),
-    "runbooks": Path("docs/runbook_index.md").exists(),
-}
+from pilot_readiness import build_predeploy_checks, build_report, write_report
 
-score = sum(1 for v in items.values() if v)
-total = len(items)
-report = {
-    "score": score,
-    "total": total,
-    "percent": round(score / total * 100, 2),
-    "items": items,
-}
+ROOT = Path(__file__).resolve().parents[1]
 
-Path("docs/production_readiness_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-Path("docs/production_readiness_report.md").write_text(
-    "# Production Readiness Report\n\n"
-    f"Score: {score}/{total} ({report['percent']}%)\n\n"
-    + "\n".join([f"- [{'x' if ok else ' '}] {key}" for key, ok in items.items()])
-    + "\n",
-    encoding="utf-8",
-)
-print(report)
+
+def main() -> int:
+    report = build_report("predeploy", build_predeploy_checks(ROOT))
+    json_path, markdown_path = write_report(ROOT, report, stem="production_readiness_report")
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    print({"json": str(json_path.relative_to(ROOT)), "markdown": str(markdown_path.relative_to(ROOT))})
+    return 0 if report["go"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

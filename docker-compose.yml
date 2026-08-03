@@ -29,7 +29,7 @@ services:
     volumes:
       - media:/app/media
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/ready || exit 1"]
       interval: 20s
       timeout: 5s
       retries: 10
