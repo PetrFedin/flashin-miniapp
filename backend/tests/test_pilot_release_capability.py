@@ -1,14 +1,18 @@
 import subprocess
+import sys
 from pathlib import Path
 
-from scripts.pilot_evidence import sign_payload
-from scripts.pilot_release_capability import (
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+from pilot_evidence import sign_payload  # noqa: E402
+from pilot_release_capability import (  # noqa: E402
     REQUIRED_FILES,
     capability_payload,
     inspect_runtime_guard,
     validate_capability,
 )
-from scripts.release_control import create_release
+from release_control import create_release  # noqa: E402
 
 
 def _release_state():
