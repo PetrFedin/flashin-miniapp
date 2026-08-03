@@ -20,8 +20,11 @@ def _database():
     return sessionmaker(bind=engine)()
 
 
-def _settings(*, enforced: bool = True):
-    return SimpleNamespace(pilot_runtime_enforced=enforced)
+def _settings(*, enforced: bool = True, max_orders: int = 20):
+    return SimpleNamespace(
+        pilot_runtime_enforced=enforced,
+        pilot_runtime_max_orders=max_orders,
+    )
 
 
 def _active_runtime(db, *, accepted_orders: int = 2):
@@ -147,6 +150,21 @@ def test_database_counter_or_sequence_drift_is_reported(monkeypatch):
     assert "slot_sequence_gap" in snapshot["database_integrity"]["codes"]
 
 
+def test_configured_limit_mismatch_is_no_go(monkeypatch):
+    db = _database()
+    _active_runtime(db)
+    monkeypatch.setattr(pilot_observability, "validate_runtime_files", lambda *_args, **_kwargs: [])
+
+    snapshot = pilot_observability.build_pilot_operations_status(
+        db,
+        _settings(max_orders=19),
+    )
+
+    assert snapshot["checkout_decision"] == "NO-GO"
+    assert "configured_max_orders_not_twenty" in snapshot["database_integrity"]["codes"]
+    assert "runtime_config_max_orders_mismatch" in snapshot["database_integrity"]["codes"]
+
+
 def test_artifact_failures_are_reduced_to_safe_machine_codes(monkeypatch):
     db = _database()
     _active_runtime(db)
@@ -174,7 +192,7 @@ def test_artifact_failures_are_reduced_to_safe_machine_codes(monkeypatch):
     assert "PILOT_EVIDENCE_SIGNING_SECRET" not in serialized
 
 
-def test_manual_stop_reason_is_not_exposed(monkeypatch):
+def test_stop_reason_is_reduced_to_an_allowlisted_category(monkeypatch):
     db = _database()
     state, _customer, _orders = _active_runtime(db)
     state.status = "stopped"
@@ -195,6 +213,20 @@ def test_manual_stop_reason_is_not_exposed(monkeypatch):
     assert snapshot["runtime"]["stop_reason"] == (
         "auto:provider_payment_amount_or_currency_mismatch"
     )
+
+    state.stop_reason = "auto:payment_review:provider_cancel_conflict:customer_123456789"
+    db.commit()
+    snapshot = pilot_observability.build_pilot_operations_status(db, _settings())
+    assert snapshot["runtime"]["stop_reason"] == (
+        "auto:payment_review:provider_cancel_conflict"
+    )
+    assert "123456789" not in json.dumps(snapshot)
+
+    state.stop_reason = "auto:unknown_customer_123456789"
+    db.commit()
+    snapshot = pilot_observability.build_pilot_operations_status(db, _settings())
+    assert snapshot["runtime"]["stop_reason"] == "auto:integrity_failure"
+    assert "123456789" not in json.dumps(snapshot)
 
 
 def test_missing_runtime_is_no_go_when_enforcement_is_enabled():
