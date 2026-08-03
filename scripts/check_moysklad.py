@@ -52,12 +52,16 @@ def main() -> int:
     if not isinstance(rows, list) or not isinstance(meta, dict):
         print("MoySklad probe failed: invalid product collection response")
         return 1
+    total_products = meta.get("size")
+    if not isinstance(total_products, int) or total_products <= 0:
+        print("MoySklad probe failed: product catalog is empty")
+        return 1
     print(
         json.dumps(
             {
                 "status": "ok",
                 "sampled_rows": len(rows),
-                "total_products": meta.get("size"),
+                "total_products": total_products,
             },
             ensure_ascii=False,
         )
