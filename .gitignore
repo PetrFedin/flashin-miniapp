@@ -26,6 +26,8 @@ backups/
 # Live pilot evidence contains real operational identifiers and must remain local/private.
 docs/pilot/live_pilot_state.json
 docs/pilot/live_pilot_summary.md
+docs/pilot/integration_check_report.json
+docs/pilot/integration_check_report.md
 
 postgres-data/
 meili_data/
