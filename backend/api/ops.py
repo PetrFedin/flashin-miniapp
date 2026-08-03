@@ -1,6 +1,6 @@
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
@@ -9,8 +9,22 @@ from ..models import Cart, Notification, ProductVariant
 from ..schemas import AbandonedCartOut, InventorySnapshotOut
 from ..security import get_current_admin
 from ..services.inventory import snapshot_inventory
+from ..services.pilot_observability import build_pilot_operations_status
+from ..services.rbac import require_permission
 
 router = APIRouter(prefix="/ops", tags=["ops"])
+
+
+@router.get("/pilot-runtime")
+def pilot_runtime_status(
+    response: Response,
+    admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    require_permission(db, admin, "security.read")
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return build_pilot_operations_status(db, get_settings())
 
 
 @router.get("/abandoned-carts", response_model=list[AbandonedCartOut])
