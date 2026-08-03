@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -21,8 +22,9 @@ class PilotCircuitBreakerError(RuntimeError):
 
 
 def _normalize_reason(reason: str) -> str:
-    normalized = "_".join(str(reason or "automatic_integrity_stop").strip().lower().split())
-    safe = "".join(character for character in normalized if character.isalnum() or character in "_-:.")
+    normalized = str(reason or "automatic_integrity_stop").strip().lower()
+    safe = re.sub(r"[^a-z0-9:.-]+", "_", normalized)
+    safe = re.sub(r"_+", "_", safe).strip("_")
     return (safe or "automatic_integrity_stop")[:160]
 
 
