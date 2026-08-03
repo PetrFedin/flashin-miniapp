@@ -19,11 +19,15 @@ required = {
         "scripts/readiness_gate.py", "scripts/check_integrations.py",
         "scripts/test_all.sh", "scripts/pilot_control.py", "scripts/pilot_runner.py",
         "scripts/generate_20_order_pilot_sheet.py", "backend/tests/test_pilot_control.py",
+        "backend/tests/test_pilot_readiness.py", "backend/tests/test_integration_checks.py",
     ],
     "integrations": [
         "backend/api/payments.py", "backend/api/moysklad.py",
         "backend/api/delivery_providers.py", "backend/api/payment_reconciliation.py",
         "backend/api/fulfillment.py", "backend/api/admin_security.py",
+        "scripts/check_telegram_bot.py", "scripts/check_yookassa_test.py",
+        "scripts/check_moysklad.py", "scripts/check_r2_s3.py",
+        "scripts/check_meilisearch.py",
     ],
     "ops": [
         "scripts/backup_postgres.sh", "scripts/restore_postgres.sh",
@@ -33,7 +37,7 @@ required = {
     "docs": [
         "README.md", "docs/v49_unified_system_map.md", "docs/v50_final_handover.md",
         "docs/v51_pilot_freeze_layer.md", "docs/acceptance/pilot_acceptance_signoff.md",
-        "docs/pilot/pilot_launch_runbook.md",
+        "docs/pilot/pilot_launch_runbook.md", "docs/pilot/provider_probe_runbook.md",
     ],
 }
 
