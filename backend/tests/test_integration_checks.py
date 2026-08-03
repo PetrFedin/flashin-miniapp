@@ -90,3 +90,16 @@ def test_host_probe_receives_values_from_dotenv():
     )
     assert captured["command"][0] == sys.executable
     assert captured["env"]["TELEGRAM_BOT_TOKEN"] == "token-from-dotenv"
+
+
+def test_live_provider_and_gate_reports_are_gitignored():
+    ignored = (ROOT / ".gitignore").read_text(encoding="utf-8")
+    for path in (
+        "docs/pilot/integration_check_report.json",
+        "docs/pilot/integration_check_report.md",
+        "docs/readiness_gate_report.json",
+        "docs/readiness_gate_report.md",
+        "docs/pilot_live_gate_report.json",
+        "docs/pilot_live_gate_report.md",
+    ):
+        assert path in ignored
