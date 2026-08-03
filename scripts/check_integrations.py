@@ -209,7 +209,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--quiet",
         action="store_true",
-        help="Print only the safe decision summary; detailed evidence remains in the private report",
+        help="Print only the safe decision summary",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print detailed probe output; the default output is a safe summary",
     )
     args = parser.parse_args(argv)
 
@@ -233,16 +238,16 @@ def main(argv: list[str] | None = None) -> int:
 
     report = build_report(results, strict=strict, host_python=args.host_python)
     json_path, markdown_path = write_report(Path(args.report), report)
-    if args.quiet:
+    if args.verbose and not args.quiet:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        print({"json": str(json_path), "markdown": str(markdown_path)})
+    else:
         print(
             json.dumps(
                 {"go": report["go"], "mode": report["mode"], "summary": report["summary"]},
                 ensure_ascii=False,
             )
         )
-    else:
-        print(json.dumps(report, ensure_ascii=False, indent=2))
-        print({"json": str(json_path), "markdown": str(markdown_path)})
     return 0 if report["go"] else 1
 
 
