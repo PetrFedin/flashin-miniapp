@@ -206,6 +206,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Run probes on the host instead of the live backend container",
     )
     parser.add_argument("--report", default=str(DEFAULT_REPORT))
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Print only the safe decision summary; detailed evidence remains in the private report",
+    )
     args = parser.parse_args(argv)
 
     env = read_env(ROOT / ".env")
@@ -228,8 +233,16 @@ def main(argv: list[str] | None = None) -> int:
 
     report = build_report(results, strict=strict, host_python=args.host_python)
     json_path, markdown_path = write_report(Path(args.report), report)
-    print(json.dumps(report, ensure_ascii=False, indent=2))
-    print({"json": str(json_path), "markdown": str(markdown_path)})
+    if args.quiet:
+        print(
+            json.dumps(
+                {"go": report["go"], "mode": report["mode"], "summary": report["summary"]},
+                ensure_ascii=False,
+            )
+        )
+    else:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        print({"json": str(json_path), "markdown": str(markdown_path)})
     return 0 if report["go"] else 1
 
 
