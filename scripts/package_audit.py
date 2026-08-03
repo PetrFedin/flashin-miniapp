@@ -17,7 +17,8 @@ required = {
     "launch": [
         "scripts/launch.py", "scripts/start_simple.sh", "scripts/preflight.py",
         "scripts/readiness_gate.py", "scripts/check_integrations.py",
-        "scripts/test_all.sh",
+        "scripts/test_all.sh", "scripts/pilot_control.py", "scripts/pilot_runner.py",
+        "scripts/generate_20_order_pilot_sheet.py", "backend/tests/test_pilot_control.py",
     ],
     "integrations": [
         "backend/api/payments.py", "backend/api/moysklad.py",
@@ -32,6 +33,7 @@ required = {
     "docs": [
         "README.md", "docs/v49_unified_system_map.md", "docs/v50_final_handover.md",
         "docs/v51_pilot_freeze_layer.md", "docs/acceptance/pilot_acceptance_signoff.md",
+        "docs/pilot/pilot_launch_runbook.md",
     ],
 }
 
@@ -40,12 +42,14 @@ for section, files in required.items():
     missing = [f for f in files if not (ROOT / f).exists()]
     report[section] = {"ok": not missing, "missing": missing, "checked": len(files)}
 
+
 def run(cmd):
     res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
     return {"ok": res.returncode == 0, "stdout": res.stdout[-2000:], "stderr": res.stderr[-2000:]}
 
+
 report["preflight"] = run("python3 scripts/preflight.py")
-report["compile"] = run("python3 -m compileall -q backend bot")
+report["compile"] = run("python3 -m compileall -q backend bot scripts")
 
 Path("docs/audit/package_audit_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 Path("docs/audit/package_audit_report.md").write_text(
