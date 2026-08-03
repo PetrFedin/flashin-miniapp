@@ -32,12 +32,12 @@ Endpoint ничего не изменяет, не arm/resume/stop runtime и н�
 Отображаются только безопасные агрегаты:
 
 - наличие и статус runtime;
-- run ID;
+- `run_ref` — первые 12 символов SHA-256 от внутреннего run ID, но не сам run ID;
 - лимит, принято и осталось заказов;
 - число фактических slots;
 - число исторических slots других run ID;
 - количество разрешённых пользователей без самих Telegram ID;
-- нормализованная STOP-причина;
+- STOP-причина: только нормализованный автоматический `auto:*` код либо обезличенный `operator_stop` для любого ручного текста;
 - timestamps открытия, остановки, завершения и последнего обновления.
 
 ### `database_integrity`
@@ -98,6 +98,8 @@ Endpoint не должен:
 
 - возвращать `allowed_telegram_ids`;
 - возвращать любые Telegram ID или customer identifiers;
+- возвращать raw run ID;
+- возвращать произвольный ручной STOP-текст;
 - возвращать provider payment/refund IDs;
 - возвращать абсолютные пути private evidence;
 - возвращать signing secret, signature или raw admission manifest;
