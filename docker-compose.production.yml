@@ -36,6 +36,34 @@ services:
     restart: unless-stopped
     stop_grace_period: 30s
 
+  ops_jobs:
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  outbox_jobs:
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  moysklad_sync:
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  campaign_jobs:
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  sla_jobs:
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  event_jobs:
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  media_jobs:
+    restart: unless-stopped
+    stop_grace_period: 30s
+
   scheduler:
     restart: unless-stopped
     stop_grace_period: 30s
