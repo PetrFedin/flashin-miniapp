@@ -44,7 +44,7 @@ groups:
           component: pilot-runtime
         annotations:
           summary: Pilot admission or release evidence is invalid
-          description: Signed admission, evidence or current/previous capability-v2 release bindings are not confirmed.
+          description: Signed admission, evidence or current/previous capability-v3 release bindings are not confirmed.
 
       - alert: FlashinPilotMoneyAttentionRequired
         expr: sum(flashin_pilot_money_attention) > 0
