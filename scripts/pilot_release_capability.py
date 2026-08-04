@@ -18,8 +18,16 @@ from release_control import MANIFEST_NAME, sha256_file, verify_release
 ROOT = Path(__file__).resolve().parents[1]
 STATE_DIR = ROOT / "deploy/release/runtime"
 CAPABILITY_NAME = "pilot_runtime_guard"
-CAPABILITY_VERSION = 2
+CAPABILITY_VERSION = 4
 REQUIRED_FILES = {
+    ".env.production.example",
+    ".github/workflows/ci.yml",
+    "admin/index.html",
+    "admin/src/BusinessEventsPanel.jsx",
+    "admin/src/ServiceOperationsPanel.jsx",
+    "admin/src/serviceOperations.css",
+    "admin/src/serviceOperations.js",
+    "admin/src/serviceOperations.test.js",
     "backend/pilot_models.py",
     "backend/services/pilot_runtime.py",
     "backend/services/pilot_circuit_breaker.py",
@@ -28,9 +36,23 @@ REQUIRED_FILES = {
     "backend/api/orders.py",
     "backend/api/payments.py",
     "backend/api/returns.py",
+    "backend/main.py",
+    "backend/middleware/metrics.py",
+    "deploy/grafana/dashboards/flashin_operations.json",
+    "deploy/grafana/provisioning/dashboards/dashboards.yml",
+    "deploy/grafana/provisioning/datasources/prometheus.yml",
+    "deploy/monitoring/prometheus.yml",
+    "deploy/monitoring/rules/flashin_pilot.yml",
+    "docs/pilot/end_to_end_coverage_matrix.md",
+    "e2e/package.json",
+    "e2e/playwright.config.js",
+    "e2e/tests/admin.spec.js",
+    "e2e/tests/storefront.spec.js",
     "scripts/pilot_runtime.py",
     "scripts/check_pilot_runtime_integrity.py",
     "scripts/pilot_release_capability.py",
+    "scripts/check_production_compose.py",
+    "docker-compose.yml",
     "docker-compose.production.yml",
     "scripts/deploy_production.sh",
     "scripts/rollback.sh",
@@ -76,7 +98,7 @@ def _require_markers(
     content = bundle.read(path).decode("utf-8")
     for marker in markers:
         if marker not in content:
-            errors.append(f"Pilot runtime capability marker is missing in {path}: {marker}")
+            errors.append(f"Pilot release capability marker is missing in {path}: {marker}")
 
 
 def inspect_runtime_guard(archive: Path) -> list[str]:
@@ -95,45 +117,32 @@ def inspect_runtime_guard(archive: Path) -> list[str]:
             if missing:
                 errors.append("Release is missing pilot runtime files: " + ", ".join(missing))
 
-            _require_markers(
-                bundle,
-                files,
-                "backend/api/orders.py",
-                ("acquire_pilot_checkout(", "record_pilot_order("),
-                errors,
-            )
-            _require_markers(
-                bundle,
-                files,
-                "backend/services/pilot_circuit_breaker.py",
-                ("def stop_pilot_for_order(", "def trip_pilot_circuit_breaker("),
-                errors,
-            )
-            _require_markers(
-                bundle,
-                files,
-                "backend/api/payments.py",
-                (
-                    "ProviderPaymentIntegrityError",
-                    "trip_pilot_circuit_breaker(",
-                    "stop_pilot_for_order(",
-                ),
-                errors,
-            )
-            _require_markers(
-                bundle,
-                files,
-                "backend/api/returns.py",
-                ("trip_pilot_circuit_breaker(", "stop_pilot_for_order("),
-                errors,
-            )
-            _require_markers(
-                bundle,
-                files,
-                "backend/services/payment_reconciliation.py",
-                ("payment_reconciliation_mismatch", "stop_pilot_for_order("),
-                errors,
-            )
+            _require_markers(bundle, files, "backend/api/orders.py", ("acquire_pilot_checkout(", "record_pilot_order("), errors)
+            _require_markers(bundle, files, "backend/services/pilot_circuit_breaker.py", ("def stop_pilot_for_order(", "def trip_pilot_circuit_breaker("), errors)
+            _require_markers(bundle, files, "backend/api/payments.py", ("ProviderPaymentIntegrityError", "trip_pilot_circuit_breaker(", "stop_pilot_for_order("), errors)
+            _require_markers(bundle, files, "backend/api/returns.py", ("trip_pilot_circuit_breaker(", "stop_pilot_for_order("), errors)
+            _require_markers(bundle, files, "backend/services/payment_reconciliation.py", ("payment_reconciliation_mismatch", "stop_pilot_for_order("), errors)
+            _require_markers(bundle, files, "backend/main.py", ("collect_pilot_metrics", '@app.get("/metrics"', "return metrics_response()"), errors)
+            _require_markers(bundle, files, "backend/middleware/metrics.py", ("flashin_pilot_metrics_collection_success", "def collect_pilot_metrics(", 'return "__unmatched__"'), errors)
+            _require_markers(bundle, files, "deploy/monitoring/rules/flashin_pilot.yml", ("FlashinPilotMetricsUnavailable", "FlashinPilotArtifactIntegrityFailed", "FlashinPilotMoneyAttentionRequired", "FlashinPilotCapacityLow"), errors)
+            _require_markers(bundle, files, "deploy/grafana/dashboards/flashin_operations.json", ("FLASHIN Operations", "flashin_pilot_checkout_ready", "flashin_pilot_money_attention"), errors)
+            _require_markers(bundle, files, "deploy/grafana/provisioning/datasources/prometheus.yml", ("prometheus", "http://prometheus:9090"), errors)
+            _require_markers(bundle, files, "deploy/monitoring/prometheus.yml", ("rule_files", "/etc/prometheus/rules/*.yml", "backend:8000"), errors)
+            _require_markers(bundle, files, "scripts/check_production_compose.py", ('MONITORING_SERVICES = {"prometheus", "grafana"}', 'PRODUCTION_PROFILES = ("production", "workers", "scheduler", "search", "monitoring")', "Grafana anonymous access must be disabled"), errors)
+            _require_markers(bundle, files, ".env.production.example", ("METRICS_ENABLED=true", "GRAFANA_ADMIN_USER=", "GRAFANA_ADMIN_PASSWORD="), errors)
+            _require_markers(bundle, files, "docker-compose.yml", ("prometheus:", "grafana:", "prometheus_data", "grafana_data"), errors)
+            _require_markers(bundle, files, ".github/workflows/ci.yml", ("browser-e2e:", "Install Chromium", "Run Mini App and Admin browser journeys", "needs: [backend, frontend, admin, browser-e2e]"), errors)
+            _require_markers(bundle, files, "e2e/package.json", ('"@playwright/test": "1.54.2"', '"test": "playwright test"'), errors)
+            _require_markers(bundle, files, "e2e/playwright.config.js", ('name: "storefront-mobile"', 'name: "admin-desktop"', 'trace: "retain-on-failure"', 'screenshot: "only-on-failure"', 'video: "retain-on-failure"'), errors)
+            _require_markers(bundle, files, "e2e/tests/storefront.spec.js", ("Mini App critical pilot journey", "Mini App cart quantity and removal controls", "Mini App profile, support, privacy and return journey", "Mini App payment return route refreshes paid order"), errors)
+            _require_markers(bundle, files, "e2e/tests/admin.spec.js", ("Admin critical pilot operator journey", "Admin operations, fulfillment and BusinessEvent recovery journey", "Admin completes support, privacy and refund service operations"), errors)
+            _require_markers(bundle, files, "admin/src/ServiceOperationsPanel.jsx", ('support: "/api/support/admin/tickets"', 'privacy: "/api/privacy/admin/requests"', 'returns: "/api/admin/returns"', 'adminJson("/api/returns/admin/approve"', "Подтвердить refund"), errors)
+            _require_markers(bundle, files, "admin/src/serviceOperations.js", ("export function supportTransitions(", "export function canProcessPrivacy(", "export function canApproveReturn(", "export function normalizeRefundAmount(", "export function serviceAttentionCount("), errors)
+            _require_markers(bundle, files, "admin/src/serviceOperations.test.js", ("support transitions follow the backend state machine", "refund amount is positive, bounded and rounded", "aggregate attention are fail-closed"), errors)
+            _require_markers(bundle, files, "admin/src/BusinessEventsPanel.jsx", ('import ServiceOperationsPanel from "./ServiceOperationsPanel.jsx"', "<ServiceOperationsPanel onUnauthorized={onUnauthorized} />"), errors)
+            _require_markers(bundle, files, "admin/index.html", ('href="/src/serviceOperations.css"', "FLASHIN Admin"), errors)
+            _require_markers(bundle, files, "admin/src/serviceOperations.css", (".service-operations", ".service-grid", ".attention-badge"), errors)
+            _require_markers(bundle, files, "docs/pilot/end_to_end_coverage_matrix.md", ("## Browser journeys", "Seven stateful Playwright journeys", "Admin service operations", "## Evidence boundary"), errors)
 
             if "docker-compose.production.yml" in files:
                 compose = bundle.read("docker-compose.production.yml").decode("utf-8")
@@ -149,14 +158,9 @@ def inspect_runtime_guard(archive: Path) -> list[str]:
                         errors.append(f"{script} does not audit pilot runtime database integrity")
             if "scripts/rollback.sh" in files:
                 rollback = bundle.read("scripts/rollback.sh").decode("utf-8")
-                for marker in (
-                    'CAPABILITY_SCRIPT="scripts/pilot_release_capability.py"',
-                    '"$CAPABILITY_SCRIPT" inspect --archive',
-                ):
+                for marker in ('CAPABILITY_SCRIPT="scripts/pilot_release_capability.py"', '"$CAPABILITY_SCRIPT" inspect --archive'):
                     if marker not in rollback:
-                        errors.append(
-                            "scripts/rollback.sh does not reject unguarded target archives"
-                        )
+                        errors.append("scripts/rollback.sh does not reject unguarded target archives")
                         break
     except (OSError, KeyError, UnicodeDecodeError, zipfile.BadZipFile, json.JSONDecodeError) as exc:
         errors.append(f"Unable to inspect release runtime capability: {exc}")
@@ -247,32 +251,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "stamp":
             state = stamp_slot(args.slot, args.env)
-            print(
-                json.dumps(
-                    {
-                        "ok": True,
-                        "slot": args.slot,
-                        "release_id": state.get("release_id"),
-                        "sha256": state.get("sha256"),
-                        "capability": CAPABILITY_NAME,
-                        "version": CAPABILITY_VERSION,
-                    },
-                    ensure_ascii=False,
-                )
-            )
+            print(json.dumps({"ok": True, "slot": args.slot, "release_id": state.get("release_id"), "sha256": state.get("sha256"), "capability": CAPABILITY_NAME, "version": CAPABILITY_VERSION}, ensure_ascii=False))
             return 0
         if args.command == "inspect":
             errors = inspect_runtime_guard(args.archive)
-            print(
-                json.dumps(
-                    {
-                        "ok": not errors,
-                        "archive": str(args.archive.resolve()),
-                        "errors": errors,
-                    },
-                    ensure_ascii=False,
-                )
-            )
+            print(json.dumps({"ok": not errors, "archive": str(args.archive.resolve()), "errors": errors}, ensure_ascii=False))
             return 1 if errors else 0
         slots = ("current", "previous") if args.slot == "both" else (args.slot,)
         errors = {slot: verify_slot(slot, args.env) for slot in slots}
