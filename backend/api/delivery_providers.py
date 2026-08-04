@@ -8,7 +8,7 @@ from ..models import DeliveryProvider, DeliveryShipment, Order
 from ..schemas import DeliveryProviderIn, DeliveryProviderOut, DeliveryShipmentOut
 from ..security import get_current_admin
 from ..services.audit import log_admin_action
-from ..services.delivery_providers import create_shipment, update_tracking
+from ..services.delivery_providers import ensure_ready_shipment, transition_shipment
 from ..services.rbac import require_permission
 
 router = APIRouter(prefix="/delivery-providers", tags=["delivery-providers"])
@@ -57,7 +57,7 @@ def create_order_shipment(
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
         try:
-            shipment, created = create_shipment(db, order, provider_code)
+            shipment, created = ensure_ready_shipment(db, order, provider_code)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         if created:
@@ -103,7 +103,7 @@ def patch_shipment(
             raise HTTPException(status_code=404, detail="Shipment not found")
         previous_status = shipment.status
         try:
-            order = update_tracking(db, shipment, tracking_number, status)
+            order = transition_shipment(db, shipment, tracking_number, status)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         log_admin_action(
