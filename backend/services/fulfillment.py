@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..database import utcnow_naive
-from ..models import FulfillmentTask, FulfillmentTaskItem, Order, SlaEvent
+from ..models import FulfillmentTask, FulfillmentTaskItem, Order, OrderItem, SlaEvent
 from .notifications import queue_order_status
 
 _FULFILLMENT_TRANSITIONS = {
@@ -90,6 +90,23 @@ def _ensure_assembling_sla(db: Session, order_id: int, now: datetime) -> None:
     )
 
 
+def _picklist_is_complete(db: Session, task: FulfillmentTask) -> bool:
+    rows = (
+        db.query(FulfillmentTaskItem, OrderItem)
+        .join(OrderItem, FulfillmentTaskItem.order_item_id == OrderItem.id)
+        .filter(FulfillmentTaskItem.task_id == task.id)
+        .with_for_update()
+        .all()
+    )
+    if not rows:
+        return False
+    return all(
+        task_item.status == "picked"
+        and task_item.picked_qty == order_item.quantity
+        for task_item, order_item in rows
+    )
+
+
 def update_fulfillment_status(
     db: Session,
     task: FulfillmentTask,
@@ -109,6 +126,8 @@ def update_fulfillment_status(
         raise ValueError(f"Fulfillment transition {task.status} -> {normalized_status} is not allowed")
     if normalized_status == "blocked" and len((comment or "").strip()) < 5:
         raise ValueError("Blocked fulfillment task requires a meaningful comment")
+    if normalized_status == "packed" and not _picklist_is_complete(db, task):
+        raise ValueError("Every picklist item must be fully picked before packing")
 
     order = (
         db.query(Order)
