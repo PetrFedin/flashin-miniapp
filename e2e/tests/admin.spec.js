@@ -220,7 +220,7 @@ test("Admin critical pilot operator journey", async ({ page }) => {
   await page.getByRole("button", { name: "Отменить до оплаты" }).click();
   await expect(page.getByText("Отменён")).toBeVisible();
 
-  await page.getByRole("button", { name: "Обновить" }).click();
+  await page.getByRole("button", { name: "Обновить", exact: true }).click();
   await expect(page.getByRole("status")).toContainText("Данные обновлены");
 
   await page.getByRole("button", { name: "Выйти" }).click();
