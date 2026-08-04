@@ -168,7 +168,10 @@ def main() -> int:
             json={"status": "packed", "comment": "Too early"},
         )
         assert rejected_pack.status_code == 409
-        assert "fully picked" in rejected_pack.text
+        assert (
+            rejected_pack.json()["detail"]
+            == "Every picklist item must be fully picked before packing"
+        )
 
         picklist = _expect(
             client.get(f"/api/fulfillment/tasks/{task_id}/picklist"),
