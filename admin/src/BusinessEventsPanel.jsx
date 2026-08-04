@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 
 import { AdminApiError, adminJson } from "./api.js";
+import FulfillmentOperationsPanel from "./FulfillmentOperationsPanel.jsx";
 import PilotOperationsPanel from "./PilotOperationsPanel.jsx";
 import ServiceOperationsPanel from "./ServiceOperationsPanel.jsx";
 import {
@@ -303,6 +304,7 @@ export default function BusinessEventsPanel({ onUnauthorized }) {
   return (
     <>
       <PilotOperationsPanel onUnauthorized={onUnauthorized} />
+      <FulfillmentOperationsPanel onUnauthorized={onUnauthorized} />
       <ServiceOperationsPanel onUnauthorized={onUnauthorized} />
       <BusinessEventsRecoveryPanel onUnauthorized={onUnauthorized} />
     </>
