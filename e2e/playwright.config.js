@@ -20,6 +20,7 @@ export default defineConfig({
       testMatch: /storefront\.spec\.js/,
       use: {
         ...devices["iPhone 13"],
+        browserName: "chromium",
         baseURL: "http://127.0.0.1:5173",
       },
     },
