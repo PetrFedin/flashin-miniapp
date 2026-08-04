@@ -46,6 +46,27 @@ FILE_CONTENT = {
     "backend/services/payment_reconciliation.py": (
         "payment_reconciliation_mismatch\nstop_pilot_for_order()\n"
     ),
+    "backend/services/fulfillment.py": (
+        "def _picklist_is_complete():\n    pass\n"
+        "Every picklist item must be fully picked before packing\n"
+        'order.delivery_status = "ready"\n'
+    ),
+    "backend/api/fulfillment.py": (
+        "fulfillment.task.update\n"
+        "fulfillment.task_item.update\n"
+        "assigned_admin_id\n"
+    ),
+    "backend/services/delivery_providers.py": (
+        "_SHIPMENT_TRANSITIONS = {}\n"
+        "Only a ready order can be transferred to delivery\n"
+        'order.status = "shipped"\n'
+        'order.status = "completed"\n'
+    ),
+    "backend/api/delivery_providers.py": (
+        "delivery.shipment.create\n"
+        "delivery.shipment.update\n"
+        "with_for_update()\n"
+    ),
     "backend/main.py": (
         "from .middleware.metrics import collect_pilot_metrics, metrics_response\n"
         '@app.get("/metrics", include_in_schema=False)\n'
@@ -95,6 +116,7 @@ FILE_CONTENT = {
         "jobs:\n  browser-e2e:\n    steps:\n"
         "      - name: Install Chromium\n"
         "      - name: Run Mini App and Admin browser journeys\n"
+        "      - name: Run transactional full fulfillment smoke\n"
         "  docker:\n    needs: [backend, frontend, admin, browser-e2e]\n"
     ),
     "e2e/package.json": (
@@ -126,6 +148,12 @@ FILE_CONTENT = {
         "assigned_admin_id: 42\n"
         "Ответственный обращения 901\n"
     ),
+    "e2e/tests/fulfillment-admin.spec.js": (
+        "Admin completes picklist, shipment and delivery lifecycle\n"
+        "Собрать все позиции и упаковать\n"
+        "PILOT-TRACK-9100\n"
+        'status: "completed"\n'
+    ),
     "backend/api/support.py": (
         "class AdminSupportTicketOut:\n"
         "    assigned_admin_id: int | None = None\n"
@@ -135,6 +163,25 @@ FILE_CONTENT = {
     "backend/tests/test_support_admin_schema.py": (
         "def test_admin_support_ticket_schema_exposes_accountable_owner():\n"
         '    assert "assigned_admin_id"\n'
+    ),
+    "admin/src/FulfillmentOperationsPanel.jsx": (
+        '"/api/fulfillment/tasks"\n'
+        '"/api/delivery-providers/shipments"\n'
+        "Собрать все позиции и упаковать\n"
+        "Передать в доставку\n"
+        "Подтвердить доставку\n"
+    ),
+    "admin/src/fulfillmentOperations.js": (
+        "export function isPicklistComplete() {}\n"
+        "export function fulfillmentAction() {}\n"
+        "export function normalizeTracking() {}\n"
+        "export function fulfillmentAttentionCount() {}\n"
+    ),
+    "admin/src/fulfillmentOperations.test.js": (
+        "fulfillment actions expose only the next safe workflow step\n"
+        "picklist completeness requires every ordered unit\n"
+        "tracking is bounded and meaningful\n"
+        "attention remains until shipment is delivered\n"
     ),
     "admin/src/ServiceOperationsPanel.jsx": (
         'support: "/api/support/admin/tickets"\n'
@@ -159,6 +206,8 @@ FILE_CONTENT = {
         "return action and aggregate attention are fail-closed\n"
     ),
     "admin/src/BusinessEventsPanel.jsx": (
+        'import FulfillmentOperationsPanel from "./FulfillmentOperationsPanel.jsx"\n'
+        "<FulfillmentOperationsPanel onUnauthorized={onUnauthorized} />\n"
         'import ServiceOperationsPanel from "./ServiceOperationsPanel.jsx"\n'
         "<ServiceOperationsPanel onUnauthorized={onUnauthorized} />\n"
     ),
@@ -169,11 +218,18 @@ FILE_CONTENT = {
     "admin/src/serviceOperations.css": (
         ".service-operations {}\n.service-grid {}\n.attention-badge {}\n"
     ),
+    "scripts/full_fulfillment_smoke.py": (
+        "Every picklist item must be fully picked before packing\n"
+        "idempotent shipment create\n"
+        'persisted_order.status == "completed"\n'
+        'persisted_order.delivery_status == "delivered"\n'
+    ),
     "docs/pilot/end_to_end_coverage_matrix.md": (
         "## Browser journeys\n"
-        "Eight stateful Playwright journeys\n"
+        "Nine stateful Playwright journeys\n"
         "accountable active Admin ID\n"
         "Admin service operations\n"
+        "full picklist\n"
         "## Evidence boundary\n"
     ),
     "docker-compose.production.yml": (
@@ -216,7 +272,7 @@ def _release(repo: Path, tmp_path: Path, release_id: str, created_at: str) -> Pa
 
 
 def test_signed_release_capability_is_bound_to_exact_release():
-    assert CAPABILITY_VERSION == 4
+    assert CAPABILITY_VERSION == 5
     secret = "s" * 48
     state = _release_state()
     state["capabilities"] = {
@@ -320,3 +376,15 @@ def test_immutable_archive_inspection_rejects_support_without_owner_schema(tmp_p
     errors = inspect_runtime_guard(release)
     assert any("backend/api/support.py" in error for error in errors)
     assert any("assigned_admin_id" in error for error in errors)
+
+
+def test_immutable_archive_inspection_rejects_missing_fulfillment_console(tmp_path):
+    repo = _guarded_repo(tmp_path)
+    panel = repo / "admin/src/FulfillmentOperationsPanel.jsx"
+    panel.unlink()
+    _git(repo, "add", "-u")
+    _git(repo, "commit", "-qm", "remove fulfillment console")
+
+    release = _release(repo, tmp_path, "no-fulfillment-console", "2026-08-05T00:07:00Z")
+    errors = inspect_runtime_guard(release)
+    assert any("admin/src/FulfillmentOperationsPanel.jsx" in error for error in errors)
