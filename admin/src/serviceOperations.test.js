@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   canApproveReturn,
   canProcessPrivacy,
+  normalizeAdminAssignment,
   normalizeRefundAmount,
   serviceAttentionCount,
   supportTransitions,
@@ -14,6 +15,13 @@ test("support transitions follow the backend state machine", () => {
   assert.deepEqual(supportTransitions("resolved"), ["in_progress", "closed"]);
   assert.deepEqual(supportTransitions("closed"), []);
   assert.deepEqual(supportTransitions("unknown"), []);
+});
+
+test("support owner assignment accepts only positive integer Admin IDs", () => {
+  assert.deepEqual(normalizeAdminAssignment("42"), { value: 42 });
+  assert.deepEqual(normalizeAdminAssignment(""), { value: null });
+  assert.match(normalizeAdminAssignment("0").error, /положительным целым/i);
+  assert.match(normalizeAdminAssignment("4.2").error, /положительным целым/i);
 });
 
 test("privacy processing is limited to open requests", () => {
