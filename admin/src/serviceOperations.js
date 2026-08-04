@@ -66,6 +66,16 @@ export function canApproveReturn(item) {
   return REFUND_ACTION_STATUSES.has(item?.status) && Number(item?.refundable_balance) > 0;
 }
 
+export function normalizeAdminAssignment(rawValue) {
+  const normalized = String(rawValue ?? "").trim();
+  if (!normalized) return { value: null };
+  const adminId = Number(normalized);
+  if (!Number.isInteger(adminId) || adminId <= 0) {
+    return { error: "ID ответственного администратора должен быть положительным целым числом." };
+  }
+  return { value: adminId };
+}
+
 export function normalizeRefundAmount(rawValue, refundableBalance) {
   const amount = Number(rawValue);
   const balance = Number(refundableBalance);
