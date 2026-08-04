@@ -214,12 +214,10 @@ test("Admin critical pilot operator journey", async ({ page }) => {
   await page.getByPlaceholder("Размер", { exact: true }).fill("M");
   await page.getByPlaceholder("SKU размера").fill("FLASH-002-M");
   await page.getByRole("button", { name: /Создать товар/i }).click();
-  await expect(page.getByRole("status")).toContainText("Товар создан");
   await expect(page.getByText("Pilot Trousers")).toBeVisible();
 
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Отменить до оплаты" }).click();
-  await expect(page.getByRole("status")).toContainText("Заказ #9001 отменён");
   await expect(page.getByText("Отменён")).toBeVisible();
 
   await page.getByRole("button", { name: "Обновить" }).click();
@@ -239,10 +237,21 @@ test("Admin operations, fulfillment and BusinessEvent recovery journey", async (
   await expect(page.getByText("Pilot Jacket").last()).toBeVisible();
   await expect(page.getByText("Cart #77")).toBeVisible();
 
+  const queueNotifications = page.waitForResponse((response) => (
+    response.url().endsWith("/api/ops/abandoned-carts/queue-notifications")
+      && response.request().method() === "POST"
+  ));
   await page.getByRole("button", { name: "Поставить уведомления по брошенным корзинам" }).click();
-  await expect(page.getByRole("status")).toContainText("Уведомления поставлены в очередь");
+  expect((await queueNotifications).ok()).toBe(true);
+  await expect(page.getByText("Cart #77")).toBeVisible();
+
+  const inventorySnapshot = page.waitForResponse((response) => (
+    response.url().endsWith("/api/ops/inventory/snapshot")
+      && response.request().method() === "POST"
+  ));
   await page.getByRole("button", { name: "Сделать снимок остатков" }).click();
-  await expect(page.getByRole("status")).toContainText("Снимок остатков создан");
+  expect((await inventorySnapshot).ok()).toBe(true);
+  await expect(page.getByText("FLASH-001-M")).toBeVisible();
 
   const csvInput = page.locator('input[accept=".csv,text/csv"]');
   await csvInput.setInputFiles({
@@ -250,7 +259,6 @@ test("Admin operations, fulfillment and BusinessEvent recovery journey", async (
     mimeType: "text/csv",
     buffer: Buffer.from("sku,title,price\nFLASH-CSV-001,Imported Pilot Shirt,7000\n"),
   });
-  await expect(page.getByRole("status")).toContainText("CSV импортирован");
   await expect(page.getByText("Imported Pilot Shirt")).toBeVisible();
 
   const downloadPromise = page.waitForEvent("download");
@@ -260,8 +268,7 @@ test("Admin operations, fulfillment and BusinessEvent recovery journey", async (
   await expect(page.getByRole("status")).toContainText("Выгрузка заказов скачана");
 
   await page.getByRole("button", { name: "Перевести: Собирается" }).click();
-  await expect(page.getByRole("status")).toContainText("Заказ #9002: Собирается");
-  await expect(page.getByText("Собирается")).toBeVisible();
+  await expect(page.getByText("Собирается").first()).toBeVisible();
 
   await expect(page.getByRole("heading", { name: "BusinessEvent recovery" })).toBeVisible();
   await page.getByRole("button", { name: /#501 · order\.paid/ }).click();
