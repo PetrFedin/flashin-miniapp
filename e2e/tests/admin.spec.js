@@ -1,5 +1,56 @@
 import { expect, test } from "@playwright/test";
 
+const pilotRuntimeStatus = {
+  schema_version: 1,
+  checkout_decision: "GO",
+  generated_at: "2026-08-04T12:00:00Z",
+  enforced: true,
+  runtime: {
+    present: true,
+    status: "active",
+    run_ref: "abcdef123456",
+    max_orders: 20,
+    accepted_orders: 3,
+    remaining_orders: 17,
+    slot_count: 3,
+    historical_slot_count: 3,
+    allowlist_count: 5,
+    stop_reason: null,
+    opened_at: "2026-08-04T10:00:00Z",
+    stopped_at: null,
+    completed_at: null,
+    updated_at: "2026-08-04T12:00:00Z",
+  },
+  database_integrity: { healthy: true, codes: [] },
+  artifact_integrity: { applicable: true, healthy: true, codes: [] },
+  money_attention: {
+    payment_review_orders: 0,
+    refund_attention_orders: 0,
+    reconciliation_mismatches: 0,
+    attention_required: false,
+  },
+};
+
+function failedBusinessEvent() {
+  return {
+    id: 501,
+    event_type: "order.paid",
+    aggregate_type: "order",
+    aggregate_id: "9002",
+    status: "failed",
+    attempts: 5,
+    replay_count: 0,
+    payload: { order_id: 9002 },
+    payload_error: null,
+    last_error: "Destination mapping missing",
+    created_at: "2026-08-04T10:00:00Z",
+    last_attempt_at: "2026-08-04T10:05:00Z",
+    failed_at: "2026-08-04T10:05:00Z",
+    processed_at: null,
+    resolved_at: null,
+  };
+}
+
 async function mockAdminApi(page) {
   let products = [{
     id: 1,
@@ -13,33 +64,52 @@ async function mockAdminApi(page) {
     active: true,
     variants: [{ id: 11, size: "M", sku: "FLASH-001-M", stock_qty: 5 }],
   }];
-  let orders = [{
-    id: 9001,
-    status: "created",
-    payment_status: "pending",
-    total: 12000,
-    currency: "RUB",
-    customer: { first_name: "Pilot" },
-    items: [{ id: 1, title: "Pilot Jacket", size: "M", quantity: 1 }],
-  }];
+  let orders = [
+    {
+      id: 9001,
+      status: "created",
+      payment_status: "pending",
+      total_amount: 12000,
+      currency: "RUB",
+      customer: { first_name: "Pilot" },
+      items: [{ id: 1, title: "Pilot Jacket", size: "M", quantity: 1 }],
+    },
+    {
+      id: 9002,
+      status: "paid",
+      payment_status: "paid",
+      total_amount: 9000,
+      currency: "RUB",
+      customer: { first_name: "Pilot Paid" },
+      items: [{ id: 2, title: "Pilot Trousers", size: "M", quantity: 1 }],
+    },
+  ];
+  let businessEvent = failedBusinessEvent();
 
   await page.route("http://localhost:8000/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
     const path = url.pathname;
     const method = request.method();
-    const json = (body, status = 200) => route.fulfill({
+    const json = (body, status = 200, headers = {}) => route.fulfill({
       status,
       contentType: "application/json",
+      headers,
       body: JSON.stringify(body),
     });
 
     if (path === "/api/admin/login" && method === "POST") return json({ access_token: "admin-pilot-token" });
     if (path === "/api/admin/products" && method === "GET") return json(products);
     if (path === "/api/admin/orders" && method === "GET") return json(orders);
-    if (path === "/api/admin/audit-logs" && method === "GET") return json([]);
-    if (path === "/api/ops/inventory/low-stock" && method === "GET") return json([]);
-    if (path === "/api/ops/abandoned-carts" && method === "GET") return json([]);
+    if (path === "/api/admin/audit-logs" && method === "GET") {
+      return json([{ id: 1, action: "pilot.login", entity_type: "admin", entity_id: "1", admin_id: 1, payload: "{}" }]);
+    }
+    if (path === "/api/ops/inventory/low-stock" && method === "GET") {
+      return json([{ variant_id: 11, product_title: "Pilot Jacket", sku: "FLASH-001-M", stock_qty: 2, reserved_qty: 1, available_qty: 1 }]);
+    }
+    if (path === "/api/ops/abandoned-carts" && method === "GET") {
+      return json([{ cart_id: 77, customer_id: 101, telegram_id: 101, items_count: 1, total_amount: 12000 }]);
+    }
     if (path === "/api/admin/promocodes" && method === "POST") return json({ id: 70, code: "PILOT10" });
     if (path === "/api/admin/products" && method === "POST") {
       const body = request.postDataJSON();
@@ -47,28 +117,89 @@ async function mockAdminApi(page) {
       products = [...products, created];
       return json(created, 201);
     }
+    if (path === "/api/admin/products/import-csv" && method === "POST") {
+      products = [...products, {
+        id: 3,
+        sku: "FLASH-CSV-001",
+        title: "Imported Pilot Shirt",
+        slug: "imported-pilot-shirt",
+        brand: "FLASHIN",
+        price: 7000,
+        currency: "RUB",
+        category: "Shirts",
+        active: true,
+        variants: [],
+      }];
+      return json({ imported: 1 });
+    }
+    if (path === "/api/admin/orders/export-csv" && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "text/csv",
+        headers: { "content-disposition": 'attachment; filename="flashin-pilot-orders.csv"' },
+        body: "id,status,total\n9001,created,12000\n",
+      });
+    }
     if (path === "/api/admin/orders/9001/cancel" && method === "POST") {
       orders = orders.map((order) => order.id === 9001
         ? { ...order, status: "cancelled", payment_status: "cancelled" }
         : order);
-      return json(orders[0]);
+      return json(orders.find((order) => order.id === 9001));
     }
-    if (path.startsWith("/api/admin/pilot-operations") || path.startsWith("/api/ops/")) return json({});
+    if (path === "/api/admin/orders/9002" && method === "PATCH") {
+      const body = request.postDataJSON();
+      orders = orders.map((order) => order.id === 9002 ? { ...order, status: body.status } : order);
+      return json(orders.find((order) => order.id === 9002));
+    }
+
+    if (path === "/api/ops/abandoned-carts/queue-notifications" && method === "POST") return json({ queued: 1 });
+    if (path === "/api/ops/inventory/snapshot" && method === "POST") return json({ created: true });
+    if (path === "/api/ops/pilot-runtime" && method === "GET") return json(pilotRuntimeStatus);
+
+    if (path === "/api/platform/admin/events/summary" && method === "GET") {
+      return json({
+        counts: {
+          failed: businessEvent.status === "failed" ? 1 : 0,
+          pending: businessEvent.status === "pending" ? 1 : 0,
+          processed: businessEvent.status === "processed" ? 1 : 0,
+        },
+        oldest_failed_at: businessEvent.status === "failed" ? businessEvent.failed_at : null,
+      });
+    }
+    if (path === "/api/platform/admin/events" && method === "GET") {
+      const status = url.searchParams.get("status");
+      return json(!status || businessEvent.status === status ? [businessEvent] : []);
+    }
+    if (path === "/api/platform/admin/events/501" && method === "GET") return json(businessEvent);
+    if (path === "/api/platform/admin/events/501/replay" && method === "POST") {
+      businessEvent = {
+        ...businessEvent,
+        status: "pending",
+        replay_count: businessEvent.replay_count + 1,
+        last_error: null,
+        failed_at: null,
+        resolved_at: "2026-08-04T12:10:00Z",
+      };
+      return json(businessEvent);
+    }
 
     return json({ detail: `Unmocked ${method} ${path}` }, 501);
   });
 }
 
-test("Admin critical pilot operator journey", async ({ page }) => {
-  await mockAdminApi(page);
+async function login(page) {
   await page.goto("/");
-
   await expect(page.getByRole("heading", { name: "FLASHIN Admin" })).toBeVisible();
   await page.getByPlaceholder("Email администратора").fill("pilot@flashin.test");
   await page.getByPlaceholder("Пароль").fill("pilot-password");
   await page.getByRole("button", { name: "Войти" }).click();
-
   await expect(page.getByRole("button", { name: "Выйти" })).toBeVisible();
+}
+
+test("Admin critical pilot operator journey", async ({ page }) => {
+  await mockAdminApi(page);
+  await login(page);
+
   await expect(page.getByRole("heading", { name: "Импорт и экспорт" })).toBeVisible();
   await expect(page.getByText("Pilot Jacket")).toBeVisible();
 
@@ -87,15 +218,57 @@ test("Admin critical pilot operator journey", async ({ page }) => {
   await expect(page.getByText("Pilot Trousers")).toBeVisible();
 
   page.once("dialog", (dialog) => dialog.accept());
-  const cancelButton = page.getByRole("button", { name: /Отменить/ }).first();
-  if (await cancelButton.isVisible()) {
-    await cancelButton.click();
-    await expect(page.getByRole("status")).toContainText("Заказ #9001 отменён");
-  }
+  await page.getByRole("button", { name: "Отменить до оплаты" }).click();
+  await expect(page.getByRole("status")).toContainText("Заказ #9001 отменён");
+  await expect(page.getByText("Отменён")).toBeVisible();
 
   await page.getByRole("button", { name: "Обновить" }).click();
   await expect(page.getByRole("status")).toContainText("Данные обновлены");
 
   await page.getByRole("button", { name: "Выйти" }).click();
   await expect(page.getByRole("button", { name: "Войти" })).toBeVisible();
+});
+
+test("Admin operations, fulfillment and BusinessEvent recovery journey", async ({ page }) => {
+  await mockAdminApi(page);
+  await login(page);
+
+  await expect(page.getByRole("heading", { name: "Контролируемый пилот" })).toBeVisible();
+  await expect(page.locator(".pilot-decision")).toContainText("GO");
+  await expect(page.getByText("3 / 20")).toBeVisible();
+  await expect(page.getByText("Pilot Jacket").last()).toBeVisible();
+  await expect(page.getByText("Cart #77")).toBeVisible();
+
+  await page.getByRole("button", { name: "Поставить уведомления по брошенным корзинам" }).click();
+  await expect(page.getByRole("status")).toContainText("Уведомления поставлены в очередь");
+  await page.getByRole("button", { name: "Сделать снимок остатков" }).click();
+  await expect(page.getByRole("status")).toContainText("Снимок остатков создан");
+
+  const csvInput = page.locator('input[accept=".csv,text/csv"]');
+  await csvInput.setInputFiles({
+    name: "pilot-products.csv",
+    mimeType: "text/csv",
+    buffer: Buffer.from("sku,title,price\nFLASH-CSV-001,Imported Pilot Shirt,7000\n"),
+  });
+  await expect(page.getByRole("status")).toContainText("CSV импортирован");
+  await expect(page.getByText("Imported Pilot Shirt")).toBeVisible();
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Скачать заказы CSV" }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe("flashin-pilot-orders.csv");
+  await expect(page.getByRole("status")).toContainText("Выгрузка заказов скачана");
+
+  await page.getByRole("button", { name: "Перевести: Собирается" }).click();
+  await expect(page.getByRole("status")).toContainText("Заказ #9002: Собирается");
+  await expect(page.getByText("Собирается")).toBeVisible();
+
+  await expect(page.getByRole("heading", { name: "BusinessEvent recovery" })).toBeVisible();
+  await page.getByRole("button", { name: /#501 · order\.paid/ }).click();
+  await expect(page.getByRole("heading", { name: "Событие #501" })).toBeVisible();
+  await page.getByPlaceholder(/исправлено сопоставление destination/i).fill("Исправлено сопоставление destination и проверена идемпотентность");
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Подтвердить replay" }).click();
+  await expect(page.getByRole("status")).toContainText("Событие #501 возвращено в очередь");
+  await expect(page.getByText("Ожидает обработки").first()).toBeVisible();
 });
