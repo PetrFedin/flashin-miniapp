@@ -190,7 +190,7 @@ test("Mini App critical pilot journey", async ({ page }) => {
 
   await page.getByRole("button", { name: /Оформить заказ/ }).click();
   await page.getByPlaceholder(/Имя получателя/i).fill("Pilot User");
-  await page.getByPlaceholder(/Телефон/i).fill("+70000000000");
+  await page.getByPlaceholder("+7 999 000-00-00").fill("+70000000000");
   await page.getByRole("button", { name: /Перейти к оплате/ }).click();
 
   await expect(page.getByRole("alert")).toContainText("Заказ #9001 создан");
