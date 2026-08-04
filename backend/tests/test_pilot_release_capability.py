@@ -134,8 +134,17 @@ def _guarded_repo(tmp_path: Path) -> Path:
             )
         elif relative == "e2e/package.json":
             content = (
-                '{"scripts":{"test":"playwright test"},'
-                '"devDependencies":{"@playwright/test":"1.54.2"}}\n'
+                "{\n"
+                '  "name": "flashin-pilot-e2e",\n'
+                '  "private": true,\n'
+                '  "type": "module",\n'
+                '  "scripts": {\n'
+                '    "test": "playwright test"\n'
+                "  },\n"
+                '  "devDependencies": {\n'
+                '    "@playwright/test": "1.54.2"\n'
+                "  }\n"
+                "}\n"
             )
         elif relative == "e2e/playwright.config.js":
             content = (
