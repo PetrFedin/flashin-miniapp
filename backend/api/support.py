@@ -19,6 +19,10 @@ _TICKET_TRANSITIONS = {
 _PRIORITIES = {"low", "normal", "high", "urgent"}
 
 
+class AdminSupportTicketOut(SupportTicketOut):
+    assigned_admin_id: int | None = None
+
+
 def _clean_text(value: str, field: str, minimum: int, maximum: int) -> str:
     cleaned = (value or "").strip()
     if len(cleaned) < minimum:
@@ -64,13 +68,13 @@ def my_tickets(
     )
 
 
-@router.get("/admin/tickets", response_model=list[SupportTicketOut])
+@router.get("/admin/tickets", response_model=list[AdminSupportTicketOut])
 def admin_tickets(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
     require_permission(db, admin, "support.write")
     return db.query(SupportTicket).order_by(SupportTicket.created_at.desc()).all()
 
 
-@router.patch("/admin/tickets/{ticket_id}", response_model=SupportTicketOut)
+@router.patch("/admin/tickets/{ticket_id}", response_model=AdminSupportTicketOut)
 def admin_update_ticket(
     ticket_id: int,
     payload: SupportTicketUpdate,
