@@ -76,11 +76,11 @@ test("Admin critical pilot operator journey", async ({ page }) => {
   await page.getByRole("button", { name: "Создать" }).first().click();
   await expect(page.getByRole("status")).toContainText("Промокод создан");
 
-  await page.getByPlaceholder("SKU").fill("FLASH-002");
+  await page.getByPlaceholder("SKU", { exact: true }).fill("FLASH-002");
   await page.getByPlaceholder("Название").fill("Pilot Trousers");
   await page.getByPlaceholder("slug").fill("pilot-trousers");
   await page.getByPlaceholder("Цена").fill("9000");
-  await page.getByPlaceholder("Размер").fill("M");
+  await page.getByPlaceholder("Размер", { exact: true }).fill("M");
   await page.getByPlaceholder("SKU размера").fill("FLASH-002-M");
   await page.getByRole("button", { name: /Создать товар/i }).click();
   await expect(page.getByRole("status")).toContainText("Товар создан");
