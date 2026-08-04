@@ -18,8 +18,10 @@ from release_control import MANIFEST_NAME, sha256_file, verify_release
 ROOT = Path(__file__).resolve().parents[1]
 STATE_DIR = ROOT / "deploy/release/runtime"
 CAPABILITY_NAME = "pilot_runtime_guard"
-CAPABILITY_VERSION = 2
+CAPABILITY_VERSION = 3
 REQUIRED_FILES = {
+    ".env.production.example",
+    ".github/workflows/ci.yml",
     "backend/pilot_models.py",
     "backend/services/pilot_runtime.py",
     "backend/services/pilot_circuit_breaker.py",
@@ -28,9 +30,23 @@ REQUIRED_FILES = {
     "backend/api/orders.py",
     "backend/api/payments.py",
     "backend/api/returns.py",
+    "backend/main.py",
+    "backend/middleware/metrics.py",
+    "deploy/grafana/dashboards/flashin_operations.json",
+    "deploy/grafana/provisioning/dashboards/dashboards.yml",
+    "deploy/grafana/provisioning/datasources/prometheus.yml",
+    "deploy/monitoring/prometheus.yml",
+    "deploy/monitoring/rules/flashin_pilot.yml",
+    "docs/pilot/end_to_end_coverage_matrix.md",
+    "e2e/package.json",
+    "e2e/playwright.config.js",
+    "e2e/tests/admin.spec.js",
+    "e2e/tests/storefront.spec.js",
     "scripts/pilot_runtime.py",
     "scripts/check_pilot_runtime_integrity.py",
     "scripts/pilot_release_capability.py",
+    "scripts/check_production_compose.py",
+    "docker-compose.yml",
     "docker-compose.production.yml",
     "scripts/deploy_production.sh",
     "scripts/rollback.sh",
@@ -76,7 +92,7 @@ def _require_markers(
     content = bundle.read(path).decode("utf-8")
     for marker in markers:
         if marker not in content:
-            errors.append(f"Pilot runtime capability marker is missing in {path}: {marker}")
+            errors.append(f"Pilot release capability marker is missing in {path}: {marker}")
 
 
 def inspect_runtime_guard(archive: Path) -> list[str]:
@@ -132,6 +148,151 @@ def inspect_runtime_guard(archive: Path) -> list[str]:
                 files,
                 "backend/services/payment_reconciliation.py",
                 ("payment_reconciliation_mismatch", "stop_pilot_for_order("),
+                errors,
+            )
+            _require_markers(
+                bundle,
+                files,
+                "backend/main.py",
+                (
+                    "collect_pilot_metrics",
+                    '@app.get("/metrics"',
+                    "return metrics_response()",
+                ),
+                errors,
+            )
+            _require_markers(
+                bundle,
+                files,
+                "backend/middleware/metrics.py",
+                (
+                    "flashin_pilot_metrics_collection_success",
+                    "def collect_pilot_metrics(",
+                    'return "__unmatched__"',
+                ),
+                errors,
+            )
+            _require_markers(
+                bundle,
+                files,
+                "deploy/monitoring/rules/flashin_pilot.yml",
+                (
+                    "FlashinPilotMetricsUnavailable",
+                    "FlashinPilotArtifactIntegrityFailed",
+                    "FlashinPilotMoneyAttentionRequired",
+                    "FlashinPilotCapacityLow",
+                ),
+                errors,
+            )
+            _require_markers(
+                bundle,
+                files,
+                "deploy/grafana/dashboards/flashin_operations.json",
+                (
+                    "FLASHIN Operations",
+                    "flashin_pilot_checkout_ready",
+                    "flashin_pilot_money_attention",
+                ),
+                errors,
+            )
+            _require_markers(
+                bundle,
+                files,
+                "deploy/grafana/provisioning/datasources/prometheus.yml",
+                ("prometheus", "http://prometheus:9090"),
+                errors,
+            )
+            _require_markers(
+                bundle,
+                files,
+                "deploy/monitoring/prometheus.yml",
+                ("rule_files", "/etc/prometheus/rules/*.yml", "backend:8000"),
+                errors,
+            )
+            _require_markers(
+                bundle,
+                files,
+                "scripts/check_production_compose.py",
+                (
+                    'MONITORING_SERVICES = {"prometheus", "grafana"}',
+                    'PRODUCTION_PROFILES = ("production", "workers", "scheduler", "search", "monitoring")',
+                    "Grafana anonymous access must be disabled",
+                ),
+                errors,
+            )
+            _require_markers(
+                bundle,
+                files,
+                ".env.production.example",
+                ("METRICS_ENABLED=true", "GRAFANA_ADMIN_USER=", "GRAFANA_ADMIN_PASSWORD="),
+                errors,
+            )
+            _require_markers(
+                bundle,
+                files,
+                "docker-compose.yml",
+                ("prometheus:", "grafana:", "flashin_prometheus_data", "flashin_grafana_data"),
+                errors,
+            )
+            _require_markers(
+                bundle,
+                files,
+                ".github/workflows/ci.yml",
+                (
+                    "browser-e2e:",
+                    "Install Chromium",
+                    "Run Mini App and Admin browser journeys",
+                    "needs: [backend, frontend, admin, browser-e2e]",
+                ),
+                errors,
+            )
+            _require_markers(
+                bundle,
+                files,
+                "e2e/package.json",
+                ('"@playwright/test": "1.54.2"', '"test": "playwright test"'),
+                errors,
+            )
+            _require_markers(
+                bundle,
+                files,
+                "e2e/playwright.config.js",
+                (
+                    'name: "storefront-mobile"',
+                    'name: "admin-desktop"',
+                    'trace: "retain-on-failure"',
+                    'screenshot: "only-on-failure"',
+                    'video: "retain-on-failure"',
+                ),
+                errors,
+            )
+            _require_markers(
+                bundle,
+                files,
+                "e2e/tests/storefront.spec.js",
+                (
+                    "Mini App critical pilot journey",
+                    "Mini App cart quantity and removal controls",
+                    "Mini App profile, support, privacy and return journey",
+                    "Mini App payment return route refreshes paid order",
+                ),
+                errors,
+            )
+            _require_markers(
+                bundle,
+                files,
+                "e2e/tests/admin.spec.js",
+                (
+                    "Admin critical pilot operator journey",
+                    "Admin operations, fulfillment and BusinessEvent recovery journey",
+                ),
+                errors,
+            )
+            _require_markers(
+                bundle,
+                files,
+                "docs/pilot/end_to_end_coverage_matrix.md",
+                ("## Browser journeys", "Six stateful Playwright journeys", "## Evidence boundary"),
                 errors,
             )
 
