@@ -33,13 +33,13 @@ Status values: `PASS`, `PARTIAL`, `BLOCKED`, `NOT COVERED`.
 | Admin authentication | Login -> protected sections -> logout | Admin security tests/build plus Playwright login/logout | PASS | Add deployed session-expiry and permission-denied assertions |
 | Admin product/promo operations | Promo create -> product create -> CSV import/export -> refreshed lists | Admin tests plus stateful browser mutations and downloaded export | PASS | Repeat with deployed database and audit-log evidence |
 | Admin inventory operations | Low stock -> snapshot -> abandoned carts -> notification queue | Backend operations tests plus browser status/list/POST evidence | PASS | Repeat with live inventory and notification worker |
-| Admin order operations | Cancellation and paid -> assembling fulfillment transition | Backend state tests plus customer/Admin cancellation and Admin fulfillment browser paths | PARTIAL | Add ready/shipped/completed transitions in deployed pilot |
+| Admin order operations | Paid order -> full picklist -> packed -> ready -> shipment -> shipped -> delivered/completed | PostgreSQL transactional fulfillment smoke plus stateful Admin browser lifecycle, SLA, ownership, notification and audit assertions | PASS | Repeat with one controlled courier/pickup pilot order and retain shipment evidence |
 | Admin service operations | Support ownership, privacy and returns queues -> operator action -> terminal state | Domain-rule unit tests plus browser assignment, privacy and partial refund processing | PASS | Validate deployed RBAC roles and named owners against the pilot roster |
 | Admin pilot operations | Protected status -> GO/NO-GO -> integrity/money attention | Observability tests, metrics/Grafana and browser-valid GO contract | PASS | Verify deployed dashboard, access control and external alerts |
 | Runtime pilot guard | Allowlist -> first 20 orders -> automatic STOP | Pilot runtime and circuit-breaker tests | PASS | Requires signed admission and controlled live run |
 | Monitoring | Metrics -> Prometheus rules -> Grafana dashboard | Monitoring config/capability tests and production Compose gate | PASS | External receiver and named on-call owner still required |
 | Backup/rollback | Backup -> restore -> previous signed release | Release capability and guard tests | PARTIAL | Execute production-like restore/rollback drill |
-| Browser E2E | Real browser across Mini App and Admin | Eight stateful Playwright journeys; traces, screenshots, video and HTML evidence on failure | PASS | Keep as required dependency of production Compose isolation |
+| Browser E2E | Real browser across Mini App and Admin | Nine stateful Playwright journeys; traces, screenshots, video and HTML evidence on failure | PASS | Keep as required dependency of production Compose isolation |
 
 ## Browser journeys
 
@@ -50,9 +50,10 @@ The mandatory browser layer now covers:
 3. Profile, loyalty, support ticket, privacy export/request and return registration.
 4. Payment return URL polling and paid-order rendering.
 5. Admin authentication, promo/product creation, order cancellation and refresh.
-6. Pilot runtime status, inventory operations, CSV import/export, fulfillment transition and BusinessEvent recovery.
+6. Pilot runtime status, inventory operations, CSV import/export, initial fulfillment transition and BusinessEvent recovery.
 7. Admin support priority/status processing, privacy execution and validated partial refund completion.
 8. Admin support-ticket ownership assignment with an accountable active Admin ID.
+9. Admin full picklist, packing, readiness, idempotent shipment creation, tracked shipping and delivered/completed terminal state.
 
 ## Evidence boundary
 
