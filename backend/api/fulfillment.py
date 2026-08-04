@@ -5,6 +5,7 @@ from ..database import get_db
 from ..models import FulfillmentTask, FulfillmentTaskItem, OrderItem, SlaEvent
 from ..schemas import FulfillmentTaskOut, FulfillmentUpdateIn, SlaEventOut
 from ..security import get_current_admin
+from ..services.audit import log_admin_action
 from ..services.fulfillment import update_fulfillment_status
 from ..services.rbac import require_permission
 
@@ -39,10 +40,27 @@ def update_task(
         )
         if not task:
             raise HTTPException(status_code=404, detail="Fulfillment task not found")
+        previous_status = task.status
         try:
             update_fulfillment_status(db, task, payload.status, payload.comment)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if task.assigned_admin_id is None:
+            task.assigned_admin_id = admin.id
+        log_admin_action(
+            db,
+            admin,
+            "fulfillment.task.update",
+            "fulfillment_task",
+            task.id,
+            {
+                "order_id": task.order_id,
+                "from_status": previous_status,
+                "status": task.status,
+                "assigned_admin_id": task.assigned_admin_id,
+                "comment": task.comment,
+            },
+        )
         db.commit()
         db.refresh(task)
         return task
@@ -135,9 +153,29 @@ def update_task_item(
         if normalized_status == "picked" and picked_qty != order_item.quantity:
             raise HTTPException(status_code=409, detail="Picked status requires the full ordered quantity")
 
+        previous = {
+            "status": item.status,
+            "picked_qty": item.picked_qty,
+            "issue": item.issue,
+        }
         item.picked_qty = picked_qty
         item.status = normalized_status
         item.issue = issue.strip()[:2000]
+        log_admin_action(
+            db,
+            admin,
+            "fulfillment.task_item.update",
+            "fulfillment_task_item",
+            item.id,
+            {
+                "task_id": item.task_id,
+                "order_item_id": item.order_item_id,
+                "previous": previous,
+                "status": item.status,
+                "picked_qty": item.picked_qty,
+                "issue": item.issue,
+            },
+        )
         db.commit()
         return {
             "ok": True,
