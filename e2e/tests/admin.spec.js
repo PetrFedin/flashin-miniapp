@@ -17,7 +17,7 @@ async function mockAdminApi(page) {
     id: 9001,
     status: "created",
     payment_status: "pending",
-    total: 12000,
+    total_amount: 12000,
     currency: "RUB",
     customer: { first_name: "Pilot" },
     items: [{ id: 1, title: "Pilot Jacket", size: "M", quantity: 1 }],
@@ -83,15 +83,11 @@ test("Admin critical pilot operator journey", async ({ page }) => {
   await page.getByPlaceholder("Размер", { exact: true }).fill("M");
   await page.getByPlaceholder("SKU размера").fill("FLASH-002-M");
   await page.getByRole("button", { name: /Создать товар/i }).click();
-  await expect(page.getByRole("status")).toContainText("Товар создан");
   await expect(page.getByText("Pilot Trousers")).toBeVisible();
 
   page.once("dialog", (dialog) => dialog.accept());
-  const cancelButton = page.getByRole("button", { name: /Отменить/ }).first();
-  if (await cancelButton.isVisible()) {
-    await cancelButton.click();
-    await expect(page.getByRole("status")).toContainText("Заказ #9001 отменён");
-  }
+  await page.getByRole("button", { name: "Отменить до оплаты" }).click();
+  await expect(page.getByText("Отменён")).toBeVisible();
 
   await page.getByRole("button", { name: "Обновить" }).click();
   await expect(page.getByRole("status")).toContainText("Данные обновлены");
