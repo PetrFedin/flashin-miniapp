@@ -4,6 +4,13 @@ from sqlalchemy.orm import Session
 
 from ..database import utcnow_naive
 from ..models import DeliveryShipment, Order
+from .notifications import queue_order_status
+
+_SHIPMENT_TRANSITIONS = {
+    "created": {"shipped"},
+    "shipped": {"delivered"},
+    "delivered": set(),
+}
 
 
 def calculate_delivery_price(provider_code: str, zone: str = "default") -> float:
@@ -16,21 +23,94 @@ def calculate_delivery_price(provider_code: str, zone: str = "default") -> float
     return float(base.get(provider_code, 500))
 
 
-def create_shipment(db: Session, order: Order, provider_code: str = "courier") -> DeliveryShipment:
-    price = calculate_delivery_price(provider_code)
+def create_shipment(
+    db: Session,
+    order: Order,
+    provider_code: str = "courier",
+) -> tuple[DeliveryShipment, bool]:
+    normalized_provider = str(provider_code or "courier").strip().lower()
+    if not normalized_provider or len(normalized_provider) > 64:
+        raise ValueError("Delivery provider code is invalid")
+    if order.status != "ready" or order.delivery_status != "ready":
+        raise ValueError("Only a ready order can be transferred to delivery")
+
+    existing = (
+        db.query(DeliveryShipment)
+        .filter(DeliveryShipment.order_id == order.id)
+        .order_by(DeliveryShipment.id.desc())
+        .with_for_update()
+        .first()
+    )
+    if existing:
+        return existing, False
+
+    price = calculate_delivery_price(normalized_provider)
     shipment = DeliveryShipment(
         order_id=order.id,
-        provider_code=provider_code,
+        provider_code=normalized_provider,
         tracking_number="",
         status="created",
         price=price,
-        raw_payload=json.dumps({"provider": provider_code}, ensure_ascii=False),
+        raw_payload=json.dumps({"provider": normalized_provider}, ensure_ascii=False),
     )
     db.add(shipment)
-    return shipment
+    db.flush()
+    return shipment, True
 
 
-def update_tracking(shipment: DeliveryShipment, tracking_number: str, status: str = "shipped") -> None:
-    shipment.tracking_number = tracking_number
-    shipment.status = status
+def update_tracking(
+    db: Session,
+    shipment: DeliveryShipment,
+    tracking_number: str,
+    status: str = "shipped",
+) -> Order:
+    normalized_status = str(status or "").strip().lower()
+    if normalized_status not in _SHIPMENT_TRANSITIONS:
+        raise ValueError("Unsupported shipment status")
+    if normalized_status == shipment.status:
+        order = db.query(Order).filter(Order.id == shipment.order_id).with_for_update().first()
+        if not order:
+            raise ValueError("Shipment is linked to a missing order")
+        return order
+
+    allowed = _SHIPMENT_TRANSITIONS.get(shipment.status, set())
+    if normalized_status not in allowed:
+        raise ValueError(
+            f"Shipment transition {shipment.status} -> {normalized_status} is not allowed"
+        )
+
+    order = (
+        db.query(Order)
+        .filter(Order.id == shipment.order_id)
+        .with_for_update()
+        .first()
+    )
+    if not order:
+        raise ValueError("Shipment is linked to a missing order")
+
+    if normalized_status == "shipped":
+        normalized_tracking = str(tracking_number or "").strip()
+        if len(normalized_tracking) < 3:
+            raise ValueError("Tracking number is required before shipment")
+        if len(normalized_tracking) > 255:
+            raise ValueError("Tracking number is too long")
+        if order.status != "ready" or order.delivery_status != "ready":
+            raise ValueError("Only a ready order can be shipped")
+        shipment.tracking_number = normalized_tracking
+        shipment.status = "shipped"
+        order.status = "shipped"
+        order.delivery_status = "shipped"
+        order.tracking_number = normalized_tracking
+    elif normalized_status == "delivered":
+        if shipment.status != "shipped" or not shipment.tracking_number.strip():
+            raise ValueError("Only a tracked shipment can be marked delivered")
+        if order.status != "shipped" or order.delivery_status != "shipped":
+            raise ValueError("Only a shipped order can be completed")
+        shipment.status = "delivered"
+        order.status = "completed"
+        order.delivery_status = "delivered"
+        order.tracking_number = shipment.tracking_number
+
     shipment.updated_at = utcnow_naive()
+    queue_order_status(db, order)
+    return order
