@@ -88,6 +88,8 @@ jobs:
         run: python scripts/customer_journey_smoke.py
       - name: Run transactional order cancellation smoke
         run: python scripts/order_cancellation_smoke.py
+      - name: Run transactional full fulfillment smoke
+        run: python scripts/full_fulfillment_smoke.py
       - name: Run transactional payment review smoke
         run: python scripts/payment_review_smoke.py
       - name: Run transactional cumulative refund smoke
