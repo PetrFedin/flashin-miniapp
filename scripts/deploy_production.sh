@@ -9,7 +9,7 @@ if [ ! -f .env ]; then
 fi
 
 export COMPOSE_FILE="docker-compose.yml:docker-compose.production.yml"
-export COMPOSE_PROFILES="production,workers,scheduler,search"
+export COMPOSE_PROFILES="production,workers,scheduler,search,monitoring"
 
 if docker compose ps --status running --services 2>/dev/null | grep -qx backend; then
   if docker compose exec -T backend test -f /app/scripts/pilot_runtime.py; then
@@ -103,8 +103,10 @@ docker compose run --rm backend python scripts/check_transaction_integrity.py
 echo "Verifying first-20-order runtime integrity..."
 docker compose run --rm backend python scripts/check_pilot_runtime_integrity.py
 
-echo "Starting production services, scheduler, notifications and search..."
-docker compose up -d db backend frontend admin bot caddy notification_worker scheduler meilisearch
+echo "Starting production services, workers, search and internal monitoring..."
+docker compose up -d \
+  db backend frontend admin bot caddy \
+  notification_worker scheduler meilisearch prometheus grafana
 
 echo "Waiting for migration-aware backend readiness inside Docker network..."
 backend_ready=0
@@ -141,7 +143,50 @@ fi
 echo "Applying search index settings..."
 docker compose run --rm backend python scripts/configure_meilisearch.py
 
-for service in db backend frontend admin bot caddy notification_worker scheduler meilisearch; do
+echo "Waiting for Prometheus rules and pilot metrics..."
+prometheus_ready=0
+for _ in $(seq 1 60); do
+  metrics_payload="$(
+    docker compose exec -T backend \
+      curl -fsS 'http://prometheus:9090/api/v1/query?query=flashin_pilot_metrics_collection_success' \
+      2>/dev/null || true
+  )"
+  rules_payload="$(
+    docker compose exec -T backend \
+      curl -fsS 'http://prometheus:9090/api/v1/rules' \
+      2>/dev/null || true
+  )"
+  if printf '%s' "$metrics_payload" | grep -q 'flashin_pilot_metrics_collection_success' \
+    && printf '%s' "$rules_payload" | grep -q 'FlashinPilotRuntimeStopped'; then
+    prometheus_ready=1
+    echo "Prometheus pilot metrics and rules ready"
+    break
+  fi
+  sleep 2
+done
+if [ "$prometheus_ready" -ne 1 ]; then
+  echo "Prometheus did not load pilot metrics and alert rules"
+  docker compose logs prometheus
+  exit 1
+fi
+
+echo "Waiting for Grafana health and provisioning..."
+grafana_ready=0
+for _ in $(seq 1 60); do
+  if docker compose exec -T backend curl -fsS http://grafana:3000/api/health >/dev/null 2>&1; then
+    grafana_ready=1
+    echo "Grafana healthy"
+    break
+  fi
+  sleep 2
+done
+if [ "$grafana_ready" -ne 1 ]; then
+  echo "Grafana did not become healthy"
+  docker compose logs grafana
+  exit 1
+fi
+
+for service in db backend frontend admin bot caddy notification_worker scheduler meilisearch prometheus grafana; do
   if ! docker compose ps --status running --services | grep -qx "$service"; then
     echo "$service is not running"
     docker compose logs "$service"
@@ -161,5 +206,6 @@ echo "Deploy completed and release promoted: $release_archive"
 if [ -n "$backup_file" ]; then
   echo "Rollback drill input: scripts/rollback.sh previous '$backup_file'"
 fi
+echo "Prometheus and Grafana are internal-only. Use an authenticated SSH tunnel for operator access."
 echo "Run 'make pilot-gate' only after the guarded current and previous releases, rollback drill and provider evidence are ready."
 echo "Pilot runtime remains stopped. Re-run admission and 'make pilot-runtime-arm' before checkout."

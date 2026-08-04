@@ -10,18 +10,28 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 PUBLIC_SERVICE = "caddy"
+WORKER_SERVICES = {
+    "notification_worker",
+    "ops_jobs",
+    "outbox_jobs",
+    "moysklad_sync",
+    "campaign_jobs",
+    "sla_jobs",
+    "event_jobs",
+    "media_jobs",
+    "scheduler",
+}
+MONITORING_SERVICES = {"prometheus", "grafana"}
 REQUIRED_INTERNAL_SERVICES = {
     "db",
     "backend",
     "frontend",
     "admin",
     "bot",
-    "notification_worker",
-    "scheduler",
     "meilisearch",
-}
+} | WORKER_SERVICES | MONITORING_SERVICES
 EXPECTED_PUBLIC_PORTS = {(80, "tcp"), (443, "tcp")}
-PRODUCTION_PROFILES = ("production", "workers", "scheduler", "search")
+PRODUCTION_PROFILES = ("production", "workers", "scheduler", "search", "monitoring")
 RESTART_POLICY = "unless-stopped"
 
 
@@ -66,6 +76,21 @@ def _dependency_condition(service: Mapping, dependency: str) -> str | None:
     return None
 
 
+def _mounts_by_target(service: Mapping) -> dict[str, Mapping]:
+    result: dict[str, Mapping] = {}
+    for mount in service.get("volumes") or []:
+        if isinstance(mount, Mapping) and mount.get("target"):
+            result[str(mount["target"])] = mount
+    return result
+
+
+def _pinned_image(service: Mapping) -> bool:
+    image = str(service.get("image") or "").strip()
+    if not image or ":" not in image:
+        return False
+    return not image.endswith(":latest")
+
+
 def validate_config(config: Mapping) -> list[str]:
     services = config.get("services")
     if not isinstance(services, Mapping):
@@ -108,11 +133,54 @@ def validate_config(config: Mapping) -> list[str]:
             errors.append("Backend healthcheck must use /ready, not only liveness")
         if _dependency_condition(backend, "db") != "service_healthy":
             errors.append("Backend must wait for a healthy database")
+        backend_mounts = _mounts_by_target(backend)
+        for target in ("/app/docs", "/app/deploy/release"):
+            mount = backend_mounts.get(target)
+            if not mount:
+                errors.append(f"Backend must mount {target}")
+            elif not mount.get("read_only"):
+                errors.append(f"Backend mount {target} must be read-only")
 
-    for worker_name in ("notification_worker", "scheduler"):
+    for worker_name in sorted(WORKER_SERVICES):
         worker = services.get(worker_name)
         if isinstance(worker, Mapping) and _dependency_condition(worker, "db") != "service_healthy":
             errors.append(f"{worker_name} must wait for a healthy database")
+
+    prometheus = services.get("prometheus")
+    if isinstance(prometheus, Mapping):
+        if not _pinned_image(prometheus):
+            errors.append("Prometheus must use a pinned image tag")
+        if "/-/ready" not in _healthcheck_text(prometheus):
+            errors.append("Prometheus healthcheck must use /-/ready")
+        if _dependency_condition(prometheus, "backend") != "service_healthy":
+            errors.append("Prometheus must wait for a healthy backend")
+        mounts = _mounts_by_target(prometheus)
+        for target in ("/etc/prometheus/prometheus.yml", "/etc/prometheus/rules"):
+            mount = mounts.get(target)
+            if not mount:
+                errors.append(f"Prometheus must mount {target}")
+            elif not mount.get("read_only"):
+                errors.append(f"Prometheus mount {target} must be read-only")
+
+    grafana = services.get("grafana")
+    if isinstance(grafana, Mapping):
+        if not _pinned_image(grafana):
+            errors.append("Grafana must use a pinned image tag")
+        if "/api/health" not in _healthcheck_text(grafana):
+            errors.append("Grafana healthcheck must use /api/health")
+        if _dependency_condition(grafana, "prometheus") != "service_healthy":
+            errors.append("Grafana must wait for healthy Prometheus")
+        environment = grafana.get("environment")
+        if not isinstance(environment, Mapping):
+            errors.append("Grafana production environment is missing")
+        else:
+            if str(environment.get("GF_AUTH_ANONYMOUS_ENABLED", "")).lower() != "false":
+                errors.append("Grafana anonymous access must be disabled")
+            if str(environment.get("GF_USERS_ALLOW_SIGN_UP", "")).lower() != "false":
+                errors.append("Grafana user sign-up must be disabled")
+            for key in ("GF_SECURITY_ADMIN_USER", "GF_SECURITY_ADMIN_PASSWORD"):
+                if not str(environment.get(key, "")).strip():
+                    errors.append(f"Grafana production environment is missing {key}")
 
     caddy = services.get(PUBLIC_SERVICE)
     if isinstance(caddy, Mapping):
@@ -177,6 +245,8 @@ def main() -> int:
             "ports": [80, 443],
             "profiles": list(PRODUCTION_PROFILES),
             "backend_healthcheck": "/ready",
+            "monitoring": sorted(MONITORING_SERVICES),
+            "workers": sorted(WORKER_SERVICES),
             "restart_policy": RESTART_POLICY,
         }
     )

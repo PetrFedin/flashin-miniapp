@@ -36,6 +36,34 @@ services:
     restart: unless-stopped
     stop_grace_period: 30s
 
+  ops_jobs:
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  outbox_jobs:
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  moysklad_sync:
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  campaign_jobs:
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  sla_jobs:
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  event_jobs:
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  media_jobs:
+    restart: unless-stopped
+    stop_grace_period: 30s
+
   scheduler:
     restart: unless-stopped
     stop_grace_period: 30s
@@ -43,6 +71,22 @@ services:
   meilisearch:
     restart: unless-stopped
     ports: !reset []
+
+  prometheus:
+    restart: unless-stopped
+    ports: !reset []
+
+  grafana:
+    restart: unless-stopped
+    ports: !reset []
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:?GRAFANA_ADMIN_USER is required}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SECURITY_DISABLE_GRAVATAR: "true"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
 
   caddy:
     restart: unless-stopped

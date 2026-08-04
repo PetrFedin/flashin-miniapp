@@ -105,7 +105,7 @@ jobs:
       - name: Run durable refund reconciliation review smoke
         run: python scripts/refund_reconciliation_review_smoke.py
       - name: Run backend tests
-        run: python -m pytest -q backend/tests
+        run: python -m pytest -q backend/tests --maxfail=1 --tb=short
 
   frontend:
     runs-on: ubuntu-latest

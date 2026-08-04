@@ -14,6 +14,17 @@ def _load_module():
 
 
 def _safe_config() -> dict:
+    worker_names = {
+        "notification_worker",
+        "ops_jobs",
+        "outbox_jobs",
+        "moysklad_sync",
+        "campaign_jobs",
+        "sla_jobs",
+        "event_jobs",
+        "media_jobs",
+        "scheduler",
+    }
     services = {
         name: {"restart": "unless-stopped"}
         for name in {
@@ -22,21 +33,60 @@ def _safe_config() -> dict:
             "frontend",
             "admin",
             "bot",
-            "notification_worker",
-            "scheduler",
             "meilisearch",
+            *worker_names,
         }
     }
     services["backend"].update(
         {
             "healthcheck": {"test": ["CMD-SHELL", "curl -fsS http://localhost:8000/ready"]},
             "depends_on": {"db": {"condition": "service_healthy"}},
+            "volumes": [
+                {"type": "bind", "source": "./docs", "target": "/app/docs", "read_only": True},
+                {
+                    "type": "bind",
+                    "source": "./deploy/release",
+                    "target": "/app/deploy/release",
+                    "read_only": True,
+                },
+            ],
         }
     )
-    services["notification_worker"]["depends_on"] = {
-        "db": {"condition": "service_healthy"}
+    for worker_name in worker_names:
+        services[worker_name]["depends_on"] = {"db": {"condition": "service_healthy"}}
+
+    services["prometheus"] = {
+        "restart": "unless-stopped",
+        "image": "prom/prometheus:v3.5.0",
+        "healthcheck": {"test": ["CMD-SHELL", "wget -qO- http://localhost:9090/-/ready"]},
+        "depends_on": {"backend": {"condition": "service_healthy"}},
+        "volumes": [
+            {
+                "type": "bind",
+                "source": "./deploy/monitoring/prometheus.yml",
+                "target": "/etc/prometheus/prometheus.yml",
+                "read_only": True,
+            },
+            {
+                "type": "bind",
+                "source": "./deploy/monitoring/rules",
+                "target": "/etc/prometheus/rules",
+                "read_only": True,
+            },
+        ],
     }
-    services["scheduler"]["depends_on"] = {"db": {"condition": "service_healthy"}}
+    services["grafana"] = {
+        "restart": "unless-stopped",
+        "image": "grafana/grafana:12.1.0",
+        "healthcheck": {"test": ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health"]},
+        "depends_on": {"prometheus": {"condition": "service_healthy"}},
+        "environment": {
+            "GF_AUTH_ANONYMOUS_ENABLED": "false",
+            "GF_USERS_ALLOW_SIGN_UP": "false",
+            "GF_SECURITY_ADMIN_USER": "pilot-operator",
+            "GF_SECURITY_ADMIN_PASSWORD": "non-default-test-password",
+        },
+    }
     services["caddy"] = {
         "restart": "unless-stopped",
         "ports": [
