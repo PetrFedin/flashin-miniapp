@@ -119,8 +119,8 @@ def _guarded_repo(tmp_path: Path) -> Path:
                 "  grafana:\n"
                 "    image: grafana/grafana:12.1.0\n"
                 "volumes:\n"
-                "  flashin_prometheus_data:\n"
-                "  flashin_grafana_data:\n"
+                "  prometheus_data:\n"
+                "  grafana_data:\n"
             )
         elif relative == ".github/workflows/ci.yml":
             content = (
