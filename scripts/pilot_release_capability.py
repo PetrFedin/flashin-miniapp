@@ -231,7 +231,7 @@ def inspect_runtime_guard(archive: Path) -> list[str]:
                 bundle,
                 files,
                 "docker-compose.yml",
-                ("prometheus:", "grafana:", "flashin_prometheus_data", "flashin_grafana_data"),
+                ("prometheus:", "grafana:", "prometheus_data", "grafana_data"),
                 errors,
             )
             _require_markers(
