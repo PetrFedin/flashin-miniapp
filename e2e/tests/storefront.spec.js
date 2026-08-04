@@ -185,7 +185,7 @@ test("Mini App critical pilot journey", async ({ page }) => {
   await expect(page.getByText("Баллы зарезервированы.")).toBeVisible();
 
   await page.getByPlaceholder(/Реферальный код/i).fill("PILOTREF");
-  await page.getByRole("button", { name: /Привязать|Применить/ }).last().click();
+  await page.getByRole("button", { name: "Добавить" }).click();
   await expect(page.getByText("Реферальный код связан с заказом.")).toBeVisible();
 
   await page.getByRole("button", { name: /Оформить заказ/ }).click();
