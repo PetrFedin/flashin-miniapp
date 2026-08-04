@@ -85,6 +85,37 @@ async function mockAdminApi(page) {
     },
   ];
   let businessEvent = failedBusinessEvent();
+  let supportTickets = [{
+    id: 601,
+    order_id: 9002,
+    subject: "Возврат заказа",
+    message: "Клиент просит проверить возврат",
+    status: "open",
+    priority: "normal",
+  }];
+  let privacyRequests = [{
+    id: 701,
+    request_type: "consent_withdrawal",
+    status: "requested",
+    result_url: "",
+  }];
+  let returnRequests = [{
+    id: 801,
+    order_id: 9002,
+    customer_id: 101,
+    customer_username: "pilot",
+    customer_name: "Pilot User",
+    reason: "Не подошёл размер изделия",
+    status: "requested",
+    currency: "RUB",
+    order_total: 9000,
+    approved_refund_total: 0,
+    refunded_total: 0,
+    refundable_balance: 9000,
+    provider_refund_id: "",
+    provider_payment_id: "pay-9002",
+    provider_payment_status: "succeeded",
+  }];
 
   await page.route("http://localhost:8000/**", async (route) => {
     const request = route.request();
@@ -156,6 +187,35 @@ async function mockAdminApi(page) {
     if (path === "/api/ops/inventory/snapshot" && method === "POST") return json({ created: true });
     if (path === "/api/ops/pilot-runtime" && method === "GET") return json(pilotRuntimeStatus);
 
+    if (path === "/api/support/admin/tickets" && method === "GET") return json(supportTickets);
+    if (path === "/api/support/admin/tickets/601" && method === "PATCH") {
+      const body = request.postDataJSON();
+      supportTickets = supportTickets.map((ticket) => ticket.id === 601 ? { ...ticket, ...body } : ticket);
+      return json(supportTickets[0]);
+    }
+    if (path === "/api/privacy/admin/requests" && method === "GET") return json(privacyRequests);
+    if (path === "/api/privacy/admin/requests/701/process" && method === "POST") {
+      privacyRequests = privacyRequests.map((item) => item.id === 701
+        ? { ...item, status: "processed", result_url: "processed://consent-withdrawal" }
+        : item);
+      return json(privacyRequests[0]);
+    }
+    if (path === "/api/admin/returns" && method === "GET") return json(returnRequests);
+    if (path === "/api/returns/admin/approve" && method === "POST") {
+      const body = request.postDataJSON();
+      returnRequests = returnRequests.map((item) => item.id === body.return_id
+        ? {
+          ...item,
+          status: body.amount < item.refundable_balance ? "approved_partial" : "approved",
+          approved_refund_total: body.amount,
+          refunded_total: body.amount,
+          refundable_balance: Math.max(0, item.refundable_balance - body.amount),
+          provider_refund_id: "refund-pilot-801",
+        }
+        : item);
+      return json(returnRequests.find((item) => item.id === body.return_id));
+    }
+
     if (path === "/api/platform/admin/events/summary" && method === "GET") {
       return json({
         counts: {
@@ -201,7 +261,10 @@ test("Admin critical pilot operator journey", async ({ page }) => {
   await login(page);
 
   await expect(page.getByRole("heading", { name: "Импорт и экспорт" })).toBeVisible();
-  await expect(page.getByText("Pilot Jacket").first()).toBeVisible();
+  const productsSection = page.locator("section").filter({
+    has: page.getByRole("heading", { name: "Товары" }),
+  });
+  await expect(productsSection.getByText("Pilot Jacket", { exact: true })).toBeVisible();
 
   await page.getByPlaceholder("CODE").fill("PILOT10");
   await page.getByRole("button", { name: "Создать" }).first().click();
@@ -214,7 +277,7 @@ test("Admin critical pilot operator journey", async ({ page }) => {
   await page.getByPlaceholder("Размер", { exact: true }).fill("M");
   await page.getByPlaceholder("SKU размера").fill("FLASH-002-M");
   await page.getByRole("button", { name: /Создать товар/i }).click();
-  await expect(page.getByText("Pilot Trousers")).toBeVisible();
+  await expect(productsSection.getByText("Pilot Trousers", { exact: true })).toBeVisible();
 
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Отменить до оплаты" }).click();
@@ -278,4 +341,35 @@ test("Admin operations, fulfillment and BusinessEvent recovery journey", async (
   await page.getByRole("button", { name: "Подтвердить replay" }).click();
   await expect(page.getByRole("status")).toContainText("Событие #501 возвращено в очередь");
   await expect(page.getByText("Ожидает обработки").first()).toBeVisible();
+});
+
+test("Admin completes support, privacy and refund service operations", async ({ page }) => {
+  await mockAdminApi(page);
+  await login(page);
+
+  await expect(page.getByRole("heading", { name: "Service Operations" })).toBeVisible();
+  await expect(page.getByText("Требуют действия: 3")).toBeVisible();
+
+  const supportQueue = page.getByRole("article", { name: "Обращения клиентов" });
+  const privacyQueue = page.getByRole("article", { name: "Privacy-запросы" });
+  const returnsQueue = page.getByRole("article", { name: "Возвраты и refunds" });
+
+  await page.getByLabel("Статус обращения 601").selectOption("in_progress");
+  await page.getByLabel("Приоритет обращения 601").selectOption("high");
+  await page.getByRole("button", { name: "Сохранить обращение" }).click();
+  await expect(page.getByRole("status")).toContainText("Обращение #601 обновлено");
+  await expect(supportQueue.locator(".service-item-heading span")).toHaveText("В работе");
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Исполнить privacy-запрос" }).click();
+  await expect(page.getByRole("status")).toContainText("Privacy-запрос #701 исполнен");
+  await expect(privacyQueue.locator(".service-item-heading span")).toHaveText("Исполнен");
+
+  await page.getByLabel("Сумма возврата 801").fill("4500");
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Подтвердить refund" }).click();
+  await expect(page.getByRole("status")).toContainText("Возврат #801 передан платёжному провайдеру");
+  await expect(returnsQueue.locator(".service-item-heading span")).toHaveText("Возвращён частично");
+  await expect(returnsQueue.getByText("Provider refund: refund-pilot-801")).toBeVisible();
+  await expect(page.getByText("Требуют действия: 1")).toBeVisible();
 });
