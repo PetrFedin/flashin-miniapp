@@ -21,7 +21,7 @@ Status values: `PASS`, `PARTIAL`, `BLOCKED`, `NOT COVERED`.
 | Order cancellation | Eligible order -> cancel -> stock/promo/loyalty reversal | Transactional cancellation smoke plus customer and Admin browser cancellation | PASS | Verify deployed stock and loyalty reversal evidence |
 | Returns | Customer request -> Admin queue -> validated amount -> provider result | Backend return/reconciliation tests plus customer registration and Admin approval browser round trip | PASS | Prove one real YooKassa sandbox refund and reconciliation |
 | Partial refunds | Review -> partial provider refund -> remaining refundable balance | Cumulative refund smoke plus Admin partial-refund browser terminal state | PASS | Prove real provider sandbox partial refund |
-| Support | Customer ticket -> Admin priority/status transition -> updated state | Backend state-machine tests plus customer create/read and Admin processing browser round trip | PASS | Verify deployed SLA ownership and Telegram notification delivery |
+| Support | Customer ticket -> accountable Admin owner -> priority/status transition | Backend Admin-only ownership schema, state-machine tests and browser assignment/update round trip | PASS | Map active Admin IDs to named pilot owners and verify Telegram SLA notification |
 | Privacy | Customer export/request -> Admin process -> terminal result | Backend privacy/idempotency tests plus browser export/request/Admin process round trip | PASS | Complete deployed legal retention review and one controlled request |
 | Notifications | Domain event -> notification outbox -> lease -> send/retry | Notification lease smoke and retry-state tests | PASS | Prove Telegram sandbox delivery |
 | Business events | Failed event -> diagnosis -> confirmed replay -> pending queue | Worker/recovery smokes plus Admin browser recovery/replay journey | PASS | Observe replay processing and poison-event alert in deployed environment |
@@ -34,12 +34,12 @@ Status values: `PASS`, `PARTIAL`, `BLOCKED`, `NOT COVERED`.
 | Admin product/promo operations | Promo create -> product create -> CSV import/export -> refreshed lists | Admin tests plus stateful browser mutations and downloaded export | PASS | Repeat with deployed database and audit-log evidence |
 | Admin inventory operations | Low stock -> snapshot -> abandoned carts -> notification queue | Backend operations tests plus browser status/list/POST evidence | PASS | Repeat with live inventory and notification worker |
 | Admin order operations | Cancellation and paid -> assembling fulfillment transition | Backend state tests plus customer/Admin cancellation and Admin fulfillment browser paths | PARTIAL | Add ready/shipped/completed transitions in deployed pilot |
-| Admin service operations | Support, privacy and returns queues -> operator action -> terminal state | Domain-rule unit tests plus stateful browser status, privacy and partial refund processing | PASS | Validate RBAC roles and named owners in deployed Admin |
+| Admin service operations | Support ownership, privacy and returns queues -> operator action -> terminal state | Domain-rule unit tests plus browser assignment, privacy and partial refund processing | PASS | Validate deployed RBAC roles and named owners against the pilot roster |
 | Admin pilot operations | Protected status -> GO/NO-GO -> integrity/money attention | Observability tests, metrics/Grafana and browser-valid GO contract | PASS | Verify deployed dashboard, access control and external alerts |
 | Runtime pilot guard | Allowlist -> first 20 orders -> automatic STOP | Pilot runtime and circuit-breaker tests | PASS | Requires signed admission and controlled live run |
 | Monitoring | Metrics -> Prometheus rules -> Grafana dashboard | Monitoring config/capability tests and production Compose gate | PASS | External receiver and named on-call owner still required |
 | Backup/rollback | Backup -> restore -> previous signed release | Release capability and guard tests | PARTIAL | Execute production-like restore/rollback drill |
-| Browser E2E | Real browser across Mini App and Admin | Seven stateful Playwright journeys; traces, screenshots, video and HTML evidence on failure | PASS | Keep as required dependency of production Compose isolation |
+| Browser E2E | Real browser across Mini App and Admin | Eight stateful Playwright journeys; traces, screenshots, video and HTML evidence on failure | PASS | Keep as required dependency of production Compose isolation |
 
 ## Browser journeys
 
@@ -52,6 +52,7 @@ The mandatory browser layer now covers:
 5. Admin authentication, promo/product creation, order cancellation and refresh.
 6. Pilot runtime status, inventory operations, CSV import/export, fulfillment transition and BusinessEvent recovery.
 7. Admin support priority/status processing, privacy execution and validated partial refund completion.
+8. Admin support-ticket ownership assignment with an accountable active Admin ID.
 
 ## Evidence boundary
 
