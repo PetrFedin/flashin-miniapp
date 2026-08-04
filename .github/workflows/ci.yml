@@ -147,10 +147,41 @@ jobs:
         working-directory: admin
         run: npm run build
 
+  browser-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [frontend, admin]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: e2e/package.json
+      - name: Install browser E2E dependencies
+        working-directory: e2e
+        run: npm install --no-audit --no-fund
+      - name: Install Chromium
+        working-directory: e2e
+        run: npx playwright install --with-deps chromium
+      - name: Run Mini App and Admin browser journeys
+        working-directory: e2e
+        run: npm test
+      - name: Upload browser failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-e2e-evidence
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          if-no-files-found: ignore
+          retention-days: 14
+
   docker:
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    needs: [backend, frontend, admin]
+    needs: [backend, frontend, admin, browser-e2e]
     steps:
       - uses: actions/checkout@v4
       - name: Prepare local Compose environment
