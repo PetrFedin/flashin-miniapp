@@ -9,6 +9,7 @@ import {
   SUPPORT_STATUS_LABELS,
   canApproveReturn,
   canProcessPrivacy,
+  normalizeAdminAssignment,
   normalizeRefundAmount,
   serviceAttentionCount,
   supportTransitions,
@@ -120,6 +121,7 @@ export default function ServiceOperationsPanel({ onUnauthorized }) {
     return supportDrafts[ticket.id] || {
       status: ticket.status,
       priority: ticket.priority,
+      assigned_admin_id: ticket.assigned_admin_id ?? "",
     };
   }
 
@@ -132,11 +134,24 @@ export default function ServiceOperationsPanel({ onUnauthorized }) {
 
   async function updateTicket(ticket) {
     const draft = supportDraft(ticket);
+    const assignment = normalizeAdminAssignment(draft.assigned_admin_id);
+    if (assignment.error) {
+      setError(assignment.error);
+      return;
+    }
+    if (assignment.value === null && ticket.assigned_admin_id != null) {
+      setError("Снятие ответственного не поддерживается. Назначьте другого активного администратора.");
+      return;
+    }
+
     const payload = {};
     if (draft.status && draft.status !== ticket.status) payload.status = draft.status;
     if (draft.priority && draft.priority !== ticket.priority) payload.priority = draft.priority;
+    if (assignment.value !== null && assignment.value !== ticket.assigned_admin_id) {
+      payload.assigned_admin_id = assignment.value;
+    }
     if (!Object.keys(payload).length) {
-      setError("Выберите новый статус или приоритет обращения.");
+      setError("Выберите новый статус, приоритет или ответственного обращения.");
       return;
     }
 
@@ -260,6 +275,19 @@ export default function ServiceOperationsPanel({ onUnauthorized }) {
                         <option value={value} key={value}>{label}</option>
                       ))}
                     </select>
+                  </label>
+                  <label>
+                    Ответственный Admin ID
+                    <input
+                      aria-label={`Ответственный обращения ${ticket.id}`}
+                      type="number"
+                      min="1"
+                      step="1"
+                      placeholder="ID активного администратора"
+                      value={draft.assigned_admin_id ?? ""}
+                      onChange={(event) => setSupportDraft(ticket.id, { assigned_admin_id: event.target.value })}
+                      disabled={isBusy(`support-${ticket.id}`)}
+                    />
                   </label>
                   <button
                     onClick={() => updateTicket(ticket)}
