@@ -121,22 +121,40 @@ FILE_CONTENT = {
         "Admin operations, fulfillment and BusinessEvent recovery journey\n"
         "Admin completes support, privacy and refund service operations\n"
     ),
+    "e2e/tests/owner-admin.spec.js": (
+        "Admin assigns an accountable owner to a support ticket\n"
+        "assigned_admin_id: 42\n"
+        "Ответственный обращения 901\n"
+    ),
+    "backend/api/support.py": (
+        "class AdminSupportTicketOut:\n"
+        "    assigned_admin_id: int | None = None\n"
+        "@router.get(response_model=list[AdminSupportTicketOut])\n"
+        "@router.patch(response_model=AdminSupportTicketOut)\n"
+    ),
+    "backend/tests/test_support_admin_schema.py": (
+        "def test_admin_support_ticket_schema_exposes_accountable_owner():\n"
+        '    assert "assigned_admin_id"\n'
+    ),
     "admin/src/ServiceOperationsPanel.jsx": (
         'support: "/api/support/admin/tickets"\n'
         'privacy: "/api/privacy/admin/requests"\n'
         'returns: "/api/admin/returns"\n'
         'adminJson("/api/returns/admin/approve"\n'
         "Подтвердить refund\n"
+        "Ответственный обращения\n"
     ),
     "admin/src/serviceOperations.js": (
         "export function supportTransitions() {}\n"
         "export function canProcessPrivacy() {}\n"
         "export function canApproveReturn() {}\n"
+        "export function normalizeAdminAssignment() {}\n"
         "export function normalizeRefundAmount() {}\n"
         "export function serviceAttentionCount() {}\n"
     ),
     "admin/src/serviceOperations.test.js": (
         "support transitions follow the backend state machine\n"
+        "support owner assignment accepts only positive integer Admin IDs\n"
         "refund amount is positive, bounded and rounded\n"
         "return action and aggregate attention are fail-closed\n"
     ),
@@ -153,7 +171,8 @@ FILE_CONTENT = {
     ),
     "docs/pilot/end_to_end_coverage_matrix.md": (
         "## Browser journeys\n"
-        "Seven stateful Playwright journeys\n"
+        "Eight stateful Playwright journeys\n"
+        "accountable active Admin ID\n"
         "Admin service operations\n"
         "## Evidence boundary\n"
     ),
@@ -288,3 +307,16 @@ def test_immutable_archive_inspection_rejects_unmounted_service_operations(tmp_p
     errors = inspect_runtime_guard(release)
     assert any("admin/src/BusinessEventsPanel.jsx" in error for error in errors)
     assert any("ServiceOperationsPanel" in error for error in errors)
+
+
+def test_immutable_archive_inspection_rejects_support_without_owner_schema(tmp_path):
+    repo = _guarded_repo(tmp_path)
+    support = repo / "backend/api/support.py"
+    support.write_text("class AdminSupportTicketOut: pass\n", encoding="utf-8")
+    _git(repo, "add", str(support.relative_to(repo)))
+    _git(repo, "commit", "-qm", "remove support owner schema")
+
+    release = _release(repo, tmp_path, "no-support-owner", "2026-08-05T00:06:00Z")
+    errors = inspect_runtime_guard(release)
+    assert any("backend/api/support.py" in error for error in errors)
+    assert any("assigned_admin_id" in error for error in errors)
