@@ -32,6 +32,145 @@ def _git(repo: Path, *args: str) -> None:
     )
 
 
+FILE_CONTENT = {
+    "backend/api/orders.py": "acquire_pilot_checkout()\nrecord_pilot_order()\n",
+    "backend/services/pilot_circuit_breaker.py": (
+        "def stop_pilot_for_order():\n    pass\n"
+        "def trip_pilot_circuit_breaker():\n    pass\n"
+    ),
+    "backend/api/payments.py": (
+        "class ProviderPaymentIntegrityError: pass\n"
+        "trip_pilot_circuit_breaker()\nstop_pilot_for_order()\n"
+    ),
+    "backend/api/returns.py": "trip_pilot_circuit_breaker()\nstop_pilot_for_order()\n",
+    "backend/services/payment_reconciliation.py": (
+        "payment_reconciliation_mismatch\nstop_pilot_for_order()\n"
+    ),
+    "backend/main.py": (
+        "from .middleware.metrics import collect_pilot_metrics, metrics_response\n"
+        '@app.get("/metrics", include_in_schema=False)\n'
+        "def metrics(db):\n"
+        "    collect_pilot_metrics(db, settings)\n"
+        "    return metrics_response()\n"
+    ),
+    "backend/middleware/metrics.py": (
+        'PILOT = "flashin_pilot_metrics_collection_success"\n'
+        "def collect_pilot_metrics(db, settings):\n    return True\n"
+        "def _metric_path(request):\n    return \"__unmatched__\"\n"
+    ),
+    "deploy/monitoring/rules/flashin_pilot.yml": (
+        "FlashinPilotMetricsUnavailable\n"
+        "FlashinPilotArtifactIntegrityFailed\n"
+        "FlashinPilotMoneyAttentionRequired\n"
+        "FlashinPilotCapacityLow\n"
+    ),
+    "deploy/grafana/dashboards/flashin_operations.json": (
+        '{"title":"FLASHIN Operations",'
+        '"targets":["flashin_pilot_checkout_ready",'
+        '"flashin_pilot_money_attention"]}\n'
+    ),
+    "deploy/grafana/provisioning/datasources/prometheus.yml": (
+        "type: prometheus\nurl: http://prometheus:9090\n"
+    ),
+    "deploy/monitoring/prometheus.yml": (
+        "rule_files:\n  - /etc/prometheus/rules/*.yml\n"
+        "static_configs:\n  - targets: [backend:8000]\n"
+    ),
+    "scripts/check_production_compose.py": (
+        'MONITORING_SERVICES = {"prometheus", "grafana"}\n'
+        'PRODUCTION_PROFILES = ("production", "workers", "scheduler", "search", "monitoring")\n'
+        'ERROR = "Grafana anonymous access must be disabled"\n'
+    ),
+    ".env.production.example": (
+        "METRICS_ENABLED=true\n"
+        "GRAFANA_ADMIN_USER=pilot-operator\n"
+        "GRAFANA_ADMIN_PASSWORD=replace-me\n"
+    ),
+    "docker-compose.yml": (
+        "services:\n  prometheus:\n    image: prom/prometheus:v3.5.0\n"
+        "  grafana:\n    image: grafana/grafana:12.1.0\n"
+        "volumes:\n  prometheus_data:\n  grafana_data:\n"
+    ),
+    ".github/workflows/ci.yml": (
+        "jobs:\n  browser-e2e:\n    steps:\n"
+        "      - name: Install Chromium\n"
+        "      - name: Run Mini App and Admin browser journeys\n"
+        "  docker:\n    needs: [backend, frontend, admin, browser-e2e]\n"
+    ),
+    "e2e/package.json": (
+        "{\n"
+        '  "scripts": {"test": "playwright test"},\n'
+        '  "devDependencies": {"@playwright/test": "1.54.2"}\n'
+        "}\n"
+    ),
+    "e2e/playwright.config.js": (
+        'trace: "retain-on-failure"\n'
+        'screenshot: "only-on-failure"\n'
+        'video: "retain-on-failure"\n'
+        'name: "storefront-mobile"\n'
+        'name: "admin-desktop"\n'
+    ),
+    "e2e/tests/storefront.spec.js": (
+        "Mini App critical pilot journey\n"
+        "Mini App cart quantity and removal controls\n"
+        "Mini App profile, support, privacy and return journey\n"
+        "Mini App payment return route refreshes paid order\n"
+    ),
+    "e2e/tests/admin.spec.js": (
+        "Admin critical pilot operator journey\n"
+        "Admin operations, fulfillment and BusinessEvent recovery journey\n"
+        "Admin completes support, privacy and refund service operations\n"
+    ),
+    "admin/src/ServiceOperationsPanel.jsx": (
+        'support: "/api/support/admin/tickets"\n'
+        'privacy: "/api/privacy/admin/requests"\n'
+        'returns: "/api/admin/returns"\n'
+        'adminJson("/api/returns/admin/approve"\n'
+        "Подтвердить refund\n"
+    ),
+    "admin/src/serviceOperations.js": (
+        "export function supportTransitions() {}\n"
+        "export function canProcessPrivacy() {}\n"
+        "export function canApproveReturn() {}\n"
+        "export function normalizeRefundAmount() {}\n"
+        "export function serviceAttentionCount() {}\n"
+    ),
+    "admin/src/serviceOperations.test.js": (
+        "support transitions follow the backend state machine\n"
+        "refund amount is positive, bounded and rounded\n"
+        "return action and aggregate attention are fail-closed\n"
+    ),
+    "admin/src/BusinessEventsPanel.jsx": (
+        'import ServiceOperationsPanel from "./ServiceOperationsPanel.jsx"\n'
+        "<ServiceOperationsPanel onUnauthorized={onUnauthorized} />\n"
+    ),
+    "admin/index.html": (
+        '<link rel="stylesheet" href="/src/serviceOperations.css" />\n'
+        "<title>FLASHIN Admin</title>\n"
+    ),
+    "admin/src/serviceOperations.css": (
+        ".service-operations {}\n.service-grid {}\n.attention-badge {}\n"
+    ),
+    "docs/pilot/end_to_end_coverage_matrix.md": (
+        "## Browser journeys\n"
+        "Seven stateful Playwright journeys\n"
+        "Admin service operations\n"
+        "## Evidence boundary\n"
+    ),
+    "docker-compose.production.yml": (
+        "./docs:/app/docs:ro\n./deploy/release:/app/deploy/release:ro\n"
+    ),
+    "scripts/deploy_production.sh": (
+        "pilot_runtime.py _stop\ncheck_pilot_runtime_integrity.py\n"
+    ),
+    "scripts/rollback.sh": (
+        'CAPABILITY_SCRIPT="scripts/pilot_release_capability.py"\n'
+        'python3 "$CAPABILITY_SCRIPT" inspect --archive "$RELEASE"\n'
+        "pilot_runtime.py _stop\ncheck_pilot_runtime_integrity.py\n"
+    ),
+}
+
+
 def _guarded_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -41,149 +180,7 @@ def _guarded_repo(tmp_path: Path) -> Path:
     for relative in REQUIRED_FILES:
         path = repo / relative
         path.parent.mkdir(parents=True, exist_ok=True)
-        content = "guarded\n"
-        if relative == "backend/api/orders.py":
-            content = "acquire_pilot_checkout()\nrecord_pilot_order()\n"
-        elif relative == "backend/services/pilot_circuit_breaker.py":
-            content = (
-                "def stop_pilot_for_order():\n"
-                "    pass\n"
-                "def trip_pilot_circuit_breaker():\n"
-                "    pass\n"
-            )
-        elif relative == "backend/api/payments.py":
-            content = (
-                "class ProviderPaymentIntegrityError: pass\n"
-                "trip_pilot_circuit_breaker()\n"
-                "stop_pilot_for_order()\n"
-            )
-        elif relative == "backend/api/returns.py":
-            content = "trip_pilot_circuit_breaker()\nstop_pilot_for_order()\n"
-        elif relative == "backend/services/payment_reconciliation.py":
-            content = "payment_reconciliation_mismatch\nstop_pilot_for_order()\n"
-        elif relative == "backend/main.py":
-            content = (
-                "from .middleware.metrics import collect_pilot_metrics, metrics_response\n"
-                '@app.get("/metrics", include_in_schema=False)\n'
-                "def metrics(db):\n"
-                "    collect_pilot_metrics(db, settings)\n"
-                "    return metrics_response()\n"
-            )
-        elif relative == "backend/middleware/metrics.py":
-            content = (
-                'PILOT = "flashin_pilot_metrics_collection_success"\n'
-                "def collect_pilot_metrics(db, settings):\n"
-                "    return True\n"
-                "def _metric_path(request):\n"
-                '    return "__unmatched__"\n'
-            )
-        elif relative == "deploy/monitoring/rules/flashin_pilot.yml":
-            content = (
-                "FlashinPilotMetricsUnavailable\n"
-                "FlashinPilotArtifactIntegrityFailed\n"
-                "FlashinPilotMoneyAttentionRequired\n"
-                "FlashinPilotCapacityLow\n"
-            )
-        elif relative == "deploy/grafana/dashboards/flashin_operations.json":
-            content = (
-                '{"title":"FLASHIN Operations",'
-                '"targets":["flashin_pilot_checkout_ready",'
-                '"flashin_pilot_money_attention"]}\n'
-            )
-        elif relative == "deploy/grafana/provisioning/datasources/prometheus.yml":
-            content = "type: prometheus\nurl: http://prometheus:9090\n"
-        elif relative == "deploy/monitoring/prometheus.yml":
-            content = (
-                "rule_files:\n"
-                "  - /etc/prometheus/rules/*.yml\n"
-                "static_configs:\n"
-                "  - targets: [backend:8000]\n"
-            )
-        elif relative == "scripts/check_production_compose.py":
-            content = (
-                'MONITORING_SERVICES = {"prometheus", "grafana"}\n'
-                'PRODUCTION_PROFILES = ("production", "workers", "scheduler", "search", "monitoring")\n'
-                'ERROR = "Grafana anonymous access must be disabled"\n'
-            )
-        elif relative == ".env.production.example":
-            content = (
-                "METRICS_ENABLED=true\n"
-                "GRAFANA_ADMIN_USER=pilot-operator\n"
-                "GRAFANA_ADMIN_PASSWORD=replace-me\n"
-            )
-        elif relative == "docker-compose.yml":
-            content = (
-                "services:\n"
-                "  prometheus:\n"
-                "    image: prom/prometheus:v3.5.0\n"
-                "  grafana:\n"
-                "    image: grafana/grafana:12.1.0\n"
-                "volumes:\n"
-                "  prometheus_data:\n"
-                "  grafana_data:\n"
-            )
-        elif relative == ".github/workflows/ci.yml":
-            content = (
-                "jobs:\n"
-                "  browser-e2e:\n"
-                "    steps:\n"
-                "      - name: Install Chromium\n"
-                "      - name: Run Mini App and Admin browser journeys\n"
-                "  docker:\n"
-                "    needs: [backend, frontend, admin, browser-e2e]\n"
-            )
-        elif relative == "e2e/package.json":
-            content = (
-                "{\n"
-                '  "name": "flashin-pilot-e2e",\n'
-                '  "private": true,\n'
-                '  "type": "module",\n'
-                '  "scripts": {\n'
-                '    "test": "playwright test"\n'
-                "  },\n"
-                '  "devDependencies": {\n'
-                '    "@playwright/test": "1.54.2"\n'
-                "  }\n"
-                "}\n"
-            )
-        elif relative == "e2e/playwright.config.js":
-            content = (
-                'trace: "retain-on-failure"\n'
-                'screenshot: "only-on-failure"\n'
-                'video: "retain-on-failure"\n'
-                'name: "storefront-mobile"\n'
-                'name: "admin-desktop"\n'
-            )
-        elif relative == "e2e/tests/storefront.spec.js":
-            content = (
-                "Mini App critical pilot journey\n"
-                "Mini App cart quantity and removal controls\n"
-                "Mini App profile, support, privacy and return journey\n"
-                "Mini App payment return route refreshes paid order\n"
-            )
-        elif relative == "e2e/tests/admin.spec.js":
-            content = (
-                "Admin critical pilot operator journey\n"
-                "Admin operations, fulfillment and BusinessEvent recovery journey\n"
-            )
-        elif relative == "docs/pilot/end_to_end_coverage_matrix.md":
-            content = (
-                "## Browser journeys\n"
-                "Six stateful Playwright journeys\n"
-                "## Evidence boundary\n"
-            )
-        elif relative == "docker-compose.production.yml":
-            content = "./docs:/app/docs:ro\n./deploy/release:/app/deploy/release:ro\n"
-        elif relative == "scripts/deploy_production.sh":
-            content = "pilot_runtime.py _stop\ncheck_pilot_runtime_integrity.py\n"
-        elif relative == "scripts/rollback.sh":
-            content = (
-                'CAPABILITY_SCRIPT="scripts/pilot_release_capability.py"\n'
-                'python3 "$CAPABILITY_SCRIPT" inspect --archive "$RELEASE"\n'
-                "pilot_runtime.py _stop\n"
-                "check_pilot_runtime_integrity.py\n"
-            )
-        path.write_text(content, encoding="utf-8")
+        path.write_text(FILE_CONTENT.get(relative, "guarded\n"), encoding="utf-8")
     _git(repo, "add", ".")
     _git(repo, "commit", "-qm", "guarded release")
     return repo
@@ -200,7 +197,7 @@ def _release(repo: Path, tmp_path: Path, release_id: str, created_at: str) -> Pa
 
 
 def test_signed_release_capability_is_bound_to_exact_release():
-    assert CAPABILITY_VERSION == 3
+    assert CAPABILITY_VERSION == 4
     secret = "s" * 48
     state = _release_state()
     state["capabilities"] = {
@@ -229,16 +226,16 @@ def test_unsigned_or_tampered_release_capability_is_rejected():
 
 def test_immutable_archive_inspection_accepts_guarded_release_and_rejects_missing_file(tmp_path):
     repo = _guarded_repo(tmp_path)
-    guarded = _release(repo, tmp_path, "guarded", "2026-08-03T19:00:00Z")
+    guarded = _release(repo, tmp_path, "guarded", "2026-08-05T00:00:00Z")
     assert inspect_runtime_guard(guarded) == []
 
-    missing_path = repo / "backend/services/pilot_circuit_breaker.py"
+    missing_path = repo / "admin/src/ServiceOperationsPanel.jsx"
     missing_path.unlink()
     _git(repo, "add", "-u")
-    _git(repo, "commit", "-qm", "remove payment circuit breaker")
-    unguarded = _release(repo, tmp_path, "unguarded", "2026-08-03T19:01:00Z")
+    _git(repo, "commit", "-qm", "remove service operations")
+    unguarded = _release(repo, tmp_path, "unguarded", "2026-08-05T00:01:00Z")
     errors = inspect_runtime_guard(unguarded)
-    assert any("backend/services/pilot_circuit_breaker.py" in error for error in errors)
+    assert any("admin/src/ServiceOperationsPanel.jsx" in error for error in errors)
 
 
 def test_immutable_archive_inspection_rejects_unwired_payment_breaker(tmp_path):
@@ -248,7 +245,7 @@ def test_immutable_archive_inspection_rejects_unwired_payment_breaker(tmp_path):
     _git(repo, "add", str(payments.relative_to(repo)))
     _git(repo, "commit", "-qm", "remove payment breaker wiring")
 
-    release = _release(repo, tmp_path, "unwired", "2026-08-03T19:02:00Z")
+    release = _release(repo, tmp_path, "unwired", "2026-08-05T00:02:00Z")
     errors = inspect_runtime_guard(release)
     assert any("backend/api/payments.py" in error for error in errors)
     assert any("trip_pilot_circuit_breaker" in error for error in errors)
@@ -257,14 +254,11 @@ def test_immutable_archive_inspection_rejects_unwired_payment_breaker(tmp_path):
 def test_immutable_archive_inspection_rejects_unwired_browser_gate(tmp_path):
     repo = _guarded_repo(tmp_path)
     workflow = repo / ".github/workflows/ci.yml"
-    workflow.write_text(
-        "jobs:\n  docker:\n    needs: [backend, frontend, admin]\n",
-        encoding="utf-8",
-    )
+    workflow.write_text("jobs:\n  docker:\n    needs: [backend, frontend, admin]\n", encoding="utf-8")
     _git(repo, "add", str(workflow.relative_to(repo)))
     _git(repo, "commit", "-qm", "remove browser gate wiring")
 
-    release = _release(repo, tmp_path, "no-browser-gate", "2026-08-03T19:03:00Z")
+    release = _release(repo, tmp_path, "no-browser-gate", "2026-08-05T00:03:00Z")
     errors = inspect_runtime_guard(release)
     assert any(".github/workflows/ci.yml" in error for error in errors)
     assert any("browser-e2e" in error for error in errors)
@@ -277,7 +271,20 @@ def test_immutable_archive_inspection_rejects_unwired_pilot_metrics(tmp_path):
     _git(repo, "add", str(metrics.relative_to(repo)))
     _git(repo, "commit", "-qm", "remove pilot metrics wiring")
 
-    release = _release(repo, tmp_path, "no-pilot-metrics", "2026-08-03T19:04:00Z")
+    release = _release(repo, tmp_path, "no-pilot-metrics", "2026-08-05T00:04:00Z")
     errors = inspect_runtime_guard(release)
     assert any("backend/middleware/metrics.py" in error for error in errors)
     assert any("flashin_pilot_metrics_collection_success" in error for error in errors)
+
+
+def test_immutable_archive_inspection_rejects_unmounted_service_operations(tmp_path):
+    repo = _guarded_repo(tmp_path)
+    panel = repo / "admin/src/BusinessEventsPanel.jsx"
+    panel.write_text("export default function BusinessEventsPanel() {}\n", encoding="utf-8")
+    _git(repo, "add", str(panel.relative_to(repo)))
+    _git(repo, "commit", "-qm", "remove service operations mount")
+
+    release = _release(repo, tmp_path, "no-service-operations", "2026-08-05T00:05:00Z")
+    errors = inspect_runtime_guard(release)
+    assert any("admin/src/BusinessEventsPanel.jsx" in error for error in errors)
+    assert any("ServiceOperationsPanel" in error for error in errors)
