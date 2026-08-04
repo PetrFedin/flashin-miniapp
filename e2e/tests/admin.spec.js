@@ -261,7 +261,10 @@ test("Admin critical pilot operator journey", async ({ page }) => {
   await login(page);
 
   await expect(page.getByRole("heading", { name: "Импорт и экспорт" })).toBeVisible();
-  await expect(page.getByText("Pilot Jacket")).toBeVisible();
+  const productsSection = page.locator("section").filter({
+    has: page.getByRole("heading", { name: "Товары" }),
+  });
+  await expect(productsSection.getByText("Pilot Jacket", { exact: true })).toBeVisible();
 
   await page.getByPlaceholder("CODE").fill("PILOT10");
   await page.getByRole("button", { name: "Создать" }).first().click();
@@ -274,7 +277,7 @@ test("Admin critical pilot operator journey", async ({ page }) => {
   await page.getByPlaceholder("Размер", { exact: true }).fill("M");
   await page.getByPlaceholder("SKU размера").fill("FLASH-002-M");
   await page.getByRole("button", { name: /Создать товар/i }).click();
-  await expect(page.getByText("Pilot Trousers")).toBeVisible();
+  await expect(productsSection.getByText("Pilot Trousers", { exact: true })).toBeVisible();
 
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Отменить до оплаты" }).click();
@@ -324,7 +327,7 @@ test("Admin operations, fulfillment and BusinessEvent recovery journey", async (
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "Скачать заказы CSV" }).click();
   const download = await downloadPromise;
-  expect(download.suggestedFilename()).toBe("flashin-pilot-orders.csv");
+  expect(download.suggestedFilename()).toBe("flashin_orders.csv");
   await expect(page.getByRole("status")).toContainText("Выгрузка заказов скачана");
 
   await page.getByRole("button", { name: "Перевести: Собирается" }).click();
@@ -347,22 +350,26 @@ test("Admin completes support, privacy and refund service operations", async ({ 
   await expect(page.getByRole("heading", { name: "Service Operations" })).toBeVisible();
   await expect(page.getByText("Требуют действия: 3")).toBeVisible();
 
+  const supportQueue = page.getByRole("article", { name: "Обращения клиентов" });
+  const privacyQueue = page.getByRole("article", { name: "Privacy-запросы" });
+  const returnsQueue = page.getByRole("article", { name: "Возвраты и refunds" });
+
   await page.getByLabel("Статус обращения 601").selectOption("in_progress");
   await page.getByLabel("Приоритет обращения 601").selectOption("high");
   await page.getByRole("button", { name: "Сохранить обращение" }).click();
   await expect(page.getByRole("status")).toContainText("Обращение #601 обновлено");
-  await expect(page.getByText("В работе")).toBeVisible();
+  await expect(supportQueue.locator(".service-item-heading span")).toHaveText("В работе");
 
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Исполнить privacy-запрос" }).click();
   await expect(page.getByRole("status")).toContainText("Privacy-запрос #701 исполнен");
-  await expect(page.getByText("Исполнен")).toBeVisible();
+  await expect(privacyQueue.locator(".service-item-heading span")).toHaveText("Исполнен");
 
   await page.getByLabel("Сумма возврата 801").fill("4500");
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Подтвердить refund" }).click();
   await expect(page.getByRole("status")).toContainText("Возврат #801 передан платёжному провайдеру");
-  await expect(page.getByText("Возвращён частично")).toBeVisible();
-  await expect(page.getByText("Provider refund: refund-pilot-801")).toBeVisible();
+  await expect(returnsQueue.locator(".service-item-heading span")).toHaveText("Возвращён частично");
+  await expect(returnsQueue.getByText("Provider refund: refund-pilot-801")).toBeVisible();
   await expect(page.getByText("Требуют действия: 1")).toBeVisible();
 });
