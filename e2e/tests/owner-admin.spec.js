@@ -83,7 +83,10 @@ test("Admin assigns an accountable owner to a support ticket", async ({ page }) 
 
   await expect(page.getByRole("status")).toContainText("Обращение #901 обновлено");
   await expect(page.getByLabel("Ответственный обращения 901")).toHaveValue("42");
-  await expect(page.getByText("В работе", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("article", { name: "Обращения клиентов" })
+      .locator(".service-item-heading span"),
+  ).toHaveText("В работе");
   expect(state.getCapturedUpdate()).toEqual({
     status: "in_progress",
     priority: "high",
