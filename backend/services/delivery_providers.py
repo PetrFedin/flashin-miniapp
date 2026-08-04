@@ -23,7 +23,28 @@ def calculate_delivery_price(provider_code: str, zone: str = "default") -> float
     return float(base.get(provider_code, 500))
 
 
-def create_shipment(
+def create_shipment(db: Session, order: Order, provider_code: str = "courier") -> DeliveryShipment:
+    """Create one shipment row without applying the HTTP workflow boundary.
+
+    Kept as a low-level compatibility helper for internal callers. Production
+    routes use ``ensure_ready_shipment`` so readiness and idempotency are always
+    enforced at the external mutation boundary.
+    """
+    normalized_provider = str(provider_code or "courier").strip().lower()
+    price = calculate_delivery_price(normalized_provider)
+    shipment = DeliveryShipment(
+        order_id=order.id,
+        provider_code=normalized_provider,
+        tracking_number="",
+        status="created",
+        price=price,
+        raw_payload=json.dumps({"provider": normalized_provider}, ensure_ascii=False),
+    )
+    db.add(shipment)
+    return shipment
+
+
+def ensure_ready_shipment(
     db: Session,
     order: Order,
     provider_code: str = "courier",
@@ -44,21 +65,23 @@ def create_shipment(
     if existing:
         return existing, False
 
-    price = calculate_delivery_price(normalized_provider)
-    shipment = DeliveryShipment(
-        order_id=order.id,
-        provider_code=normalized_provider,
-        tracking_number="",
-        status="created",
-        price=price,
-        raw_payload=json.dumps({"provider": normalized_provider}, ensure_ascii=False),
-    )
-    db.add(shipment)
+    shipment = create_shipment(db, order, normalized_provider)
     db.flush()
     return shipment, True
 
 
 def update_tracking(
+    shipment: DeliveryShipment,
+    tracking_number: str,
+    status: str = "shipped",
+) -> None:
+    """Compatibility helper for internal imports that only mutate a shipment."""
+    shipment.tracking_number = str(tracking_number or "").strip()
+    shipment.status = str(status or "").strip().lower()
+    shipment.updated_at = utcnow_naive()
+
+
+def transition_shipment(
     db: Session,
     shipment: DeliveryShipment,
     tracking_number: str,
@@ -96,8 +119,7 @@ def update_tracking(
             raise ValueError("Tracking number is too long")
         if order.status != "ready" or order.delivery_status != "ready":
             raise ValueError("Only a ready order can be shipped")
-        shipment.tracking_number = normalized_tracking
-        shipment.status = "shipped"
+        update_tracking(shipment, normalized_tracking, "shipped")
         order.status = "shipped"
         order.delivery_status = "shipped"
         order.tracking_number = normalized_tracking
@@ -106,11 +128,10 @@ def update_tracking(
             raise ValueError("Only a tracked shipment can be marked delivered")
         if order.status != "shipped" or order.delivery_status != "shipped":
             raise ValueError("Only a shipped order can be completed")
-        shipment.status = "delivered"
+        update_tracking(shipment, shipment.tracking_number, "delivered")
         order.status = "completed"
         order.delivery_status = "delivered"
         order.tracking_number = shipment.tracking_number
 
-    shipment.updated_at = utcnow_naive()
     queue_order_status(db, order)
     return order
