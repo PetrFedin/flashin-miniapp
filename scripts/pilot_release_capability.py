@@ -18,13 +18,16 @@ from release_control import MANIFEST_NAME, sha256_file, verify_release
 ROOT = Path(__file__).resolve().parents[1]
 STATE_DIR = ROOT / "deploy/release/runtime"
 CAPABILITY_NAME = "pilot_runtime_guard"
-CAPABILITY_VERSION = 4
+CAPABILITY_VERSION = 5
 REQUIRED_FILES = {
     ".env.production.example",
     ".github/workflows/ci.yml",
     "admin/index.html",
     "admin/src/BusinessEventsPanel.jsx",
+    "admin/src/FulfillmentOperationsPanel.jsx",
     "admin/src/ServiceOperationsPanel.jsx",
+    "admin/src/fulfillmentOperations.js",
+    "admin/src/fulfillmentOperations.test.js",
     "admin/src/serviceOperations.css",
     "admin/src/serviceOperations.js",
     "admin/src/serviceOperations.test.js",
@@ -32,11 +35,15 @@ REQUIRED_FILES = {
     "backend/services/pilot_runtime.py",
     "backend/services/pilot_circuit_breaker.py",
     "backend/services/payment_reconciliation.py",
+    "backend/services/fulfillment.py",
+    "backend/services/delivery_providers.py",
     "backend/alembic/versions/0022_pilot_runtime_guard.py",
     "backend/api/orders.py",
     "backend/api/payments.py",
     "backend/api/returns.py",
     "backend/api/support.py",
+    "backend/api/fulfillment.py",
+    "backend/api/delivery_providers.py",
     "backend/tests/test_support_admin_schema.py",
     "backend/main.py",
     "backend/middleware/metrics.py",
@@ -49,8 +56,10 @@ REQUIRED_FILES = {
     "e2e/package.json",
     "e2e/playwright.config.js",
     "e2e/tests/admin.spec.js",
+    "e2e/tests/fulfillment-admin.spec.js",
     "e2e/tests/owner-admin.spec.js",
     "e2e/tests/storefront.spec.js",
+    "scripts/full_fulfillment_smoke.py",
     "scripts/pilot_runtime.py",
     "scripts/check_pilot_runtime_integrity.py",
     "scripts/pilot_release_capability.py",
@@ -127,6 +136,10 @@ def inspect_runtime_guard(archive: Path) -> list[str]:
             _require_markers(bundle, files, "backend/api/support.py", ("class AdminSupportTicketOut", "assigned_admin_id: int | None = None", "response_model=list[AdminSupportTicketOut]", "response_model=AdminSupportTicketOut"), errors)
             _require_markers(bundle, files, "backend/tests/test_support_admin_schema.py", ("test_admin_support_ticket_schema_exposes_accountable_owner", "assigned_admin_id"), errors)
             _require_markers(bundle, files, "backend/services/payment_reconciliation.py", ("payment_reconciliation_mismatch", "stop_pilot_for_order("), errors)
+            _require_markers(bundle, files, "backend/services/fulfillment.py", ("def _picklist_is_complete(", "Every picklist item must be fully picked before packing", 'order.delivery_status = "ready"'), errors)
+            _require_markers(bundle, files, "backend/api/fulfillment.py", ("fulfillment.task.update", "fulfillment.task_item.update", "assigned_admin_id"), errors)
+            _require_markers(bundle, files, "backend/services/delivery_providers.py", ("_SHIPMENT_TRANSITIONS", "Only a ready order can be transferred to delivery", 'order.status = "shipped"', 'order.status = "completed"'), errors)
+            _require_markers(bundle, files, "backend/api/delivery_providers.py", ("delivery.shipment.create", "delivery.shipment.update", "with_for_update()"), errors)
             _require_markers(bundle, files, "backend/main.py", ("collect_pilot_metrics", '@app.get("/metrics"', "return metrics_response()"), errors)
             _require_markers(bundle, files, "backend/middleware/metrics.py", ("flashin_pilot_metrics_collection_success", "def collect_pilot_metrics(", 'return "__unmatched__"'), errors)
             _require_markers(bundle, files, "deploy/monitoring/rules/flashin_pilot.yml", ("FlashinPilotMetricsUnavailable", "FlashinPilotArtifactIntegrityFailed", "FlashinPilotMoneyAttentionRequired", "FlashinPilotCapacityLow"), errors)
@@ -136,19 +149,24 @@ def inspect_runtime_guard(archive: Path) -> list[str]:
             _require_markers(bundle, files, "scripts/check_production_compose.py", ('MONITORING_SERVICES = {"prometheus", "grafana"}', 'PRODUCTION_PROFILES = ("production", "workers", "scheduler", "search", "monitoring")', "Grafana anonymous access must be disabled"), errors)
             _require_markers(bundle, files, ".env.production.example", ("METRICS_ENABLED=true", "GRAFANA_ADMIN_USER=", "GRAFANA_ADMIN_PASSWORD="), errors)
             _require_markers(bundle, files, "docker-compose.yml", ("prometheus:", "grafana:", "prometheus_data", "grafana_data"), errors)
-            _require_markers(bundle, files, ".github/workflows/ci.yml", ("browser-e2e:", "Install Chromium", "Run Mini App and Admin browser journeys", "needs: [backend, frontend, admin, browser-e2e]"), errors)
+            _require_markers(bundle, files, ".github/workflows/ci.yml", ("browser-e2e:", "Install Chromium", "Run Mini App and Admin browser journeys", "Run transactional full fulfillment smoke", "needs: [backend, frontend, admin, browser-e2e]"), errors)
             _require_markers(bundle, files, "e2e/package.json", ('"@playwright/test": "1.54.2"', '"test": "playwright test"'), errors)
             _require_markers(bundle, files, "e2e/playwright.config.js", ('name: "storefront-mobile"', 'name: "admin-desktop"', 'trace: "retain-on-failure"', 'screenshot: "only-on-failure"', 'video: "retain-on-failure"'), errors)
             _require_markers(bundle, files, "e2e/tests/storefront.spec.js", ("Mini App critical pilot journey", "Mini App cart quantity and removal controls", "Mini App profile, support, privacy and return journey", "Mini App payment return route refreshes paid order"), errors)
             _require_markers(bundle, files, "e2e/tests/admin.spec.js", ("Admin critical pilot operator journey", "Admin operations, fulfillment and BusinessEvent recovery journey", "Admin completes support, privacy and refund service operations"), errors)
             _require_markers(bundle, files, "e2e/tests/owner-admin.spec.js", ("Admin assigns an accountable owner to a support ticket", "assigned_admin_id: 42", "Ответственный обращения 901"), errors)
+            _require_markers(bundle, files, "e2e/tests/fulfillment-admin.spec.js", ("Admin completes picklist, shipment and delivery lifecycle", "Собрать все позиции и упаковать", "PILOT-TRACK-9100", 'status: "completed"'), errors)
+            _require_markers(bundle, files, "admin/src/FulfillmentOperationsPanel.jsx", ('"/api/fulfillment/tasks"', '"/api/delivery-providers/shipments"', "async function pickAndPack(", "async function ship(", "async function deliver("), errors)
+            _require_markers(bundle, files, "admin/src/fulfillmentOperations.js", ("export function isPicklistComplete(", "export function fulfillmentAction(", "export function normalizeTracking(", "export function fulfillmentAttentionCount(", "Собрать все позиции и упаковать", "Передать в доставку", "Подтвердить доставку"), errors)
+            _require_markers(bundle, files, "admin/src/fulfillmentOperations.test.js", ("fulfillment actions expose only the next safe workflow step", "picklist completeness requires every ordered unit", "tracking is bounded and meaningful", "attention remains until shipment is delivered"), errors)
             _require_markers(bundle, files, "admin/src/ServiceOperationsPanel.jsx", ('support: "/api/support/admin/tickets"', 'privacy: "/api/privacy/admin/requests"', 'returns: "/api/admin/returns"', 'adminJson("/api/returns/admin/approve"', "Подтвердить refund", "Ответственный обращения"), errors)
             _require_markers(bundle, files, "admin/src/serviceOperations.js", ("export function supportTransitions(", "export function canProcessPrivacy(", "export function canApproveReturn(", "export function normalizeAdminAssignment(", "export function normalizeRefundAmount(", "export function serviceAttentionCount("), errors)
             _require_markers(bundle, files, "admin/src/serviceOperations.test.js", ("support transitions follow the backend state machine", "support owner assignment accepts only positive integer Admin IDs", "refund amount is positive, bounded and rounded", "aggregate attention are fail-closed"), errors)
-            _require_markers(bundle, files, "admin/src/BusinessEventsPanel.jsx", ('import ServiceOperationsPanel from "./ServiceOperationsPanel.jsx"', "<ServiceOperationsPanel onUnauthorized={onUnauthorized} />"), errors)
+            _require_markers(bundle, files, "admin/src/BusinessEventsPanel.jsx", ('import FulfillmentOperationsPanel from "./FulfillmentOperationsPanel.jsx"', '<FulfillmentOperationsPanel onUnauthorized={onUnauthorized} />', 'import ServiceOperationsPanel from "./ServiceOperationsPanel.jsx"', "<ServiceOperationsPanel onUnauthorized={onUnauthorized} />"), errors)
             _require_markers(bundle, files, "admin/index.html", ('href="/src/serviceOperations.css"', "FLASHIN Admin"), errors)
             _require_markers(bundle, files, "admin/src/serviceOperations.css", (".service-operations", ".service-grid", ".attention-badge"), errors)
-            _require_markers(bundle, files, "docs/pilot/end_to_end_coverage_matrix.md", ("## Browser journeys", "Eight stateful Playwright journeys", "accountable active Admin ID", "Admin service operations", "## Evidence boundary"), errors)
+            _require_markers(bundle, files, "scripts/full_fulfillment_smoke.py", ("Every picklist item must be fully picked before packing", "idempotent shipment create", 'persisted_order.status == "completed"', 'persisted_order.delivery_status == "delivered"'), errors)
+            _require_markers(bundle, files, "docs/pilot/end_to_end_coverage_matrix.md", ("## Browser journeys", "Nine stateful Playwright journeys", "accountable active Admin ID", "Admin service operations", "full picklist", "## Evidence boundary"), errors)
 
             if "docker-compose.production.yml" in files:
                 compose = bundle.read("docker-compose.production.yml").decode("utf-8")
