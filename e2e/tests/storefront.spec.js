@@ -301,7 +301,7 @@ test("Mini App critical pilot journey", async ({ page }) => {
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Отменить заказ" }).click();
   await expect(page.getByRole("status")).toContainText("Заказ #9001 отменён");
-  await expect(page.getByText("Отменён")).toBeVisible();
+  await expect(page.getByText("Отменён", { exact: true })).toBeVisible();
 });
 
 test("Mini App cart quantity and removal controls", async ({ page }) => {
