@@ -253,7 +253,7 @@ test("Mini App critical pilot journey", async ({ page }) => {
 
   await page.getByRole("button", { name: "Образы" }).click();
   await expect(page.getByRole("heading", { name: "Активных образов нет" })).toBeVisible();
-  await page.getByRole("button", { name: "Каталог" }).click();
+  await page.getByRole("button", { name: "Каталог", exact: true }).click();
 
   await page.getByLabel("Поиск товаров").fill("Pilot");
   await page.getByRole("button", { name: "Найти" }).click();
@@ -350,7 +350,7 @@ test("Mini App profile, support, privacy and return journey", async ({ page }) =
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "Скачать мои данные" }).click();
   const download = await downloadPromise;
-  expect(download.suggestedFilename()).toBe("flashin-pilot-export.json");
+  expect(download.suggestedFilename()).toBe("flashin_customer_export.json");
   await expect(page.getByRole("status")).toContainText("Архив персональных данных сформирован");
 
   page.once("dialog", (dialog) => dialog.accept());
