@@ -36,6 +36,8 @@ REQUIRED_FILES = {
     "backend/api/orders.py",
     "backend/api/payments.py",
     "backend/api/returns.py",
+    "backend/api/support.py",
+    "backend/tests/test_support_admin_schema.py",
     "backend/main.py",
     "backend/middleware/metrics.py",
     "deploy/grafana/dashboards/flashin_operations.json",
@@ -47,6 +49,7 @@ REQUIRED_FILES = {
     "e2e/package.json",
     "e2e/playwright.config.js",
     "e2e/tests/admin.spec.js",
+    "e2e/tests/owner-admin.spec.js",
     "e2e/tests/storefront.spec.js",
     "scripts/pilot_runtime.py",
     "scripts/check_pilot_runtime_integrity.py",
@@ -121,6 +124,8 @@ def inspect_runtime_guard(archive: Path) -> list[str]:
             _require_markers(bundle, files, "backend/services/pilot_circuit_breaker.py", ("def stop_pilot_for_order(", "def trip_pilot_circuit_breaker("), errors)
             _require_markers(bundle, files, "backend/api/payments.py", ("ProviderPaymentIntegrityError", "trip_pilot_circuit_breaker(", "stop_pilot_for_order("), errors)
             _require_markers(bundle, files, "backend/api/returns.py", ("trip_pilot_circuit_breaker(", "stop_pilot_for_order("), errors)
+            _require_markers(bundle, files, "backend/api/support.py", ("class AdminSupportTicketOut", "assigned_admin_id: int | None = None", "response_model=list[AdminSupportTicketOut]", "response_model=AdminSupportTicketOut"), errors)
+            _require_markers(bundle, files, "backend/tests/test_support_admin_schema.py", ("test_admin_support_ticket_schema_exposes_accountable_owner", "assigned_admin_id"), errors)
             _require_markers(bundle, files, "backend/services/payment_reconciliation.py", ("payment_reconciliation_mismatch", "stop_pilot_for_order("), errors)
             _require_markers(bundle, files, "backend/main.py", ("collect_pilot_metrics", '@app.get("/metrics"', "return metrics_response()"), errors)
             _require_markers(bundle, files, "backend/middleware/metrics.py", ("flashin_pilot_metrics_collection_success", "def collect_pilot_metrics(", 'return "__unmatched__"'), errors)
@@ -136,13 +141,14 @@ def inspect_runtime_guard(archive: Path) -> list[str]:
             _require_markers(bundle, files, "e2e/playwright.config.js", ('name: "storefront-mobile"', 'name: "admin-desktop"', 'trace: "retain-on-failure"', 'screenshot: "only-on-failure"', 'video: "retain-on-failure"'), errors)
             _require_markers(bundle, files, "e2e/tests/storefront.spec.js", ("Mini App critical pilot journey", "Mini App cart quantity and removal controls", "Mini App profile, support, privacy and return journey", "Mini App payment return route refreshes paid order"), errors)
             _require_markers(bundle, files, "e2e/tests/admin.spec.js", ("Admin critical pilot operator journey", "Admin operations, fulfillment and BusinessEvent recovery journey", "Admin completes support, privacy and refund service operations"), errors)
-            _require_markers(bundle, files, "admin/src/ServiceOperationsPanel.jsx", ('support: "/api/support/admin/tickets"', 'privacy: "/api/privacy/admin/requests"', 'returns: "/api/admin/returns"', 'adminJson("/api/returns/admin/approve"', "Подтвердить refund"), errors)
-            _require_markers(bundle, files, "admin/src/serviceOperations.js", ("export function supportTransitions(", "export function canProcessPrivacy(", "export function canApproveReturn(", "export function normalizeRefundAmount(", "export function serviceAttentionCount("), errors)
-            _require_markers(bundle, files, "admin/src/serviceOperations.test.js", ("support transitions follow the backend state machine", "refund amount is positive, bounded and rounded", "aggregate attention are fail-closed"), errors)
+            _require_markers(bundle, files, "e2e/tests/owner-admin.spec.js", ("Admin assigns an accountable owner to a support ticket", "assigned_admin_id: 42", "Ответственный обращения 901"), errors)
+            _require_markers(bundle, files, "admin/src/ServiceOperationsPanel.jsx", ('support: "/api/support/admin/tickets"', 'privacy: "/api/privacy/admin/requests"', 'returns: "/api/admin/returns"', 'adminJson("/api/returns/admin/approve"', "Подтвердить refund", "Ответственный обращения"), errors)
+            _require_markers(bundle, files, "admin/src/serviceOperations.js", ("export function supportTransitions(", "export function canProcessPrivacy(", "export function canApproveReturn(", "export function normalizeAdminAssignment(", "export function normalizeRefundAmount(", "export function serviceAttentionCount("), errors)
+            _require_markers(bundle, files, "admin/src/serviceOperations.test.js", ("support transitions follow the backend state machine", "support owner assignment accepts only positive integer Admin IDs", "refund amount is positive, bounded and rounded", "aggregate attention are fail-closed"), errors)
             _require_markers(bundle, files, "admin/src/BusinessEventsPanel.jsx", ('import ServiceOperationsPanel from "./ServiceOperationsPanel.jsx"', "<ServiceOperationsPanel onUnauthorized={onUnauthorized} />"), errors)
             _require_markers(bundle, files, "admin/index.html", ('href="/src/serviceOperations.css"', "FLASHIN Admin"), errors)
             _require_markers(bundle, files, "admin/src/serviceOperations.css", (".service-operations", ".service-grid", ".attention-badge"), errors)
-            _require_markers(bundle, files, "docs/pilot/end_to_end_coverage_matrix.md", ("## Browser journeys", "Seven stateful Playwright journeys", "Admin service operations", "## Evidence boundary"), errors)
+            _require_markers(bundle, files, "docs/pilot/end_to_end_coverage_matrix.md", ("## Browser journeys", "Eight stateful Playwright journeys", "accountable active Admin ID", "Admin service operations", "## Evidence boundary"), errors)
 
             if "docker-compose.production.yml" in files:
                 compose = bundle.read("docker-compose.production.yml").decode("utf-8")
