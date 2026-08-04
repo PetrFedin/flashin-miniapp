@@ -1,0 +1,12 @@
+{
+  "name": "flashin-pilot-e2e",
+  "private": true,
+  "scripts": {
+    "test": "playwright test",
+    "test:storefront": "playwright test tests/storefront.spec.js",
+    "test:admin": "playwright test tests/admin.spec.js"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.54.2"
+  }
+}
