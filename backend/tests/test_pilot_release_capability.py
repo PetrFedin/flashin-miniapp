@@ -167,15 +167,18 @@ FILE_CONTENT = {
     "admin/src/FulfillmentOperationsPanel.jsx": (
         '"/api/fulfillment/tasks"\n'
         '"/api/delivery-providers/shipments"\n'
-        "Собрать все позиции и упаковать\n"
-        "Передать в доставку\n"
-        "Подтвердить доставку\n"
+        "async function pickAndPack() {}\n"
+        "async function ship() {}\n"
+        "async function deliver() {}\n"
     ),
     "admin/src/fulfillmentOperations.js": (
         "export function isPicklistComplete() {}\n"
         "export function fulfillmentAction() {}\n"
         "export function normalizeTracking() {}\n"
         "export function fulfillmentAttentionCount() {}\n"
+        "Собрать все позиции и упаковать\n"
+        "Передать в доставку\n"
+        "Подтвердить доставку\n"
     ),
     "admin/src/fulfillmentOperations.test.js": (
         "fulfillment actions expose only the next safe workflow step\n"
