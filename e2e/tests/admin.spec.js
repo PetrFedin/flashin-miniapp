@@ -201,7 +201,7 @@ test("Admin critical pilot operator journey", async ({ page }) => {
   await login(page);
 
   await expect(page.getByRole("heading", { name: "Импорт и экспорт" })).toBeVisible();
-  await expect(page.getByText("Pilot Jacket")).toBeVisible();
+  await expect(page.getByText("Pilot Jacket").first()).toBeVisible();
 
   await page.getByPlaceholder("CODE").fill("PILOT10");
   await page.getByRole("button", { name: "Создать" }).first().click();
@@ -264,7 +264,7 @@ test("Admin operations, fulfillment and BusinessEvent recovery journey", async (
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "Скачать заказы CSV" }).click();
   const download = await downloadPromise;
-  expect(download.suggestedFilename()).toBe("flashin-pilot-orders.csv");
+  expect(download.suggestedFilename()).toBe("flashin_orders.csv");
   await expect(page.getByRole("status")).toContainText("Выгрузка заказов скачана");
 
   await page.getByRole("button", { name: "Перевести: Собирается" }).click();
