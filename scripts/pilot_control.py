@@ -5,8 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import tempfile
 from collections import Counter
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -17,6 +15,7 @@ from pilot_control_chain import (
     require_state_chain,
     signed_state_sha256,
 )
+from pilot_control_io import durable_atomic_write_text
 from pilot_control_lock import (
     DEFAULT_LOCK_TIMEOUT_SECONDS,
     exclusive_state_lock,
@@ -187,20 +186,6 @@ def load_state(
     return state
 
 
-def _atomic_write_text(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_name, path)
-    finally:
-        if os.path.exists(temporary_name):
-            os.unlink(temporary_name)
-
-
 def _apply_report(state: dict[str, Any], report: dict[str, Any]) -> None:
     state["decision"] = report["decision"]
     state["stop_reasons"] = report["stop_reasons"]
@@ -253,8 +238,13 @@ def save_state(
         signed_state = sign_payload(state, secret)
         state.clear()
         state.update(signed_state)
-        _atomic_write_text(path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
-        _atomic_write_text(path.with_name("live_pilot_summary.md"), render_markdown(state, report))
+        durable_atomic_write_text(
+            path, json.dumps(state, ensure_ascii=False, indent=2) + "\n"
+        )
+        durable_atomic_write_text(
+            path.with_name("live_pilot_summary.md"),
+            render_markdown(state, report),
+        )
 
 
 def _decimal(value: Any, field: str, errors: list[str], number: int) -> Decimal | None:
@@ -396,9 +386,18 @@ def record_scenario(state: dict[str, Any], number: int, **changes: Any) -> dict[
 
 def render_markdown(state: dict[str, Any], report: dict[str, Any]) -> str:
     summary = report["summary"]
+    state_sha = signed_state_sha256(state)
     lines = [
-        "# FLASHIN live pilot control", "", f"**Decision:** {report['decision']}", "",
-        f"Passed: {summary['passed']}/20 · Failed: {summary['failed']} · Blocked: {summary['blocked']} · Running: {summary['running']} · Todo: {summary['todo']}", "",
+        "# FLASHIN live pilot control",
+        "",
+        f"**Decision:** {report['decision']}",
+        "",
+        f"State revision: `{state.get('revision')}`",
+        f"State SHA-256: `{state_sha}`",
+        "Source: signed JSON state. This Markdown file is derived and non-authoritative.",
+        "",
+        f"Passed: {summary['passed']}/20 · Failed: {summary['failed']} · Blocked: {summary['blocked']} · Running: {summary['running']} · Todo: {summary['todo']}",
+        "",
     ]
     for title, items in (("STOP reasons", report["stop_reasons"]), ("Validation errors", report["errors"])):
         if items:
@@ -423,6 +422,28 @@ def render_markdown(state: dict[str, Any], report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def refresh_summary(
+    path: Path,
+    *,
+    expected_admission: Mapping[str, Any],
+    secret: str,
+    final: bool = False,
+    lock_timeout_seconds: float = DEFAULT_LOCK_TIMEOUT_SECONDS,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    with exclusive_state_lock(path, timeout_seconds=lock_timeout_seconds):
+        state = load_state(
+            path,
+            expected_admission=expected_admission,
+            secret=secret,
+        )
+        report = validate_state(state, final=final)
+        durable_atomic_write_text(
+            path.with_name("live_pilot_summary.md"),
+            render_markdown(state, report),
+        )
+        return state, report
+
+
 def _state_path(args: argparse.Namespace) -> Path:
     return Path(args.state)
 
@@ -441,6 +462,10 @@ def _finish(
         save_state(
             path, state, report, secret=secret, allow_replace=allow_replace
         )
+    return _report_exit(report, final=final)
+
+
+def _report_exit(report: Mapping[str, Any], *, final: bool) -> int:
     print(json.dumps(report, ensure_ascii=False, indent=2))
     if report["decision"] == "STOP":
         return 2
@@ -486,27 +511,23 @@ def command_record(args: argparse.Namespace) -> int:
 
 def command_status(args: argparse.Namespace) -> int:
     path = _state_path(args)
-    return _finish(
+    _, report = refresh_summary(
         path,
-        load_state(
-            path, expected_admission=args.admission_binding, secret=args.signing_secret
-        ),
+        expected_admission=args.admission_binding,
         secret=args.signing_secret,
-        persist=False,
     )
+    return _report_exit(report, final=False)
 
 
 def command_validate(args: argparse.Namespace) -> int:
     path = _state_path(args)
-    return _finish(
+    _, report = refresh_summary(
         path,
-        load_state(
-            path, expected_admission=args.admission_binding, secret=args.signing_secret
-        ),
+        expected_admission=args.admission_binding,
         secret=args.signing_secret,
         final=args.final,
-        persist=False,
     )
+    return _report_exit(report, final=args.final)
 
 
 def build_parser() -> argparse.ArgumentParser:
