@@ -13,7 +13,7 @@ The signing secret is the trust boundary for admission and pilot-state evidence.
 ## Before initialization
 
 1. Confirm that the production `.env` contains the intended provider and pilot settings plus the protected `PILOT_EVIDENCE_SIGNING_SECRET`.
-2. Confirm that current and previous release pointers are different and both expose signed pilot capability v13.
+2. Confirm that current and previous release pointers are different and both expose the same signed pilot capability v13. Mixed capability versions fail closed and require a fresh release promotion before admission.
 3. Keep `live_pilot_state.json`, its `.lock` file and `live_pilot_summary.md` on the same POSIX filesystem mounted read-write for operator commands. The filesystem must provide working advisory `flock` semantics; object storage and unverified network filesystems are not supported.
 4. Generate fresh provider, live-gate and rollback evidence.
 5. Create the signed admission manifest with named owners and all required acknowledgements.
