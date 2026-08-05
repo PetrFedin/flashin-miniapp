@@ -38,14 +38,14 @@ docker compose exec -T db sh -ec \
 BACKUP_FILE="$BACKUP_FILE" \
 BACKUP_MANIFEST_FILE="$MANIFEST_FILE" \
 BACKUP_INTEGRITY_ENV="$INTEGRITY_ENV" \
-  scripts/backup_postgres.sh >/dev/null
+  bash scripts/backup_postgres.sh >/dev/null
 
 test -s "$BACKUP_FILE"
 test -s "$MANIFEST_FILE"
 
 BACKUP_MANIFEST_FILE="$MANIFEST_FILE" \
 BACKUP_INTEGRITY_ENV="$INTEGRITY_ENV" \
-  scripts/verify_backup.sh "$BACKUP_FILE" >/dev/null
+  bash scripts/verify_backup.sh "$BACKUP_FILE" >/dev/null
 
 cp "$BACKUP_FILE" "$TAMPERED_FILE"
 printf 'tampered' >> "$TAMPERED_FILE"
@@ -73,7 +73,7 @@ fi
 
 BACKUP_MANIFEST_FILE="$MANIFEST_FILE" \
 BACKUP_INTEGRITY_ENV="$INTEGRITY_ENV" \
-  scripts/restore_postgres.sh --yes "$BACKUP_FILE" >/dev/null
+  bash scripts/restore_postgres.sh --yes "$BACKUP_FILE" >/dev/null
 
 restored_name=$(docker compose exec -T db sh -ec \
   'exec psql --set ON_ERROR_STOP=on -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAX -c "$1"' \
