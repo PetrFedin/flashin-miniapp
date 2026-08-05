@@ -79,6 +79,8 @@ REQUIRED_FILES = {
     "scripts/pilot_control.py",
     "scripts/pilot_runner.py",
     "backend/tests/test_pilot_control_binding.py",
+    "backend/tests/test_pilot_control_signature.py",
+    "backend/tests/test_pilot_runtime.py",
     "Makefile",
     "scripts/pilot_runtime.py",
     "scripts/check_pilot_runtime_integrity.py",
@@ -151,19 +153,21 @@ def inspect_runtime_guard(archive: Path) -> list[str]:
                 errors.append("Release is missing pilot runtime files: " + ", ".join(missing))
 
             _require_markers(bundle, files, "backend/api/orders.py", ("acquire_pilot_checkout(", "record_pilot_order("), errors)
-            _require_markers(bundle, files, "scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 10",), errors)
+            _require_markers(bundle, files, "scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 11",), errors)
             _require_markers(bundle, files, "scripts/pilot_release_capability.py", ("from pilot_release_contract import CAPABILITY_VERSION",), errors)
             _require_markers(bundle, files, "backend/services/pilot_runtime.py", ("from scripts.pilot_release_contract import CAPABILITY_VERSION", '"version": CAPABILITY_VERSION'), errors)
             _require_markers(bundle, files, "scripts/readiness_gate.py", ("def build_signed_live_report(", '"kind": "pilot_live_gate"', "configuration_fingerprint(env, secret)", "release_binding(current_release)", "return sign_payload(payload, secret)"), errors)
             _require_markers(bundle, files, "scripts/pilot_admission.py", ("live gate evidence signature is invalid", "live gate configuration fingerprint does not match", "live gate release binding is missing", "validate_release_binding(release, current_release)", "def validate_admission_evidence_inputs(", "current_release=current_release"), errors)
             _require_markers(bundle, files, "backend/tests/test_pilot_admission.py", ("test_live_gate_rejects_tampering_configuration_and_other_release", "test_admission_create_preflight_binds_live_gate_to_current_release", "configuration fingerprint", "live gate release"), errors)
             _require_markers(bundle, files, "scripts/pilot_control_binding.py", ("def build_admission_binding(", "manifest_sha256", "def validate_admission_binding(", "def require_admission_binding("), errors)
-            _require_markers(bundle, files, "scripts/pilot_control.py", ("SCHEMA_VERSION = 2", "def verified_admission_binding(", "expected_admission=args.admission_binding", "Legacy pilot state schema 1 cannot be reused"), errors)
+            _require_markers(bundle, files, "scripts/pilot_control.py", ("SCHEMA_VERSION = 3", "def verified_admission_binding(", "def pilot_signing_secret(", "verify_payload_signature(state, secret)", "signed_state = sign_payload(state, secret)", "Unsigned pilot state schema 2 cannot be reused", "secret=args.signing_secret"), errors)
             _require_markers(bundle, files, "scripts/pilot_runner.py", ("errors = verify_default_admission(ROOT)", "return pilot_control_main(args)"), errors)
-            _require_markers(bundle, files, "backend/services/pilot_runtime.py", ("build_admission_binding(manifest_path, manifest)", "validate_admission_binding(pilot_state, expected_binding)"), errors)
-            _require_markers(bundle, files, "scripts/pilot_runtime.py", ("build_admission_binding(DEFAULT_MANIFEST, manifest)", "require_admission_binding("), errors)
+            _require_markers(bundle, files, "backend/services/pilot_runtime.py", ("build_admission_binding(manifest_path, manifest)", "validate_admission_binding(pilot_state, expected_binding)", "verify_payload_signature(pilot_state, secret)", "pilot control state signature is invalid"), errors)
+            _require_markers(bundle, files, "scripts/pilot_runtime.py", ("build_admission_binding(DEFAULT_MANIFEST, manifest)", "require_admission_binding(", "verify_payload_signature(pilot_state, secret)", "Pilot control state signature is invalid"), errors)
             _require_markers(bundle, files, "Makefile", ("python3 scripts/pilot_runner.py init", "python3 scripts/pilot_runner.py record $(ARGS)", "python3 scripts/pilot_runner.py status", "python3 scripts/pilot_runner.py validate --final"), errors)
             _require_markers(bundle, files, "backend/tests/test_pilot_control_binding.py", ("test_state_is_bound_to_one_exact_signed_admission_file", "test_legacy_state_is_rejected_without_silent_migration", "test_makefile_routes_pilot_control_through_admission_runner"), errors)
+            _require_markers(bundle, files, "backend/tests/test_pilot_control_signature.py", ("test_state_write_is_signed_and_exact_state_loads", "test_tampered_scenario_or_decision_is_rejected", "test_wrong_secret_and_unsigned_schema_v2_are_rejected"), errors)
+            _require_markers(bundle, files, "backend/tests/test_pilot_runtime.py", ("test_tampered_pilot_control_state_fails_closed_on_checkout", "sign_payload(pilot_payload, secret)"), errors)
             _require_markers(bundle, files, "backend/services/pilot_circuit_breaker.py", ("def stop_pilot_for_order(", "def trip_pilot_circuit_breaker("), errors)
             _require_markers(bundle, files, "backend/api/payments.py", ("ProviderPaymentIntegrityError", "trip_pilot_circuit_breaker(", "stop_pilot_for_order("), errors)
             _require_markers(bundle, files, "backend/api/returns.py", ("trip_pilot_circuit_breaker(", "stop_pilot_for_order("), errors)

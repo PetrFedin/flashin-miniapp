@@ -185,8 +185,10 @@ def validate_runtime_files(
             if str(entry.get("sha256", "")) != sha256_file(path):
                 errors.append(f"pilot evidence checksum does not match: {key}")
 
-    if pilot_state.get("schema_version") != 2:
+    if pilot_state.get("schema_version") != 3:
         errors.append("pilot control state schema is unsupported")
+    elif not verify_payload_signature(pilot_state, secret):
+        errors.append("pilot control state signature is invalid")
     else:
         try:
             expected_binding = build_admission_binding(manifest_path, manifest)

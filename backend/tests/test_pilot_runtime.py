@@ -25,7 +25,7 @@ def _capability(state: dict, secret: str) -> dict:
             "schema_version": 1,
             "kind": "release_capability",
             "name": "pilot_runtime_guard",
-            "version": 10,
+            "version": 11,
             "archive_sha256": state["sha256"],
             "git_commit": state["git_commit"],
             "release_id": state["release_id"],
@@ -77,7 +77,7 @@ def _runtime(tmp_path: Path, *, accepted_orders: int = 0):
     pilot_created_at = "2026-08-03T18:00:00Z"
     pilot_path = pilot_docs / "live_pilot_state.json"
     pilot_payload = {
-        "schema_version": 2,
+        "schema_version": 3,
         "created_at": pilot_created_at,
         "decision": "NO-GO",
         "scenarios": [{} for _ in range(20)],
@@ -102,7 +102,9 @@ def _runtime(tmp_path: Path, *, accepted_orders: int = 0):
     )
     signed_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     pilot_payload["admission"] = build_admission_binding(manifest_path, signed_manifest)
-    pilot_path.write_text(json.dumps(pilot_payload), encoding="utf-8")
+    pilot_path.write_text(
+        json.dumps(sign_payload(pilot_payload, secret)), encoding="utf-8"
+    )
 
     settings = SimpleNamespace(
         pilot_runtime_enforced=True,
@@ -177,7 +179,10 @@ def test_non_allowlisted_customer_and_stop_decision_are_blocked(tmp_path):
     db.commit()
     payload = json.loads(pilot_path.read_text(encoding="utf-8"))
     payload["decision"] = "STOP"
-    pilot_path.write_text(json.dumps(payload), encoding="utf-8")
+    pilot_path.write_text(
+        json.dumps(sign_payload(payload, env["PILOT_EVIDENCE_SIGNING_SECRET"])),
+        encoding="utf-8",
+    )
     with pytest.raises(HTTPException) as stopped:
         acquire_pilot_checkout(db, customer=customer, settings=settings, env=env)
     assert stopped.value.status_code == 423
@@ -236,8 +241,23 @@ def test_pilot_state_bound_to_other_admission_fails_closed(tmp_path):
     db, customer, settings, env, pilot_path, *_ = _runtime(tmp_path)
     payload = json.loads(pilot_path.read_text(encoding="utf-8"))
     payload["admission"]["manifest_sha256"] = "0" * 64
-    pilot_path.write_text(json.dumps(payload), encoding="utf-8")
+    pilot_path.write_text(
+        json.dumps(sign_payload(payload, env["PILOT_EVIDENCE_SIGNING_SECRET"])),
+        encoding="utf-8",
+    )
 
     with pytest.raises(HTTPException) as mismatch:
         acquire_pilot_checkout(db, customer=customer, settings=settings, env=env)
     assert mismatch.value.status_code == 503
+
+
+
+def test_tampered_pilot_control_state_fails_closed_on_checkout(tmp_path):
+    db, customer, settings, env, pilot_path, *_ = _runtime(tmp_path)
+    payload = json.loads(pilot_path.read_text(encoding="utf-8"))
+    payload["scenarios"][0]["result"] = "pass"
+    pilot_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(HTTPException) as tampered:
+        acquire_pilot_checkout(db, customer=customer, settings=settings, env=env)
+    assert tampered.value.status_code == 503

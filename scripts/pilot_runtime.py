@@ -109,6 +109,7 @@ def _host_arm(args: argparse.Namespace) -> int:
     sys.path.insert(0, str(ROOT / "scripts"))
     from pilot_admission import verify_default_admission
     from pilot_control_binding import build_admission_binding, require_admission_binding
+    from pilot_evidence import require_signing_secret, verify_payload_signature
 
     admission_errors = verify_default_admission(ROOT)
     if admission_errors:
@@ -129,12 +130,15 @@ def _host_arm(args: argparse.Namespace) -> int:
         return 1
 
     try:
+        secret = require_signing_secret(env)
         telegram_ids = _normalize_ids(args.telegram_id)
         manifest = _load_json(DEFAULT_MANIFEST, "pilot admission manifest")
         current = _load_json(DEFAULT_RELEASE, "current release pointer")
         pilot_state = _load_json(DEFAULT_PILOT_STATE, "pilot control state")
-        if pilot_state.get("schema_version") != 2:
+        if pilot_state.get("schema_version") != 3:
             raise ValueError("Pilot control state schema is unsupported")
+        if not verify_payload_signature(pilot_state, secret):
+            raise ValueError("Pilot control state signature is invalid")
         require_admission_binding(
             pilot_state, build_admission_binding(DEFAULT_MANIFEST, manifest)
         )
