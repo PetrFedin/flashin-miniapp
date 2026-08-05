@@ -10,11 +10,16 @@ from ..database import utcnow_naive
 from ..models import (
     Cart,
     CrmProfile,
+    Customer,
     LoyaltyRedemptionHold,
     LoyaltyTransaction,
+    Order,
     ReferralAttribution,
     ReferralCode,
 )
+from ..order_statuses import SETTLED_ORDER_PAYMENT_STATUSES
+
+_REFERRAL_INELIGIBLE_DETAIL = "Referral code must be applied before the first paid order"
 
 
 def _finite_number(value: float, field: str) -> float:
@@ -39,6 +44,33 @@ def _locked_profile(db: Session, customer_id: int, create: bool = False) -> CrmP
         db.add(profile)
         db.flush()
     return profile
+
+
+def _lock_referral_customer(db: Session, customer_id: int) -> Customer:
+    customer = (
+        db.query(Customer)
+        .filter(Customer.id == customer_id)
+        .with_for_update()
+        .first()
+    )
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    return customer
+
+
+def _has_prior_settled_order(
+    db: Session,
+    customer_id: int,
+    *,
+    exclude_order_id: int | None = None,
+) -> bool:
+    query = db.query(Order).filter(
+        Order.customer_id == customer_id,
+        Order.payment_status.in_(SETTLED_ORDER_PAYMENT_STATUSES),
+    )
+    if exclude_order_id is not None:
+        query = query.filter(Order.id != exclude_order_id)
+    return query.first() is not None
 
 
 def add_points(
@@ -89,18 +121,9 @@ def ensure_referral_code(db: Session, customer_id: int) -> ReferralCode:
 
 
 def apply_referral(db: Session, code: str, new_customer_id: int) -> bool:
-    normalized_code = (code or "").strip().upper()
-    referral = (
-        db.query(ReferralCode)
-        .filter(ReferralCode.code == normalized_code, ReferralCode.active.is_(True))
-        .with_for_update()
-        .first()
-    )
-    if not referral or referral.customer_id == new_customer_id:
-        return False
-    add_points(db, referral.customer_id, referral.reward_points, "referral_reward")
-    referral.used_count += 1
-    return True
+    """Compatibility wrapper: attach attribution without rewarding before payment."""
+
+    return attach_referral_to_customer(db, code, new_customer_id)
 
 
 def redeem_points(db: Session, customer_id: int, cart: Cart, points: float) -> Cart:
@@ -166,6 +189,10 @@ def redeem_points(db: Session, customer_id: int, cart: Cart, points: float) -> C
 
 def attach_referral_to_customer(db: Session, code: str, invited_customer_id: int) -> bool:
     normalized_code = (code or "").strip().upper()
+    _lock_referral_customer(db, invited_customer_id)
+    if _has_prior_settled_order(db, invited_customer_id):
+        raise HTTPException(status_code=409, detail=_REFERRAL_INELIGIBLE_DETAIL)
+
     referral = (
         db.query(ReferralCode)
         .filter(ReferralCode.code == normalized_code, ReferralCode.active.is_(True))
@@ -200,6 +227,7 @@ def attach_referral_to_customer(db: Session, code: str, invited_customer_id: int
 
 
 def reward_referral_after_first_paid_order(db: Session, invited_customer_id: int, order_id: int) -> None:
+    _lock_referral_customer(db, invited_customer_id)
     attribution = (
         db.query(ReferralAttribution)
         .filter(
@@ -212,6 +240,14 @@ def reward_referral_after_first_paid_order(db: Session, invited_customer_id: int
     if not attribution:
         return
 
+    order = (
+        db.query(Order)
+        .filter(Order.id == order_id, Order.customer_id == invited_customer_id)
+        .first()
+    )
+    if not order:
+        raise HTTPException(status_code=409, detail="Referral reward order is invalid")
+
     referral = (
         db.query(ReferralCode)
         .filter(ReferralCode.id == attribution.referral_code_id, ReferralCode.active.is_(True))
@@ -219,6 +255,14 @@ def reward_referral_after_first_paid_order(db: Session, invited_customer_id: int
         .first()
     )
     if not referral:
+        attribution.status = "ineligible"
+        return
+
+    if (
+        _has_prior_settled_order(db, invited_customer_id, exclude_order_id=order_id)
+        or (order.referral_code or "").strip().upper() != referral.code
+    ):
+        attribution.status = "ineligible"
         return
 
     add_points(db, referral.customer_id, referral.reward_points, "referral_reward", order_id)
