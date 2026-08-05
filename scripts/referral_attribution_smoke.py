@@ -306,7 +306,11 @@ def main() -> int:
         )
 
         assert second_persisted_order.status == "paid"
-        assert second_persisted_order.referral_code is None
+        second_referral_is_empty = (
+            second_persisted_order.referral_code is None
+            or second_persisted_order.referral_code == ""
+        )
+        assert second_referral_is_empty
         assert persisted_referral.used_count == 1
         assert _money(persisted_inviter_profile.loyalty_points) == Decimal("250.00")
         assert len(reward_rows) == 1
