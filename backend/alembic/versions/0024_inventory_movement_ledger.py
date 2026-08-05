@@ -1,5 +1,9 @@
 """Add durable order-linked inventory movement ledger.
 
+The ledger is authoritative pilot evidence. Operators must never edit or
+backfill movement rows during an active pilot; a suspected gap requires a
+runtime stop, an incident record, fresh admission evidence and a new run.
+
 Revision ID: 0024_inventory_movement_ledger
 Revises: 0023_pilot_state_replay_anchor
 Create Date: 2026-08-05
