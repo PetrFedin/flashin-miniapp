@@ -17,6 +17,10 @@ from pilot_control_chain import (
     require_state_chain,
     signed_state_sha256,
 )
+from pilot_control_lock import (
+    DEFAULT_LOCK_TIMEOUT_SECONDS,
+    exclusive_state_lock,
+)
 from pilot_evidence import require_signing_secret, sign_payload, verify_payload_signature
 from pilot_readiness import read_env
 from script_time import utc_timestamp
@@ -209,43 +213,48 @@ def save_state(
     report: dict[str, Any],
     *,
     secret: str,
+    allow_replace: bool = False,
+    lock_timeout_seconds: float = DEFAULT_LOCK_TIMEOUT_SECONDS,
 ) -> None:
-    if "signature" in state:
-        try:
-            parent_state = json.loads(path.read_text(encoding="utf-8"))
-        except FileNotFoundError as exc:
-            raise ValueError("Pilot control parent state is missing before update") from exc
-        except json.JSONDecodeError as exc:
-            raise ValueError("Pilot control parent state is invalid JSON") from exc
-        if not isinstance(parent_state, dict):
-            raise ValueError("Pilot control parent state must contain a JSON object")
-        if not verify_payload_signature(parent_state, secret):
-            raise ValueError("Pilot control parent state signature is invalid")
-        require_state_chain(parent_state)
-        if (
-            state.get("signature") != parent_state.get("signature")
-            or state.get("revision") != parent_state.get("revision")
-            or state.get("state_history_sha256")
-            != parent_state.get("state_history_sha256")
-        ):
-            raise ValueError("Pilot control state changed concurrently before update")
-        previous_hash = signed_state_sha256(parent_state)
-        state["state_history_sha256"] = [
-            *list(parent_state["state_history_sha256"]),
-            previous_hash,
-        ]
-        state["revision"] = int(parent_state["revision"]) + 1
-    else:
-        require_state_chain(state)
-        if state.get("revision") != 1 or state.get("state_history_sha256") != []:
-            raise ValueError("Initial pilot control state lineage is invalid")
-    state["updated_at"] = utc_timestamp()
-    _apply_report(state, report)
-    signed_state = sign_payload(state, secret)
-    state.clear()
-    state.update(signed_state)
-    _atomic_write_text(path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
-    _atomic_write_text(path.with_name("live_pilot_summary.md"), render_markdown(state, report))
+    with exclusive_state_lock(path, timeout_seconds=lock_timeout_seconds):
+        if "signature" in state:
+            try:
+                parent_state = json.loads(path.read_text(encoding="utf-8"))
+            except FileNotFoundError as exc:
+                raise ValueError("Pilot control parent state is missing before update") from exc
+            except json.JSONDecodeError as exc:
+                raise ValueError("Pilot control parent state is invalid JSON") from exc
+            if not isinstance(parent_state, dict):
+                raise ValueError("Pilot control parent state must contain a JSON object")
+            if not verify_payload_signature(parent_state, secret):
+                raise ValueError("Pilot control parent state signature is invalid")
+            require_state_chain(parent_state)
+            if (
+                state.get("signature") != parent_state.get("signature")
+                or state.get("revision") != parent_state.get("revision")
+                or state.get("state_history_sha256")
+                != parent_state.get("state_history_sha256")
+            ):
+                raise ValueError("Pilot control state changed concurrently before update")
+            previous_hash = signed_state_sha256(parent_state)
+            state["state_history_sha256"] = [
+                *list(parent_state["state_history_sha256"]),
+                previous_hash,
+            ]
+            state["revision"] = int(parent_state["revision"]) + 1
+        else:
+            require_state_chain(state)
+            if state.get("revision") != 1 or state.get("state_history_sha256") != []:
+                raise ValueError("Initial pilot control state lineage is invalid")
+            if path.exists() and not allow_replace:
+                raise ValueError("Pilot control state appeared concurrently before initialization")
+        state["updated_at"] = utc_timestamp()
+        _apply_report(state, report)
+        signed_state = sign_payload(state, secret)
+        state.clear()
+        state.update(signed_state)
+        _atomic_write_text(path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
+        _atomic_write_text(path.with_name("live_pilot_summary.md"), render_markdown(state, report))
 
 
 def _decimal(value: Any, field: str, errors: list[str], number: int) -> Decimal | None:
@@ -425,10 +434,13 @@ def _finish(
     secret: str,
     final: bool = False,
     persist: bool = True,
+    allow_replace: bool = False,
 ) -> int:
     report = validate_state(state, final=final)
     if persist:
-        save_state(path, state, report, secret=secret)
+        save_state(
+            path, state, report, secret=secret, allow_replace=allow_replace
+        )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     if report["decision"] == "STOP":
         return 2
@@ -441,7 +453,12 @@ def command_init(args: argparse.Namespace) -> int:
     path = _state_path(args)
     if path.exists() and not args.force:
         raise ValueError(f"Pilot state already exists: {path}. Use --force only for an intentional reset.")
-    return _finish(path, new_state(args.admission_binding), secret=args.signing_secret)
+    return _finish(
+        path,
+        new_state(args.admission_binding),
+        secret=args.signing_secret,
+        allow_replace=args.force,
+    )
 
 
 def command_record(args: argparse.Namespace) -> int:

@@ -37,7 +37,7 @@ def _git(repo: Path, *args: str) -> None:
 FILE_CONTENT = {
     "backend/api/orders.py": "acquire_pilot_checkout()\nrecord_pilot_order()\n",
     "scripts/pilot_release_capability.py": "from pilot_release_contract import CAPABILITY_VERSION\n",
-    "scripts/pilot_release_contract.py": "CAPABILITY_VERSION = 12\n",
+    "scripts/pilot_release_contract.py": "CAPABILITY_VERSION = 13\n",
     "scripts/readiness_gate.py": (
         'def build_signed_live_report():\n    pass\n"kind": "pilot_live_gate"\n'
         'configuration_fingerprint(env, secret)\nrelease_binding(current_release)\n'
@@ -71,18 +71,23 @@ FILE_CONTENT = {
         "def require_admission_binding(): pass\n"
     ),
     "scripts/pilot_control.py": (
-        "SCHEMA_VERSION = 4\ndef verified_admission_binding(): pass\n"
-        "def pilot_signing_secret(): pass\n"
-        "require_state_chain(state)\n"
+        "SCHEMA_VERSION = 4\n"
+        "exclusive_state_lock(path, timeout_seconds=lock_timeout_seconds)\n"
+        "Pilot control state appeared concurrently before initialization\n"
         "previous_hash = signed_state_sha256(parent_state)\n"
-        "Replay-vulnerable pilot state schema 3 cannot be reused\n"
-        "persist=False\n"
+        "allow_replace=args.force\npersist=False\n"
     ),
     "scripts/pilot_control_chain.py": (
         "def signed_state_sha256(): pass\n"
         "def validate_anchor_transition(): pass\n"
         "pilot control state revision rollback detected\n"
         "pilot control state ancestry does not match the armed runtime\n"
+    ),
+    "scripts/pilot_control_lock.py": (
+        "def exclusive_state_lock(): pass\n"
+        "fcntl.LOCK_EX | fcntl.LOCK_NB\n"
+        "Pilot control state lock acquisition timed out\n"
+        "os.fchmod(handle.fileno(), 0o600)\n"
     ),
     "backend/pilot_models.py": (
         "pilot_state_revision\npilot_state_sha256\nck_pilot_runtime_state_anchor\n"
@@ -112,9 +117,9 @@ FILE_CONTENT = {
         "test_makefile_routes_pilot_control_through_admission_runner\n"
     ),
     "backend/tests/test_pilot_control_signature.py": (
-        "test_authorized_write_advances_revision_and_preserves_exact_parent_hash\n"
-        "test_replayed_or_unrelated_signed_branch_is_rejected_by_anchor\n"
-        "test_wrong_secret_and_legacy_schemas_are_rejected\n"
+        "test_cross_process_writers_serialize_and_reject_stale_parent\n"
+        "test_cross_process_lock_timeout_fails_closed\n"
+        'multiprocessing.get_context("fork")\n'
     ),
     "backend/tests/test_pilot_runtime.py": (
         "test_tampered_pilot_control_state_fails_closed_on_checkout\n"
@@ -410,7 +415,7 @@ def _release(repo: Path, tmp_path: Path, release_id: str, created_at: str) -> Pa
 
 
 def test_signed_release_capability_is_bound_to_exact_release():
-    assert CAPABILITY_VERSION == 12
+    assert CAPABILITY_VERSION == 13
     secret = "s" * 48
     state = _release_state()
     state["capabilities"] = {
