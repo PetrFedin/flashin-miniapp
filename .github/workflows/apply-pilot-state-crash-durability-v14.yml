@@ -1,0 +1,55 @@
+name: Apply pilot state crash durability v14
+
+on:
+  push:
+    branches:
+      - agent/pilot-state-crash-durability-v14
+    paths:
+      - .github/workflows/apply-pilot-state-crash-durability-v14.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: .
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/pilot-state-crash-durability-v14
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Apply crash-durable evidence contract
+        run: python .github/scripts/apply_pilot_state_crash_durability_v14.py
+      - name: Install and validate targeted contract
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          python -m compileall \
+            scripts/pilot_control_io.py \
+            scripts/pilot_control.py
+          pytest -q \
+            backend/tests/test_pilot_control.py \
+            backend/tests/test_pilot_control_binding.py \
+            backend/tests/test_pilot_control_signature.py \
+            backend/tests/test_pilot_control_durability.py \
+            backend/tests/test_pilot_runtime.py \
+            backend/tests/test_pilot_runtime_cli.py \
+            backend/tests/test_pilot_release_capability.py
+      - name: Create clean v14 commit
+        run: |
+          rm .github/workflows/apply-pilot-state-crash-durability-v14.yml
+          rm .github/scripts/apply_pilot_state_crash_durability_v14.py
+          git config user.name "FLASHIN Pilot Durability Guard"
+          git config user.email "pilot-durability-guard@flashin.local"
+          git add -A
+          git commit -m "Make pilot state evidence crash durable"
+      - name: Validate immutable repository archive
+        run: pytest -q backend/tests/test_pilot_release_capability_repository.py
+      - name: Push validated capability v14
+        run: git push origin HEAD:agent/pilot-state-crash-durability-v14
