@@ -36,6 +36,12 @@ def _git(repo: Path, *args: str) -> None:
 
 FILE_CONTENT = {
     "backend/api/orders.py": "acquire_pilot_checkout()\nrecord_pilot_order()\n",
+    "scripts/pilot_release_capability.py": "from pilot_release_contract import CAPABILITY_VERSION\n",
+    "scripts/pilot_release_contract.py": "CAPABILITY_VERSION = 8\n",
+    "backend/services/pilot_runtime.py": (
+        "from scripts.pilot_release_contract import CAPABILITY_VERSION\n"
+        '"version": CAPABILITY_VERSION\n'
+    ),
     "backend/services/pilot_circuit_breaker.py": (
         "def stop_pilot_for_order():\n    pass\n"
         "def trip_pilot_circuit_breaker():\n    pass\n"
@@ -129,6 +135,8 @@ FILE_CONTENT = {
         "Run transactional full fulfillment smoke\n"
         "Run signed backup and restore drill\n"
         "bash scripts/backup_restore_smoke.sh\n"
+        "Run signed full release rollback drill\n"
+        "bash scripts/release_rollback_smoke.sh\n"
         "needs: [backend, frontend, admin, browser-e2e]\n"
     ),
     "e2e/package.json": (
@@ -256,6 +264,12 @@ FILE_CONTENT = {
         "tampered_archive_rejected\nmutated_database_rejected\n"
         "restored_value_verified\nverify-live\nrestore_postgres.sh --yes\n"
     ),
+    "scripts/release_rollback_smoke.sh": (
+        "ROLLBACK_DRILL=1\nPREVIOUS_MARKER=previous\nCURRENT_MARKER=current\n"
+        "container_marker=previous\nrestored_name=sentinel\nverify-live\n"
+        "verify --slot both\nverify-rollback\nruntime_image_rebuilt\n"
+        "release_pointer_promoted\nsigned_evidence_verified\n"
+    ),
     "backend/tests/test_backup_integrity.py": (
         "test_signed_manifest_binds_exact_archive_and_snapshot\n"
         "test_archive_byte_or_size_change_is_rejected\n"
@@ -279,6 +293,10 @@ FILE_CONTENT = {
         'CAPABILITY_SCRIPT="scripts/pilot_release_capability.py"\n'
         '"$CAPABILITY_SCRIPT" inspect --archive\n'
         "scripts/verify_backup.sh\nrestore_postgres.sh\n"
+        "docker compose build backend frontend admin bot notification_worker scheduler\n"
+        "RELEASE_STATE_DIR=\n--state-dir \"$RELEASE_STATE_DIR\"\n"
+        "PROMOTED_RELEASE=\nRollback release pointer promotion mismatch\n"
+        "verify --slot both\nrecord-rollback\n"
         "pilot_runtime.py _stop\ncheck_pilot_runtime_integrity.py\n"
     ),
 }
@@ -310,7 +328,7 @@ def _release(repo: Path, tmp_path: Path, release_id: str, created_at: str) -> Pa
 
 
 def test_signed_release_capability_is_bound_to_exact_release():
-    assert CAPABILITY_VERSION == 7
+    assert CAPABILITY_VERSION == 8
     secret = "s" * 48
     state = _release_state()
     state["capabilities"] = {
@@ -381,3 +399,16 @@ def test_immutable_archive_rejects_removed_guard_marker(
     errors = inspect_runtime_guard(release)
     assert any(path in error for error in errors)
     assert any(expected_marker in error for error in errors)
+
+
+def test_immutable_archive_rejects_missing_full_release_rollback_proof(tmp_path):
+    repo = _guarded_repo(tmp_path)
+    smoke = repo / "scripts/release_rollback_smoke.sh"
+    smoke.write_text("ROLLBACK_DRILL=1\n", encoding="utf-8")
+    _git(repo, "add", str(smoke.relative_to(repo)))
+    _git(repo, "commit", "-qm", "remove full rollback proof")
+    archive = _release(repo, tmp_path, "missing-full-rollback", "2026-08-05T00:00:00Z")
+
+    errors = inspect_runtime_guard(archive)
+
+    assert any("runtime_image_rebuilt" in error for error in errors)
