@@ -1,0 +1,52 @@
+name: Apply signed pilot control state v11
+
+on:
+  push:
+    branches:
+      - agent/pilot-signed-control-state-v11
+    paths:
+      - .github/workflows/apply-signed-control-state-v11.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/pilot-signed-control-state-v11
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Apply signed control state contract
+        run: python .github/scripts/apply_signed_control_state_v11.py
+      - name: Install and validate targeted contract
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          python -m compileall scripts/pilot_control.py scripts/pilot_runtime.py backend/services/pilot_runtime.py
+          pytest -q \
+            backend/tests/test_pilot_control.py \
+            backend/tests/test_pilot_control_binding.py \
+            backend/tests/test_pilot_control_signature.py \
+            backend/tests/test_pilot_runtime.py \
+            backend/tests/test_pilot_runtime_cli.py \
+            backend/tests/test_pilot_runtime_wiring.py \
+            backend/tests/test_pilot_runtime_integrity.py \
+            backend/tests/test_pilot_release_capability.py
+      - name: Create clean v11 commit
+        run: |
+          rm .github/workflows/apply-signed-control-state-v11.yml
+          rm .github/scripts/apply_signed_control_state_v11.py
+          git config user.name "FLASHIN Signed Pilot State Guard"
+          git config user.email "signed-pilot-state-guard@flashin.local"
+          git add -A
+          git commit -m "Sign pilot control state evidence"
+      - name: Validate immutable repository archive
+        run: pytest -q backend/tests/test_pilot_release_capability_repository.py
+      - name: Push validated capability v11
+        run: git push origin HEAD:agent/pilot-signed-control-state-v11
