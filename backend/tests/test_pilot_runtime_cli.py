@@ -20,9 +20,9 @@ def test_allowlist_is_unique_numeric_and_bounded():
 
 
 
-def test_host_arm_requires_replay_resistant_schema_v4_control_state():
+def test_host_arm_requires_accountable_schema_v5_control_state():
     source = (ROOT / "scripts/pilot_runtime.py").read_text(encoding="utf-8")
-    assert 'pilot_state.get("schema_version") != 4' in source
+    assert 'pilot_state.get("schema_version") != 5' in source
     assert "verify_payload_signature(pilot_state, secret)" in source
     assert "Pilot control state signature is invalid" in source
 
@@ -39,3 +39,10 @@ def test_runtime_arm_transports_and_validates_state_lineage_anchor():
         "Host pilot state anchor does not match runtime evidence",
     ):
         assert marker in source
+
+
+
+def test_runtime_arm_validates_audit_owners_against_signed_admission():
+    source = (ROOT / "scripts/pilot_runtime.py").read_text(encoding="utf-8")
+    assert "approved_operators(manifest)" in source
+    assert "validate_audit_log(" in source

@@ -12,6 +12,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from scripts.pilot_release_contract import CAPABILITY_VERSION
+from scripts.pilot_control_audit import approved_operators, validate_audit_log
 from scripts.pilot_control_binding import build_admission_binding, validate_admission_binding
 from scripts.pilot_control_chain import (
     state_anchor,
@@ -191,13 +192,21 @@ def validate_runtime_files(
             if str(entry.get("sha256", "")) != sha256_file(path):
                 errors.append(f"pilot evidence checksum does not match: {key}")
 
-    if pilot_state.get("schema_version") != 4:
+    if pilot_state.get("schema_version") != 5:
         errors.append("pilot control state schema is unsupported")
     elif not verify_payload_signature(pilot_state, secret):
         errors.append("pilot control state signature is invalid")
     else:
         chain_errors = validate_state_chain(pilot_state)
         errors.extend(chain_errors)
+        try:
+            errors.extend(
+                validate_audit_log(
+                    pilot_state, approvals=approved_operators(manifest)
+                )
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
         try:
             expected_binding = build_admission_binding(manifest_path, manifest)
             errors.extend(validate_admission_binding(pilot_state, expected_binding))

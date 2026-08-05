@@ -13,12 +13,13 @@ import pilot_control as pilot_control_module  # noqa: E402
 import pilot_control_io  # noqa: E402
 from pilot_control import (  # noqa: E402
     load_state,
-    new_state,
-    refresh_summary,
-    save_state,
+    new_state as _new_state,
+    refresh_summary as _refresh_summary,
+    save_state as _save_state,
     validate_state,
 )
 from pilot_control_chain import state_anchor  # noqa: E402
+from pilot_control_audit import build_audit_entry, normalize_mutation  # noqa: E402
 from pilot_control_io import durable_atomic_write_text  # noqa: E402
 
 SECRET = "s" * 48
@@ -32,6 +33,70 @@ BINDING = {
         "sha256": "d" * 64,
     },
 }
+APPROVALS = {
+    "business_owner": "Business",
+    "operations_owner": "Operations",
+    "technical_owner": "Technical",
+    "legal_owner": "Legal",
+    "support_owner": "Support",
+}
+
+
+def _init_audit():
+    mutation = normalize_mutation(
+        operation="init",
+        operator_role="operations_owner",
+        operator_name="Operations",
+        reason="Initialize controlled pilot state",
+        approvals=APPROVALS,
+    )
+    return build_audit_entry(mutation, revision=1, parent_state_sha256=None)
+
+
+def new_state(binding):
+    return _new_state(binding, initial_audit=_init_audit())
+
+
+def _mutation_for_state(path: Path, state: dict):
+    parent = json.loads(path.read_text(encoding="utf-8"))
+    changed = [
+        index + 1
+        for index, (before, after) in enumerate(zip(parent["scenarios"], state["scenarios"]))
+        if before != after
+    ]
+    number = changed[0] if len(changed) == 1 else 1
+    return normalize_mutation(
+        operation="record",
+        operator_role="operations_owner",
+        operator_name="Operations",
+        reason=f"Record verified outcome for scenario {number}",
+        approvals=APPROVALS,
+        scenario_number=number,
+        result=state["scenarios"][number - 1]["result"],
+    )
+
+
+def save_state(path, state, report, *, secret, **kwargs):
+    mutation = _mutation_for_state(Path(path), state) if "signature" in state else None
+    return _save_state(
+        Path(path),
+        state,
+        report,
+        secret=secret,
+        approved_operator_names=APPROVALS,
+        mutation=mutation,
+        **kwargs,
+    )
+
+
+def refresh_summary(path, *, expected_admission, secret, **kwargs):
+    return _refresh_summary(
+        Path(path),
+        expected_admission=expected_admission,
+        secret=secret,
+        approved_operator_names=APPROVALS,
+        **kwargs,
+    )
 
 
 def _signed_state(path: Path) -> dict:

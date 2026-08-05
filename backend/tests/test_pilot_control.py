@@ -4,7 +4,8 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from pilot_control import SCENARIOS, new_state, record_scenario, validate_state  # noqa: E402
+from pilot_control import SCENARIOS, new_state as _new_state, record_scenario, validate_state  # noqa: E402
+from pilot_control_audit import build_audit_entry, normalize_mutation  # noqa: E402
 
 ADMISSION_BINDING = {
     "manifest_sha256": "a" * 64,
@@ -16,6 +17,29 @@ ADMISSION_BINDING = {
         "sha256": "d" * 64,
     },
 }
+APPROVALS = {
+    "business_owner": "Business",
+    "operations_owner": "Operations",
+    "technical_owner": "Technical",
+    "legal_owner": "Legal",
+    "support_owner": "Support",
+}
+
+
+def new_state(binding):
+    mutation = normalize_mutation(
+        operation="init",
+        operator_role="operations_owner",
+        operator_name="Operations",
+        reason="Initialize controlled pilot state",
+        approvals=APPROVALS,
+    )
+    return _new_state(
+        binding,
+        initial_audit=build_audit_entry(
+            mutation, revision=1, parent_state_sha256=None
+        ),
+    )
 
 
 def valid_changes(scenario):
