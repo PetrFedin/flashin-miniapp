@@ -184,7 +184,7 @@ jobs:
 
   docker:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     needs: [backend, frontend, admin, browser-e2e]
     steps:
       - uses: actions/checkout@v4
@@ -200,6 +200,21 @@ jobs:
           caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
       - name: Docker build
         run: docker compose build
+      - name: Run signed backup and restore drill
+        run: |
+          set -euo pipefail
+          printf '\nPILOT_EVIDENCE_SIGNING_SECRET=ci-backup-integrity-signing-secret-0123456789abcdef\n' >> .env
+          docker compose up -d db
+          for _ in $(seq 1 60); do
+            if docker compose exec -T db pg_isready -U flashin -d flashin >/dev/null 2>&1; then
+              break
+            fi
+            sleep 2
+          done
+          docker compose exec -T db pg_isready -U flashin -d flashin
+          docker compose run --rm backend alembic -c backend/alembic.ini upgrade head
+          bash scripts/backup_restore_smoke.sh
+          docker compose down -v
       - name: Validate production Compose isolation
         run: |
           cp .env.production.example .env
