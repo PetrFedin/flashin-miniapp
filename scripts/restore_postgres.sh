@@ -12,8 +12,20 @@ if [ "$#" -ne 1 ]; then
 fi
 
 FILE=$1
+MANIFEST_FILE=${BACKUP_MANIFEST_FILE:-"${FILE}.manifest.json"}
+INTEGRITY_SCRIPT=${BACKUP_INTEGRITY_SCRIPT:-scripts/backup_integrity.py}
+INTEGRITY_ENV=${BACKUP_INTEGRITY_ENV:-.env}
+
 if [ ! -f "$FILE" ]; then
   echo "Backup file not found: $FILE" >&2
+  exit 1
+fi
+if [ ! -f "$MANIFEST_FILE" ]; then
+  echo "Signed backup manifest not found: $MANIFEST_FILE" >&2
+  exit 1
+fi
+if [ ! -f "$INTEGRITY_SCRIPT" ]; then
+  echo "Backup integrity script is missing: $INTEGRITY_SCRIPT" >&2
   exit 1
 fi
 if ! gzip -t "$FILE"; then
@@ -50,6 +62,12 @@ case "$DB_NAME" in
     exit 1
     ;;
 esac
+
+# Prove the exact signed archive is restorable before destroying the live database.
+python3 "$INTEGRITY_SCRIPT" verify \
+  --backup "$FILE" \
+  --manifest "$MANIFEST_FILE" \
+  --env "$INTEGRITY_ENV" >/dev/null
 
 if [ "$ASSUME_YES" -ne 1 ]; then
   read -r -p "Restore will drop and recreate database '$DB_NAME'. Type RESTORE to continue: " confirmation
@@ -88,4 +106,12 @@ if [ "$ALEMBIC_TABLE" != "t" ]; then
   exit 1
 fi
 
-echo "Restore completed and validated from: $FILE ($TABLE_COUNT public tables)"
+# Compare the restored target against the signed archive snapshot, including the
+# Alembic revision, complete public schema and critical business-ledger content.
+python3 "$INTEGRITY_SCRIPT" verify-live \
+  --backup "$FILE" \
+  --manifest "$MANIFEST_FILE" \
+  --env "$INTEGRITY_ENV" \
+  --database "$DB_NAME" >/dev/null
+
+echo "Restore completed and signed snapshot verified from: $FILE ($TABLE_COUNT public tables)"
