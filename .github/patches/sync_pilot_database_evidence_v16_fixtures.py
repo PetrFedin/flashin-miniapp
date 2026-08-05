@@ -30,16 +30,14 @@ replacements = (
         '"SCHEMA_VERSION = 6\\ndatabase_evidence_contract\\nverified_admission_context(\\n"',
     ),
     (
-        '"approved_operators(manifest)\\n"\n        "state.pilot_state_revision',
-        '"approved_operators(manifest)\\n"\n'
-        '        "validate_pilot_database_evidence(\\n"\n'
-        '        "state.pilot_state_revision',
+        '"from scripts.pilot_release_contract import CAPABILITY_VERSION\\n"',
+        '"from scripts.pilot_release_contract import CAPABILITY_VERSION\\n"\n'
+        '        "validate_pilot_database_evidence(\\n"',
     ),
     (
-        '"validate_anchor_transition(\\n"\n        "Stopped pilot runtime',
-        '"validate_anchor_transition(\\n"\n'
-        '        "validate_pilot_database_evidence(\\n"\n'
-        '        "Stopped pilot runtime',
+        '"build_admission_binding(DEFAULT_MANIFEST, manifest)\\n"',
+        '"build_admission_binding(DEFAULT_MANIFEST, manifest)\\n"\n'
+        '        "validate_pilot_database_evidence(\\n"',
     ),
     (
         "assert CAPABILITY_VERSION == 15",
