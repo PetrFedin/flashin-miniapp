@@ -39,6 +39,7 @@ from pilot_readiness import read_env  # noqa: E402
 SCHEMA_VERSION = 1
 KIND = "postgres_backup_manifest"
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_CONTAINER_ENV_NAMES = frozenset({"POSTGRES_DB", "POSTGRES_USER"})
 CRITICAL_TABLES = (
     "customers",
     "products",
@@ -97,6 +98,8 @@ def _run(
 
 
 def _compose_env(name: str) -> str:
+    if name not in _CONTAINER_ENV_NAMES:
+        raise BackupIntegrityError(f"Unsupported PostgreSQL container variable: {name}")
     result = _run(
         [
             "docker",
@@ -106,7 +109,7 @@ def _compose_env(name: str) -> str:
             "db",
             "sh",
             "-ec",
-            'printf %s "${!1}"',
+            'case "$1" in POSTGRES_DB) printf %s "$POSTGRES_DB" ;; POSTGRES_USER) printf %s "$POSTGRES_USER" ;; *) exit 64 ;; esac',
             "sh",
             name,
         ]
@@ -144,12 +147,12 @@ def _psql_lines(database: str, sql: str) -> list[str]:
 
 def _drop_database(database: str) -> None:
     db_name = _validate_identifier(database, "temporary database")
-    sql = (
+    _psql(
+        "postgres",
         "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-        f"WHERE datname = '{db_name}' AND pid <> pg_backend_pid(); "
-        f'DROP DATABASE IF EXISTS "{db_name}";'
+        f"WHERE datname = '{db_name}' AND pid <> pg_backend_pid();",
     )
-    _psql("postgres", sql)
+    _psql("postgres", f'DROP DATABASE IF EXISTS "{db_name}";')
 
 
 def _create_database(database: str) -> None:
@@ -161,11 +164,14 @@ def _create_database(database: str) -> None:
 
 def _restore_archive(backup: Path, database: str) -> None:
     db_name = _validate_identifier(database, "restore database")
-    gzip_process = subprocess.Popen(
-        ["gzip", "-dc", str(backup)],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    try:
+        gzip_process = subprocess.Popen(
+            ["gzip", "-dc", str(backup)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except FileNotFoundError as exc:
+        raise BackupIntegrityError("gzip is required to restore PostgreSQL backups") from exc
     assert gzip_process.stdout is not None
     try:
         psql_process = subprocess.Popen(
@@ -187,6 +193,7 @@ def _restore_archive(backup: Path, database: str) -> None:
         )
     except FileNotFoundError as exc:
         gzip_process.kill()
+        gzip_process.communicate()
         raise BackupIntegrityError("docker is required to restore PostgreSQL backups") from exc
     gzip_process.stdout.close()
     psql_stdout, psql_stderr = psql_process.communicate()
