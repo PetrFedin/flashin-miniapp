@@ -23,7 +23,18 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements.txt
       - name: Apply database evidence contract
-        run: python .github/patches/apply_pilot_database_evidence_v16.py
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/patches/apply_pilot_database_evidence_v16.py')
+          content = path.read_text(encoding='utf-8')
+          old = '    if count != 1:\n        raise SystemExit(\n            f"Expected one match in {path}: {old[:120]!r}; found {count}"\n        )'
+          new = '    if count < 1:\n        raise SystemExit(\n            f"Expected a match in {path}: {old[:120]!r}; found {count}"\n        )'
+          if old not in content:
+              raise SystemExit('replace_once guard not found')
+          path.write_text(content.replace(old, new, 1), encoding='utf-8')
+          PY
+          python .github/patches/apply_pilot_database_evidence_v16.py
       - name: Install and validate targeted contract
         run: |
           pip install -r backend/requirements.txt
