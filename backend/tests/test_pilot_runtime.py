@@ -16,6 +16,7 @@ from backend.services.pilot_runtime import (
     sha256_file,
 )
 from scripts.pilot_evidence import configuration_fingerprint, sign_payload
+from scripts.pilot_control_binding import build_admission_binding
 
 
 def _capability(state: dict, secret: str) -> dict:
@@ -24,7 +25,7 @@ def _capability(state: dict, secret: str) -> dict:
             "schema_version": 1,
             "kind": "release_capability",
             "name": "pilot_runtime_guard",
-            "version": 9,
+            "version": 10,
             "archive_sha256": state["sha256"],
             "git_commit": state["git_commit"],
             "release_id": state["release_id"],
@@ -75,21 +76,17 @@ def _runtime(tmp_path: Path, *, accepted_orders: int = 0):
 
     pilot_created_at = "2026-08-03T18:00:00Z"
     pilot_path = pilot_docs / "live_pilot_state.json"
-    pilot_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "created_at": pilot_created_at,
-                "decision": "NO-GO",
-                "scenarios": [{} for _ in range(20)],
-            }
-        ),
-        encoding="utf-8",
-    )
+    pilot_payload = {
+        "schema_version": 2,
+        "created_at": pilot_created_at,
+        "decision": "NO-GO",
+        "scenarios": [{} for _ in range(20)],
+    }
 
     manifest_path = pilot_docs / "pilot_admission_manifest.json"
     manifest = {
         "kind": "pilot_admission",
+        "created_at": "2026-08-05T12:00:00Z",
         "decision": "GO",
         "configuration_fingerprint": configuration_fingerprint(env, secret),
         "release": current,
@@ -103,6 +100,9 @@ def _runtime(tmp_path: Path, *, accepted_orders: int = 0):
         json.dumps(sign_payload(manifest, secret)),
         encoding="utf-8",
     )
+    signed_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    pilot_payload["admission"] = build_admission_binding(manifest_path, signed_manifest)
+    pilot_path.write_text(json.dumps(pilot_payload), encoding="utf-8")
 
     settings = SimpleNamespace(
         pilot_runtime_enforced=True,
@@ -230,3 +230,14 @@ def test_development_runtime_can_remain_disabled(tmp_path):
     db, customer, settings, env, *_ = _runtime(tmp_path)
     settings.pilot_runtime_enforced = False
     assert acquire_pilot_checkout(db, customer=customer, settings=settings, env=env) is None
+
+
+def test_pilot_state_bound_to_other_admission_fails_closed(tmp_path):
+    db, customer, settings, env, pilot_path, *_ = _runtime(tmp_path)
+    payload = json.loads(pilot_path.read_text(encoding="utf-8"))
+    payload["admission"]["manifest_sha256"] = "0" * 64
+    pilot_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(HTTPException) as mismatch:
+        acquire_pilot_checkout(db, customer=customer, settings=settings, env=env)
+    assert mismatch.value.status_code == 503

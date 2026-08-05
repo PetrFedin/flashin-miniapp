@@ -1,29 +1,27 @@
 #!/usr/bin/env python3
-"""Admission-gated entry point for the executable 20-order pilot control plane."""
+"""Admission-gated wrapper for every controlled 20-order pilot operation."""
 
 from __future__ import annotations
 
-import json
+import sys
 from pathlib import Path
 
 from pilot_admission import verify_default_admission
-from pilot_control import DEFAULT_STATE_PATH, main
+from pilot_control import main as pilot_control_main
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = sys.argv[1:] if argv is None else list(argv)
+    errors = verify_default_admission(ROOT)
+    if errors:
+        print("Pilot runner blocked by admission policy:")
+        for error in errors:
+            print(f"- {error}")
+        return 2
+    return pilot_control_main(args)
 
 
 if __name__ == "__main__":
-    if not Path(DEFAULT_STATE_PATH).exists():
-        errors = verify_default_admission()
-        if errors:
-            print(
-                json.dumps(
-                    {
-                        "decision": "NO-GO",
-                        "errors": errors,
-                        "next": "Create and verify the signed pilot admission manifest before initializing the 20-order pilot.",
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                )
-            )
-            raise SystemExit(1)
     raise SystemExit(main())

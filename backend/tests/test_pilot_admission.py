@@ -8,6 +8,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from pilot_admission import (  # noqa: E402
     build_manifest,
+    validate_admission_evidence_inputs,
     validate_admission_manifest,
     validate_live_gate_report,
 )
@@ -270,5 +271,50 @@ def test_live_gate_rejects_tampering_configuration_and_other_release():
     other = release("other", "c")
     errors = validate_live_gate_report(
         report, env=values, current_release=other, max_age_minutes=30
+    )
+    assert any("live gate release" in item for item in errors)
+
+
+
+def test_admission_create_preflight_binds_live_gate_to_current_release(tmp_path: Path):
+    values = env()
+    current = release("current", "a")
+    previous = release("previous", "b")
+    unrelated = release("unrelated", "c")
+    now = datetime.now(UTC)
+    backup = tmp_path / "backup.sql.gz"
+    backup.write_bytes(b"backup")
+    provider = provider_report(now, values, current)
+    live = live_report(now, values, current)
+    rollback = build_rollback_drill_report(
+        from_release=current,
+        to_release=previous,
+        backup_path=backup,
+        env=values,
+        completed_at=now,
+        max_age_days=30,
+    )
+
+    assert validate_admission_evidence_inputs(
+        provider,
+        live,
+        rollback,
+        env=values,
+        current_release=current,
+        provider_max_age_minutes=60,
+        live_max_age_minutes=30,
+        rollback_max_age_days=30,
+    ) == []
+
+    unrelated_live = live_report(now, values, unrelated)
+    errors = validate_admission_evidence_inputs(
+        provider,
+        unrelated_live,
+        rollback,
+        env=values,
+        current_release=current,
+        provider_max_age_minutes=60,
+        live_max_age_minutes=30,
+        rollback_max_age_days=30,
     )
     assert any("live gate release" in item for item in errors)

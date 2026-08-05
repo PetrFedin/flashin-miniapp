@@ -37,7 +37,7 @@ def _git(repo: Path, *args: str) -> None:
 FILE_CONTENT = {
     "backend/api/orders.py": "acquire_pilot_checkout()\nrecord_pilot_order()\n",
     "scripts/pilot_release_capability.py": "from pilot_release_contract import CAPABILITY_VERSION\n",
-    "scripts/pilot_release_contract.py": "CAPABILITY_VERSION = 9\n",
+    "scripts/pilot_release_contract.py": "CAPABILITY_VERSION = 10\n",
     "scripts/readiness_gate.py": (
         'def build_signed_live_report():\n    pass\n"kind": "pilot_live_gate"\n'
         'configuration_fingerprint(env, secret)\nrelease_binding(current_release)\n'
@@ -48,14 +48,47 @@ FILE_CONTENT = {
         'live gate configuration fingerprint does not match\n'
         'live gate release binding is missing\n'
         'validate_release_binding(release, current_release)\n'
+        'def validate_admission_evidence_inputs(): pass\n'
+        'current_release=current_release\n'
     ),
     "backend/tests/test_pilot_admission.py": (
         'test_live_gate_rejects_tampering_configuration_and_other_release\n'
+        'test_admission_create_preflight_binds_live_gate_to_current_release\n'
         'configuration fingerprint\nlive gate release\n'
     ),
     "backend/services/pilot_runtime.py": (
         "from scripts.pilot_release_contract import CAPABILITY_VERSION\n"
         '"version": CAPABILITY_VERSION\n'
+        "build_admission_binding(manifest_path, manifest)\n"
+        "validate_admission_binding(pilot_state, expected_binding)\n"
+    ),
+    "scripts/pilot_control_binding.py": (
+        "def build_admission_binding(): pass\nmanifest_sha256\n"
+        "def validate_admission_binding(): pass\n"
+        "def require_admission_binding(): pass\n"
+    ),
+    "scripts/pilot_control.py": (
+        "SCHEMA_VERSION = 2\ndef verified_admission_binding(): pass\n"
+        "expected_admission=args.admission_binding\n"
+        "Legacy pilot state schema 1 cannot be reused\n"
+    ),
+    "scripts/pilot_runner.py": (
+        "errors = verify_default_admission(ROOT)\nreturn pilot_control_main(args)\n"
+    ),
+    "scripts/pilot_runtime.py": (
+        "build_admission_binding(DEFAULT_MANIFEST, manifest)\n"
+        "require_admission_binding(\n"
+    ),
+    "Makefile": (
+        "python3 scripts/pilot_runner.py init\n"
+        "python3 scripts/pilot_runner.py record $(ARGS)\n"
+        "python3 scripts/pilot_runner.py status\n"
+        "python3 scripts/pilot_runner.py validate --final\n"
+    ),
+    "backend/tests/test_pilot_control_binding.py": (
+        "test_state_is_bound_to_one_exact_signed_admission_file\n"
+        "test_legacy_state_is_rejected_without_silent_migration\n"
+        "test_makefile_routes_pilot_control_through_admission_runner\n"
     ),
     "backend/services/pilot_circuit_breaker.py": (
         "def stop_pilot_for_order():\n    pass\n"
@@ -343,7 +376,7 @@ def _release(repo: Path, tmp_path: Path, release_id: str, created_at: str) -> Pa
 
 
 def test_signed_release_capability_is_bound_to_exact_release():
-    assert CAPABILITY_VERSION == 9
+    assert CAPABILITY_VERSION == 10
     secret = "s" * 48
     state = _release_state()
     state["capabilities"] = {
