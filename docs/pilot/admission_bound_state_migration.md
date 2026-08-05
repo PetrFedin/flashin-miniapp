@@ -13,10 +13,11 @@ The signing secret is the trust boundary for admission and pilot-state evidence.
 ## Before initialization
 
 1. Confirm that the production `.env` contains the intended provider and pilot settings plus the protected `PILOT_EVIDENCE_SIGNING_SECRET`.
-2. Confirm that current and previous release pointers are different and both expose signed pilot capability v12.
-3. Generate fresh provider, live-gate and rollback evidence.
-4. Create the signed admission manifest with named owners and all required acknowledgements.
-5. Run `make pilot-admission-status`; continue only when it returns GO with no errors.
+2. Confirm that current and previous release pointers are different and both expose signed pilot capability v13.
+3. Keep `live_pilot_state.json`, its `.lock` file and `live_pilot_summary.md` on the same POSIX filesystem mounted read-write for operator commands. The filesystem must provide working advisory `flock` semantics; object storage and unverified network filesystems are not supported.
+4. Generate fresh provider, live-gate and rollback evidence.
+5. Create the signed admission manifest with named owners and all required acknowledgements.
+6. Run `make pilot-admission-status`; continue only when it returns GO with no errors.
 
 ## Existing schema v1, v2 or v3 state
 
