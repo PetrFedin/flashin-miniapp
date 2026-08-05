@@ -16,10 +16,10 @@ The signing secret is the trust boundary for admission and pilot-state evidence.
 2. Confirm that current and previous release pointers are different and both expose the same signed pilot capability v15. Mixed capability versions fail closed and require a fresh release promotion before admission.
 3. Keep `live_pilot_state.json`, its `.lock` file and `live_pilot_summary.md` on the same POSIX filesystem mounted read-write for operator commands. The filesystem must provide working advisory `flock` semantics; object storage and unverified network filesystems are not supported.
 4. Generate fresh provider, live-gate and rollback evidence.
-5. Create the signed admission manifest with named owners and all required acknowledgements.
+5. Create the signed admission manifest with named owners and all required acknowledgements. Each owner value must identify one accountable individual. Team names, role aliases, shared accounts and generic values such as `Operations` are not acceptable production identities. If an owner changes, stop runtime and create a fresh signed admission before that person records another mutation.
 6. Run `make pilot-admission-status`; continue only when it returns GO with no errors.
 
-## Existing schema v1, v2 or v3 state
+## Existing schema v1, v2, v3 or v4 state
 
 Schema v1 is admission-unbound. Schema v2 is admission-bound but unsigned. Schema v3 is signed but has no database-anchored replay lineage. Schema v4 has replay protection but no admission-owner audit. All four are intentionally rejected and are never migrated in place.
 
@@ -28,7 +28,7 @@ Schema v1 is admission-unbound. Schema v2 is admission-bound but unsigned. Schem
 3. Record the archive location and SHA-256 in the change log or incident record.
 4. Remove the active legacy state only after the archive has been verified.
 5. Create a fresh accountable schema v5 state with `make pilot-init`.
-6. Run `make pilot-status` and confirm there is no signature, lineage or admission-binding error.
+6. Run `make pilot-status` and confirm there is no signature, lineage, audit-owner or admission-binding error.
 
 Never edit the schema number manually and never copy scenario results into a state bound to another admission.
 
@@ -68,13 +68,13 @@ Do not use `--force` to suppress a mismatch. It is only for an intentional reset
 
 ## Runtime arm and checkout
 
-After initialization, arm the allowlist with `make pilot-runtime-arm ARGS='--telegram-id <id>'`. Runtime arm stores the current state revision and SHA-256 in PostgreSQL. Every checkout independently verifies the HMAC, admission binding and append-only ancestry against that database anchor. The same state or a signed descendant is accepted; the anchor advances inside the same database transaction used by checkout, so a failed transaction does not persist a newer trust point. An older revision or unrelated signed branch keeps checkout closed.
+After initialization, arm the allowlist with `make pilot-runtime-arm ARGS='--telegram-id <id>'`. Runtime arm stores the current state revision and SHA-256 in PostgreSQL. Every checkout independently verifies the HMAC, admission binding, accountable audit owners and append-only ancestry against that database anchor. The same state or a signed descendant is accepted; the anchor advances inside the same database transaction used by checkout, so a failed transaction does not persist a newer trust point. An older revision, unrelated signed branch or mutation attributed to a person outside the current signed admission keeps checkout closed.
 
-## Release, configuration or signing-secret change during the pilot
+## Release, configuration, owner or signing-secret change during the pilot
 
 1. Stop runtime immediately.
 2. Archive the current state and summary.
-3. Generate fresh evidence for the new release/configuration.
+3. Generate fresh evidence for the new release, configuration or owner set.
 4. Create a new signed admission.
 5. Initialize a fresh accountable schema v5 state.
 6. Re-arm runtime only after admission and state verification pass.
