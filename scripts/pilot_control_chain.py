@@ -7,7 +7,10 @@ import json
 import re
 from typing import Any, Mapping, Sequence
 
-from pilot_control_audit import validate_audit_log
+try:
+    from .pilot_control_audit import validate_audit_log
+except ImportError:  # script execution mode
+    from pilot_control_audit import validate_audit_log
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 

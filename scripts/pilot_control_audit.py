@@ -7,7 +7,10 @@ import re
 from typing import Any, Mapping
 import uuid
 
-from script_time import utc_timestamp
+try:
+    from .script_time import utc_timestamp
+except ImportError:  # script execution mode
+    from script_time import utc_timestamp
 
 APPROVAL_ROLES = (
     "business_owner",
