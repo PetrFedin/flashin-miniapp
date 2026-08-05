@@ -16,14 +16,10 @@ old = '''replace_once(
 '''
 new = '''replace_once(
     "backend/services/payment_settlement.py",
+    "    commit_reservations_to_sold(db, _order_item_quantities(order))\\n",
     ''' + "'''" + '''    commit_reservations_to_sold(
         db,
-        {int(item.variant_id): int(item.quantity) for item in order.items},
-    )
-''' + "'''" + ''',
-    ''' + "'''" + '''    commit_reservations_to_sold(
-        db,
-        {int(item.variant_id): int(item.quantity) for item in order.items},
+        _order_item_quantities(order),
         order_id=order.id,
         source="payment_settlement",
     )
