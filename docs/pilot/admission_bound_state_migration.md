@@ -13,12 +13,12 @@ The signing secret is the trust boundary for admission and pilot-state evidence.
 ## Before initialization
 
 1. Confirm that the production `.env` contains the intended provider and pilot settings plus the protected `PILOT_EVIDENCE_SIGNING_SECRET`.
-2. Confirm that current and previous release pointers are different and both expose signed pilot capability v11.
+2. Confirm that current and previous release pointers are different and both expose signed pilot capability v12.
 3. Generate fresh provider, live-gate and rollback evidence.
 4. Create the signed admission manifest with named owners and all required acknowledgements.
 5. Run `make pilot-admission-status`; continue only when it returns GO with no errors.
 
-## Existing schema v1 or v2 state
+## Existing schema v1, v2 or v3 state
 
 Schema v1 is admission-unbound. Schema v2 is admission-bound but unsigned. Schema v3 is signed but has no database-anchored replay lineage. All three are intentionally rejected and are never migrated in place.
 
@@ -27,7 +27,7 @@ Schema v1 is admission-unbound. Schema v2 is admission-bound but unsigned. Schem
 3. Record the archive location and SHA-256 in the change log or incident record.
 4. Remove the active legacy state only after the archive has been verified.
 5. Create a fresh replay-resistant schema v4 state with `make pilot-init`.
-6. Run `make pilot-status` and confirm there is no signature or admission-binding error.
+6. Run `make pilot-status` and confirm there is no signature, lineage or admission-binding error.
 
 Never edit the schema number manually and never copy scenario results into a state bound to another admission.
 
@@ -40,18 +40,20 @@ make pilot-status
 make pilot-final
 ```
 
-Every target revalidates the signed admission and verifies the current state signature. Authorized record changes append the exact parent-state SHA-256, increment the revision and write a new signature; status and final validation are read-only so they cannot inflate or fork the lineage. Direct calls that bypass `scripts/pilot_runner.py` are not part of the supported procedure.
+Every target revalidates the signed admission and verifies the current state signature. Authorized record changes reread and verify the exact parent file, append its SHA-256, increment the revision and write a new signature. A second writer holding a stale parent is rejected instead of creating a competing signed branch. Status and final validation are read-only, so they cannot inflate or fork the lineage. Direct calls that bypass `scripts/pilot_runner.py` are not part of the supported procedure.
 
 ## Expected fail-closed conditions
 
 Stop and investigate when any command reports:
 
 - pilot control state signature invalid;
+- state revision rollback or ancestry mismatch;
+- concurrent parent-state replacement;
 - admission manifest checksum mismatch;
 - configuration fingerprint mismatch;
 - release ID, Git commit or archive SHA mismatch;
 - expired provider, live-gate or admission evidence;
-- legacy schema v1 or unsigned schema v2 state;
+- legacy schema v1, unsigned schema v2 or replay-vulnerable schema v3 state;
 - missing or malformed admission binding;
 - pilot decision `STOP`.
 
@@ -59,7 +61,7 @@ Do not use `--force` to suppress a mismatch. It is only for an intentional reset
 
 ## Runtime arm and checkout
 
-After initialization, arm the allowlist with `make pilot-runtime-arm ARGS='--telegram-id <id>'`. Runtime arm stores the current state revision and SHA-256 in PostgreSQL. Every checkout independently verifies the HMAC, admission binding and append-only ancestry against that database anchor. The same state or a signed descendant is accepted and advances the anchor; an older revision or unrelated signed branch keeps checkout closed.
+After initialization, arm the allowlist with `make pilot-runtime-arm ARGS='--telegram-id <id>'`. Runtime arm stores the current state revision and SHA-256 in PostgreSQL. Every checkout independently verifies the HMAC, admission binding and append-only ancestry against that database anchor. The same state or a signed descendant is accepted; the anchor advances inside the same database transaction used by checkout, so a failed transaction does not persist a newer trust point. An older revision or unrelated signed branch keeps checkout closed.
 
 ## Release, configuration or signing-secret change during the pilot
 
