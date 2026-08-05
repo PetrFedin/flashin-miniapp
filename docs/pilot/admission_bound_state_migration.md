@@ -8,6 +8,8 @@ One `live_pilot_state.json` belongs to one exact signed `pilot_admission_manifes
 
 Do not reuse a pilot state after any admission, signing-secret, configuration or promoted-release change. Do not edit the JSON by hand.
 
+The signing secret is the trust boundary for admission and pilot-state evidence. Keep it outside Git, restrict production read access to the deployment/runtime operators that need it, rotate it after suspected disclosure, and treat rotation as a new pilot admission that requires a fresh schema v3 state.
+
 ## Before initialization
 
 1. Confirm that the production `.env` contains the intended provider and pilot settings plus the protected `PILOT_EVIDENCE_SIGNING_SECRET`.
