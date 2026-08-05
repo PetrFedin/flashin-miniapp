@@ -13,6 +13,11 @@ from sqlalchemy.orm import Session
 
 from scripts.pilot_release_contract import CAPABILITY_VERSION
 from scripts.pilot_control_binding import build_admission_binding, validate_admission_binding
+from scripts.pilot_control_chain import (
+    state_anchor,
+    validate_state_chain,
+    validate_state_descendant,
+)
 from scripts.pilot_evidence import (
     configuration_fingerprint,
     require_signing_secret,
@@ -111,6 +116,7 @@ def validate_runtime_files(
     settings: "Settings",
     *,
     env: Mapping[str, str] | None = None,
+    validated_anchor: dict[str, Any] | None = None,
 ) -> list[str]:
     errors: list[str] = []
     runtime_env: Mapping[str, str] = env or os.environ
@@ -185,16 +191,30 @@ def validate_runtime_files(
             if str(entry.get("sha256", "")) != sha256_file(path):
                 errors.append(f"pilot evidence checksum does not match: {key}")
 
-    if pilot_state.get("schema_version") != 3:
+    if pilot_state.get("schema_version") != 4:
         errors.append("pilot control state schema is unsupported")
     elif not verify_payload_signature(pilot_state, secret):
         errors.append("pilot control state signature is invalid")
     else:
+        chain_errors = validate_state_chain(pilot_state)
+        errors.extend(chain_errors)
         try:
             expected_binding = build_admission_binding(manifest_path, manifest)
             errors.extend(validate_admission_binding(pilot_state, expected_binding))
         except (OSError, ValueError) as exc:
             errors.append(str(exc))
+        if state.status in {"active", "stopped"} and (
+            state.pilot_state_revision < 1 or len(state.pilot_state_sha256) != 64
+        ):
+            errors.append("armed runtime pilot state replay anchor is missing")
+        elif not chain_errors:
+            errors.extend(
+                validate_state_descendant(
+                    pilot_state,
+                    anchored_revision=state.pilot_state_revision,
+                    anchored_sha256=state.pilot_state_sha256,
+                )
+            )
     if pilot_state.get("created_at") != state.pilot_state_created_at:
         errors.append("pilot control state was replaced after runtime arm")
     if pilot_state.get("decision") == "STOP":
@@ -203,7 +223,10 @@ def validate_runtime_files(
     if not isinstance(scenarios, list) or len(scenarios) != 20:
         errors.append("pilot control state must contain exactly 20 scenarios")
 
-    return list(dict.fromkeys(errors))
+    unique_errors = list(dict.fromkeys(errors))
+    if not unique_errors and validated_anchor is not None:
+        validated_anchor.update(state_anchor(pilot_state))
+    return unique_errors
 
 
 def _blocked() -> HTTPException:
@@ -247,11 +270,18 @@ def acquire_pilot_checkout(
     if state.max_orders != settings.pilot_runtime_max_orders or state.max_orders != 20:
         raise _integrity_failure()
 
-    file_errors = validate_runtime_files(state, settings, env=env)
+    current_anchor: dict[str, Any] = {}
+    file_errors = validate_runtime_files(
+        state, settings, env=env, validated_anchor=current_anchor
+    )
     if file_errors:
         if "pilot control decision is STOP" in file_errors:
             raise _blocked()
         raise _integrity_failure()
+
+    state.pilot_state_revision = int(current_anchor["revision"])
+    state.pilot_state_sha256 = str(current_anchor["sha256"])
+    state.updated_at = utcnow_naive()
 
     allowlist, allowlist_errors = _parse_allowlist(state.allowed_telegram_ids)
     if allowlist_errors:

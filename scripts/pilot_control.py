@@ -13,12 +13,16 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from pilot_control_binding import build_admission_binding, require_admission_binding
+from pilot_control_chain import (
+    require_state_chain,
+    signed_state_sha256,
+)
 from pilot_evidence import require_signing_secret, sign_payload, verify_payload_signature
 from pilot_readiness import read_env
 from script_time import utc_timestamp
 
 ROOT = Path(__file__).resolve().parents[1]
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 DEFAULT_STATE_PATH = Path("docs/pilot/live_pilot_state.json")
 DEFAULT_MANIFEST_PATH = Path("docs/pilot/pilot_admission_manifest.json")
 ALLOWED_RESULTS = {"todo", "running", "pass", "fail", "blocked"}
@@ -119,6 +123,8 @@ def new_state(admission_binding: Mapping[str, Any]) -> dict[str, Any]:
         "updated_at": now,
         "decision": "NO-GO",
         "stop_reasons": [],
+        "revision": 1,
+        "state_history_sha256": [],
         "admission": json.loads(json.dumps(dict(admission_binding))),
         "scenarios": [_empty_record(scenario) for scenario in SCENARIOS],
     }
@@ -156,7 +162,12 @@ def load_state(
     if schema == 2:
         raise ValueError(
             "Unsigned pilot state schema 2 cannot be reused. Archive it and initialize "
-            "a fresh signed admission-bound pilot state."
+            "a fresh replay-resistant pilot state."
+        )
+    if schema == 3:
+        raise ValueError(
+            "Replay-vulnerable pilot state schema 3 cannot be reused. Archive it and "
+            "initialize a fresh replay-resistant pilot state."
         )
     if schema != SCHEMA_VERSION:
         raise ValueError(f"Unsupported pilot state schema {schema}; expected {SCHEMA_VERSION}")
@@ -164,6 +175,7 @@ def load_state(
         raise ValueError("Pilot control signing secret is required")
     if not verify_payload_signature(state, secret):
         raise ValueError("Pilot control state signature is invalid")
+    require_state_chain(state)
     if [item.get("number") for item in _scenario_records(state)] != [item["number"] for item in SCENARIOS]:
         raise ValueError("Pilot state scenario order does not match the current 20-order contract")
     if expected_admission is not None:
@@ -198,6 +210,35 @@ def save_state(
     *,
     secret: str,
 ) -> None:
+    if "signature" in state:
+        try:
+            parent_state = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError as exc:
+            raise ValueError("Pilot control parent state is missing before update") from exc
+        except json.JSONDecodeError as exc:
+            raise ValueError("Pilot control parent state is invalid JSON") from exc
+        if not isinstance(parent_state, dict):
+            raise ValueError("Pilot control parent state must contain a JSON object")
+        if not verify_payload_signature(parent_state, secret):
+            raise ValueError("Pilot control parent state signature is invalid")
+        require_state_chain(parent_state)
+        if (
+            state.get("signature") != parent_state.get("signature")
+            or state.get("revision") != parent_state.get("revision")
+            or state.get("state_history_sha256")
+            != parent_state.get("state_history_sha256")
+        ):
+            raise ValueError("Pilot control state changed concurrently before update")
+        previous_hash = signed_state_sha256(parent_state)
+        state["state_history_sha256"] = [
+            *list(parent_state["state_history_sha256"]),
+            previous_hash,
+        ]
+        state["revision"] = int(parent_state["revision"]) + 1
+    else:
+        require_state_chain(state)
+        if state.get("revision") != 1 or state.get("state_history_sha256") != []:
+            raise ValueError("Initial pilot control state lineage is invalid")
     state["updated_at"] = utc_timestamp()
     _apply_report(state, report)
     signed_state = sign_payload(state, secret)
@@ -383,9 +424,11 @@ def _finish(
     *,
     secret: str,
     final: bool = False,
+    persist: bool = True,
 ) -> int:
     report = validate_state(state, final=final)
-    save_state(path, state, report, secret=secret)
+    if persist:
+        save_state(path, state, report, secret=secret)
     print(json.dumps(report, ensure_ascii=False, indent=2))
     if report["decision"] == "STOP":
         return 2
@@ -432,6 +475,7 @@ def command_status(args: argparse.Namespace) -> int:
             path, expected_admission=args.admission_binding, secret=args.signing_secret
         ),
         secret=args.signing_secret,
+        persist=False,
     )
 
 
@@ -444,6 +488,7 @@ def command_validate(args: argparse.Namespace) -> int:
         ),
         secret=args.signing_secret,
         final=args.final,
+        persist=False,
     )
 
 

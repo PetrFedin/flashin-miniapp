@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from backend.api import health
 
 
-CURRENT_HEAD = "0022_pilot_runtime_guard"
+CURRENT_HEAD = "0023_pilot_state_replay_anchor"
 
 
 class ScalarResult:
@@ -58,7 +58,7 @@ def test_not_ready_when_database_revision_is_old(monkeypatch):
         "_expected_migration_heads",
         lambda: frozenset({CURRENT_HEAD}),
     )
-    db = FakeDb(["0021_business_event_recovery_states"])
+    db = FakeDb(["0022_pilot_runtime_guard"])
 
     with pytest.raises(HTTPException) as exc_info:
         health.ready(db)
