@@ -64,11 +64,11 @@ monitoring:
 	docker compose --profile monitoring up -d prometheus grafana
 
 backup:
-	./scripts/backup_postgres.sh
+	bash ./scripts/backup_postgres.sh
 
 restore:
 	@echo "Usage: make restore FILE=backups/flashin_xxx.sql.gz"
-	./scripts/restore_postgres.sh $(FILE)
+	bash ./scripts/restore_postgres.sh $(FILE)
 
 test:
 	docker compose run --rm backend pytest backend/tests
@@ -81,22 +81,22 @@ clean:
 
 
 deploy-prod:
-	./scripts/deploy_production.sh
+	bash ./scripts/deploy_production.sh
 
 rollback:
 	@echo "Usage: make rollback RELEASE=previous BACKUP=backups/flashin_xxx.sql.gz"
-	./scripts/rollback.sh $(if $(RELEASE),$(RELEASE),previous) $(BACKUP)
+	bash ./scripts/rollback.sh $(if $(RELEASE),$(RELEASE),previous) $(BACKUP)
 
 rollback-drill:
 	@echo "Usage: make rollback-drill RELEASE=previous BACKUP=backups/flashin_xxx.sql.gz"
-	ROLLBACK_DRILL=1 ./scripts/rollback.sh $(if $(RELEASE),$(RELEASE),previous) $(BACKUP)
+	ROLLBACK_DRILL=1 bash ./scripts/rollback.sh $(if $(RELEASE),$(RELEASE),previous) $(BACKUP)
 
 rollback-drill-status:
 	python3 scripts/pilot_evidence.py verify-rollback
 
 verify-backup:
 	@echo "Usage: make verify-backup FILE=backups/flashin_xxx.sql.gz"
-	./scripts/verify_backup.sh $(FILE)
+	bash ./scripts/verify_backup.sh $(FILE)
 
 seed-admin:
 	docker compose run --rm backend python scripts/seed_admin.py
