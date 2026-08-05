@@ -14,10 +14,11 @@ The signing secret is the trust boundary for admission and pilot-state evidence.
 
 1. Confirm that the production `.env` contains the intended provider and pilot settings plus the protected `PILOT_EVIDENCE_SIGNING_SECRET`.
 2. Confirm that current and previous release pointers are different and both expose the same signed pilot capability v15. Mixed capability versions fail closed and require a fresh release promotion before admission.
-3. Keep `live_pilot_state.json`, its `.lock` file and `live_pilot_summary.md` on the same POSIX filesystem mounted read-write for operator commands. The filesystem must provide working advisory `flock` semantics; object storage and unverified network filesystems are not supported.
-4. Generate fresh provider, live-gate and rollback evidence.
-5. Create the signed admission manifest with named owners and all required acknowledgements. Each owner value must identify one accountable individual. Team names, role aliases, shared accounts and generic values such as `Operations` are not acceptable production identities. If an owner changes, stop runtime and create a fresh signed admission before that person records another mutation.
-6. Run `make pilot-admission-status`; continue only when it returns GO with no errors.
+3. Verify the release in both supported Python modes: backend services import the audit and lineage modules through the `scripts.*` package, while operator commands execute them directly from the `scripts` directory. Both paths must load the same capability v15 code and pass before deployment.
+4. Keep `live_pilot_state.json`, its `.lock` file and `live_pilot_summary.md` on the same POSIX filesystem mounted read-write for operator commands. The filesystem must provide working advisory `flock` semantics; object storage and unverified network filesystems are not supported.
+5. Generate fresh provider, live-gate and rollback evidence.
+6. Create the signed admission manifest with named owners and all required acknowledgements. Each owner value must identify one accountable individual. Team names, role aliases, shared accounts and generic values such as `Operations` are not acceptable production identities. If an owner changes, stop runtime and create a fresh signed admission before that person records another mutation.
+7. Run `make pilot-admission-status`; continue only when it returns GO with no errors.
 
 ## Existing schema v1, v2, v3 or v4 state
 
