@@ -12,7 +12,7 @@ Status values: `PASS`, `PARTIAL`, `BLOCKED`, `NOT COVERED`.
 | Cart | Product -> cart -> quantity update/remove | Transactional smoke plus browser add, increment, decrement and removal | PASS | Repeat against deployed inventory reservations |
 | Promotions | Cart -> promo validation -> recalculated totals | Backend constraints/checkout tests plus browser successful promo path | PASS | Add deployed invalid/expired promo evidence |
 | Loyalty | Cart -> reserve points -> order -> cancellation/refund reversal | Transactional smokes plus browser points reservation and customer cancellation | PASS | Verify deployed balance after cancellation/refund |
-| Referral | Profile/referral code -> cart attribution -> order | Backend referral tests plus browser profile/code/cart path | PARTIAL | Prove persisted attribution on deployed order |
+| Referral | Profile/referral code -> cart attribution -> first paid order -> one inviter reward | PostgreSQL transactional referral smoke, duplicate-webhook proof, late-attribution rejection, backend tests and browser profile/code/cart path | PASS | Repeat with two controlled pilot customers and retain order/loyalty ledger evidence |
 | Checkout | Cart -> delivery form -> order creation | Transactional journey, idempotency tests and browser checkout/order creation | PASS | Repeat through Telegram MainButton in deployed Mini App |
 | Payment creation | Order -> YooKassa payment creation -> redirect | Payment service/review tests plus browser failure-safe order fallback | PARTIAL | Requires YooKassa test credentials and successful redirect evidence |
 | Payment callback | Provider webhook -> idempotent domain effect -> paid/review state | Payment idempotency, reconciliation and circuit-breaker tests | PASS | Prove one real duplicate test webhook in pilot environment |
@@ -54,6 +54,10 @@ The mandatory browser layer now covers:
 7. Admin support priority/status processing, privacy execution and validated partial refund completion.
 8. Admin support-ticket ownership assignment with an accountable active Admin ID.
 9. Admin full picklist, packing, readiness, idempotent shipment creation, tracked shipping and delivered/completed terminal state.
+
+## Transactional referral evidence
+
+The mandatory PostgreSQL referral smoke uses the real cart, checkout, payment webhook settlement, loyalty ledger and referral attribution services. It proves that the code is attached before purchase, copied to the first order, rewarded exactly once after `payment.succeeded`, unchanged after duplicate webhooks and a second paid order, and rejected when applied after the first settled purchase.
 
 ## Evidence boundary
 
