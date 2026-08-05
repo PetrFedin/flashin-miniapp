@@ -23,7 +23,9 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements.txt
       - name: Apply inventory ledger contract
-        run: python .github/patches/apply_pilot_inventory_ledger_v17.py
+        run: |
+          python .github/patches/fix_pilot_inventory_ledger_v17_anchor.py
+          python .github/patches/apply_pilot_inventory_ledger_v17.py
       - name: Install and validate targeted contract
         run: |
           pip install -r backend/requirements.txt
@@ -44,6 +46,7 @@ jobs:
         run: |
           rm -f .github/workflows/apply-pilot-inventory-ledger-v17.yml
           rm -f .github/patches/apply_pilot_inventory_ledger_v17.py
+          rm -f .github/patches/fix_pilot_inventory_ledger_v17_anchor.py
           rmdir .github/patches 2>/dev/null || true
           git config user.name "FLASHIN Inventory Ledger Guard"
           git config user.email "pilot-inventory-ledger@flashin.local"
