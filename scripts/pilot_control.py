@@ -10,6 +10,14 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from pilot_control_audit import (
+    APPROVAL_ROLES,
+    approved_operators,
+    build_audit_entry,
+    normalize_mutation,
+    require_audit_log,
+    validate_record_mutation,
+)
 from pilot_control_binding import build_admission_binding, require_admission_binding
 from pilot_control_chain import (
     require_state_chain,
@@ -25,7 +33,7 @@ from pilot_readiness import read_env
 from script_time import utc_timestamp
 
 ROOT = Path(__file__).resolve().parents[1]
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 DEFAULT_STATE_PATH = Path("docs/pilot/live_pilot_state.json")
 DEFAULT_MANIFEST_PATH = Path("docs/pilot/pilot_admission_manifest.json")
 ALLOWED_RESULTS = {"todo", "running", "pass", "fail", "blocked"}
@@ -102,7 +110,9 @@ def _empty_record(scenario: dict[str, Any]) -> dict[str, Any]:
     return record
 
 
-def verified_admission_binding(root: Path = ROOT) -> dict[str, Any]:
+def verified_admission_context(
+    root: Path = ROOT,
+) -> tuple[dict[str, Any], dict[str, str]]:
     from pilot_admission import verify_default_admission
     from pilot_evidence import load_json
 
@@ -110,15 +120,24 @@ def verified_admission_binding(root: Path = ROOT) -> dict[str, Any]:
     if errors:
         raise ValueError("Pilot admission is invalid: " + "; ".join(errors))
     manifest_path = root / DEFAULT_MANIFEST_PATH
-    return build_admission_binding(manifest_path, load_json(manifest_path))
+    manifest = load_json(manifest_path)
+    return build_admission_binding(manifest_path, manifest), approved_operators(manifest)
+
+
+def verified_admission_binding(root: Path = ROOT) -> dict[str, Any]:
+    return verified_admission_context(root)[0]
 
 
 def pilot_signing_secret(root: Path = ROOT) -> str:
     return require_signing_secret(read_env(root / ".env"))
 
 
-def new_state(admission_binding: Mapping[str, Any]) -> dict[str, Any]:
-    now = utc_timestamp()
+def new_state(
+    admission_binding: Mapping[str, Any],
+    *,
+    initial_audit: Mapping[str, Any],
+) -> dict[str, Any]:
+    now = str(initial_audit.get("changed_at", "")).strip() or utc_timestamp()
     state = {
         "schema_version": SCHEMA_VERSION,
         "pilot_name": "FLASHIN first 20 orders",
@@ -128,9 +147,11 @@ def new_state(admission_binding: Mapping[str, Any]) -> dict[str, Any]:
         "stop_reasons": [],
         "revision": 1,
         "state_history_sha256": [],
+        "audit_log": [json.loads(json.dumps(dict(initial_audit)))],
         "admission": json.loads(json.dumps(dict(admission_binding))),
         "scenarios": [_empty_record(scenario) for scenario in SCENARIOS],
     }
+    require_audit_log(state)
     _apply_report(state, validate_state(state, final=False))
     return state
 
@@ -147,6 +168,7 @@ def load_state(
     *,
     expected_admission: Mapping[str, Any] | None = None,
     secret: str | None = None,
+    approved_operator_names: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     try:
         state = json.loads(path.read_text(encoding="utf-8"))
@@ -172,6 +194,11 @@ def load_state(
             "Replay-vulnerable pilot state schema 3 cannot be reused. Archive it and "
             "initialize a fresh replay-resistant pilot state."
         )
+    if schema == 4:
+        raise ValueError(
+            "Unattributed pilot state schema 4 cannot be reused. Archive it and "
+            "initialize a fresh accountable pilot state."
+        )
     if schema != SCHEMA_VERSION:
         raise ValueError(f"Unsupported pilot state schema {schema}; expected {SCHEMA_VERSION}")
     if not secret:
@@ -179,6 +206,8 @@ def load_state(
     if not verify_payload_signature(state, secret):
         raise ValueError("Pilot control state signature is invalid")
     require_state_chain(state)
+    if approved_operator_names is not None:
+        require_audit_log(state, approvals=approved_operator_names)
     if [item.get("number") for item in _scenario_records(state)] != [item["number"] for item in SCENARIOS]:
         raise ValueError("Pilot state scenario order does not match the current 20-order contract")
     if expected_admission is not None:
@@ -200,6 +229,8 @@ def save_state(
     secret: str,
     allow_replace: bool = False,
     lock_timeout_seconds: float = DEFAULT_LOCK_TIMEOUT_SECONDS,
+    approved_operator_names: Mapping[str, str],
+    mutation: Mapping[str, Any] | None = None,
 ) -> None:
     with exclusive_state_lock(path, timeout_seconds=lock_timeout_seconds):
         if "signature" in state:
@@ -214,26 +245,50 @@ def save_state(
             if not verify_payload_signature(parent_state, secret):
                 raise ValueError("Pilot control parent state signature is invalid")
             require_state_chain(parent_state)
+            require_audit_log(parent_state, approvals=approved_operator_names)
+            if mutation is None:
+                raise ValueError("Pilot record mutation audit metadata is required")
             if (
                 state.get("signature") != parent_state.get("signature")
                 or state.get("revision") != parent_state.get("revision")
                 or state.get("state_history_sha256")
                 != parent_state.get("state_history_sha256")
+                or state.get("audit_log") != parent_state.get("audit_log")
             ):
                 raise ValueError("Pilot control state changed concurrently before update")
+            mutation_errors = validate_record_mutation(parent_state, state, mutation)
+            if mutation_errors:
+                raise ValueError("; ".join(mutation_errors))
             previous_hash = signed_state_sha256(parent_state)
             state["state_history_sha256"] = [
                 *list(parent_state["state_history_sha256"]),
                 previous_hash,
             ]
             state["revision"] = int(parent_state["revision"]) + 1
+            changed_at = utc_timestamp()
+            state["audit_log"] = [
+                *list(parent_state["audit_log"]),
+                build_audit_entry(
+                    mutation,
+                    revision=int(state["revision"]),
+                    parent_state_sha256=previous_hash,
+                    changed_at=changed_at,
+                ),
+            ]
         else:
             require_state_chain(state)
+            require_audit_log(state, approvals=approved_operator_names)
+            if mutation is not None:
+                raise ValueError("Pilot init mutation must be embedded in initial audit")
             if state.get("revision") != 1 or state.get("state_history_sha256") != []:
                 raise ValueError("Initial pilot control state lineage is invalid")
             if path.exists() and not allow_replace:
                 raise ValueError("Pilot control state appeared concurrently before initialization")
-        state["updated_at"] = utc_timestamp()
+        if mutation is not None:
+            state["updated_at"] = changed_at
+        else:
+            state["updated_at"] = str(state["audit_log"][0]["changed_at"])
+        require_audit_log(state, approvals=approved_operator_names)
         _apply_report(state, report)
         signed_state = sign_payload(state, secret)
         state.clear()
@@ -387,6 +442,7 @@ def record_scenario(state: dict[str, Any], number: int, **changes: Any) -> dict[
 def render_markdown(state: dict[str, Any], report: dict[str, Any]) -> str:
     summary = report["summary"]
     state_sha = signed_state_sha256(state)
+    last_audit = state["audit_log"][-1]
     lines = [
         "# FLASHIN live pilot control",
         "",
@@ -394,6 +450,8 @@ def render_markdown(state: dict[str, Any], report: dict[str, Any]) -> str:
         "",
         f"State revision: `{state.get('revision')}`",
         f"State SHA-256: `{state_sha}`",
+        f"Last accountable mutation: `{last_audit['operator_role']}` / {last_audit['operator_name']}",
+        f"Mutation reason: {last_audit['reason']}",
         "Source: signed JSON state. This Markdown file is derived and non-authoritative.",
         "",
         f"Passed: {summary['passed']}/20 · Failed: {summary['failed']} · Blocked: {summary['blocked']} · Running: {summary['running']} · Todo: {summary['todo']}",
@@ -427,6 +485,7 @@ def refresh_summary(
     *,
     expected_admission: Mapping[str, Any],
     secret: str,
+    approved_operator_names: Mapping[str, str],
     final: bool = False,
     lock_timeout_seconds: float = DEFAULT_LOCK_TIMEOUT_SECONDS,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -435,6 +494,7 @@ def refresh_summary(
             path,
             expected_admission=expected_admission,
             secret=secret,
+            approved_operator_names=approved_operator_names,
         )
         report = validate_state(state, final=final)
         durable_atomic_write_text(
@@ -456,11 +516,19 @@ def _finish(
     final: bool = False,
     persist: bool = True,
     allow_replace: bool = False,
+    approved_operator_names: Mapping[str, str],
+    mutation: Mapping[str, Any] | None = None,
 ) -> int:
     report = validate_state(state, final=final)
     if persist:
         save_state(
-            path, state, report, secret=secret, allow_replace=allow_replace
+            path,
+            state,
+            report,
+            secret=secret,
+            allow_replace=allow_replace,
+            approved_operator_names=approved_operator_names,
+            mutation=mutation,
         )
     return _report_exit(report, final=final)
 
@@ -474,15 +542,41 @@ def _report_exit(report: Mapping[str, Any], *, final: bool) -> int:
     return 0
 
 
+def _mutation_from_args(
+    args: argparse.Namespace,
+    *,
+    operation: str,
+    scenario_number: int | None = None,
+    result: str | None = None,
+) -> dict[str, Any]:
+    return normalize_mutation(
+        operation=operation,
+        operator_role=args.operator_role,
+        operator_name=args.operator,
+        reason=args.reason,
+        approvals=args.approved_operators,
+        scenario_number=scenario_number,
+        result=result,
+        force_reset=bool(getattr(args, "force", False)),
+    )
+
+
 def command_init(args: argparse.Namespace) -> int:
     path = _state_path(args)
     if path.exists() and not args.force:
         raise ValueError(f"Pilot state already exists: {path}. Use --force only for an intentional reset.")
+    mutation = _mutation_from_args(args, operation="init")
+    initial_audit = build_audit_entry(
+        mutation,
+        revision=1,
+        parent_state_sha256=None,
+    )
     return _finish(
         path,
-        new_state(args.admission_binding),
+        new_state(args.admission_binding, initial_audit=initial_audit),
         secret=args.signing_secret,
         allow_replace=args.force,
+        approved_operator_names=args.approved_operators,
     )
 
 
@@ -506,7 +600,18 @@ def command_record(args: argparse.Namespace) -> int:
         expected_stock_delta=args.expected_stock_delta, webhook_deliveries=args.webhook_deliveries,
         domain_effects=args.domain_effects, evidence=evidence, note=args.note,
     )
-    return _finish(path, state, secret=args.signing_secret)
+    return _finish(
+        path,
+        state,
+        secret=args.signing_secret,
+        approved_operator_names=args.approved_operators,
+        mutation=_mutation_from_args(
+            args,
+            operation="record",
+            scenario_number=args.number,
+            result=args.result,
+        ),
+    )
 
 
 def command_status(args: argparse.Namespace) -> int:
@@ -515,6 +620,7 @@ def command_status(args: argparse.Namespace) -> int:
         path,
         expected_admission=args.admission_binding,
         secret=args.signing_secret,
+        approved_operator_names=args.approved_operators,
     )
     return _report_exit(report, final=False)
 
@@ -525,6 +631,7 @@ def command_validate(args: argparse.Namespace) -> int:
         path,
         expected_admission=args.admission_binding,
         secret=args.signing_secret,
+        approved_operator_names=args.approved_operators,
         final=args.final,
     )
     return _report_exit(report, final=args.final)
@@ -534,11 +641,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state", default=str(DEFAULT_STATE_PATH), help="Pilot state JSON path")
     subparsers = parser.add_subparsers(dest="command")
+    def add_mutation_identity(target: argparse.ArgumentParser) -> None:
+        target.add_argument("--operator-role", choices=APPROVAL_ROLES, required=True)
+        target.add_argument("--operator", required=True)
+        target.add_argument("--reason", required=True)
+
     init_parser = subparsers.add_parser("init", help="Create a fresh 20-order pilot state")
     init_parser.add_argument("--force", action="store_true", help="Replace an existing state")
+    add_mutation_identity(init_parser)
     init_parser.set_defaults(handler=command_init)
 
     record_parser = subparsers.add_parser("record", help="Record one pilot scenario result")
+    add_mutation_identity(record_parser)
     record_parser.add_argument("--number", type=int, required=True)
     record_parser.add_argument("--result", choices=sorted(ALLOWED_RESULTS - {"todo"}), required=True)
     for option in ("order-id", "payment-id", "refund-id", "order-status", "payment-status", "refund-status", "expected-amount", "provider-amount", "currency", "provider-currency", "note"):
@@ -562,9 +676,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command is None:
         path = Path(args.state)
-        return main(["--state", str(path), "status" if path.exists() else "init"])
+        if path.exists():
+            return main(["--state", str(path), "status"])
+        parser.error(
+            "Pilot initialization requires explicit --operator-role, --operator and --reason"
+        )
     try:
-        args.admission_binding = verified_admission_binding(ROOT)
+        (
+            args.admission_binding,
+            args.approved_operators,
+        ) = verified_admission_context(ROOT)
         args.signing_secret = pilot_signing_secret(ROOT)
         return args.handler(args)
     except ValueError as exc:

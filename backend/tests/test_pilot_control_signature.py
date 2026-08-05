@@ -8,7 +8,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from pilot_control import load_state, new_state, save_state, validate_state  # noqa: E402
+from pilot_control import load_state, new_state as _new_state, save_state as _save_state, validate_state  # noqa: E402
+from pilot_control_audit import build_audit_entry, normalize_mutation  # noqa: E402
 from pilot_control_chain import (  # noqa: E402
     state_anchor,
     validate_anchor_transition,
@@ -27,6 +28,60 @@ BINDING = {
         "sha256": "d" * 64,
     },
 }
+APPROVALS = {
+    "business_owner": "Business",
+    "operations_owner": "Operations",
+    "technical_owner": "Technical",
+    "legal_owner": "Legal",
+    "support_owner": "Support",
+}
+
+
+def _init_audit():
+    mutation = normalize_mutation(
+        operation="init",
+        operator_role="operations_owner",
+        operator_name="Operations",
+        reason="Initialize controlled pilot state",
+        approvals=APPROVALS,
+    )
+    return build_audit_entry(mutation, revision=1, parent_state_sha256=None)
+
+
+def new_state(binding):
+    return _new_state(binding, initial_audit=_init_audit())
+
+
+def _mutation_for_state(path: Path, state: dict):
+    parent = json.loads(path.read_text(encoding="utf-8"))
+    changed = [
+        index + 1
+        for index, (before, after) in enumerate(zip(parent["scenarios"], state["scenarios"]))
+        if before != after
+    ]
+    number = changed[0] if len(changed) == 1 else 1
+    return normalize_mutation(
+        operation="record",
+        operator_role="operations_owner",
+        operator_name="Operations",
+        reason=f"Record verified outcome for scenario {number}",
+        approvals=APPROVALS,
+        scenario_number=number,
+        result=state["scenarios"][number - 1]["result"],
+    )
+
+
+def save_state(path, state, report, *, secret, **kwargs):
+    mutation = _mutation_for_state(Path(path), state) if "signature" in state else None
+    return _save_state(
+        Path(path),
+        state,
+        report,
+        secret=secret,
+        approved_operator_names=APPROVALS,
+        mutation=mutation,
+        **kwargs,
+    )
 
 
 def _concurrent_writer(
@@ -64,7 +119,7 @@ def _signed_state(path: Path) -> dict:
 def test_state_write_is_signed_and_exact_state_loads(tmp_path: Path):
     path = tmp_path / "live_pilot_state.json"
     state = _signed_state(path)
-    assert state["schema_version"] == 4
+    assert state["schema_version"] == 5
     assert state["revision"] == 1
     assert state["state_history_sha256"] == []
     assert verify_payload_signature(state, SECRET)
@@ -141,6 +196,10 @@ def test_wrong_secret_and_legacy_schemas_are_rejected(tmp_path: Path):
 
     path.write_text(json.dumps({"schema_version": 3}), encoding="utf-8")
     with pytest.raises(ValueError, match="Replay-vulnerable pilot state schema 3 cannot be reused"):
+        load_state(path, secret=SECRET)
+
+    path.write_text(json.dumps({"schema_version": 4}), encoding="utf-8")
+    with pytest.raises(ValueError, match="Unattributed pilot state schema 4 cannot be reused"):
         load_state(path, secret=SECRET)
 
 

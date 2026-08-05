@@ -7,12 +7,38 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from pilot_control import load_state, new_state  # noqa: E402
+from pilot_control import load_state, new_state as _new_state  # noqa: E402
+from pilot_control_audit import build_audit_entry, normalize_mutation  # noqa: E402
 from pilot_control_binding import (  # noqa: E402
     build_admission_binding,
     require_admission_binding,
     validate_admission_binding,
 )
+
+
+APPROVALS = {
+    "business_owner": "Business",
+    "operations_owner": "Operations",
+    "technical_owner": "Technical",
+    "legal_owner": "Legal",
+    "support_owner": "Support",
+}
+
+
+def new_state(binding):
+    mutation = normalize_mutation(
+        operation="init",
+        operator_role="operations_owner",
+        operator_name="Operations",
+        reason="Initialize controlled pilot state",
+        approvals=APPROVALS,
+    )
+    return _new_state(
+        binding,
+        initial_audit=build_audit_entry(
+            mutation, revision=1, parent_state_sha256=None
+        ),
+    )
 
 
 def _manifest(path: Path) -> dict:

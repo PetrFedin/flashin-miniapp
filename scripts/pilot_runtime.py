@@ -14,6 +14,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from pilot_control_audit import approved_operators, validate_audit_log
 from pilot_control_chain import (
     state_anchor,
     validate_anchor_transition,
@@ -141,13 +142,18 @@ def _host_arm(args: argparse.Namespace) -> int:
         manifest = _load_json(DEFAULT_MANIFEST, "pilot admission manifest")
         current = _load_json(DEFAULT_RELEASE, "current release pointer")
         pilot_state = _load_json(DEFAULT_PILOT_STATE, "pilot control state")
-        if pilot_state.get("schema_version") != 4:
+        if pilot_state.get("schema_version") != 5:
             raise ValueError("Pilot control state schema is unsupported")
         if not verify_payload_signature(pilot_state, secret):
             raise ValueError("Pilot control state signature is invalid")
         chain_errors = validate_state_chain(pilot_state)
         if chain_errors:
             raise ValueError("; ".join(chain_errors))
+        audit_errors = validate_audit_log(
+            pilot_state, approvals=approved_operators(manifest)
+        )
+        if audit_errors:
+            raise ValueError("; ".join(audit_errors))
         pilot_anchor = state_anchor(pilot_state)
         require_admission_binding(
             pilot_state, build_admission_binding(DEFAULT_MANIFEST, manifest)

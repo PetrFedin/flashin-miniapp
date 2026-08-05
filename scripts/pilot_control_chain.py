@@ -7,6 +7,11 @@ import json
 import re
 from typing import Any, Mapping, Sequence
 
+try:
+    from .pilot_control_audit import validate_audit_log
+except ImportError:  # script execution mode
+    from pilot_control_audit import validate_audit_log
+
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -40,7 +45,12 @@ def validate_chain_fields(revision: object, history: object) -> list[str]:
 
 
 def validate_state_chain(state: Mapping[str, Any]) -> list[str]:
-    return validate_chain_fields(state.get("revision"), state.get("state_history_sha256"))
+    errors = validate_chain_fields(
+        state.get("revision"), state.get("state_history_sha256")
+    )
+    if not errors:
+        errors.extend(validate_audit_log(state))
+    return list(dict.fromkeys(errors))
 
 
 def require_state_chain(state: Mapping[str, Any]) -> None:

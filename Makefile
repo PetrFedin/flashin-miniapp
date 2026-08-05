@@ -196,7 +196,8 @@ pilot-runner:
 	python3 scripts/pilot_runner.py
 
 pilot-init:
-	python3 scripts/pilot_runner.py init
+	@echo "Usage: make pilot-init ARGS='--operator-role operations_owner --operator \"Name\" --reason \"Initialize controlled pilot\" [--force]'"
+	python3 scripts/pilot_runner.py init $(ARGS)
 
 pilot-runtime-arm:
 	@echo "Usage: make pilot-runtime-arm ARGS='--telegram-id 123456789 [--telegram-id ...] [--resume]'"
@@ -210,7 +211,7 @@ pilot-runtime-stop:
 	python3 scripts/pilot_runtime.py stop --reason "$(REASON)"
 
 pilot-record:
-	@echo "Usage: make pilot-record ARGS='--number 1 --result pass ...'"
+	@echo "Usage: make pilot-record ARGS='--number 1 --result pass --operator-role operations_owner --operator \"Name\" --reason \"Verified scenario\" ...'"
 	python3 scripts/pilot_runner.py record $(ARGS)
 
 pilot-status:
