@@ -184,7 +184,7 @@ jobs:
 
   docker:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 55
     needs: [backend, frontend, admin, browser-e2e]
     steps:
       - uses: actions/checkout@v4
@@ -215,6 +215,12 @@ jobs:
           docker compose run --rm backend alembic -c backend/alembic.ini upgrade head
           bash scripts/backup_restore_smoke.sh
           docker compose down -v
+      - name: Run signed full release rollback drill
+        run: |
+          set -euo pipefail
+          cp .env.local.example .env
+          printf '\nPILOT_EVIDENCE_SIGNING_SECRET=ci-release-rollback-signing-secret-0123456789abcdef\n' >> .env
+          bash scripts/release_rollback_smoke.sh
       - name: Validate production Compose isolation
         run: |
           cp .env.production.example .env
