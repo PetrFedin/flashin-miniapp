@@ -26,6 +26,7 @@ from scripts.pilot_evidence import (
 )
 
 from ..database import utcnow_naive
+from .pilot_database_evidence import validate_pilot_database_evidence
 from ..pilot_models import PilotOrderSlot, PilotRuntimeState
 
 if TYPE_CHECKING:
@@ -118,6 +119,7 @@ def validate_runtime_files(
     *,
     env: Mapping[str, str] | None = None,
     validated_anchor: dict[str, Any] | None = None,
+    validated_pilot_state: dict[str, Any] | None = None,
 ) -> list[str]:
     errors: list[str] = []
     runtime_env: Mapping[str, str] = env or os.environ
@@ -192,8 +194,10 @@ def validate_runtime_files(
             if str(entry.get("sha256", "")) != sha256_file(path):
                 errors.append(f"pilot evidence checksum does not match: {key}")
 
-    if pilot_state.get("schema_version") != 5:
+    if pilot_state.get("schema_version") != 6:
         errors.append("pilot control state schema is unsupported")
+    elif pilot_state.get("database_evidence_contract") != 1:
+        errors.append("pilot database evidence contract is missing or unsupported")
     elif not verify_payload_signature(pilot_state, secret):
         errors.append("pilot control state signature is invalid")
     else:
@@ -235,6 +239,9 @@ def validate_runtime_files(
     unique_errors = list(dict.fromkeys(errors))
     if not unique_errors and validated_anchor is not None:
         validated_anchor.update(state_anchor(pilot_state))
+    if not unique_errors and validated_pilot_state is not None:
+        validated_pilot_state.clear()
+        validated_pilot_state.update(json.loads(json.dumps(pilot_state)))
     return unique_errors
 
 
@@ -280,12 +287,25 @@ def acquire_pilot_checkout(
         raise _integrity_failure()
 
     current_anchor: dict[str, Any] = {}
+    current_pilot_state: dict[str, Any] = {}
     file_errors = validate_runtime_files(
-        state, settings, env=env, validated_anchor=current_anchor
+        state,
+        settings,
+        env=env,
+        validated_anchor=current_anchor,
+        validated_pilot_state=current_pilot_state,
     )
     if file_errors:
         if "pilot control decision is STOP" in file_errors:
             raise _blocked()
+        raise _integrity_failure()
+    database_errors = validate_pilot_database_evidence(
+        db,
+        current_pilot_state,
+        state,
+        final=False,
+    )
+    if database_errors:
         raise _integrity_failure()
 
     state.pilot_state_revision = int(current_anchor["revision"])

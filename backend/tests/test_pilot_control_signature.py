@@ -119,7 +119,7 @@ def _signed_state(path: Path) -> dict:
 def test_state_write_is_signed_and_exact_state_loads(tmp_path: Path):
     path = tmp_path / "live_pilot_state.json"
     state = _signed_state(path)
-    assert state["schema_version"] == 5
+    assert state["schema_version"] == 6
     assert state["revision"] == 1
     assert state["state_history_sha256"] == []
     assert verify_payload_signature(state, SECRET)

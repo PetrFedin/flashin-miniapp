@@ -49,11 +49,10 @@ def valid_changes(scenario):
         "evidence": [f"evidence-{number}"],
         "note": "verified",
     }
-    if scenario.get("requires_order"):
-        changes.update(
-            order_id=f"order-{number}",
-            order_status=scenario["expected_order_status"],
-        )
+    changes.update(
+        order_id=str(number),
+        order_status=scenario["expected_order_status"],
+    )
     if scenario.get("requires_payment"):
         changes.update(
             payment_id=f"payment-{number}",

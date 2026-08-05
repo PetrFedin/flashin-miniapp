@@ -37,7 +37,7 @@ def _git(repo: Path, *args: str) -> None:
 FILE_CONTENT = {
     "backend/api/orders.py": "acquire_pilot_checkout()\nrecord_pilot_order()\n",
     "scripts/pilot_release_capability.py": "from pilot_release_contract import CAPABILITY_VERSION\n",
-    "scripts/pilot_release_contract.py": "CAPABILITY_VERSION = 15\n",
+    "scripts/pilot_release_contract.py": "CAPABILITY_VERSION = 16\n",
     "scripts/readiness_gate.py": (
         'def build_signed_live_report():\n    pass\n"kind": "pilot_live_gate"\n'
         'configuration_fingerprint(env, secret)\nrelease_binding(current_release)\n'
@@ -58,6 +58,7 @@ FILE_CONTENT = {
     ),
     "backend/services/pilot_runtime.py": (
         "from scripts.pilot_release_contract import CAPABILITY_VERSION\n"
+        "validate_pilot_database_evidence(\n"
         '"version": CAPABILITY_VERSION\n'
         "build_admission_binding(manifest_path, manifest)\n"
         "validate_state_descendant(\n"
@@ -65,13 +66,24 @@ FILE_CONTENT = {
         "state.pilot_state_revision\nstate.pilot_state_sha256\n"
         "armed runtime pilot state replay anchor is missing\n"
     ),
+    "backend/services/pilot_database_evidence.py": (
+        "def validate_pilot_database_evidence(): pass\n"
+        "pilot slot order_id\nPostgreSQL payment\nPostgreSQL refund\n"
+        "final GO scenario order IDs\n"
+    ),
+    "backend/tests/test_pilot_database_evidence.py": (
+        "test_exact_completed_twenty_order_database_evidence_is_accepted\n"
+        "test_missing_or_wrong_slot_order_fails_closed\n"
+        "test_payment_refund_status_and_amount_are_read_from_postgresql\n"
+        "test_final_go_rejects_active_or_incomplete_runtime\n"
+    ),
     "scripts/pilot_control_binding.py": (
         "def build_admission_binding(): pass\nmanifest_sha256\n"
         "def validate_admission_binding(): pass\n"
         "def require_admission_binding(): pass\n"
     ),
     "scripts/pilot_control.py": (
-        "SCHEMA_VERSION = 5\nverified_admission_context(\n"
+        "SCHEMA_VERSION = 6\ndatabase_evidence_contract\nverified_admission_context(\n"
         "approved_operator_names=args.approved_operators\n"
         "mutation=_mutation_from_args(\n"
         "Unattributed pilot state schema 4 cannot be reused\n"
@@ -114,6 +126,7 @@ FILE_CONTENT = {
     ),
     "scripts/pilot_runtime.py": (
         "build_admission_binding(DEFAULT_MANIFEST, manifest)\n"
+        "validate_pilot_database_evidence(\n"
         "validate_audit_log(\napproved_operators(manifest)\n"
         "pilot_state_revision\npilot_state_sha256\npilot_state_history\n"
         "validate_anchor_transition(\n"
@@ -443,7 +456,7 @@ def _release(repo: Path, tmp_path: Path, release_id: str, created_at: str) -> Pa
 
 
 def test_signed_release_capability_is_bound_to_exact_release():
-    assert CAPABILITY_VERSION == 15
+    assert CAPABILITY_VERSION == 16
     secret = "s" * 48
     state = _release_state()
     state["capabilities"] = {
