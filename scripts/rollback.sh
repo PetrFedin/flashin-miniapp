@@ -8,6 +8,8 @@ ROLLBACK_DRILL=${ROLLBACK_DRILL:-0}
 export COMPOSE_FILE=${COMPOSE_FILE:-"docker-compose.yml:docker-compose.production.yml"}
 export COMPOSE_PROFILES=${COMPOSE_PROFILES:-"production,workers,scheduler,search"}
 
+PROJECT_ROOT=$(pwd)
+RELEASE_STATE_DIR="$PROJECT_ROOT/deploy/release/runtime"
 CONTROL_SCRIPT="scripts/release_control.py"
 RESTORE_SCRIPT="scripts/restore_postgres.sh"
 EVIDENCE_SCRIPT="scripts/pilot_evidence.py"
@@ -193,8 +195,18 @@ for service in db backend frontend admin bot caddy notification_worker scheduler
 done
 
 docker compose exec -T backend python scripts/container_smoke.py
-python3 "$TMP_DIR/release_control.py" promote --archive "$RELEASE" >/dev/null
+python3 "$TMP_DIR/release_control.py" promote \
+  --archive "$RELEASE" \
+  --state-dir "$RELEASE_STATE_DIR" >/dev/null
+PROMOTED_RELEASE=$(python3 "$TMP_DIR/release_control.py" resolve \
+  --slot current \
+  --state-dir "$RELEASE_STATE_DIR")
+if [ "$PROMOTED_RELEASE" != "$RELEASE" ]; then
+  echo "Rollback release pointer promotion mismatch: expected '$RELEASE', got '$PROMOTED_RELEASE'" >&2
+  exit 1
+fi
 python3 scripts/pilot_release_capability.py stamp --slot current --env .env >/dev/null
+python3 scripts/pilot_release_capability.py verify --slot both --env .env
 
 if [ "$ROLLBACK_DRILL" = "1" ]; then
   max_age_days=$(python3 - <<'PY'
