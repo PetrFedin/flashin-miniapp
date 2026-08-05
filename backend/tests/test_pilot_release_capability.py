@@ -36,11 +36,11 @@ def _git(repo: Path, *args: str) -> None:
 
 FILE_CONTENT = {
     "backend/api/orders.py": "acquire_pilot_checkout()\nrecord_pilot_order()\n",
+    "scripts/pilot_release_capability.py": "from pilot_release_contract import CAPABILITY_VERSION\n",
+    "scripts/pilot_release_contract.py": "CAPABILITY_VERSION = 8\n",
     "backend/services/pilot_runtime.py": (
-        "from scripts.pilot_release_capability import (\n"
-        "    CAPABILITY_VERSION as PILOT_RUNTIME_CAPABILITY_VERSION,\n"
-        ")\n"
-        '"version": PILOT_RUNTIME_CAPABILITY_VERSION\n'
+        "from scripts.pilot_release_contract import CAPABILITY_VERSION\n"
+        '"version": CAPABILITY_VERSION\n'
     ),
     "backend/services/pilot_circuit_breaker.py": (
         "def stop_pilot_for_order():\n    pass\n"

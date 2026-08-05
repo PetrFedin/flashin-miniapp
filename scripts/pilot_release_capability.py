@@ -12,13 +12,13 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from pilot_evidence import require_signing_secret, sign_payload, verify_payload_signature
+from pilot_release_contract import CAPABILITY_VERSION
 from pilot_readiness import read_env
 from release_control import MANIFEST_NAME, sha256_file, verify_release
 
 ROOT = Path(__file__).resolve().parents[1]
 STATE_DIR = ROOT / "deploy/release/runtime"
 CAPABILITY_NAME = "pilot_runtime_guard"
-CAPABILITY_VERSION = 8
 REQUIRED_FILES = {
     ".env.production.example",
     ".github/workflows/ci.yml",
@@ -75,6 +75,7 @@ REQUIRED_FILES = {
     "scripts/pilot_runtime.py",
     "scripts/check_pilot_runtime_integrity.py",
     "scripts/pilot_release_capability.py",
+    "scripts/pilot_release_contract.py",
     "scripts/check_production_compose.py",
     "docker-compose.yml",
     "docker-compose.production.yml",
@@ -142,7 +143,9 @@ def inspect_runtime_guard(archive: Path) -> list[str]:
                 errors.append("Release is missing pilot runtime files: " + ", ".join(missing))
 
             _require_markers(bundle, files, "backend/api/orders.py", ("acquire_pilot_checkout(", "record_pilot_order("), errors)
-            _require_markers(bundle, files, "backend/services/pilot_runtime.py", ("from scripts.pilot_release_capability import (", "CAPABILITY_VERSION as PILOT_RUNTIME_CAPABILITY_VERSION,", '"version": PILOT_RUNTIME_CAPABILITY_VERSION'), errors)
+            _require_markers(bundle, files, "scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 8",), errors)
+            _require_markers(bundle, files, "scripts/pilot_release_capability.py", ("from pilot_release_contract import CAPABILITY_VERSION",), errors)
+            _require_markers(bundle, files, "backend/services/pilot_runtime.py", ("from scripts.pilot_release_contract import CAPABILITY_VERSION", '"version": CAPABILITY_VERSION'), errors)
             _require_markers(bundle, files, "backend/services/pilot_circuit_breaker.py", ("def stop_pilot_for_order(", "def trip_pilot_circuit_breaker("), errors)
             _require_markers(bundle, files, "backend/api/payments.py", ("ProviderPaymentIntegrityError", "trip_pilot_circuit_breaker(", "stop_pilot_for_order("), errors)
             _require_markers(bundle, files, "backend/api/returns.py", ("trip_pilot_circuit_breaker(", "stop_pilot_for_order("), errors)
