@@ -37,7 +37,22 @@ def _git(repo: Path, *args: str) -> None:
 FILE_CONTENT = {
     "backend/api/orders.py": "acquire_pilot_checkout()\nrecord_pilot_order()\n",
     "scripts/pilot_release_capability.py": "from pilot_release_contract import CAPABILITY_VERSION\n",
-    "scripts/pilot_release_contract.py": "CAPABILITY_VERSION = 8\n",
+    "scripts/pilot_release_contract.py": "CAPABILITY_VERSION = 9\n",
+    "scripts/readiness_gate.py": (
+        'def build_signed_live_report():\n    pass\n"kind": "pilot_live_gate"\n'
+        'configuration_fingerprint(env, secret)\nrelease_binding(current_release)\n'
+        'return sign_payload(payload, secret)\n'
+    ),
+    "scripts/pilot_admission.py": (
+        'live gate evidence signature is invalid\n'
+        'live gate configuration fingerprint does not match\n'
+        'live gate release binding is missing\n'
+        'validate_release_binding(release, current_release)\n'
+    ),
+    "backend/tests/test_pilot_admission.py": (
+        'test_live_gate_rejects_tampering_configuration_and_other_release\n'
+        'configuration fingerprint\nlive gate release\n'
+    ),
     "backend/services/pilot_runtime.py": (
         "from scripts.pilot_release_contract import CAPABILITY_VERSION\n"
         '"version": CAPABILITY_VERSION\n'
@@ -328,7 +343,7 @@ def _release(repo: Path, tmp_path: Path, release_id: str, created_at: str) -> Pa
 
 
 def test_signed_release_capability_is_bound_to_exact_release():
-    assert CAPABILITY_VERSION == 8
+    assert CAPABILITY_VERSION == 9
     secret = "s" * 48
     state = _release_state()
     state["capabilities"] = {

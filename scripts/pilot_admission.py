@@ -82,9 +82,31 @@ def load_verified_release_state(path: Path) -> dict[str, Any]:
 def validate_live_gate_report(
     report: Mapping[str, Any],
     *,
+    env: Mapping[str, str],
+    current_release: Mapping[str, Any],
     max_age_minutes: int,
 ) -> list[str]:
     errors: list[str] = []
+    try:
+        secret = require_signing_secret(env)
+    except ValueError as exc:
+        return [str(exc)]
+    if report.get("schema_version") != 1:
+        errors.append("unsupported live gate evidence schema")
+    if report.get("kind") != "pilot_live_gate":
+        errors.append("live gate evidence kind is invalid")
+    if not verify_payload_signature(report, secret):
+        errors.append("live gate evidence signature is invalid")
+    if report.get("configuration_fingerprint") != configuration_fingerprint(env, secret):
+        errors.append("live gate configuration fingerprint does not match")
+    release = report.get("release")
+    if not isinstance(release, Mapping):
+        errors.append("live gate release binding is missing")
+    else:
+        errors.extend(
+            f"live gate release: {item}"
+            for item in validate_release_binding(release, current_release)
+        )
     if report.get("phase") != "live":
         errors.append("live gate phase is not live")
     if report.get("go") is not True:
@@ -99,30 +121,18 @@ def validate_live_gate_report(
         provider_checks = [
             item
             for item in checks
-            if isinstance(item, Mapping) and item.get("name") == "live:provider_integrations"
+            if isinstance(item, Mapping)
+            and item.get("name") == "live:provider_integrations"
         ]
         if len(provider_checks) != 1 or provider_checks[0].get("ok") is not True:
             errors.append("live gate did not verify provider evidence")
-    generated_at = report.get("generated_at")
-    window_payload = {
-        "created_at": generated_at,
-        "expires_at": report.get("expires_at") or generated_at,
-    }
-    if generated_at:
-        try:
-            created = parse_timestamp(generated_at, "generated_at")
-            window_payload["expires_at"] = utc_timestamp(created + timedelta(minutes=max_age_minutes))
-            errors.extend(
-                validate_evidence_window(
-                    window_payload,
-                    now=None,
-                    maximum_age=timedelta(minutes=max_age_minutes),
-                )
-            )
-        except ValueError as exc:
-            errors.append(str(exc))
-    else:
-        errors.append("live gate generated_at is missing")
+    errors.extend(
+        validate_evidence_window(
+            report,
+            now=None,
+            maximum_age=timedelta(minutes=max_age_minutes),
+        )
+    )
     return list(dict.fromkeys(errors))
 
 
@@ -277,6 +287,8 @@ def validate_admission_manifest(
         errors.extend(
             validate_live_gate_report(
                 load_json(live_path),
+                env=env,
+                current_release=current_release,
                 max_age_minutes=live_max_age_minutes,
             )
         )

@@ -72,6 +72,9 @@ REQUIRED_FILES = {
     "scripts/restore_postgres.sh",
     "scripts/backup_restore_smoke.sh",
     "scripts/release_rollback_smoke.sh",
+    "scripts/readiness_gate.py",
+    "scripts/pilot_admission.py",
+    "backend/tests/test_pilot_admission.py",
     "scripts/pilot_runtime.py",
     "scripts/check_pilot_runtime_integrity.py",
     "scripts/pilot_release_capability.py",
@@ -143,9 +146,12 @@ def inspect_runtime_guard(archive: Path) -> list[str]:
                 errors.append("Release is missing pilot runtime files: " + ", ".join(missing))
 
             _require_markers(bundle, files, "backend/api/orders.py", ("acquire_pilot_checkout(", "record_pilot_order("), errors)
-            _require_markers(bundle, files, "scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 8",), errors)
+            _require_markers(bundle, files, "scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 9",), errors)
             _require_markers(bundle, files, "scripts/pilot_release_capability.py", ("from pilot_release_contract import CAPABILITY_VERSION",), errors)
             _require_markers(bundle, files, "backend/services/pilot_runtime.py", ("from scripts.pilot_release_contract import CAPABILITY_VERSION", '"version": CAPABILITY_VERSION'), errors)
+            _require_markers(bundle, files, "scripts/readiness_gate.py", ("def build_signed_live_report(", '"kind": "pilot_live_gate"', "configuration_fingerprint(env, secret)", "release_binding(current_release)", "return sign_payload(payload, secret)"), errors)
+            _require_markers(bundle, files, "scripts/pilot_admission.py", ("live gate evidence signature is invalid", "live gate configuration fingerprint does not match", "live gate release binding is missing", "validate_release_binding(release, current_release)"), errors)
+            _require_markers(bundle, files, "backend/tests/test_pilot_admission.py", ("test_live_gate_rejects_tampering_configuration_and_other_release", "configuration fingerprint", "live gate release"), errors)
             _require_markers(bundle, files, "backend/services/pilot_circuit_breaker.py", ("def stop_pilot_for_order(", "def trip_pilot_circuit_breaker("), errors)
             _require_markers(bundle, files, "backend/api/payments.py", ("ProviderPaymentIntegrityError", "trip_pilot_circuit_breaker(", "stop_pilot_for_order("), errors)
             _require_markers(bundle, files, "backend/api/returns.py", ("trip_pilot_circuit_breaker(", "stop_pilot_for_order("), errors)

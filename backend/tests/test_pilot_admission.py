@@ -11,6 +11,7 @@ from pilot_admission import (  # noqa: E402
     validate_admission_manifest,
     validate_live_gate_report,
 )
+from readiness_gate import build_signed_live_report  # noqa: E402
 from pilot_evidence import (  # noqa: E402
     build_rollback_drill_report,
     configuration_fingerprint,
@@ -68,11 +69,10 @@ def provider_report(now, values, current):
     return sign_payload(payload, values["PILOT_EVIDENCE_SIGNING_SECRET"])
 
 
-def live_report(now):
-    return {
+def live_report(now, values, current):
+    unsigned = {
         "phase": "live",
         "go": True,
-        "generated_at": utc_timestamp(now),
         "summary": {"total": 10, "passed": 10, "critical_failed": 0, "optional_failed": 0},
         "critical_failed": [],
         "checks": [
@@ -80,6 +80,16 @@ def live_report(now):
             {"name": "live:provider_integrations", "ok": True, "critical": True, "detail": "ok"},
         ],
     }
+    report = build_signed_live_report(
+        unsigned,
+        env=values,
+        current_release=current,
+        max_age_minutes=30,
+    )
+    report["created_at"] = utc_timestamp(now)
+    report["generated_at"] = utc_timestamp(now)
+    report["expires_at"] = utc_timestamp(now + timedelta(minutes=30))
+    return sign_payload(report, values["PILOT_EVIDENCE_SIGNING_SECRET"])
 
 
 def write_json(path: Path, payload):
@@ -97,7 +107,7 @@ def test_admission_manifest_binds_all_evidence_and_approvals(tmp_path: Path):
     backup = tmp_path / "backup.sql.gz"
     backup.write_bytes(b"backup")
     write_json(provider_path, provider_report(now, values, current))
-    write_json(live_path, live_report(now))
+    write_json(live_path, live_report(now, values, current))
     write_json(
         rollback_path,
         build_rollback_drill_report(
@@ -159,13 +169,21 @@ def test_admission_manifest_binds_all_evidence_and_approvals(tmp_path: Path):
 
 def test_live_gate_requires_provider_evidence_and_fresh_timestamp():
     now = datetime.now(UTC)
-    report = live_report(now)
-    assert validate_live_gate_report(report, max_age_minutes=30) == []
+    values = env()
+    current = release("current", "a")
+    report = live_report(now, values, current)
+    assert validate_live_gate_report(
+        report, env=values, current_release=current, max_age_minutes=30
+    ) == []
     report["checks"] = []
-    errors = validate_live_gate_report(report, max_age_minutes=30)
+    errors = validate_live_gate_report(
+        report, env=values, current_release=current, max_age_minutes=30
+    )
     assert any("provider evidence" in item for item in errors)
-    old = live_report(now - timedelta(minutes=31))
-    errors = validate_live_gate_report(old, max_age_minutes=30)
+    old = live_report(now - timedelta(minutes=31), values, current)
+    errors = validate_live_gate_report(
+        old, env=values, current_release=current, max_age_minutes=30
+    )
     assert any("expired" in item or "older" in item for item in errors)
 
 
@@ -181,7 +199,7 @@ def test_admission_rejects_rollback_drill_for_unrelated_releases(tmp_path: Path)
     backup = tmp_path / "backup.sql.gz"
     backup.write_bytes(b"backup")
     write_json(provider_path, provider_report(now, values, current))
-    write_json(live_path, live_report(now))
+    write_json(live_path, live_report(now, values, current))
     write_json(
         rollback_path,
         build_rollback_drill_report(
@@ -227,3 +245,30 @@ def test_admission_rejects_rollback_drill_for_unrelated_releases(tmp_path: Path)
         rollback_max_age_days=30,
     )
     assert any("rollback drill origin" in item for item in errors)
+
+
+def test_live_gate_rejects_tampering_configuration_and_other_release():
+    now = datetime.now(UTC)
+    values = env()
+    current = release("current", "a")
+    report = live_report(now, values, current)
+
+    tampered = dict(report)
+    tampered["go"] = False
+    errors = validate_live_gate_report(
+        tampered, env=values, current_release=current, max_age_minutes=30
+    )
+    assert any("signature" in item for item in errors)
+
+    changed_env = dict(values)
+    changed_env["MEILISEARCH_MASTER_KEY"] = "different"
+    errors = validate_live_gate_report(
+        report, env=changed_env, current_release=current, max_age_minutes=30
+    )
+    assert any("configuration fingerprint" in item for item in errors)
+
+    other = release("other", "c")
+    errors = validate_live_gate_report(
+        report, env=values, current_release=other, max_age_minutes=30
+    )
+    assert any("live gate release" in item for item in errors)
