@@ -48,6 +48,7 @@ def build_signed_live_report(
     current_release: Mapping[str, Any],
     max_age_minutes: int,
 ) -> dict[str, Any]:
+    """Bind live evidence to the active release/configuration and sign it."""
     secret = require_signing_secret(env)
     created = utc_now()
     payload = dict(report)
@@ -57,7 +58,9 @@ def build_signed_live_report(
             "kind": "pilot_live_gate",
             "generated_at": utc_timestamp(created),
             "created_at": utc_timestamp(created),
-            "expires_at": utc_timestamp(created + timedelta(minutes=max_age_minutes)),
+            "expires_at": utc_timestamp(
+                created + timedelta(minutes=max_age_minutes)
+            ),
             "configuration_fingerprint": configuration_fingerprint(env, secret),
             "release": release_binding(current_release),
         }
@@ -94,10 +97,19 @@ def main() -> int:
         )
     else:
         report["generated_at"] = utc_timestamp()
-    stem = "readiness_gate_report" if args.phase == "predeploy" else "pilot_live_gate_report"
+    stem = (
+        "readiness_gate_report"
+        if args.phase == "predeploy"
+        else "pilot_live_gate_report"
+    )
     json_path, markdown_path = write_report(ROOT, report, stem=stem)
     print(json.dumps(report, ensure_ascii=False, indent=2))
-    print({"json": str(json_path.relative_to(ROOT)), "markdown": str(markdown_path.relative_to(ROOT))})
+    print(
+        {
+            "json": str(json_path.relative_to(ROOT)),
+            "markdown": str(markdown_path.relative_to(ROOT)),
+        }
+    )
     return 0 if report["go"] else 1
 
 
