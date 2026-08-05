@@ -18,7 +18,7 @@ from release_control import MANIFEST_NAME, sha256_file, verify_release
 ROOT = Path(__file__).resolve().parents[1]
 STATE_DIR = ROOT / "deploy/release/runtime"
 CAPABILITY_NAME = "pilot_runtime_guard"
-CAPABILITY_VERSION = 5
+CAPABILITY_VERSION = 6
 REQUIRED_FILES = {
     ".env.production.example",
     ".github/workflows/ci.yml",
@@ -32,9 +32,12 @@ REQUIRED_FILES = {
     "admin/src/serviceOperations.js",
     "admin/src/serviceOperations.test.js",
     "backend/pilot_models.py",
+    "backend/order_statuses.py",
     "backend/services/pilot_runtime.py",
     "backend/services/pilot_circuit_breaker.py",
     "backend/services/payment_reconciliation.py",
+    "backend/services/payment_settlement.py",
+    "backend/services/loyalty.py",
     "backend/services/fulfillment.py",
     "backend/services/delivery_providers.py",
     "backend/alembic/versions/0022_pilot_runtime_guard.py",
@@ -45,6 +48,7 @@ REQUIRED_FILES = {
     "backend/api/fulfillment.py",
     "backend/api/delivery_providers.py",
     "backend/tests/test_support_admin_schema.py",
+    "backend/tests/test_referral_attribution.py",
     "backend/main.py",
     "backend/middleware/metrics.py",
     "deploy/grafana/dashboards/flashin_operations.json",
@@ -60,6 +64,7 @@ REQUIRED_FILES = {
     "e2e/tests/owner-admin.spec.js",
     "e2e/tests/storefront.spec.js",
     "scripts/full_fulfillment_smoke.py",
+    "scripts/referral_attribution_smoke.py",
     "scripts/pilot_runtime.py",
     "scripts/check_pilot_runtime_integrity.py",
     "scripts/pilot_release_capability.py",
@@ -136,6 +141,10 @@ def inspect_runtime_guard(archive: Path) -> list[str]:
             _require_markers(bundle, files, "backend/api/support.py", ("class AdminSupportTicketOut", "assigned_admin_id: int | None = None", "response_model=list[AdminSupportTicketOut]", "response_model=AdminSupportTicketOut"), errors)
             _require_markers(bundle, files, "backend/tests/test_support_admin_schema.py", ("test_admin_support_ticket_schema_exposes_accountable_owner", "assigned_admin_id"), errors)
             _require_markers(bundle, files, "backend/services/payment_reconciliation.py", ("payment_reconciliation_mismatch", "stop_pilot_for_order("), errors)
+            _require_markers(bundle, files, "backend/order_statuses.py", ("SETTLED_ORDER_PAYMENT_STATUSES", '"paid_review_required"', '"refund_review_required"'), errors)
+            _require_markers(bundle, files, "backend/services/payment_settlement.py", ("from ..order_statuses import SETTLED_ORDER_PAYMENT_STATUSES", "reward_referral_after_first_paid_order(db, order.customer_id, order.id)", "if order.payment_status in SETTLED_ORDER_PAYMENT_STATUSES"), errors)
+            _require_markers(bundle, files, "backend/services/loyalty.py", ("def _lock_referral_customer(", "def _has_prior_settled_order(", "Referral code must be applied before the first paid order", "return attach_referral_to_customer(db, code, new_customer_id)", 'attribution.status = "ineligible"', "def reward_referral_after_first_paid_order("), errors)
+            _require_markers(bundle, files, "backend/tests/test_referral_attribution.py", ("test_legacy_apply_referral_only_attaches_pending_attribution", "test_referral_after_settled_order_is_rejected_even_for_same_code", "test_missing_customer_is_not_silently_eligible"), errors)
             _require_markers(bundle, files, "backend/services/fulfillment.py", ("def _picklist_is_complete(", "Every picklist item must be fully picked before packing", 'order.delivery_status = "ready"'), errors)
             _require_markers(bundle, files, "backend/api/fulfillment.py", ("fulfillment.task.update", "fulfillment.task_item.update", "assigned_admin_id"), errors)
             _require_markers(bundle, files, "backend/services/delivery_providers.py", ("_SHIPMENT_TRANSITIONS", "Only a ready order can be transferred to delivery", 'order.status = "shipped"', 'order.status = "completed"'), errors)
@@ -149,7 +158,7 @@ def inspect_runtime_guard(archive: Path) -> list[str]:
             _require_markers(bundle, files, "scripts/check_production_compose.py", ('MONITORING_SERVICES = {"prometheus", "grafana"}', 'PRODUCTION_PROFILES = ("production", "workers", "scheduler", "search", "monitoring")', "Grafana anonymous access must be disabled"), errors)
             _require_markers(bundle, files, ".env.production.example", ("METRICS_ENABLED=true", "GRAFANA_ADMIN_USER=", "GRAFANA_ADMIN_PASSWORD="), errors)
             _require_markers(bundle, files, "docker-compose.yml", ("prometheus:", "grafana:", "prometheus_data", "grafana_data"), errors)
-            _require_markers(bundle, files, ".github/workflows/ci.yml", ("browser-e2e:", "Install Chromium", "Run Mini App and Admin browser journeys", "Run transactional full fulfillment smoke", "needs: [backend, frontend, admin, browser-e2e]"), errors)
+            _require_markers(bundle, files, ".github/workflows/ci.yml", ("browser-e2e:", "Install Chromium", "Run Mini App and Admin browser journeys", "Run transactional referral attribution smoke", "Run transactional full fulfillment smoke", "needs: [backend, frontend, admin, browser-e2e]"), errors)
             _require_markers(bundle, files, "e2e/package.json", ('"@playwright/test": "1.54.2"', '"test": "playwright test"'), errors)
             _require_markers(bundle, files, "e2e/playwright.config.js", ('name: "storefront-mobile"', 'name: "admin-desktop"', 'trace: "retain-on-failure"', 'screenshot: "only-on-failure"', 'video: "retain-on-failure"'), errors)
             _require_markers(bundle, files, "e2e/tests/storefront.spec.js", ("Mini App critical pilot journey", "Mini App cart quantity and removal controls", "Mini App profile, support, privacy and return journey", "Mini App payment return route refreshes paid order"), errors)
@@ -166,7 +175,8 @@ def inspect_runtime_guard(archive: Path) -> list[str]:
             _require_markers(bundle, files, "admin/index.html", ('href="/src/serviceOperations.css"', "FLASHIN Admin"), errors)
             _require_markers(bundle, files, "admin/src/serviceOperations.css", (".service-operations", ".service-grid", ".attention-badge"), errors)
             _require_markers(bundle, files, "scripts/full_fulfillment_smoke.py", ("Every picklist item must be fully picked before packing", "idempotent shipment create", 'persisted_order.status == "completed"', 'persisted_order.delivery_status == "delivered"'), errors)
-            _require_markers(bundle, files, "docs/pilot/end_to_end_coverage_matrix.md", ("## Browser journeys", "Nine stateful Playwright journeys", "accountable active Admin ID", "Admin service operations", "full picklist", "## Evidence boundary"), errors)
+            _require_markers(bundle, files, "scripts/referral_attribution_smoke.py", ("duplicate referral payment webhook", "late_referral.status_code == 409", "persisted_referral.used_count == 1", "len(reward_rows) == 1", "second_persisted_order.referral_code is None"), errors)
+            _require_markers(bundle, files, "docs/pilot/end_to_end_coverage_matrix.md", ("## Browser journeys", "Nine stateful Playwright journeys", "accountable active Admin ID", "Admin service operations", "full picklist", "## Transactional referral evidence", "first paid order -> one inviter reward", "## Evidence boundary"), errors)
 
             if "docker-compose.production.yml" in files:
                 compose = bundle.read("docker-compose.production.yml").decode("utf-8")
