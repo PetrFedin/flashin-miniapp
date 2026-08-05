@@ -24,65 +24,9 @@ jobs:
           cache-dependency-path: backend/requirements.txt
       - name: Apply database evidence contract
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          path = Path('.github/patches/apply_pilot_database_evidence_v16.py')
-          content = path.read_text(encoding='utf-8')
-          old = '    if count != 1:\n        raise SystemExit(\n            f"Expected one match in {path}: {old[:120]!r}; found {count}"\n        )'
-          new = '    if count < 1:\n        raise SystemExit(\n            f"Expected a match in {path}: {old[:120]!r}; found {count}"\n        )'
-          if old not in content:
-              raise SystemExit('replace_once guard not found')
-          path.write_text(content.replace(old, new, 1), encoding='utf-8')
-          PY
+          sed -i 's/if count != 1:/if count < 1:/' .github/patches/apply_pilot_database_evidence_v16.py
           python .github/patches/apply_pilot_database_evidence_v16.py
-      - name: Synchronize v16 test fixtures
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          signature = Path('backend/tests/test_pilot_control_signature.py')
-          text = signature.read_text(encoding='utf-8')
-          old = 'assert state["schema_version"] == 5'
-          if old not in text:
-              raise SystemExit('schema version assertion fixture not found')
-          signature.write_text(text.replace(old, 'assert state["schema_version"] == 6', 1), encoding='utf-8')
-
-          capability = Path('backend/tests/test_pilot_release_capability.py')
-          text = capability.read_text(encoding='utf-8')
-          replacements = [
-              ('"scripts/pilot_release_contract.py": "CAPABILITY_VERSION = 15\\n",',
-               '"scripts/pilot_release_contract.py": "CAPABILITY_VERSION = 16\\n",'),
-              ('"SCHEMA_VERSION = 5\\nverified_admission_context(\\n"',
-               '"SCHEMA_VERSION = 6\\ndatabase_evidence_contract\\nverified_admission_context(\\n"'),
-              ('"approved_operators(manifest)\\n"\n        "state.pilot_state_revision',
-               '"approved_operators(manifest)\\n"\n        "validate_pilot_database_evidence(\\n"\n        "state.pilot_state_revision'),
-              ('"validate_anchor_transition(\\n"\n        "Stopped pilot runtime',
-               '"validate_anchor_transition(\\n"\n        "validate_pilot_database_evidence(\\n"\n        "Stopped pilot runtime'),
-              ('assert CAPABILITY_VERSION == 15', 'assert CAPABILITY_VERSION == 16'),
-          ]
-          for old, new in replacements:
-              if old not in text:
-                  raise SystemExit(f'capability fixture marker not found: {old[:80]}')
-              text = text.replace(old, new, 1)
-
-          insertion = '''    "backend/services/pilot_database_evidence.py": (
-        "def validate_pilot_database_evidence(): pass\\n"
-        "pilot slot order_id\\nPostgreSQL payment\\nPostgreSQL refund\\n"
-        "final GO scenario order IDs\\n"
-    ),
-    "backend/tests/test_pilot_database_evidence.py": (
-        "test_exact_completed_twenty_order_database_evidence_is_accepted\\n"
-        "test_missing_or_wrong_slot_order_fails_closed\\n"
-        "test_payment_refund_status_and_amount_are_read_from_postgresql\\n"
-        "test_final_go_rejects_active_or_incomplete_runtime\\n"
-    ),
-'''
-          anchor = '    "scripts/pilot_control_binding.py": ('
-          if anchor not in text:
-              raise SystemExit('capability fixture insertion anchor not found')
-          text = text.replace(anchor, insertion + anchor, 1)
-          capability.write_text(text, encoding='utf-8')
-          PY
+          python .github/patches/sync_pilot_database_evidence_v16_fixtures.py
       - name: Install and validate targeted contract
         run: |
           pip install -r backend/requirements.txt
@@ -101,6 +45,7 @@ jobs:
         run: |
           rm -f .github/workflows/apply-pilot-database-evidence-v16.yml
           rm -f .github/patches/apply_pilot_database_evidence_v16.py
+          rm -f .github/patches/sync_pilot_database_evidence_v16_fixtures.py
           rmdir .github/patches 2>/dev/null || true
           git config user.name "FLASHIN Database Evidence Guard"
           git config user.email "pilot-db-evidence@flashin.local"
