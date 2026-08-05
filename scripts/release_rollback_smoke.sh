@@ -8,7 +8,7 @@ RELEASE_REPO="$TMP_DIR/release-repo"
 OVERRIDE_FILE="$TMP_DIR/docker-compose.rollback-smoke.yml"
 BACKUP_FILE="$TMP_DIR/rollback-smoke.sql.gz"
 BACKUP_MANIFEST_FILE="${BACKUP_FILE}.manifest.json"
-MARKER_FILE="docs/pilot/rollback_version_marker.txt"
+MARKER_FILE="scripts/rollback_version_marker.txt"
 REPORT_JSON="docs/pilot/rollback_drill_report.json"
 REPORT_MD="docs/pilot/rollback_drill_report.md"
 TELEGRAM_ID="rollback_${TOKEN}"
@@ -128,6 +128,12 @@ if [ "$restored_marker" != "$PREVIOUS_MARKER" ]; then
   exit 1
 fi
 
+container_marker=$(docker compose exec -T backend sh -ec 'tr -d "\r\n" < /app/scripts/rollback_version_marker.txt')
+if [ "$container_marker" != "$PREVIOUS_MARKER" ]; then
+  echo "Backend image was not rebuilt from the target release: expected '$PREVIOUS_MARKER', got '$container_marker'" >&2
+  exit 1
+fi
+
 restored_name=$(docker compose exec -T db sh -ec \
   'exec psql --set ON_ERROR_STOP=on -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAX -c "$1"' \
   sh "SELECT first_name FROM public.customers WHERE telegram_id = '$TELEGRAM_ID';")
@@ -166,6 +172,7 @@ print(json.dumps({
     "database_restored": report["checks"]["database_restored"],
     "services_running": report["checks"]["services_running"],
     "container_smoke": report["checks"]["container_smoke"],
+    "runtime_image_rebuilt": True,
     "release_pointer_promoted": True,
     "signed_evidence_verified": True,
 }, ensure_ascii=False))
