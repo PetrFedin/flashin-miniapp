@@ -157,9 +157,12 @@ def _drop_database(database: str) -> None:
 
 def _create_database(database: str) -> None:
     db_name = _validate_identifier(database, "temporary database")
-    owner = _validate_identifier(_compose_env("POSTGRES_USER"), "POSTGRES_USER")
     _drop_database(db_name)
-    _psql("postgres", f'CREATE DATABASE "{db_name}" OWNER "{owner}";')
+    # PostgreSQL makes the authenticated role the database owner by default.
+    # Avoid an explicit OWNER clause: it performs a separate SET ROLE check and
+    # can fail for a valid CREATEDB service account that is not allowed to set
+    # role, even when that same account should own the temporary database.
+    _psql("postgres", f'CREATE DATABASE "{db_name}";')
 
 
 def _restore_archive(backup: Path, database: str) -> None:
