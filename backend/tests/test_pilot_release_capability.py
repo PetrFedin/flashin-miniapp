@@ -2,6 +2,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 
@@ -75,32 +77,25 @@ FILE_CONTENT = {
         'order.delivery_status = "ready"\n'
     ),
     "backend/api/fulfillment.py": (
-        "fulfillment.task.update\n"
-        "fulfillment.task_item.update\n"
-        "assigned_admin_id\n"
+        "fulfillment.task.update\nfulfillment.task_item.update\nassigned_admin_id\n"
     ),
     "backend/services/delivery_providers.py": (
         "_SHIPMENT_TRANSITIONS = {}\n"
         "Only a ready order can be transferred to delivery\n"
-        'order.status = "shipped"\n'
-        'order.status = "completed"\n'
+        'order.status = "shipped"\norder.status = "completed"\n'
     ),
     "backend/api/delivery_providers.py": (
-        "delivery.shipment.create\n"
-        "delivery.shipment.update\n"
-        "with_for_update()\n"
+        "delivery.shipment.create\ndelivery.shipment.update\nwith_for_update()\n"
     ),
     "backend/main.py": (
-        "from .middleware.metrics import collect_pilot_metrics, metrics_response\n"
-        '@app.get("/metrics", include_in_schema=False)\n'
-        "def metrics(db):\n"
-        "    collect_pilot_metrics(db, settings)\n"
-        "    return metrics_response()\n"
+        "collect_pilot_metrics\n"
+        '@app.get("/metrics"\n'
+        "return metrics_response()\n"
     ),
     "backend/middleware/metrics.py": (
-        'PILOT = "flashin_pilot_metrics_collection_success"\n'
-        "def collect_pilot_metrics(db, settings):\n    return True\n"
-        "def _metric_path(request):\n    return \"__unmatched__\"\n"
+        "flashin_pilot_metrics_collection_success\n"
+        "def collect_pilot_metrics():\n    pass\n"
+        'return "__unmatched__"\n'
     ),
     "deploy/monitoring/rules/flashin_pilot.yml": (
         "FlashinPilotMetricsUnavailable\n"
@@ -109,52 +104,41 @@ FILE_CONTENT = {
         "FlashinPilotCapacityLow\n"
     ),
     "deploy/grafana/dashboards/flashin_operations.json": (
-        '{"title":"FLASHIN Operations",'
-        '"targets":["flashin_pilot_checkout_ready",'
-        '"flashin_pilot_money_attention"]}\n'
+        "FLASHIN Operations\nflashin_pilot_checkout_ready\nflashin_pilot_money_attention\n"
     ),
     "deploy/grafana/provisioning/datasources/prometheus.yml": (
-        "type: prometheus\nurl: http://prometheus:9090\n"
+        "prometheus\nhttp://prometheus:9090\n"
     ),
     "deploy/monitoring/prometheus.yml": (
-        "rule_files:\n  - /etc/prometheus/rules/*.yml\n"
-        "static_configs:\n  - targets: [backend:8000]\n"
+        "rule_files\n/etc/prometheus/rules/*.yml\nbackend:8000\n"
     ),
     "scripts/check_production_compose.py": (
         'MONITORING_SERVICES = {"prometheus", "grafana"}\n'
         'PRODUCTION_PROFILES = ("production", "workers", "scheduler", "search", "monitoring")\n'
-        'ERROR = "Grafana anonymous access must be disabled"\n'
+        "Grafana anonymous access must be disabled\n"
     ),
     ".env.production.example": (
-        "METRICS_ENABLED=true\n"
-        "GRAFANA_ADMIN_USER=pilot-operator\n"
-        "GRAFANA_ADMIN_PASSWORD=replace-me\n"
+        "METRICS_ENABLED=true\nGRAFANA_ADMIN_USER=pilot\nGRAFANA_ADMIN_PASSWORD=secret\n"
     ),
     "docker-compose.yml": (
-        "services:\n  prometheus:\n    image: prom/prometheus:v3.5.0\n"
-        "  grafana:\n    image: grafana/grafana:12.1.0\n"
-        "volumes:\n  prometheus_data:\n  grafana_data:\n"
+        "prometheus:\ngrafana:\nprometheus_data\ngrafana_data\n"
     ),
     ".github/workflows/ci.yml": (
-        "jobs:\n  browser-e2e:\n    steps:\n"
-        "      - name: Install Chromium\n"
-        "      - name: Run Mini App and Admin browser journeys\n"
-        "      - name: Run transactional referral attribution smoke\n"
-        "      - name: Run transactional full fulfillment smoke\n"
-        "  docker:\n    needs: [backend, frontend, admin, browser-e2e]\n"
+        "browser-e2e:\nInstall Chromium\nRun Mini App and Admin browser journeys\n"
+        "Run transactional referral attribution smoke\n"
+        "Run transactional full fulfillment smoke\n"
+        "Run signed backup and restore drill\n"
+        "bash scripts/backup_restore_smoke.sh\n"
+        "needs: [backend, frontend, admin, browser-e2e]\n"
     ),
     "e2e/package.json": (
-        "{\n"
-        '  "scripts": {"test": "playwright test"},\n'
-        '  "devDependencies": {"@playwright/test": "1.54.2"}\n'
-        "}\n"
+        '{"scripts":{"test":"playwright test"},'
+        '"devDependencies":{"@playwright/test":"1.54.2"}}\n'
     ),
     "e2e/playwright.config.js": (
-        'trace: "retain-on-failure"\n'
-        'screenshot: "only-on-failure"\n'
+        'name: "storefront-mobile"\nname: "admin-desktop"\n'
+        'trace: "retain-on-failure"\nscreenshot: "only-on-failure"\n'
         'video: "retain-on-failure"\n'
-        'name: "storefront-mobile"\n'
-        'name: "admin-desktop"\n'
     ),
     "e2e/tests/storefront.spec.js": (
         "Mini App critical pilot journey\n"
@@ -169,30 +153,24 @@ FILE_CONTENT = {
     ),
     "e2e/tests/owner-admin.spec.js": (
         "Admin assigns an accountable owner to a support ticket\n"
-        "assigned_admin_id: 42\n"
-        "Ответственный обращения 901\n"
+        "assigned_admin_id: 42\nОтветственный обращения 901\n"
     ),
     "e2e/tests/fulfillment-admin.spec.js": (
         "Admin completes picklist, shipment and delivery lifecycle\n"
-        "Собрать все позиции и упаковать\n"
-        "PILOT-TRACK-9100\n"
+        "Собрать все позиции и упаковать\nPILOT-TRACK-9100\n"
         'status: "completed"\n'
     ),
     "backend/api/support.py": (
-        "class AdminSupportTicketOut:\n"
-        "    assigned_admin_id: int | None = None\n"
-        "@router.get(response_model=list[AdminSupportTicketOut])\n"
-        "@router.patch(response_model=AdminSupportTicketOut)\n"
+        "class AdminSupportTicketOut:\n    assigned_admin_id: int | None = None\n"
+        "response_model=list[AdminSupportTicketOut]\n"
+        "response_model=AdminSupportTicketOut\n"
     ),
     "backend/tests/test_support_admin_schema.py": (
-        "def test_admin_support_ticket_schema_exposes_accountable_owner():\n"
-        '    assert "assigned_admin_id"\n'
+        "test_admin_support_ticket_schema_exposes_accountable_owner\nassigned_admin_id\n"
     ),
     "admin/src/FulfillmentOperationsPanel.jsx": (
-        '"/api/fulfillment/tasks"\n'
-        '"/api/delivery-providers/shipments"\n'
-        "async function pickAndPack() {}\n"
-        "async function ship() {}\n"
+        '"/api/fulfillment/tasks"\n"/api/delivery-providers/shipments"\n'
+        "async function pickAndPack() {}\nasync function ship() {}\n"
         "async function deliver() {}\n"
     ),
     "admin/src/fulfillmentOperations.js": (
@@ -200,9 +178,7 @@ FILE_CONTENT = {
         "export function fulfillmentAction() {}\n"
         "export function normalizeTracking() {}\n"
         "export function fulfillmentAttentionCount() {}\n"
-        "Собрать все позиции и упаковать\n"
-        "Передать в доставку\n"
-        "Подтвердить доставку\n"
+        "Собрать все позиции и упаковать\nПередать в доставку\nПодтвердить доставку\n"
     ),
     "admin/src/fulfillmentOperations.test.js": (
         "fulfillment actions expose only the next safe workflow step\n"
@@ -215,8 +191,7 @@ FILE_CONTENT = {
         'privacy: "/api/privacy/admin/requests"\n'
         'returns: "/api/admin/returns"\n'
         'adminJson("/api/returns/admin/approve"\n'
-        "Подтвердить refund\n"
-        "Ответственный обращения\n"
+        "Подтвердить refund\nОтветственный обращения\n"
     ),
     "admin/src/serviceOperations.js": (
         "export function supportTransitions() {}\n"
@@ -230,7 +205,7 @@ FILE_CONTENT = {
         "support transitions follow the backend state machine\n"
         "support owner assignment accepts only positive integer Admin IDs\n"
         "refund amount is positive, bounded and rounded\n"
-        "return action and aggregate attention are fail-closed\n"
+        "aggregate attention are fail-closed\n"
     ),
     "admin/src/BusinessEventsPanel.jsx": (
         'import FulfillmentOperationsPanel from "./FulfillmentOperationsPanel.jsx"\n'
@@ -239,8 +214,7 @@ FILE_CONTENT = {
         "<ServiceOperationsPanel onUnauthorized={onUnauthorized} />\n"
     ),
     "admin/index.html": (
-        '<link rel="stylesheet" href="/src/serviceOperations.css" />\n'
-        "<title>FLASHIN Admin</title>\n"
+        'href="/src/serviceOperations.css"\nFLASHIN Admin\n'
     ),
     "admin/src/serviceOperations.css": (
         ".service-operations {}\n.service-grid {}\n.attention-badge {}\n"
@@ -252,21 +226,46 @@ FILE_CONTENT = {
         'persisted_order.delivery_status == "delivered"\n'
     ),
     "scripts/referral_attribution_smoke.py": (
-        "duplicate referral payment webhook\n"
-        "late_referral.status_code == 409\n"
-        "persisted_referral.used_count == 1\n"
-        "len(reward_rows) == 1\n"
+        "duplicate referral payment webhook\nlate_referral.status_code == 409\n"
+        "persisted_referral.used_count == 1\nlen(reward_rows) == 1\n"
         "second_persisted_order.referral_code is None\n"
     ),
+    "scripts/backup_integrity.py": (
+        'KIND = "postgres_backup_manifest"\nCRITICAL_TABLES = (\n'
+        "def snapshot_database():\n    pass\n"
+        "def verify_restorable():\n    pass\n"
+        "def verify_live_database():\n    pass\n"
+        "backup SHA-256 does not match signed manifest\n"
+        "restored critical table\n"
+    ),
+    "scripts/backup_postgres.sh": (
+        'MANIFEST_FILE=x\npython3 "$INTEGRITY_SCRIPT" create\n'
+        "Backup created, restored in isolation and signed\n"
+    ),
+    "scripts/verify_backup.sh": (
+        'Signed backup manifest not found\npython3 "$INTEGRITY_SCRIPT" verify\n'
+        "Backup signature, archive, schema and critical data verification OK\n"
+    ),
+    "scripts/restore_postgres.sh": (
+        'Signed backup manifest not found\npython3 "$INTEGRITY_SCRIPT" verify\n'
+        'python3 "$INTEGRITY_SCRIPT" verify-live\nsigned snapshot verified\n'
+    ),
+    "scripts/backup_restore_smoke.sh": (
+        "tampered_archive_rejected\nmutated_database_rejected\n"
+        "restored_value_verified\nverify-live\nrestore_postgres.sh --yes\n"
+    ),
+    "backend/tests/test_backup_integrity.py": (
+        "test_signed_manifest_binds_exact_archive_and_snapshot\n"
+        "test_archive_byte_or_size_change_is_rejected\n"
+        "test_snapshot_comparison_detects_schema_revision_and_ledger_changes\n"
+        "test_database_identifiers_fail_closed\n"
+    ),
     "docs/pilot/end_to_end_coverage_matrix.md": (
-        "## Browser journeys\n"
-        "Nine stateful Playwright journeys\n"
-        "accountable active Admin ID\n"
-        "Admin service operations\n"
-        "full picklist\n"
-        "## Transactional referral evidence\n"
-        "first paid order -> one inviter reward\n"
-        "## Evidence boundary\n"
+        "## Browser journeys\nNine stateful Playwright journeys\n"
+        "accountable active Admin ID\nAdmin service operations\nfull picklist\n"
+        "## Transactional referral evidence\nfirst paid order -> one inviter reward\n"
+        "## Signed backup and restore evidence\nBackup/restore integrity\n"
+        "Release rollback\n## Evidence boundary\n"
     ),
     "docker-compose.production.yml": (
         "./docs:/app/docs:ro\n./deploy/release:/app/deploy/release:ro\n"
@@ -276,7 +275,8 @@ FILE_CONTENT = {
     ),
     "scripts/rollback.sh": (
         'CAPABILITY_SCRIPT="scripts/pilot_release_capability.py"\n'
-        'python3 "$CAPABILITY_SCRIPT" inspect --archive "$RELEASE"\n'
+        '"$CAPABILITY_SCRIPT" inspect --archive\n'
+        "scripts/verify_backup.sh\nrestore_postgres.sh\n"
         "pilot_runtime.py _stop\ncheck_pilot_runtime_integrity.py\n"
     ),
 }
@@ -308,7 +308,7 @@ def _release(repo: Path, tmp_path: Path, release_id: str, created_at: str) -> Pa
 
 
 def test_signed_release_capability_is_bound_to_exact_release():
-    assert CAPABILITY_VERSION == 6
+    assert CAPABILITY_VERSION == 7
     secret = "s" * 48
     state = _release_state()
     state["capabilities"] = {
@@ -335,108 +335,47 @@ def test_unsigned_or_tampered_release_capability_is_rejected():
     assert any("version" in error for error in errors)
 
 
-def test_immutable_archive_inspection_accepts_guarded_release_and_rejects_missing_file(tmp_path):
+def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(tmp_path):
     repo = _guarded_repo(tmp_path)
     guarded = _release(repo, tmp_path, "guarded", "2026-08-05T00:00:00Z")
     assert inspect_runtime_guard(guarded) == []
 
-    missing_path = repo / "admin/src/ServiceOperationsPanel.jsx"
+    missing_path = repo / "scripts/backup_integrity.py"
     missing_path.unlink()
     _git(repo, "add", "-u")
-    _git(repo, "commit", "-qm", "remove service operations")
+    _git(repo, "commit", "-qm", "remove backup integrity")
     unguarded = _release(repo, tmp_path, "unguarded", "2026-08-05T00:01:00Z")
     errors = inspect_runtime_guard(unguarded)
-    assert any("admin/src/ServiceOperationsPanel.jsx" in error for error in errors)
+    assert any("scripts/backup_integrity.py" in error for error in errors)
 
 
-def test_immutable_archive_inspection_rejects_unwired_payment_breaker(tmp_path):
+@pytest.mark.parametrize(
+    ("path", "replacement", "expected_marker"),
+    [
+        ("backend/api/payments.py", "class ProviderPaymentIntegrityError: pass\n", "trip_pilot_circuit_breaker"),
+        (".github/workflows/ci.yml", "jobs:\n  docker:\n    needs: [backend]\n", "browser-e2e"),
+        ("backend/middleware/metrics.py", "def metrics_response(): pass\n", "flashin_pilot_metrics_collection_success"),
+        ("admin/src/BusinessEventsPanel.jsx", "export default function Panel() {}\n", "ServiceOperationsPanel"),
+        ("backend/api/support.py", "class AdminSupportTicketOut: pass\n", "assigned_admin_id"),
+        ("admin/src/FulfillmentOperationsPanel.jsx", "export default function Panel() {}\n", "/api/fulfillment/tasks"),
+        ("backend/services/loyalty.py", "def reward_referral_after_first_paid_order(): pass\n", "_lock_referral_customer"),
+        ("scripts/backup_integrity.py", "KIND = 'broken'\n", "postgres_backup_manifest"),
+        ("scripts/restore_postgres.sh", "#!/usr/bin/env bash\nexit 0\n", "verify-live"),
+    ],
+)
+def test_immutable_archive_rejects_removed_guard_marker(
+    tmp_path,
+    path,
+    replacement,
+    expected_marker,
+):
     repo = _guarded_repo(tmp_path)
-    payments = repo / "backend/api/payments.py"
-    payments.write_text("class ProviderPaymentIntegrityError: pass\n", encoding="utf-8")
-    _git(repo, "add", str(payments.relative_to(repo)))
-    _git(repo, "commit", "-qm", "remove payment breaker wiring")
+    target = repo / path
+    target.write_text(replacement, encoding="utf-8")
+    _git(repo, "add", path)
+    _git(repo, "commit", "-qm", f"remove guard from {path}")
 
     release = _release(repo, tmp_path, "unwired", "2026-08-05T00:02:00Z")
     errors = inspect_runtime_guard(release)
-    assert any("backend/api/payments.py" in error for error in errors)
-    assert any("trip_pilot_circuit_breaker" in error for error in errors)
-
-
-def test_immutable_archive_inspection_rejects_unwired_browser_gate(tmp_path):
-    repo = _guarded_repo(tmp_path)
-    workflow = repo / ".github/workflows/ci.yml"
-    workflow.write_text("jobs:\n  docker:\n    needs: [backend, frontend, admin]\n", encoding="utf-8")
-    _git(repo, "add", str(workflow.relative_to(repo)))
-    _git(repo, "commit", "-qm", "remove browser gate wiring")
-
-    release = _release(repo, tmp_path, "no-browser-gate", "2026-08-05T00:03:00Z")
-    errors = inspect_runtime_guard(release)
-    assert any(".github/workflows/ci.yml" in error for error in errors)
-    assert any("browser-e2e" in error for error in errors)
-
-
-def test_immutable_archive_inspection_rejects_unwired_pilot_metrics(tmp_path):
-    repo = _guarded_repo(tmp_path)
-    metrics = repo / "backend/middleware/metrics.py"
-    metrics.write_text("def metrics_response(): pass\n", encoding="utf-8")
-    _git(repo, "add", str(metrics.relative_to(repo)))
-    _git(repo, "commit", "-qm", "remove pilot metrics wiring")
-
-    release = _release(repo, tmp_path, "no-pilot-metrics", "2026-08-05T00:04:00Z")
-    errors = inspect_runtime_guard(release)
-    assert any("backend/middleware/metrics.py" in error for error in errors)
-    assert any("flashin_pilot_metrics_collection_success" in error for error in errors)
-
-
-def test_immutable_archive_inspection_rejects_unmounted_service_operations(tmp_path):
-    repo = _guarded_repo(tmp_path)
-    panel = repo / "admin/src/BusinessEventsPanel.jsx"
-    panel.write_text("export default function BusinessEventsPanel() {}\n", encoding="utf-8")
-    _git(repo, "add", str(panel.relative_to(repo)))
-    _git(repo, "commit", "-qm", "remove service operations mount")
-
-    release = _release(repo, tmp_path, "no-service-operations", "2026-08-05T00:05:00Z")
-    errors = inspect_runtime_guard(release)
-    assert any("admin/src/BusinessEventsPanel.jsx" in error for error in errors)
-    assert any("ServiceOperationsPanel" in error for error in errors)
-
-
-def test_immutable_archive_inspection_rejects_support_without_owner_schema(tmp_path):
-    repo = _guarded_repo(tmp_path)
-    support = repo / "backend/api/support.py"
-    support.write_text("class AdminSupportTicketOut: pass\n", encoding="utf-8")
-    _git(repo, "add", str(support.relative_to(repo)))
-    _git(repo, "commit", "-qm", "remove support owner schema")
-
-    release = _release(repo, tmp_path, "no-support-owner", "2026-08-05T00:06:00Z")
-    errors = inspect_runtime_guard(release)
-    assert any("backend/api/support.py" in error for error in errors)
-    assert any("assigned_admin_id" in error for error in errors)
-
-
-def test_immutable_archive_inspection_rejects_missing_fulfillment_console(tmp_path):
-    repo = _guarded_repo(tmp_path)
-    panel = repo / "admin/src/FulfillmentOperationsPanel.jsx"
-    panel.unlink()
-    _git(repo, "add", "-u")
-    _git(repo, "commit", "-qm", "remove fulfillment console")
-
-    release = _release(repo, tmp_path, "no-fulfillment-console", "2026-08-05T00:07:00Z")
-    errors = inspect_runtime_guard(release)
-    assert any("admin/src/FulfillmentOperationsPanel.jsx" in error for error in errors)
-
-
-def test_immutable_archive_inspection_rejects_unwired_referral_guard(tmp_path):
-    repo = _guarded_repo(tmp_path)
-    loyalty = repo / "backend/services/loyalty.py"
-    loyalty.write_text(
-        "def reward_referral_after_first_paid_order():\n    pass\n",
-        encoding="utf-8",
-    )
-    _git(repo, "add", str(loyalty.relative_to(repo)))
-    _git(repo, "commit", "-qm", "remove referral eligibility guard")
-
-    release = _release(repo, tmp_path, "no-referral-guard", "2026-08-05T00:08:00Z")
-    errors = inspect_runtime_guard(release)
-    assert any("backend/services/loyalty.py" in error for error in errors)
-    assert any("_lock_referral_customer" in error for error in errors)
+    assert any(path in error for error in errors)
+    assert any(expected_marker in error for error in errors)
