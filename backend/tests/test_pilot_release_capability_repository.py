@@ -8,11 +8,11 @@ from pilot_release_capability import inspect_runtime_guard  # noqa: E402
 from release_control import create_release  # noqa: E402
 
 
-def test_current_repository_archive_satisfies_capability_v11(tmp_path):
+def test_current_repository_archive_satisfies_capability_v12(tmp_path):
     state = create_release(
         ROOT,
         tmp_path / "builds",
-        release_id="current-capability-v11",
+        release_id="current-capability-v12",
         created_at="2026-08-05T00:00:00Z",
     )
 

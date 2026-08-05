@@ -17,6 +17,7 @@ from backend.services.pilot_runtime import (
 )
 from scripts.pilot_evidence import configuration_fingerprint, sign_payload
 from scripts.pilot_control_binding import build_admission_binding
+from scripts.pilot_control_chain import state_anchor
 
 
 def _capability(state: dict, secret: str) -> dict:
@@ -25,7 +26,7 @@ def _capability(state: dict, secret: str) -> dict:
             "schema_version": 1,
             "kind": "release_capability",
             "name": "pilot_runtime_guard",
-            "version": 11,
+            "version": 12,
             "archive_sha256": state["sha256"],
             "git_commit": state["git_commit"],
             "release_id": state["release_id"],
@@ -77,7 +78,9 @@ def _runtime(tmp_path: Path, *, accepted_orders: int = 0):
     pilot_created_at = "2026-08-03T18:00:00Z"
     pilot_path = pilot_docs / "live_pilot_state.json"
     pilot_payload = {
-        "schema_version": 3,
+        "schema_version": 4,
+        "revision": 1,
+        "state_history_sha256": [],
         "created_at": pilot_created_at,
         "decision": "NO-GO",
         "scenarios": [{} for _ in range(20)],
@@ -102,9 +105,9 @@ def _runtime(tmp_path: Path, *, accepted_orders: int = 0):
     )
     signed_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     pilot_payload["admission"] = build_admission_binding(manifest_path, signed_manifest)
-    pilot_path.write_text(
-        json.dumps(sign_payload(pilot_payload, secret)), encoding="utf-8"
-    )
+    signed_pilot = sign_payload(pilot_payload, secret)
+    pilot_path.write_text(json.dumps(signed_pilot), encoding="utf-8")
+    pilot_anchor = state_anchor(signed_pilot)
 
     settings = SimpleNamespace(
         pilot_runtime_enforced=True,
@@ -128,6 +131,8 @@ def _runtime(tmp_path: Path, *, accepted_orders: int = 0):
         admission_sha256=sha256_file(manifest_path),
         release_sha256=current["sha256"],
         pilot_state_created_at=pilot_created_at,
+        pilot_state_revision=pilot_anchor["revision"],
+        pilot_state_sha256=pilot_anchor["sha256"],
         max_orders=20,
         accepted_orders=accepted_orders,
         allowed_telegram_ids='["123456"]',
@@ -148,6 +153,15 @@ def _runtime(tmp_path: Path, *, accepted_orders: int = 0):
         )
     session.commit()
     return session, customer, settings, env, pilot_path, manifest_path, previous_path
+
+
+def _next_signed_state(payload: dict, secret: str) -> dict:
+    parent = state_anchor(payload)
+    child = dict(payload)
+    child.pop("signature", None)
+    child["revision"] = parent["revision"] + 1
+    child["state_history_sha256"] = [*parent["history"], parent["sha256"]]
+    return sign_payload(child, secret)
 
 
 def test_allowlisted_checkout_consumes_one_atomic_slot(tmp_path):
@@ -180,7 +194,7 @@ def test_non_allowlisted_customer_and_stop_decision_are_blocked(tmp_path):
     payload = json.loads(pilot_path.read_text(encoding="utf-8"))
     payload["decision"] = "STOP"
     pilot_path.write_text(
-        json.dumps(sign_payload(payload, env["PILOT_EVIDENCE_SIGNING_SECRET"])),
+        json.dumps(_next_signed_state(payload, env["PILOT_EVIDENCE_SIGNING_SECRET"])),
         encoding="utf-8",
     )
     with pytest.raises(HTTPException) as stopped:
@@ -242,7 +256,7 @@ def test_pilot_state_bound_to_other_admission_fails_closed(tmp_path):
     payload = json.loads(pilot_path.read_text(encoding="utf-8"))
     payload["admission"]["manifest_sha256"] = "0" * 64
     pilot_path.write_text(
-        json.dumps(sign_payload(payload, env["PILOT_EVIDENCE_SIGNING_SECRET"])),
+        json.dumps(_next_signed_state(payload, env["PILOT_EVIDENCE_SIGNING_SECRET"])),
         encoding="utf-8",
     )
 
@@ -261,3 +275,41 @@ def test_tampered_pilot_control_state_fails_closed_on_checkout(tmp_path):
     with pytest.raises(HTTPException) as tampered:
         acquire_pilot_checkout(db, customer=customer, settings=settings, env=env)
     assert tampered.value.status_code == 503
+
+
+
+def test_runtime_anchor_advances_to_descendant_and_rejects_replay(tmp_path):
+    db, customer, settings, env, pilot_path, *_ = _runtime(tmp_path)
+    original_bytes = pilot_path.read_bytes()
+    original = json.loads(original_bytes)
+    descendant = _next_signed_state(original, env["PILOT_EVIDENCE_SIGNING_SECRET"])
+    descendant["scenarios"][0]["result"] = "running"
+    descendant = sign_payload(descendant, env["PILOT_EVIDENCE_SIGNING_SECRET"])
+    pilot_path.write_text(json.dumps(descendant), encoding="utf-8")
+
+    acquire_pilot_checkout(db, customer=customer, settings=settings, env=env)
+    db.commit()
+    runtime = db.get(PilotRuntimeState, 1)
+    child_anchor = state_anchor(descendant)
+    assert runtime.pilot_state_revision == child_anchor["revision"]
+    assert runtime.pilot_state_sha256 == child_anchor["sha256"]
+
+    pilot_path.write_bytes(original_bytes)
+    with pytest.raises(HTTPException) as replay:
+        acquire_pilot_checkout(db, customer=customer, settings=settings, env=env)
+    assert replay.value.status_code == 503
+
+
+def test_unrelated_valid_signed_state_branch_fails_closed(tmp_path):
+    db, customer, settings, env, pilot_path, *_ = _runtime(tmp_path)
+    current = json.loads(pilot_path.read_text(encoding="utf-8"))
+    fork = dict(current)
+    fork.pop("signature", None)
+    fork["revision"] = 2
+    fork["state_history_sha256"] = ["f" * 64]
+    fork = sign_payload(fork, env["PILOT_EVIDENCE_SIGNING_SECRET"])
+    pilot_path.write_text(json.dumps(fork), encoding="utf-8")
+
+    with pytest.raises(HTTPException) as unrelated:
+        acquire_pilot_checkout(db, customer=customer, settings=settings, env=env)
+    assert unrelated.value.status_code == 503

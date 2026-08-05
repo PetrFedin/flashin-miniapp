@@ -21,6 +21,15 @@ class PilotRuntimeState(Base):
             "accepted_orders >= 0 AND accepted_orders <= max_orders",
             name="ck_pilot_runtime_state_accepted_orders",
         ),
+        CheckConstraint(
+            "pilot_state_revision >= 0",
+            name="ck_pilot_runtime_state_revision",
+        ),
+        CheckConstraint(
+            "(pilot_state_revision = 0 AND pilot_state_sha256 = '') OR "
+            "(pilot_state_revision >= 1 AND length(pilot_state_sha256) = 64)",
+            name="ck_pilot_runtime_state_anchor",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
@@ -29,6 +38,8 @@ class PilotRuntimeState(Base):
     admission_sha256: Mapped[str] = mapped_column(String(64), default="")
     release_sha256: Mapped[str] = mapped_column(String(64), default="")
     pilot_state_created_at: Mapped[str] = mapped_column(String(64), default="")
+    pilot_state_revision: Mapped[int] = mapped_column(Integer, default=0)
+    pilot_state_sha256: Mapped[str] = mapped_column(String(64), default="")
     max_orders: Mapped[int] = mapped_column(Integer, default=20)
     accepted_orders: Mapped[int] = mapped_column(Integer, default=0)
     allowed_telegram_ids: Mapped[str] = mapped_column(Text, default="[]")

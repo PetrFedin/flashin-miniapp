@@ -1,6 +1,6 @@
 # Signed admission-bound pilot state migration
 
-This runbook applies when upgrading the controlled first-20-order pilot to state schema v3.
+This runbook applies when upgrading the controlled first-20-order pilot to state schema v4.
 
 ## Safety invariant
 
@@ -8,7 +8,7 @@ One `live_pilot_state.json` belongs to one exact signed `pilot_admission_manifes
 
 Do not reuse a pilot state after any admission, signing-secret, configuration or promoted-release change. Do not edit the JSON by hand.
 
-The signing secret is the trust boundary for admission and pilot-state evidence. Keep it outside Git, restrict production read access to the deployment/runtime operators that need it, rotate it after suspected disclosure, and treat rotation as a new pilot admission that requires a fresh schema v3 state.
+The signing secret is the trust boundary for admission and pilot-state evidence. Keep it outside Git, restrict production read access to the deployment/runtime operators that need it, rotate it after suspected disclosure, and treat rotation as a new pilot admission that requires a fresh schema v4 state.
 
 ## Before initialization
 
@@ -20,13 +20,13 @@ The signing secret is the trust boundary for admission and pilot-state evidence.
 
 ## Existing schema v1 or v2 state
 
-Schema v1 is admission-unbound. Schema v2 is admission-bound but unsigned. Both are intentionally rejected and are never migrated in place.
+Schema v1 is admission-unbound. Schema v2 is admission-bound but unsigned. Schema v3 is signed but has no database-anchored replay lineage. All three are intentionally rejected and are never migrated in place.
 
 1. Stop the pilot runtime.
 2. Copy `docs/pilot/live_pilot_state.json` and `docs/pilot/live_pilot_summary.md` to an access-controlled evidence archive with a timestamp.
 3. Record the archive location and SHA-256 in the change log or incident record.
 4. Remove the active legacy state only after the archive has been verified.
-5. Create a fresh signed schema v3 state with `make pilot-init`.
+5. Create a fresh replay-resistant schema v4 state with `make pilot-init`.
 6. Run `make pilot-status` and confirm there is no signature or admission-binding error.
 
 Never edit the schema number manually and never copy scenario results into a state bound to another admission.
@@ -40,7 +40,7 @@ make pilot-status
 make pilot-final
 ```
 
-Every target revalidates the signed admission, verifies the current state signature before reading it, and writes a new signature after an authorized state change. Direct calls that bypass `scripts/pilot_runner.py` are not part of the supported procedure.
+Every target revalidates the signed admission and verifies the current state signature. Authorized record changes append the exact parent-state SHA-256, increment the revision and write a new signature; status and final validation are read-only so they cannot inflate or fork the lineage. Direct calls that bypass `scripts/pilot_runner.py` are not part of the supported procedure.
 
 ## Expected fail-closed conditions
 
@@ -59,7 +59,7 @@ Do not use `--force` to suppress a mismatch. It is only for an intentional reset
 
 ## Runtime arm and checkout
 
-After initialization, arm the allowlist with `make pilot-runtime-arm ARGS='--telegram-id <id>'`. Runtime arm and every checkout independently verify the state HMAC and compare the state with the exact signed admission. A signature or binding mismatch keeps checkout closed.
+After initialization, arm the allowlist with `make pilot-runtime-arm ARGS='--telegram-id <id>'`. Runtime arm stores the current state revision and SHA-256 in PostgreSQL. Every checkout independently verifies the HMAC, admission binding and append-only ancestry against that database anchor. The same state or a signed descendant is accepted and advances the anchor; an older revision or unrelated signed branch keeps checkout closed.
 
 ## Release, configuration or signing-secret change during the pilot
 
@@ -67,7 +67,7 @@ After initialization, arm the allowlist with `make pilot-runtime-arm ARGS='--tel
 2. Archive the current state and summary.
 3. Generate fresh evidence for the new release/configuration.
 4. Create a new signed admission.
-5. Initialize a fresh signed schema v3 state.
+5. Initialize a fresh replay-resistant schema v4 state.
 6. Re-arm runtime only after admission and state verification pass.
 
 Scenario results from the previous admission remain evidence for that run; they do not count toward the new run.

@@ -37,7 +37,7 @@ def _git(repo: Path, *args: str) -> None:
 FILE_CONTENT = {
     "backend/api/orders.py": "acquire_pilot_checkout()\nrecord_pilot_order()\n",
     "scripts/pilot_release_capability.py": "from pilot_release_contract import CAPABILITY_VERSION\n",
-    "scripts/pilot_release_contract.py": "CAPABILITY_VERSION = 11\n",
+    "scripts/pilot_release_contract.py": "CAPABILITY_VERSION = 12\n",
     "scripts/readiness_gate.py": (
         'def build_signed_live_report():\n    pass\n"kind": "pilot_live_gate"\n'
         'configuration_fingerprint(env, secret)\nrelease_binding(current_release)\n'
@@ -60,9 +60,10 @@ FILE_CONTENT = {
         "from scripts.pilot_release_contract import CAPABILITY_VERSION\n"
         '"version": CAPABILITY_VERSION\n'
         "build_admission_binding(manifest_path, manifest)\n"
-        "validate_admission_binding(pilot_state, expected_binding)\n"
-        "verify_payload_signature(pilot_state, secret)\n"
-        "pilot control state signature is invalid\n"
+        "validate_state_descendant(\n"
+        "validated_anchor.update(state_anchor(pilot_state))\n"
+        "state.pilot_state_revision\nstate.pilot_state_sha256\n"
+        "armed runtime pilot state replay anchor is missing\n"
     ),
     "scripts/pilot_control_binding.py": (
         "def build_admission_binding(): pass\nmanifest_sha256\n"
@@ -70,21 +71,34 @@ FILE_CONTENT = {
         "def require_admission_binding(): pass\n"
     ),
     "scripts/pilot_control.py": (
-        "SCHEMA_VERSION = 3\ndef verified_admission_binding(): pass\n"
+        "SCHEMA_VERSION = 4\ndef verified_admission_binding(): pass\n"
         "def pilot_signing_secret(): pass\n"
-        "verify_payload_signature(state, secret)\n"
-        "signed_state = sign_payload(state, secret)\n"
-        "Unsigned pilot state schema 2 cannot be reused\n"
-        "secret=args.signing_secret\n"
+        "require_state_chain(state)\n"
+        "previous_hash = signed_state_sha256(parent_state)\n"
+        "Replay-vulnerable pilot state schema 3 cannot be reused\n"
+        "persist=False\n"
+    ),
+    "scripts/pilot_control_chain.py": (
+        "def signed_state_sha256(): pass\n"
+        "def validate_anchor_transition(): pass\n"
+        "pilot control state revision rollback detected\n"
+        "pilot control state ancestry does not match the armed runtime\n"
+    ),
+    "backend/pilot_models.py": (
+        "pilot_state_revision\npilot_state_sha256\nck_pilot_runtime_state_anchor\n"
+    ),
+    "backend/alembic/versions/0023_pilot_state_replay_anchor.py": (
+        "0023_pilot_state_replay_anchor\n0022_pilot_runtime_guard\n"
+        "pilot_state_revision\npilot_state_sha256\n"
     ),
     "scripts/pilot_runner.py": (
         "errors = verify_default_admission(ROOT)\nreturn pilot_control_main(args)\n"
     ),
     "scripts/pilot_runtime.py": (
         "build_admission_binding(DEFAULT_MANIFEST, manifest)\n"
-        "require_admission_binding(\n"
-        "verify_payload_signature(pilot_state, secret)\n"
-        "Pilot control state signature is invalid\n"
+        "pilot_state_revision\npilot_state_sha256\npilot_state_history\n"
+        "validate_anchor_transition(\n"
+        "Stopped pilot runtime cannot change admission or release lineage\n"
     ),
     "Makefile": (
         "python3 scripts/pilot_runner.py init\n"
@@ -98,13 +112,17 @@ FILE_CONTENT = {
         "test_makefile_routes_pilot_control_through_admission_runner\n"
     ),
     "backend/tests/test_pilot_control_signature.py": (
-        "test_state_write_is_signed_and_exact_state_loads\n"
-        "test_tampered_scenario_or_decision_is_rejected\n"
-        "test_wrong_secret_and_unsigned_schema_v2_are_rejected\n"
+        "test_authorized_write_advances_revision_and_preserves_exact_parent_hash\n"
+        "test_replayed_or_unrelated_signed_branch_is_rejected_by_anchor\n"
+        "test_wrong_secret_and_legacy_schemas_are_rejected\n"
     ),
     "backend/tests/test_pilot_runtime.py": (
         "test_tampered_pilot_control_state_fails_closed_on_checkout\n"
-        "sign_payload(pilot_payload, secret)\n"
+        "test_runtime_anchor_advances_to_descendant_and_rejects_replay\n"
+        "test_unrelated_valid_signed_state_branch_fails_closed\n"
+    ),
+    "backend/tests/test_pilot_state_replay_migration.py": (
+        "test_replay_anchor_migration_extends_current_pilot_runtime_head\n"
     ),
     "backend/services/pilot_circuit_breaker.py": (
         "def stop_pilot_for_order():\n    pass\n"
@@ -392,7 +410,7 @@ def _release(repo: Path, tmp_path: Path, release_id: str, created_at: str) -> Pa
 
 
 def test_signed_release_capability_is_bound_to_exact_release():
-    assert CAPABILITY_VERSION == 11
+    assert CAPABILITY_VERSION == 12
     secret = "s" * 48
     state = _release_state()
     state["capabilities"] = {

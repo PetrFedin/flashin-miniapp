@@ -14,6 +14,12 @@ import uuid
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from pilot_control_chain import (
+    state_anchor,
+    validate_anchor_transition,
+    validate_state_chain,
+)
+
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = ROOT / "docs/pilot/pilot_admission_manifest.json"
 DEFAULT_RELEASE = ROOT / "deploy/release/runtime/current_release.json"
@@ -135,10 +141,14 @@ def _host_arm(args: argparse.Namespace) -> int:
         manifest = _load_json(DEFAULT_MANIFEST, "pilot admission manifest")
         current = _load_json(DEFAULT_RELEASE, "current release pointer")
         pilot_state = _load_json(DEFAULT_PILOT_STATE, "pilot control state")
-        if pilot_state.get("schema_version") != 3:
+        if pilot_state.get("schema_version") != 4:
             raise ValueError("Pilot control state schema is unsupported")
         if not verify_payload_signature(pilot_state, secret):
             raise ValueError("Pilot control state signature is invalid")
+        chain_errors = validate_state_chain(pilot_state)
+        if chain_errors:
+            raise ValueError("; ".join(chain_errors))
+        pilot_anchor = state_anchor(pilot_state)
         require_admission_binding(
             pilot_state, build_admission_binding(DEFAULT_MANIFEST, manifest)
         )
@@ -166,6 +176,9 @@ def _host_arm(args: argparse.Namespace) -> int:
         "admission_sha256": manifest_sha,
         "release_sha256": release_sha,
         "pilot_state_created_at": created_at,
+        "pilot_state_revision": pilot_anchor["revision"],
+        "pilot_state_sha256": pilot_anchor["sha256"],
+        "pilot_state_history": pilot_anchor["history"],
         "max_orders": max_orders,
         "resume": bool(args.resume),
     }
@@ -217,6 +230,9 @@ def _internal_apply_arm() -> int:
         admission_sha = str(payload.get("admission_sha256", ""))
         release_sha = str(payload.get("release_sha256", ""))
         pilot_created_at = str(payload.get("pilot_state_created_at", ""))
+        pilot_revision = int(payload.get("pilot_state_revision", 0))
+        pilot_sha = str(payload.get("pilot_state_sha256", ""))
+        pilot_history = payload.get("pilot_state_history")
         max_orders = int(payload.get("max_orders", 0))
         resume = payload.get("resume") is True
         if len(admission_sha) != 64 or len(release_sha) != 64:
@@ -225,6 +241,15 @@ def _internal_apply_arm() -> int:
             raise ValueError("Pilot state created_at is required")
         if max_orders != 20:
             raise ValueError("Pilot runtime must be limited to exactly 20 orders")
+        anchor_errors = validate_anchor_transition(
+            revision=pilot_revision,
+            sha256=pilot_sha,
+            history=pilot_history,
+            anchored_revision=0,
+            anchored_sha256="",
+        )
+        if anchor_errors:
+            raise ValueError("; ".join(anchor_errors))
     except (TypeError, ValueError) as exc:
         print(json.dumps({"ok": False, "errors": [str(exc)]}, ensure_ascii=False))
         return 1
@@ -265,9 +290,26 @@ def _internal_apply_arm() -> int:
             )
             if not exact:
                 raise ValueError("Active pilot runtime differs from the requested arm state")
-            errors = validate_runtime_files(state, settings)
+            transition_errors = validate_anchor_transition(
+                revision=pilot_revision,
+                sha256=pilot_sha,
+                history=pilot_history,
+                anchored_revision=state.pilot_state_revision,
+                anchored_sha256=state.pilot_state_sha256,
+            )
+            if transition_errors:
+                raise ValueError("Active pilot state lineage is invalid: " + "; ".join(transition_errors))
+            verified_anchor: dict[str, Any] = {}
+            errors = validate_runtime_files(
+                state, settings, validated_anchor=verified_anchor
+            )
             if errors:
                 raise ValueError("Active pilot runtime evidence is invalid: " + "; ".join(errors))
+            if verified_anchor.get("revision") != pilot_revision or verified_anchor.get("sha256") != pilot_sha:
+                raise ValueError("Host pilot state anchor does not match runtime evidence")
+            state.pilot_state_revision = pilot_revision
+            state.pilot_state_sha256 = pilot_sha
+            state.updated_at = utcnow_naive()
             db.commit()
             print(
                 json.dumps(
@@ -293,6 +335,24 @@ def _internal_apply_arm() -> int:
             raise ValueError("Closed pilot runtime contains historical order slots")
         if state.status == "stopped" and state.accepted_orders >= state.max_orders:
             raise ValueError("Stopped pilot runtime has no remaining order slots")
+        if state.status == "stopped":
+            same_lineage = (
+                state.admission_sha256 == admission_sha
+                and state.release_sha256 == release_sha
+                and state.pilot_state_created_at == pilot_created_at
+                and state.max_orders == max_orders
+            )
+            if not same_lineage:
+                raise ValueError("Stopped pilot runtime cannot change admission or release lineage")
+            transition_errors = validate_anchor_transition(
+                revision=pilot_revision,
+                sha256=pilot_sha,
+                history=pilot_history,
+                anchored_revision=state.pilot_state_revision,
+                anchored_sha256=state.pilot_state_sha256,
+            )
+            if transition_errors:
+                raise ValueError("Stopped pilot state lineage is invalid: " + "; ".join(transition_errors))
 
         if state.status == "closed":
             state.run_id = uuid.uuid4().hex
@@ -302,15 +362,22 @@ def _internal_apply_arm() -> int:
         state.admission_sha256 = admission_sha
         state.release_sha256 = release_sha
         state.pilot_state_created_at = pilot_created_at
+        state.pilot_state_revision = pilot_revision
+        state.pilot_state_sha256 = pilot_sha
         state.max_orders = max_orders
         state.allowed_telegram_ids = allowlist_json
         state.stopped_at = None
         state.stop_reason = ""
         state.updated_at = utcnow_naive()
 
-        errors = validate_runtime_files(state, settings)
+        verified_anchor: dict[str, Any] = {}
+        errors = validate_runtime_files(
+            state, settings, validated_anchor=verified_anchor
+        )
         if errors:
             raise ValueError("Pilot runtime evidence is invalid: " + "; ".join(errors))
+        if verified_anchor.get("revision") != pilot_revision or verified_anchor.get("sha256") != pilot_sha:
+            raise ValueError("Host pilot state anchor does not match runtime evidence")
         db.commit()
         print(
             json.dumps(
