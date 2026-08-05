@@ -11,6 +11,18 @@ replacements = (
         '"down_revision = "0023_pilot_state_replay_anchor""',
         '"0023_pilot_state_replay_anchor"',
     ),
+    (
+        '"kind="reserve""',
+        '"kind=\\"reserve\\""',
+    ),
+    (
+        '"kind="release""',
+        '"kind=\\"release\\""',
+    ),
+    (
+        '"kind="commit""',
+        '"kind=\\"commit\\""',
+    ),
 )
 for old, new in replacements:
     if content.count(old) != 1:
