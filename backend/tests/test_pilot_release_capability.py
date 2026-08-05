@@ -48,9 +48,12 @@ FILE_CONTENT = {
         'live gate configuration fingerprint does not match\n'
         'live gate release binding is missing\n'
         'validate_release_binding(release, current_release)\n'
+        'def validate_admission_evidence_inputs(): pass\n'
+        'current_release=current_release\n'
     ),
     "backend/tests/test_pilot_admission.py": (
         'test_live_gate_rejects_tampering_configuration_and_other_release\n'
+        'test_admission_create_preflight_binds_live_gate_to_current_release\n'
         'configuration fingerprint\nlive gate release\n'
     ),
     "backend/services/pilot_runtime.py": (

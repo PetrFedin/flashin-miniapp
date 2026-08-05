@@ -320,6 +320,45 @@ def validate_admission_manifest(
     return list(dict.fromkeys(errors))
 
 
+def validate_admission_evidence_inputs(
+    provider_report: Mapping[str, Any],
+    live_report: Mapping[str, Any],
+    rollback_report: Mapping[str, Any],
+    *,
+    env: Mapping[str, str],
+    current_release: Mapping[str, Any],
+    provider_max_age_minutes: int,
+    live_max_age_minutes: int,
+    rollback_max_age_days: int,
+) -> list[str]:
+    """Validate the exact evidence set before an admission manifest is created."""
+    errors: list[str] = []
+    errors.extend(
+        validate_provider_report(
+            provider_report,
+            env=env,
+            current_release=current_release,
+            max_age_minutes=provider_max_age_minutes,
+        )
+    )
+    errors.extend(
+        validate_live_gate_report(
+            live_report,
+            env=env,
+            current_release=current_release,
+            max_age_minutes=live_max_age_minutes,
+        )
+    )
+    errors.extend(
+        validate_rollback_drill_report(
+            rollback_report,
+            env=env,
+            max_age_days=rollback_max_age_days,
+        )
+    )
+    return list(dict.fromkeys(errors))
+
+
 def render_markdown(manifest: Mapping[str, Any]) -> str:
     release = manifest.get("release") if isinstance(manifest.get("release"), Mapping) else {}
     approvals = manifest.get("approvals") if isinstance(manifest.get("approvals"), Mapping) else {}
@@ -449,24 +488,15 @@ def main(argv: list[str] | None = None) -> int:
         provider = load_json(args.provider_report)
         live = load_json(args.live_report)
         rollback = load_json(args.rollback_report)
-        preflight_errors: list[str] = []
-        preflight_errors.extend(
-            validate_provider_report(
-                provider,
-                env=env,
-                current_release=current,
-                max_age_minutes=settings["provider"],
-            )
-        )
-        preflight_errors.extend(
-            validate_live_gate_report(live, max_age_minutes=settings["live"])
-        )
-        preflight_errors.extend(
-            validate_rollback_drill_report(
-                rollback,
-                env=env,
-                max_age_days=settings["rollback"],
-            )
+        preflight_errors = validate_admission_evidence_inputs(
+            provider,
+            live,
+            rollback,
+            env=env,
+            current_release=current,
+            provider_max_age_minutes=settings["provider"],
+            live_max_age_minutes=settings["live"],
+            rollback_max_age_days=settings["rollback"],
         )
         if preflight_errors:
             raise ValueError("Pilot evidence is not admissible: " + "; ".join(dict.fromkeys(preflight_errors)))
