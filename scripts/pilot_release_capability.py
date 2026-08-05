@@ -77,6 +77,7 @@ REQUIRED_FILES = {
     "backend/tests/test_pilot_admission.py",
     "scripts/pilot_control_binding.py",
     "scripts/pilot_control_chain.py",
+    "scripts/pilot_control_lock.py",
     "scripts/pilot_control.py",
     "backend/pilot_models.py",
     "backend/alembic/versions/0023_pilot_state_replay_anchor.py",
@@ -157,23 +158,24 @@ def inspect_runtime_guard(archive: Path) -> list[str]:
                 errors.append("Release is missing pilot runtime files: " + ", ".join(missing))
 
             _require_markers(bundle, files, "backend/api/orders.py", ("acquire_pilot_checkout(", "record_pilot_order("), errors)
-            _require_markers(bundle, files, "scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 12",), errors)
+            _require_markers(bundle, files, "scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 13",), errors)
             _require_markers(bundle, files, "scripts/pilot_release_capability.py", ("from pilot_release_contract import CAPABILITY_VERSION",), errors)
             _require_markers(bundle, files, "backend/services/pilot_runtime.py", ("from scripts.pilot_release_contract import CAPABILITY_VERSION", '"version": CAPABILITY_VERSION'), errors)
             _require_markers(bundle, files, "scripts/readiness_gate.py", ("def build_signed_live_report(", '"kind": "pilot_live_gate"', "configuration_fingerprint(env, secret)", "release_binding(current_release)", "return sign_payload(payload, secret)"), errors)
             _require_markers(bundle, files, "scripts/pilot_admission.py", ("live gate evidence signature is invalid", "live gate configuration fingerprint does not match", "live gate release binding is missing", "validate_release_binding(release, current_release)", "def validate_admission_evidence_inputs(", "current_release=current_release"), errors)
             _require_markers(bundle, files, "backend/tests/test_pilot_admission.py", ("test_live_gate_rejects_tampering_configuration_and_other_release", "test_admission_create_preflight_binds_live_gate_to_current_release", "configuration fingerprint", "live gate release"), errors)
             _require_markers(bundle, files, "scripts/pilot_control_binding.py", ("def build_admission_binding(", "manifest_sha256", "def validate_admission_binding(", "def require_admission_binding("), errors)
-            _require_markers(bundle, files, "scripts/pilot_control.py", ("SCHEMA_VERSION = 4", "def verified_admission_binding(", "def pilot_signing_secret(", "require_state_chain(state)", "previous_hash = signed_state_sha256(parent_state)", "Replay-vulnerable pilot state schema 3 cannot be reused", "persist=False"), errors)
+            _require_markers(bundle, files, "scripts/pilot_control.py", ("SCHEMA_VERSION = 4", "exclusive_state_lock(path, timeout_seconds=lock_timeout_seconds)", "Pilot control state appeared concurrently before initialization", "previous_hash = signed_state_sha256(parent_state)", "allow_replace=args.force", "persist=False"), errors)
             _require_markers(bundle, files, "scripts/pilot_runner.py", ("errors = verify_default_admission(ROOT)", "return pilot_control_main(args)"), errors)
             _require_markers(bundle, files, "backend/services/pilot_runtime.py", ("build_admission_binding(manifest_path, manifest)", "validate_state_descendant(", "validated_anchor.update(state_anchor(pilot_state))", "state.pilot_state_revision", "state.pilot_state_sha256", "armed runtime pilot state replay anchor is missing"), errors)
             _require_markers(bundle, files, "scripts/pilot_runtime.py", ("build_admission_binding(DEFAULT_MANIFEST, manifest)", "pilot_state_revision", "pilot_state_sha256", "pilot_state_history", "validate_anchor_transition(", "Stopped pilot runtime cannot change admission or release lineage"), errors)
             _require_markers(bundle, files, "Makefile", ("python3 scripts/pilot_runner.py init", "python3 scripts/pilot_runner.py record $(ARGS)", "python3 scripts/pilot_runner.py status", "python3 scripts/pilot_runner.py validate --final"), errors)
             _require_markers(bundle, files, "backend/tests/test_pilot_control_binding.py", ("test_state_is_bound_to_one_exact_signed_admission_file", "test_legacy_state_is_rejected_without_silent_migration", "test_makefile_routes_pilot_control_through_admission_runner"), errors)
             _require_markers(bundle, files, "scripts/pilot_control_chain.py", ("def signed_state_sha256(", "def validate_anchor_transition(", "pilot control state revision rollback detected", "pilot control state ancestry does not match the armed runtime"), errors)
+            _require_markers(bundle, files, "scripts/pilot_control_lock.py", ("def exclusive_state_lock(", "fcntl.LOCK_EX | fcntl.LOCK_NB", "Pilot control state lock acquisition timed out", "os.fchmod(handle.fileno(), 0o600)"), errors)
             _require_markers(bundle, files, "backend/pilot_models.py", ("pilot_state_revision", "pilot_state_sha256", "ck_pilot_runtime_state_anchor"), errors)
             _require_markers(bundle, files, "backend/alembic/versions/0023_pilot_state_replay_anchor.py", ("0023_pilot_state_replay_anchor", "0022_pilot_runtime_guard", "pilot_state_revision", "pilot_state_sha256"), errors)
-            _require_markers(bundle, files, "backend/tests/test_pilot_control_signature.py", ("test_authorized_write_advances_revision_and_preserves_exact_parent_hash", "test_replayed_or_unrelated_signed_branch_is_rejected_by_anchor", "test_wrong_secret_and_legacy_schemas_are_rejected"), errors)
+            _require_markers(bundle, files, "backend/tests/test_pilot_control_signature.py", ("test_cross_process_writers_serialize_and_reject_stale_parent", "test_cross_process_lock_timeout_fails_closed", "multiprocessing.get_context(\"fork\")"), errors)
             _require_markers(bundle, files, "backend/tests/test_pilot_runtime.py", ("test_tampered_pilot_control_state_fails_closed_on_checkout", "test_runtime_anchor_advances_to_descendant_and_rejects_replay", "test_unrelated_valid_signed_state_branch_fails_closed"), errors)
             _require_markers(bundle, files, "backend/services/pilot_circuit_breaker.py", ("def stop_pilot_for_order(", "def trip_pilot_circuit_breaker("), errors)
             _require_markers(bundle, files, "backend/api/payments.py", ("ProviderPaymentIntegrityError", "trip_pilot_circuit_breaker(", "stop_pilot_for_order("), errors)

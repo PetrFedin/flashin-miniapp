@@ -1,4 +1,5 @@
 import json
+import multiprocessing
 from pathlib import Path
 import sys
 
@@ -13,6 +14,7 @@ from pilot_control_chain import (  # noqa: E402
     validate_anchor_transition,
 )
 from pilot_evidence import verify_payload_signature  # noqa: E402
+from pilot_control_lock import exclusive_state_lock  # noqa: E402
 
 SECRET = "s" * 48
 BINDING = {
@@ -25,6 +27,32 @@ BINDING = {
         "sha256": "d" * 64,
     },
 }
+
+
+def _concurrent_writer(
+    path_text: str,
+    scenario_index: int,
+    barrier,
+    results,
+) -> None:
+    path = Path(path_text)
+    try:
+        state = load_state(path, expected_admission=BINDING, secret=SECRET)
+        state["scenarios"][scenario_index]["result"] = "running"
+        barrier.wait(timeout=10)
+        save_state(path, state, validate_state(state, final=False), secret=SECRET)
+        results.put(("ok", scenario_index))
+    except BaseException as exc:  # process boundary must report every failure
+        results.put(("error", str(exc)))
+
+
+def _hold_state_lock(path_text: str, ready, release) -> None:
+    try:
+        with exclusive_state_lock(Path(path_text), timeout_seconds=5):
+            ready.set()
+            release.wait(timeout=10)
+    finally:
+        ready.set()
 
 
 def _signed_state(path: Path) -> dict:
@@ -127,3 +155,57 @@ def test_concurrent_parent_replacement_is_rejected(tmp_path: Path):
     stale["scenarios"][0]["result"] = "running"
     with pytest.raises(ValueError, match="changed concurrently"):
         save_state(path, stale, validate_state(stale, final=False), secret=SECRET)
+
+
+
+def test_cross_process_writers_serialize_and_reject_stale_parent(tmp_path: Path):
+    path = tmp_path / "live_pilot_state.json"
+    _signed_state(path)
+    context = multiprocessing.get_context("fork")
+    barrier = context.Barrier(2)
+    results = context.Queue()
+    processes = [
+        context.Process(
+            target=_concurrent_writer,
+            args=(str(path), scenario_index, barrier, results),
+        )
+        for scenario_index in (0, 1)
+    ]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(timeout=15)
+        assert process.exitcode == 0
+
+    outcomes = [results.get(timeout=3) for _ in processes]
+    assert sum(kind == "ok" for kind, _ in outcomes) == 1
+    errors = [detail for kind, detail in outcomes if kind == "error"]
+    assert len(errors) == 1
+    assert "changed concurrently" in errors[0]
+
+    final_state = load_state(path, expected_admission=BINDING, secret=SECRET)
+    assert final_state["revision"] == 2
+    running = [
+        item["number"]
+        for item in final_state["scenarios"]
+        if item["result"] == "running"
+    ]
+    assert len(running) == 1
+
+
+def test_cross_process_lock_timeout_fails_closed(tmp_path: Path):
+    path = tmp_path / "live_pilot_state.json"
+    context = multiprocessing.get_context("fork")
+    ready = context.Event()
+    release = context.Event()
+    holder = context.Process(target=_hold_state_lock, args=(str(path), ready, release))
+    holder.start()
+    assert ready.wait(timeout=5)
+    try:
+        with pytest.raises(ValueError, match="lock acquisition timed out"):
+            with exclusive_state_lock(path, timeout_seconds=0.1):
+                pass
+    finally:
+        release.set()
+        holder.join(timeout=10)
+    assert holder.exitcode == 0
