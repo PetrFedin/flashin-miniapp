@@ -37,7 +37,7 @@ def _git(repo: Path, *args: str) -> None:
 FILE_CONTENT = {
     "backend/api/orders.py": "acquire_pilot_checkout()\nrecord_pilot_order()\n",
     "scripts/pilot_release_capability.py": "from pilot_release_contract import CAPABILITY_VERSION\n",
-    "scripts/pilot_release_contract.py": "CAPABILITY_VERSION = 13\n",
+    "scripts/pilot_release_contract.py": "CAPABILITY_VERSION = 14\n",
     "scripts/readiness_gate.py": (
         'def build_signed_live_report():\n    pass\n"kind": "pilot_live_gate"\n'
         'configuration_fingerprint(env, secret)\nrelease_binding(current_release)\n'
@@ -72,10 +72,10 @@ FILE_CONTENT = {
     ),
     "scripts/pilot_control.py": (
         "SCHEMA_VERSION = 4\n"
-        "exclusive_state_lock(path, timeout_seconds=lock_timeout_seconds)\n"
-        "Pilot control state appeared concurrently before initialization\n"
-        "previous_hash = signed_state_sha256(parent_state)\n"
-        "allow_replace=args.force\npersist=False\n"
+        "durable_atomic_write_text(\n"
+        "def refresh_summary(): pass\n"
+        "derived and non-authoritative\n"
+        "return _report_exit(report, final=args.final)\n"
     ),
     "scripts/pilot_control_chain.py": (
         "def signed_state_sha256(): pass\n"
@@ -87,6 +87,13 @@ FILE_CONTENT = {
         "def exclusive_state_lock(): pass\n"
         "fcntl.LOCK_EX | fcntl.LOCK_NB\n"
         "Pilot control state lock acquisition timed out\n"
+        "os.fchmod(handle.fileno(), 0o600)\n"
+    ),
+    "scripts/pilot_control_io.py": (
+        "def durable_atomic_write_text(): pass\n"
+        "os.fsync(handle.fileno())\n"
+        "os.replace(temporary_path, path)\n"
+        "_fsync_directory(path.parent)\n"
         "os.fchmod(handle.fileno(), 0o600)\n"
     ),
     "backend/pilot_models.py": (
@@ -120,6 +127,12 @@ FILE_CONTENT = {
         "test_cross_process_writers_serialize_and_reject_stale_parent\n"
         "test_cross_process_lock_timeout_fails_closed\n"
         'multiprocessing.get_context("fork")\n'
+    ),
+    "backend/tests/test_pilot_control_durability.py": (
+        "test_durable_atomic_write_fsyncs_file_and_parent_directory\n"
+        "test_summary_refresh_repairs_stale_file_without_advancing_state\n"
+        "test_summary_write_failure_leaves_valid_committed_state_and_is_repairable\n"
+        "test_status_summary_refresh_does_not_change_signed_json_bytes\n"
     ),
     "backend/tests/test_pilot_runtime.py": (
         "test_tampered_pilot_control_state_fails_closed_on_checkout\n"
@@ -415,7 +428,7 @@ def _release(repo: Path, tmp_path: Path, release_id: str, created_at: str) -> Pa
 
 
 def test_signed_release_capability_is_bound_to_exact_release():
-    assert CAPABILITY_VERSION == 13
+    assert CAPABILITY_VERSION == 14
     secret = "s" * 48
     state = _release_state()
     state["capabilities"] = {

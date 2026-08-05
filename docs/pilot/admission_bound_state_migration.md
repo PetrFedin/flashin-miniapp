@@ -13,7 +13,7 @@ The signing secret is the trust boundary for admission and pilot-state evidence.
 ## Before initialization
 
 1. Confirm that the production `.env` contains the intended provider and pilot settings plus the protected `PILOT_EVIDENCE_SIGNING_SECRET`.
-2. Confirm that current and previous release pointers are different and both expose the same signed pilot capability v13. Mixed capability versions fail closed and require a fresh release promotion before admission.
+2. Confirm that current and previous release pointers are different and both expose the same signed pilot capability v14. Mixed capability versions fail closed and require a fresh release promotion before admission.
 3. Keep `live_pilot_state.json`, its `.lock` file and `live_pilot_summary.md` on the same POSIX filesystem mounted read-write for operator commands. The filesystem must provide working advisory `flock` semantics; object storage and unverified network filesystems are not supported.
 4. Generate fresh provider, live-gate and rollback evidence.
 5. Create the signed admission manifest with named owners and all required acknowledgements.
@@ -41,7 +41,9 @@ make pilot-status
 make pilot-final
 ```
 
-Every target revalidates the signed admission and verifies the current state signature. Authorized record changes hold a cross-process exclusive lock while they reread and verify the exact parent file, append its SHA-256, increment the revision, and atomically write both state and summary. A second writer waits for the lock and is then rejected as stale instead of creating or overwriting a competing signed branch. Lock acquisition has a bounded timeout and fails closed. Status and final validation are read-only, so they cannot inflate or fork the lineage. Direct calls that bypass `scripts/pilot_runner.py` are not part of the supported procedure.
+Every target revalidates the signed admission and verifies the current state signature. Authorized record changes hold a cross-process exclusive lock while they reread and verify the exact parent file, append its SHA-256 and increment the revision. The signed JSON state is replaced first with file and parent-directory fsync; the Markdown summary is then regenerated as a derived, non-authoritative view with the exact state revision and SHA-256. A second writer waits for the lock and is then rejected as stale instead of creating or overwriting a competing signed branch. Lock acquisition has a bounded timeout and fails closed. If a process or host stops after the authoritative state commit but before the derived summary commit, the next `pilot-status` or `pilot-final` validates the signed state and repairs the summary without advancing the revision. Status and final validation are read-only, so they cannot inflate or fork the lineage. Direct calls that bypass `scripts/pilot_runner.py` are not part of the supported procedure.
+
+After any operator write reports a filesystem or summary error, do not repeat the same `pilot-record` command blindly. First run `make pilot-status`: if the signed JSON revision already advanced, treat that state as committed and use the regenerated summary; if state validation fails or the revision did not advance, stop the pilot and investigate the filesystem before another mutation.
 
 ## Expected fail-closed conditions
 
@@ -51,6 +53,7 @@ Stop and investigate when any command reports:
 - state revision rollback or ancestry mismatch;
 - concurrent parent-state replacement;
 - pilot state lock acquisition timeout;
+- durable file or parent-directory fsync failure;
 - admission manifest checksum mismatch;
 - configuration fingerprint mismatch;
 - release ID, Git commit or archive SHA mismatch;
