@@ -132,8 +132,10 @@ FILE_CONTENT = {
         "needs: [backend, frontend, admin, browser-e2e]\n"
     ),
     "e2e/package.json": (
-        '{"scripts":{"test":"playwright test"},'
-        '"devDependencies":{"@playwright/test":"1.54.2"}}\n'
+        "{\n"
+        '  "scripts": {"test": "playwright test"},\n'
+        '  "devDependencies": {"@playwright/test": "1.54.2"}\n'
+        "}\n"
     ),
     "e2e/playwright.config.js": (
         'name: "storefront-mobile"\nname: "admin-desktop"\n'
