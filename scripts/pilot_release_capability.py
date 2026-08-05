@@ -18,7 +18,7 @@ from release_control import MANIFEST_NAME, sha256_file, verify_release
 ROOT = Path(__file__).resolve().parents[1]
 STATE_DIR = ROOT / "deploy/release/runtime"
 CAPABILITY_NAME = "pilot_runtime_guard"
-CAPABILITY_VERSION = 6
+CAPABILITY_VERSION = 7
 REQUIRED_FILES = {
     ".env.production.example",
     ".github/workflows/ci.yml",
@@ -49,6 +49,7 @@ REQUIRED_FILES = {
     "backend/api/delivery_providers.py",
     "backend/tests/test_support_admin_schema.py",
     "backend/tests/test_referral_attribution.py",
+    "backend/tests/test_backup_integrity.py",
     "backend/main.py",
     "backend/middleware/metrics.py",
     "deploy/grafana/dashboards/flashin_operations.json",
@@ -65,6 +66,11 @@ REQUIRED_FILES = {
     "e2e/tests/storefront.spec.js",
     "scripts/full_fulfillment_smoke.py",
     "scripts/referral_attribution_smoke.py",
+    "scripts/backup_integrity.py",
+    "scripts/backup_postgres.sh",
+    "scripts/verify_backup.sh",
+    "scripts/restore_postgres.sh",
+    "scripts/backup_restore_smoke.sh",
     "scripts/pilot_runtime.py",
     "scripts/check_pilot_runtime_integrity.py",
     "scripts/pilot_release_capability.py",
@@ -158,7 +164,7 @@ def inspect_runtime_guard(archive: Path) -> list[str]:
             _require_markers(bundle, files, "scripts/check_production_compose.py", ('MONITORING_SERVICES = {"prometheus", "grafana"}', 'PRODUCTION_PROFILES = ("production", "workers", "scheduler", "search", "monitoring")', "Grafana anonymous access must be disabled"), errors)
             _require_markers(bundle, files, ".env.production.example", ("METRICS_ENABLED=true", "GRAFANA_ADMIN_USER=", "GRAFANA_ADMIN_PASSWORD="), errors)
             _require_markers(bundle, files, "docker-compose.yml", ("prometheus:", "grafana:", "prometheus_data", "grafana_data"), errors)
-            _require_markers(bundle, files, ".github/workflows/ci.yml", ("browser-e2e:", "Install Chromium", "Run Mini App and Admin browser journeys", "Run transactional referral attribution smoke", "Run transactional full fulfillment smoke", "needs: [backend, frontend, admin, browser-e2e]"), errors)
+            _require_markers(bundle, files, ".github/workflows/ci.yml", ("browser-e2e:", "Install Chromium", "Run Mini App and Admin browser journeys", "Run transactional referral attribution smoke", "Run transactional full fulfillment smoke", "Run signed backup and restore drill", "bash scripts/backup_restore_smoke.sh", "needs: [backend, frontend, admin, browser-e2e]"), errors)
             _require_markers(bundle, files, "e2e/package.json", ('"@playwright/test": "1.54.2"', '"test": "playwright test"'), errors)
             _require_markers(bundle, files, "e2e/playwright.config.js", ('name: "storefront-mobile"', 'name: "admin-desktop"', 'trace: "retain-on-failure"', 'screenshot: "only-on-failure"', 'video: "retain-on-failure"'), errors)
             _require_markers(bundle, files, "e2e/tests/storefront.spec.js", ("Mini App critical pilot journey", "Mini App cart quantity and removal controls", "Mini App profile, support, privacy and return journey", "Mini App payment return route refreshes paid order"), errors)
@@ -176,7 +182,13 @@ def inspect_runtime_guard(archive: Path) -> list[str]:
             _require_markers(bundle, files, "admin/src/serviceOperations.css", (".service-operations", ".service-grid", ".attention-badge"), errors)
             _require_markers(bundle, files, "scripts/full_fulfillment_smoke.py", ("Every picklist item must be fully picked before packing", "idempotent shipment create", 'persisted_order.status == "completed"', 'persisted_order.delivery_status == "delivered"'), errors)
             _require_markers(bundle, files, "scripts/referral_attribution_smoke.py", ("duplicate referral payment webhook", "late_referral.status_code == 409", "persisted_referral.used_count == 1", "len(reward_rows) == 1", "second_persisted_order.referral_code is None"), errors)
-            _require_markers(bundle, files, "docs/pilot/end_to_end_coverage_matrix.md", ("## Browser journeys", "Nine stateful Playwright journeys", "accountable active Admin ID", "Admin service operations", "full picklist", "## Transactional referral evidence", "first paid order -> one inviter reward", "## Evidence boundary"), errors)
+            _require_markers(bundle, files, "scripts/backup_integrity.py", ('KIND = "postgres_backup_manifest"', "CRITICAL_TABLES = (", "def snapshot_database(", "def verify_restorable(", "def verify_live_database(", "backup SHA-256 does not match signed manifest", "restored critical table"), errors)
+            _require_markers(bundle, files, "scripts/backup_postgres.sh", ("MANIFEST_FILE=", 'python3 "$INTEGRITY_SCRIPT" create', "Backup created, restored in isolation and signed"), errors)
+            _require_markers(bundle, files, "scripts/verify_backup.sh", ("Signed backup manifest not found", 'python3 "$INTEGRITY_SCRIPT" verify', "Backup signature, archive, schema and critical data verification OK"), errors)
+            _require_markers(bundle, files, "scripts/restore_postgres.sh", ("Signed backup manifest not found", 'python3 "$INTEGRITY_SCRIPT" verify', 'python3 "$INTEGRITY_SCRIPT" verify-live', "signed snapshot verified"), errors)
+            _require_markers(bundle, files, "scripts/backup_restore_smoke.sh", ("tampered_archive_rejected", "mutated_database_rejected", "restored_value_verified", "verify-live", "restore_postgres.sh --yes"), errors)
+            _require_markers(bundle, files, "backend/tests/test_backup_integrity.py", ("test_signed_manifest_binds_exact_archive_and_snapshot", "test_archive_byte_or_size_change_is_rejected", "test_snapshot_comparison_detects_schema_revision_and_ledger_changes", "test_database_identifiers_fail_closed"), errors)
+            _require_markers(bundle, files, "docs/pilot/end_to_end_coverage_matrix.md", ("## Browser journeys", "Nine stateful Playwright journeys", "accountable active Admin ID", "Admin service operations", "full picklist", "## Transactional referral evidence", "first paid order -> one inviter reward", "## Signed backup and restore evidence", "Backup/restore integrity", "Release rollback", "## Evidence boundary"), errors)
 
             if "docker-compose.production.yml" in files:
                 compose = bundle.read("docker-compose.production.yml").decode("utf-8")
@@ -192,10 +204,14 @@ def inspect_runtime_guard(archive: Path) -> list[str]:
                         errors.append(f"{script} does not audit pilot runtime database integrity")
             if "scripts/rollback.sh" in files:
                 rollback = bundle.read("scripts/rollback.sh").decode("utf-8")
-                for marker in ('CAPABILITY_SCRIPT="scripts/pilot_release_capability.py"', '"$CAPABILITY_SCRIPT" inspect --archive'):
+                for marker in (
+                    'CAPABILITY_SCRIPT="scripts/pilot_release_capability.py"',
+                    '"$CAPABILITY_SCRIPT" inspect --archive',
+                    "scripts/verify_backup.sh",
+                    "restore_postgres.sh",
+                ):
                     if marker not in rollback:
-                        errors.append("scripts/rollback.sh does not reject unguarded target archives")
-                        break
+                        errors.append(f"scripts/rollback.sh is missing rollback guard: {marker}")
     except (OSError, KeyError, UnicodeDecodeError, zipfile.BadZipFile, json.JSONDecodeError) as exc:
         errors.append(f"Unable to inspect release runtime capability: {exc}")
     return list(dict.fromkeys(errors))
