@@ -39,7 +39,8 @@ Status values: `PASS`, `PARTIAL`, `BLOCKED`, `NOT COVERED`.
 | Runtime pilot guard | Allowlist -> first 20 orders -> automatic STOP | Pilot runtime and circuit-breaker tests | PASS | Requires signed admission and controlled live run |
 | Monitoring | Metrics -> Prometheus rules -> Grafana dashboard | Monitoring config/capability tests and production Compose gate | PASS | External receiver and named on-call owner still required |
 | Backup/restore integrity | pg_dump -> signed manifest -> isolated verify -> destructive restore -> exact ledger recovery | Unit tests plus mandatory Docker Compose drill with SHA/signature tamper rejection, Alembic/schema fingerprints, critical table digests and restored sentinel | PASS | Run the same command against production-like storage and retain backup/manifest artifacts |
-| Release rollback | Previous signed release + verified database backup -> stopped runtime -> service health -> promoted pointer | Release capability, rollback guards and restore integrity checks | PARTIAL | Execute and sign one production-like `make rollback-drill` with named rollback owner |
+| Release rollback mechanics | Different current/previous signed releases + verified backup -> runtime STOP -> code/database restore -> health -> pointer promotion -> signed evidence | Mandatory full rollback CI drill through the production `rollback.sh`, real PostgreSQL, backend/frontend/admin/Caddy/Meilisearch and safe external-loop stubs | PASS | Keep the drill mandatory before production isolation |
+| Production rollback admission | Named rollback owner -> retained external backup -> production-like host drill -> measured recovery -> signed acceptance | Code-level rollback mechanics and signed evidence validation are complete | PARTIAL | Execute `make rollback-drill` on the pilot host, retain backup/manifest/report and record RTO/RPO |
 | Browser E2E | Real browser across Mini App and Admin | Nine stateful Playwright journeys; traces, screenshots, video and HTML evidence on failure | PASS | Keep as required dependency of production Compose isolation |
 
 ## Browser journeys
@@ -66,11 +67,17 @@ Every new PostgreSQL backup must have an adjacent HMAC-SHA256 manifest. The mani
 
 The mandatory Compose drill proves four fail-closed paths: modified archive bytes are rejected, a mutated live critical row is rejected, the destructive restore returns the original sentinel value, and the restored target exactly matches the signed database snapshot. Production restore commands refuse archives without a valid manifest.
 
+## Full release rollback evidence
+
+The mandatory release rollback drill creates two immutable archives from different git commits and promotes them as previous/current. It starts the current deployment, creates a signed restore-proven backup, mutates a critical customer row and calls the real `scripts/rollback.sh` with evidence recording enabled.
+
+The drill must prove that pilot checkout is stopped, the previous release marker is restored, the database sentinel returns to its backed-up value, transaction and pilot-runtime integrity pass, backend readiness and container smoke pass, Caddy and Meilisearch restart, current/previous pointers swap correctly, both release capabilities remain signed and the rollback evidence validates with different release SHA-256 values. Telegram and long-running worker commands are replaced only inside the CI Compose override so the test cannot call external providers.
+
 ## Evidence boundary
 
 The Playwright layer runs the real Mini App and Admin interfaces and uses deterministic stateful API fixtures. It proves browser routing, controls, validation, mutations and UI/API contracts without requiring third-party secrets.
 
-The backup drill uses a real PostgreSQL container and destructive database recreation, but it does **not** prove external backup retention, production-host permissions, object-storage durability, recovery time objectives or the human rollback procedure. Those require one signed production-like rollback drill.
+The backup and full release rollback drills use real PostgreSQL, immutable release archives, destructive database recreation and service restart. They do **not** prove external backup retention, production-host permissions, object-storage durability, recovery-time objectives, DNS/HTTPS availability during rollback or a named human operator. Those require one signed production-like admission drill.
 
 It does **not** replace deployed provider evidence. Telegram signatures, YooKassa redirects/webhooks/refunds, MoySklad synchronization, R2/CDN delivery, public DNS/HTTPS and external alert delivery remain live admission requirements.
 
