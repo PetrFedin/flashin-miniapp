@@ -46,6 +46,29 @@ FILE_CONTENT = {
     "backend/services/payment_reconciliation.py": (
         "payment_reconciliation_mismatch\nstop_pilot_for_order()\n"
     ),
+    "backend/order_statuses.py": (
+        "SETTLED_ORDER_PAYMENT_STATUSES = frozenset({\n"
+        '    "paid", "paid_review_required", "refund_review_required"\n'
+        "})\n"
+    ),
+    "backend/services/payment_settlement.py": (
+        "from ..order_statuses import SETTLED_ORDER_PAYMENT_STATUSES\n"
+        "if order.payment_status in SETTLED_ORDER_PAYMENT_STATUSES:\n    return False\n"
+        "reward_referral_after_first_paid_order(db, order.customer_id, order.id)\n"
+    ),
+    "backend/services/loyalty.py": (
+        "def _lock_referral_customer():\n    pass\n"
+        "def _has_prior_settled_order():\n    pass\n"
+        "Referral code must be applied before the first paid order\n"
+        "return attach_referral_to_customer(db, code, new_customer_id)\n"
+        'attribution.status = "ineligible"\n'
+        "def reward_referral_after_first_paid_order():\n    pass\n"
+    ),
+    "backend/tests/test_referral_attribution.py": (
+        "test_legacy_apply_referral_only_attaches_pending_attribution\n"
+        "test_referral_after_settled_order_is_rejected_even_for_same_code\n"
+        "test_missing_customer_is_not_silently_eligible\n"
+    ),
     "backend/services/fulfillment.py": (
         "def _picklist_is_complete():\n    pass\n"
         "Every picklist item must be fully picked before packing\n"
@@ -116,6 +139,7 @@ FILE_CONTENT = {
         "jobs:\n  browser-e2e:\n    steps:\n"
         "      - name: Install Chromium\n"
         "      - name: Run Mini App and Admin browser journeys\n"
+        "      - name: Run transactional referral attribution smoke\n"
         "      - name: Run transactional full fulfillment smoke\n"
         "  docker:\n    needs: [backend, frontend, admin, browser-e2e]\n"
     ),
@@ -227,12 +251,21 @@ FILE_CONTENT = {
         'persisted_order.status == "completed"\n'
         'persisted_order.delivery_status == "delivered"\n'
     ),
+    "scripts/referral_attribution_smoke.py": (
+        "duplicate referral payment webhook\n"
+        "late_referral.status_code == 409\n"
+        "persisted_referral.used_count == 1\n"
+        "len(reward_rows) == 1\n"
+        "second_persisted_order.referral_code is None\n"
+    ),
     "docs/pilot/end_to_end_coverage_matrix.md": (
         "## Browser journeys\n"
         "Nine stateful Playwright journeys\n"
         "accountable active Admin ID\n"
         "Admin service operations\n"
         "full picklist\n"
+        "## Transactional referral evidence\n"
+        "first paid order -> one inviter reward\n"
         "## Evidence boundary\n"
     ),
     "docker-compose.production.yml": (
@@ -275,7 +308,7 @@ def _release(repo: Path, tmp_path: Path, release_id: str, created_at: str) -> Pa
 
 
 def test_signed_release_capability_is_bound_to_exact_release():
-    assert CAPABILITY_VERSION == 5
+    assert CAPABILITY_VERSION == 6
     secret = "s" * 48
     state = _release_state()
     state["capabilities"] = {
@@ -391,3 +424,19 @@ def test_immutable_archive_inspection_rejects_missing_fulfillment_console(tmp_pa
     release = _release(repo, tmp_path, "no-fulfillment-console", "2026-08-05T00:07:00Z")
     errors = inspect_runtime_guard(release)
     assert any("admin/src/FulfillmentOperationsPanel.jsx" in error for error in errors)
+
+
+def test_immutable_archive_inspection_rejects_unwired_referral_guard(tmp_path):
+    repo = _guarded_repo(tmp_path)
+    loyalty = repo / "backend/services/loyalty.py"
+    loyalty.write_text(
+        "def reward_referral_after_first_paid_order():\n    pass\n",
+        encoding="utf-8",
+    )
+    _git(repo, "add", str(loyalty.relative_to(repo)))
+    _git(repo, "commit", "-qm", "remove referral eligibility guard")
+
+    release = _release(repo, tmp_path, "no-referral-guard", "2026-08-05T00:08:00Z")
+    errors = inspect_runtime_guard(release)
+    assert any("backend/services/loyalty.py" in error for error in errors)
+    assert any("_lock_referral_customer" in error for error in errors)

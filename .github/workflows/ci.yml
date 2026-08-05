@@ -86,6 +86,8 @@ jobs:
         run: alembic -c backend/alembic.ini current
       - name: Run transactional customer journey smoke
         run: python scripts/customer_journey_smoke.py
+      - name: Run transactional referral attribution smoke
+        run: python scripts/referral_attribution_smoke.py
       - name: Run transactional order cancellation smoke
         run: python scripts/order_cancellation_smoke.py
       - name: Run transactional full fulfillment smoke

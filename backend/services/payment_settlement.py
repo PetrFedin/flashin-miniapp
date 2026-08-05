@@ -1,5 +1,6 @@
 from fastapi import HTTPException
 
+from ..order_statuses import SETTLED_ORDER_PAYMENT_STATUSES
 from .event_dispatcher import emit_event
 from .fulfillment import ensure_fulfillment_task
 from .inventory import commit_reservations_to_sold
@@ -11,19 +12,6 @@ from .loyalty import (
 from .notifications import queue_order_paid
 from .outbox import enqueue_event_for_destinations, enqueue_webhook
 from .timeline import add_timeline_event
-
-
-SETTLED_ORDER_PAYMENT_STATUSES = frozenset(
-    {
-        "paid",
-        "paid_review_required",
-        "refund_processing",
-        "refund_pending",
-        "refund_review_required",
-        "partially_refunded",
-        "refunded",
-    }
-)
 
 
 def _order_item_quantities(order) -> dict[int, int]:
