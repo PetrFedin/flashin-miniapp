@@ -6,6 +6,17 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from pilot_control import SCENARIOS, new_state, record_scenario, validate_state  # noqa: E402
 
+ADMISSION_BINDING = {
+    "manifest_sha256": "a" * 64,
+    "created_at": "2026-08-05T12:00:00Z",
+    "configuration_fingerprint": "b" * 64,
+    "release": {
+        "release_id": "pilot-release",
+        "git_commit": "c" * 40,
+        "sha256": "d" * 64,
+    },
+}
+
 
 def valid_changes(scenario):
     number = scenario["number"]
@@ -46,14 +57,14 @@ def valid_changes(scenario):
 
 
 def completed_state():
-    state = new_state()
+    state = new_state(ADMISSION_BINDING)
     for scenario in SCENARIOS:
         record_scenario(state, scenario["number"], **valid_changes(scenario))
     return state
 
 
 def test_new_state_contains_20_scenarios_and_is_no_go():
-    state = new_state()
+    state = new_state(ADMISSION_BINDING)
     report = validate_state(state, final=False)
     assert len(state["scenarios"]) == 20
     assert report["decision"] == "NO-GO"

@@ -79,7 +79,7 @@ The Playwright layer runs the real Mini App and Admin interfaces and uses determ
 
 The backup and full release rollback drills use real PostgreSQL, immutable release archives, destructive database recreation and service restart. They do **not** prove external backup retention, production-host permissions, object-storage durability, recovery-time objectives, DNS/HTTPS availability during rollback or a named human operator. Those require one signed production-like admission drill.
 
-The live gate report is HMAC-signed and bound to the exact current release and configuration fingerprint before human admission can be created. Tampering, cross-release reuse and configuration drift are rejected.
+The live gate report is HMAC-signed and bound to the exact current release and configuration fingerprint before human admission can be created. Tampering, cross-release reuse and configuration drift are rejected. The 20-scenario control state is then bound to that one exact signed admission manifest; every init, record, status, final validation, runtime arm and checkout revalidates the binding, and legacy unbound state is rejected without silent migration.
 
 It does **not** replace deployed provider evidence. Telegram signatures, YooKassa redirects/webhooks/refunds, MoySklad synchronization, R2/CDN delivery, public DNS/HTTPS and external alert delivery remain live admission requirements.
 

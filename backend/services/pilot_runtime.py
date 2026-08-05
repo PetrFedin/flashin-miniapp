@@ -12,6 +12,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from scripts.pilot_release_contract import CAPABILITY_VERSION
+from scripts.pilot_control_binding import build_admission_binding, validate_admission_binding
 from scripts.pilot_evidence import (
     configuration_fingerprint,
     require_signing_secret,
@@ -184,8 +185,14 @@ def validate_runtime_files(
             if str(entry.get("sha256", "")) != sha256_file(path):
                 errors.append(f"pilot evidence checksum does not match: {key}")
 
-    if pilot_state.get("schema_version") != 1:
+    if pilot_state.get("schema_version") != 2:
         errors.append("pilot control state schema is unsupported")
+    else:
+        try:
+            expected_binding = build_admission_binding(manifest_path, manifest)
+            errors.extend(validate_admission_binding(pilot_state, expected_binding))
+        except (OSError, ValueError) as exc:
+            errors.append(str(exc))
     if pilot_state.get("created_at") != state.pilot_state_created_at:
         errors.append("pilot control state was replaced after runtime arm")
     if pilot_state.get("decision") == "STOP":

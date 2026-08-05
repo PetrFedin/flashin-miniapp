@@ -108,6 +108,7 @@ def _compose_exec(
 def _host_arm(args: argparse.Namespace) -> int:
     sys.path.insert(0, str(ROOT / "scripts"))
     from pilot_admission import verify_default_admission
+    from pilot_control_binding import build_admission_binding, require_admission_binding
 
     admission_errors = verify_default_admission(ROOT)
     if admission_errors:
@@ -132,8 +133,11 @@ def _host_arm(args: argparse.Namespace) -> int:
         manifest = _load_json(DEFAULT_MANIFEST, "pilot admission manifest")
         current = _load_json(DEFAULT_RELEASE, "current release pointer")
         pilot_state = _load_json(DEFAULT_PILOT_STATE, "pilot control state")
-        if pilot_state.get("schema_version") != 1:
+        if pilot_state.get("schema_version") != 2:
             raise ValueError("Pilot control state schema is unsupported")
+        require_admission_binding(
+            pilot_state, build_admission_binding(DEFAULT_MANIFEST, manifest)
+        )
         if pilot_state.get("decision") == "STOP":
             raise ValueError("Pilot control decision is STOP")
         scenarios = pilot_state.get("scenarios")

@@ -196,8 +196,7 @@ pilot-runner:
 	python3 scripts/pilot_runner.py
 
 pilot-init:
-	python3 scripts/pilot_admission.py verify
-	python3 scripts/pilot_control.py init
+	python3 scripts/pilot_runner.py init
 
 pilot-runtime-arm:
 	@echo "Usage: make pilot-runtime-arm ARGS='--telegram-id 123456789 [--telegram-id ...] [--resume]'"
@@ -212,13 +211,13 @@ pilot-runtime-stop:
 
 pilot-record:
 	@echo "Usage: make pilot-record ARGS='--number 1 --result pass ...'"
-	python3 scripts/pilot_control.py record $(ARGS)
+	python3 scripts/pilot_runner.py record $(ARGS)
 
 pilot-status:
-	python3 scripts/pilot_control.py status
+	python3 scripts/pilot_runner.py status
 
 pilot-final:
-	python3 scripts/pilot_control.py validate --final
+	python3 scripts/pilot_runner.py validate --final
 
 release-create:
 	python3 scripts/release_control.py create --print-path

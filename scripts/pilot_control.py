@@ -10,12 +10,15 @@ import tempfile
 from collections import Counter
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
+from pilot_control_binding import build_admission_binding, require_admission_binding
 from script_time import utc_timestamp
 
-SCHEMA_VERSION = 1
+ROOT = Path(__file__).resolve().parents[1]
+SCHEMA_VERSION = 2
 DEFAULT_STATE_PATH = Path("docs/pilot/live_pilot_state.json")
+DEFAULT_MANIFEST_PATH = Path("docs/pilot/pilot_admission_manifest.json")
 ALLOWED_RESULTS = {"todo", "running", "pass", "fail", "blocked"}
 MONEY_TOLERANCE = Decimal("0.01")
 
@@ -90,7 +93,18 @@ def _empty_record(scenario: dict[str, Any]) -> dict[str, Any]:
     return record
 
 
-def new_state() -> dict[str, Any]:
+def verified_admission_binding(root: Path = ROOT) -> dict[str, Any]:
+    from pilot_admission import verify_default_admission
+    from pilot_evidence import load_json
+
+    errors = verify_default_admission(root)
+    if errors:
+        raise ValueError("Pilot admission is invalid: " + "; ".join(errors))
+    manifest_path = root / DEFAULT_MANIFEST_PATH
+    return build_admission_binding(manifest_path, load_json(manifest_path))
+
+
+def new_state(admission_binding: Mapping[str, Any]) -> dict[str, Any]:
     now = utc_timestamp()
     state = {
         "schema_version": SCHEMA_VERSION,
@@ -99,6 +113,7 @@ def new_state() -> dict[str, Any]:
         "updated_at": now,
         "decision": "NO-GO",
         "stop_reasons": [],
+        "admission": json.loads(json.dumps(dict(admission_binding))),
         "scenarios": [_empty_record(scenario) for scenario in SCENARIOS],
     }
     _apply_report(state, validate_state(state, final=False))
@@ -112,17 +127,29 @@ def _scenario_records(state: dict[str, Any]) -> list[dict[str, Any]]:
     return records
 
 
-def load_state(path: Path) -> dict[str, Any]:
+def load_state(
+    path: Path,
+    *,
+    expected_admission: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     try:
         state = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise ValueError(f"Pilot state not found: {path}. Run init first.") from exc
     except json.JSONDecodeError as exc:
         raise ValueError(f"Pilot state is not valid JSON: {exc}") from exc
-    if state.get("schema_version") != SCHEMA_VERSION:
-        raise ValueError(f"Unsupported pilot state schema {state.get('schema_version')}; expected {SCHEMA_VERSION}")
+    schema = state.get("schema_version")
+    if schema == 1:
+        raise ValueError(
+            "Legacy pilot state schema 1 cannot be reused. Archive it and initialize "
+            "a fresh admission-bound pilot state."
+        )
+    if schema != SCHEMA_VERSION:
+        raise ValueError(f"Unsupported pilot state schema {schema}; expected {SCHEMA_VERSION}")
     if [item.get("number") for item in _scenario_records(state)] != [item["number"] for item in SCENARIOS]:
         raise ValueError("Pilot state scenario order does not match the current 20-order contract")
+    if expected_admission is not None:
+        require_admission_binding(state, expected_admission)
     return state
 
 
@@ -338,12 +365,12 @@ def command_init(args: argparse.Namespace) -> int:
     path = _state_path(args)
     if path.exists() and not args.force:
         raise ValueError(f"Pilot state already exists: {path}. Use --force only for an intentional reset.")
-    return _finish(path, new_state())
+    return _finish(path, new_state(args.admission_binding))
 
 
 def command_record(args: argparse.Namespace) -> int:
     path = _state_path(args)
-    state = load_state(path)
+    state = load_state(path, expected_admission=args.admission_binding)
     if args.number not in SCENARIO_BY_NUMBER:
         raise ValueError(f"Scenario number must be between 1 and {len(SCENARIOS)}")
     current = _scenario_records(state)[args.number - 1]
@@ -364,12 +391,12 @@ def command_record(args: argparse.Namespace) -> int:
 
 def command_status(args: argparse.Namespace) -> int:
     path = _state_path(args)
-    return _finish(path, load_state(path))
+    return _finish(path, load_state(path, expected_admission=args.admission_binding))
 
 
 def command_validate(args: argparse.Namespace) -> int:
     path = _state_path(args)
-    return _finish(path, load_state(path), final=args.final)
+    return _finish(path, load_state(path, expected_admission=args.admission_binding), final=args.final)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -406,6 +433,7 @@ def main(argv: list[str] | None = None) -> int:
         path = Path(args.state)
         return main(["--state", str(path), "status" if path.exists() else "init"])
     try:
+        args.admission_binding = verified_admission_binding(ROOT)
         return args.handler(args)
     except ValueError as exc:
         parser.error(str(exc))
