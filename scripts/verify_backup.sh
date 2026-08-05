@@ -2,53 +2,39 @@
 set -euo pipefail
 
 if [ "$#" -ne 1 ]; then
-  echo "Usage: scripts/verify_backup.sh backups/flashin_YYYYMMDD_HHMMSS.sql.gz"
+  echo "Usage: scripts/verify_backup.sh backups/flashin_YYYYMMDD_HHMMSS.sql.gz" >&2
   exit 1
 fi
 
 FILE=$1
-TEST_DB=${TEST_DB:-flashin_restore_check}
+MANIFEST_FILE=${BACKUP_MANIFEST_FILE:-"${FILE}.manifest.json"}
+INTEGRITY_SCRIPT=${BACKUP_INTEGRITY_SCRIPT:-scripts/backup_integrity.py}
+INTEGRITY_ENV=${BACKUP_INTEGRITY_ENV:-.env}
 
 if [ ! -f "$FILE" ]; then
-  echo "Backup file not found: $FILE"
+  echo "Backup file not found: $FILE" >&2
+  exit 1
+fi
+if [ ! -f "$MANIFEST_FILE" ]; then
+  echo "Signed backup manifest not found: $MANIFEST_FILE" >&2
+  exit 1
+fi
+if [ ! -f "$INTEGRITY_SCRIPT" ]; then
+  echo "Backup integrity script is missing: $INTEGRITY_SCRIPT" >&2
   exit 1
 fi
 if ! gzip -t "$FILE"; then
-  echo "Backup archive is invalid: $FILE"
-  exit 1
-fi
-if ! [[ "$TEST_DB" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
-  echo "TEST_DB must be a valid PostgreSQL identifier"
+  echo "Backup archive is invalid: $FILE" >&2
   exit 1
 fi
 if ! docker compose ps --status running --services | grep -qx db; then
-  echo "PostgreSQL Compose service is not running"
+  echo "PostgreSQL Compose service is not running" >&2
   exit 1
 fi
 
-echo "Verifying backup $FILE"
+python3 "$INTEGRITY_SCRIPT" verify \
+  --backup "$FILE" \
+  --manifest "$MANIFEST_FILE" \
+  --env "$INTEGRITY_ENV"
 
-cleanup() {
-  docker compose exec -T db sh -ec \
-    'psql --set ON_ERROR_STOP=on -U "$POSTGRES_USER" -d postgres -v test_db="$1" -c "DROP DATABASE IF EXISTS :\"test_db\";"' \
-    sh "$TEST_DB" >/dev/null 2>&1 || true
-}
-trap cleanup EXIT
-
-docker compose exec -T db sh -ec \
-  'psql --set ON_ERROR_STOP=on -U "$POSTGRES_USER" -d postgres -v test_db="$1" -c "DROP DATABASE IF EXISTS :\"test_db\";" -c "CREATE DATABASE :\"test_db\";"' \
-  sh "$TEST_DB"
-
-gunzip -c "$FILE" \
-  | docker compose exec -T db sh -ec \
-      'psql --set ON_ERROR_STOP=on -U "$POSTGRES_USER" -d "$1"' sh "$TEST_DB"
-
-docker compose exec -T db sh -ec \
-  'psql --set ON_ERROR_STOP=on -U "$POSTGRES_USER" -d "$1" -tAc "SELECT COUNT(*) FROM pg_catalog.pg_tables WHERE schemaname = '\''public'\'';"' \
-  sh "$TEST_DB" \
-  | awk '{ if ($1 <= 0) exit 1; print "Restored public tables:", $1 }'
-
-cleanup
-trap - EXIT
-
-echo "Backup verification OK"
+echo "Backup signature, archive, schema and critical data verification OK"

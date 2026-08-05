@@ -38,7 +38,8 @@ Status values: `PASS`, `PARTIAL`, `BLOCKED`, `NOT COVERED`.
 | Admin pilot operations | Protected status -> GO/NO-GO -> integrity/money attention | Observability tests, metrics/Grafana and browser-valid GO contract | PASS | Verify deployed dashboard, access control and external alerts |
 | Runtime pilot guard | Allowlist -> first 20 orders -> automatic STOP | Pilot runtime and circuit-breaker tests | PASS | Requires signed admission and controlled live run |
 | Monitoring | Metrics -> Prometheus rules -> Grafana dashboard | Monitoring config/capability tests and production Compose gate | PASS | External receiver and named on-call owner still required |
-| Backup/rollback | Backup -> restore -> previous signed release | Release capability and guard tests | PARTIAL | Execute production-like restore/rollback drill |
+| Backup/restore integrity | pg_dump -> signed manifest -> isolated verify -> destructive restore -> exact ledger recovery | Unit tests plus mandatory Docker Compose drill with SHA/signature tamper rejection, Alembic/schema fingerprints, critical table digests and restored sentinel | PASS | Run the same command against production-like storage and retain backup/manifest artifacts |
+| Release rollback | Previous signed release + verified database backup -> stopped runtime -> service health -> promoted pointer | Release capability, rollback guards and restore integrity checks | PARTIAL | Execute and sign one production-like `make rollback-drill` with named rollback owner |
 | Browser E2E | Real browser across Mini App and Admin | Nine stateful Playwright journeys; traces, screenshots, video and HTML evidence on failure | PASS | Keep as required dependency of production Compose isolation |
 
 ## Browser journeys
@@ -59,9 +60,17 @@ The mandatory browser layer now covers:
 
 The mandatory PostgreSQL referral smoke uses the real cart, checkout, payment webhook settlement, loyalty ledger and referral attribution services. It proves that the code is attached before purchase, copied to the first order, rewarded exactly once after `payment.succeeded`, unchanged after duplicate webhooks and a second paid order, and rejected when applied after the first settled purchase.
 
+## Signed backup and restore evidence
+
+Every new PostgreSQL backup must have an adjacent HMAC-SHA256 manifest. The manifest is built from a temporary database restored from the exact compressed archive and binds the archive SHA-256 and size to one Alembic revision, the complete public schema fingerprint and content fingerprints for critical customer, order, payment, refund, inventory, loyalty, referral and pilot-runtime tables.
+
+The mandatory Compose drill proves four fail-closed paths: modified archive bytes are rejected, a mutated live critical row is rejected, the destructive restore returns the original sentinel value, and the restored target exactly matches the signed database snapshot. Production restore commands refuse archives without a valid manifest.
+
 ## Evidence boundary
 
 The Playwright layer runs the real Mini App and Admin interfaces and uses deterministic stateful API fixtures. It proves browser routing, controls, validation, mutations and UI/API contracts without requiring third-party secrets.
+
+The backup drill uses a real PostgreSQL container and destructive database recreation, but it does **not** prove external backup retention, production-host permissions, object-storage durability, recovery time objectives or the human rollback procedure. Those require one signed production-like rollback drill.
 
 It does **not** replace deployed provider evidence. Telegram signatures, YooKassa redirects/webhooks/refunds, MoySklad synchronization, R2/CDN delivery, public DNS/HTTPS and external alert delivery remain live admission requirements.
 

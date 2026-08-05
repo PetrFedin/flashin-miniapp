@@ -57,7 +57,7 @@ fi
 python3 "$CONTROL_SCRIPT" verify --archive "$RELEASE" >/dev/null
 python3 "$CAPABILITY_SCRIPT" inspect --archive "$RELEASE" >/dev/null
 if [ -n "$BACKUP" ]; then
-  scripts/verify_backup.sh "$BACKUP"
+  bash scripts/verify_backup.sh "$BACKUP"
 fi
 
 if ! command -v rsync >/dev/null 2>&1; then
@@ -134,7 +134,7 @@ if ! docker compose exec -T db sh -ec 'pg_isready -U "$POSTGRES_USER" -d "$POSTG
 fi
 
 if [ -n "$BACKUP" ]; then
-  "$TMP_DIR/restore_postgres.sh" --yes "$BACKUP"
+  bash "$TMP_DIR/restore_postgres.sh" --yes "$BACKUP"
 else
   echo "Code-only rollback explicitly authorized; database was not modified."
 fi
