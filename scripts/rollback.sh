@@ -119,6 +119,12 @@ rsync -a --delete \
   --exclude 'docs/pilot_live_gate_report.md' \
   "$TMP_DIR/release/" ./
 
+# Rebuild from the extracted target release. Without this step Compose could
+# restart images created from the newer deployment and leave runtime code at the
+# wrong version even though files and release pointers were rolled back.
+echo "Building rolled-back application images from the target release..."
+docker compose build backend frontend admin bot notification_worker scheduler
+
 echo "Starting PostgreSQL for rollback validation..."
 docker compose up -d db
 for _ in $(seq 1 60); do
