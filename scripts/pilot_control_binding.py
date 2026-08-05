@@ -21,6 +21,7 @@ def build_admission_binding(
     manifest_path: Path,
     manifest: Mapping[str, Any],
 ) -> dict[str, Any]:
+    """Create the immutable identity that a single pilot state must retain."""
     release = manifest.get("release")
     if not isinstance(release, Mapping):
         raise ValueError("Pilot admission release binding is missing")
@@ -47,6 +48,7 @@ def validate_admission_binding(
     state: Mapping[str, Any],
     expected: Mapping[str, Any],
 ) -> list[str]:
+    """Return every mismatch; callers decide how to stop their operation."""
     actual = state.get("admission")
     if not isinstance(actual, Mapping):
         return ["pilot control admission binding is missing"]
@@ -71,6 +73,7 @@ def require_admission_binding(
     state: Mapping[str, Any],
     expected: Mapping[str, Any],
 ) -> None:
+    """Fail closed before a state can be reused under a different admission."""
     errors = validate_admission_binding(state, expected)
     if errors:
         raise ValueError(
