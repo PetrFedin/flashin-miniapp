@@ -142,8 +142,10 @@ def _host_arm(args: argparse.Namespace) -> int:
         manifest = _load_json(DEFAULT_MANIFEST, "pilot admission manifest")
         current = _load_json(DEFAULT_RELEASE, "current release pointer")
         pilot_state = _load_json(DEFAULT_PILOT_STATE, "pilot control state")
-        if pilot_state.get("schema_version") != 5:
+        if pilot_state.get("schema_version") != 6:
             raise ValueError("Pilot control state schema is unsupported")
+        if pilot_state.get("database_evidence_contract") != 1:
+            raise ValueError("Pilot database evidence contract is missing or unsupported")
         if not verify_payload_signature(pilot_state, secret):
             raise ValueError("Pilot control state signature is invalid")
         chain_errors = validate_state_chain(pilot_state)
@@ -226,6 +228,10 @@ def _internal_apply_arm() -> int:
         PilotRuntimeState,
         validate_runtime_files,
     ) = _internal_imports()
+    from backend.services.pilot_database_evidence import (
+        validate_pilot_database_evidence,
+    )
+
     settings = get_settings()
     if not settings.pilot_runtime_enforced or settings.pilot_runtime_max_orders != 20:
         print(json.dumps({"ok": False, "errors": ["Production pilot runtime is not fail-closed"]}))
@@ -306,11 +312,26 @@ def _internal_apply_arm() -> int:
             if transition_errors:
                 raise ValueError("Active pilot state lineage is invalid: " + "; ".join(transition_errors))
             verified_anchor: dict[str, Any] = {}
+            verified_pilot_state: dict[str, Any] = {}
             errors = validate_runtime_files(
-                state, settings, validated_anchor=verified_anchor
+                state,
+                settings,
+                validated_anchor=verified_anchor,
+                validated_pilot_state=verified_pilot_state,
             )
             if errors:
                 raise ValueError("Active pilot runtime evidence is invalid: " + "; ".join(errors))
+            database_errors = validate_pilot_database_evidence(
+                db,
+                verified_pilot_state,
+                state,
+                final=False,
+            )
+            if database_errors:
+                raise ValueError(
+                    "Active pilot database evidence is invalid: "
+                    + "; ".join(database_errors)
+                )
             if verified_anchor.get("revision") != pilot_revision or verified_anchor.get("sha256") != pilot_sha:
                 raise ValueError("Host pilot state anchor does not match runtime evidence")
             state.pilot_state_revision = pilot_revision
@@ -377,11 +398,26 @@ def _internal_apply_arm() -> int:
         state.updated_at = utcnow_naive()
 
         verified_anchor: dict[str, Any] = {}
+        verified_pilot_state: dict[str, Any] = {}
         errors = validate_runtime_files(
-            state, settings, validated_anchor=verified_anchor
+            state,
+            settings,
+            validated_anchor=verified_anchor,
+            validated_pilot_state=verified_pilot_state,
         )
         if errors:
             raise ValueError("Pilot runtime evidence is invalid: " + "; ".join(errors))
+        database_errors = validate_pilot_database_evidence(
+            db,
+            verified_pilot_state,
+            state,
+            final=False,
+        )
+        if database_errors:
+            raise ValueError(
+                "Pilot database evidence is invalid: "
+                + "; ".join(database_errors)
+            )
         if verified_anchor.get("revision") != pilot_revision or verified_anchor.get("sha256") != pilot_sha:
             raise ValueError("Host pilot state anchor does not match runtime evidence")
         db.commit()

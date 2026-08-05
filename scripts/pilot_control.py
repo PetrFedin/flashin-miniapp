@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections import Counter
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -33,7 +34,7 @@ from pilot_readiness import read_env
 from script_time import utc_timestamp
 
 ROOT = Path(__file__).resolve().parents[1]
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 DEFAULT_STATE_PATH = Path("docs/pilot/live_pilot_state.json")
 DEFAULT_MANIFEST_PATH = Path("docs/pilot/pilot_admission_manifest.json")
 ALLOWED_RESULTS = {"todo", "running", "pass", "fail", "blocked"}
@@ -48,17 +49,17 @@ _SCENARIO_ROWS = (
     (4, 2, "Заказ с промокодом", True, "paid", "ops", "скидка до создания платежа", None),
     (5, 2, "Заказ со списанием бонусов", True, "paid", "ops", "баланс бонусов и итог заказа", None),
     (6, 2, "Повторная доставка payment webhook", True, "paid", "opsi", "два webhook, один доменный эффект", None),
-    (7, 2, "Отмена неоплаченного заказа", True, "canceled", "os", "резерв освобождён, списания нет", 0),
+    (7, 2, "Отмена неоплаченного заказа", True, "cancelled", "os", "резерв освобождён, списания нет", 0),
     (8, 3, "Заказ из нескольких позиций", True, "paid", "ops", "сумма строк и совокупное списание", None),
     (9, 3, "Пограничный остаток", True, "paid", "ops", "остаток не уходит ниже нуля", None),
-    (10, 3, "Поздний платёж после истечения резерва", True, "review", "ops", "нет скрытого списания, создан review case", 0),
+    (10, 3, "Поздний платёж после истечения резерва", True, "payment_review_required", "ops", "нет скрытого списания, создан review case", 0),
     (11, 3, "Support ticket после заказа", False, "paid", "ops", "тикет связан с order ID", None),
     (12, 3, "Fulfillment picking", True, "paid", "ops", "создана одна задача комплектации", None),
     (13, 4, "Полный возврат", True, "refunded", "opsr", "деньги, товар и бонусы возвращены один раз", None),
     (14, 4, "Частичный возврат", True, "partially_refunded", "opsr", "возвращена только подтверждённая часть", None),
     (15, 4, "Повторный refund callback", True, "refunded", "opsri", "два callback, один возврат и одно оприходование", None),
-    (16, 4, "Аномалия платежа на ручном review", True, "review", "ops", "оператор видит причину и не проводит заказ автоматически", 0),
-    (17, 4, "MoySklad конфликт остатка", True, "review", "", "конфликт видим и имеет владельца", None),
+    (16, 4, "Аномалия платежа на ручном review", True, "payment_review_required", "ops", "оператор видит причину и не проводит заказ автоматически", 0),
+    (17, 4, "MoySklad конфликт остатка", True, "payment_review_required", "o", "конфликт видим и имеет владельца", None),
     (18, 4, "Восстановление failed BusinessEvent", True, "paid", "ops", "ошибка диагностирована, replay контролируемый, эффект один", None),
     (19, 4, "Медленная мобильная сеть", False, "paid", "ops", "повтор нажатия не создаёт дубль заказа или платежа", None),
     (20, 4, "Обычный клиентский поток оператором по SOP", True, "paid", "ops", "нет ручного вмешательства разработчика", None),
@@ -140,6 +141,7 @@ def new_state(
     now = str(initial_audit.get("changed_at", "")).strip() or utc_timestamp()
     state = {
         "schema_version": SCHEMA_VERSION,
+        "database_evidence_contract": 1,
         "pilot_name": "FLASHIN first 20 orders",
         "created_at": now,
         "updated_at": now,
@@ -199,8 +201,15 @@ def load_state(
             "Unattributed pilot state schema 4 cannot be reused. Archive it and "
             "initialize a fresh accountable pilot state."
         )
+    if schema == 5:
+        raise ValueError(
+            "Database-unverified pilot state schema 5 cannot be reused. Archive it and "
+            "initialize a fresh database-bound pilot state."
+        )
     if schema != SCHEMA_VERSION:
         raise ValueError(f"Unsupported pilot state schema {schema}; expected {SCHEMA_VERSION}")
+    if state.get("database_evidence_contract") != 1:
+        raise ValueError("Pilot database evidence contract is missing or unsupported")
     if not secret:
         raise ValueError("Pilot control signing secret is required")
     if not verify_payload_signature(state, secret):
@@ -346,6 +355,8 @@ def validate_state(state: dict[str, Any], *, final: bool) -> dict[str, Any]:
             continue
 
         _require(record, "evidence", errors)
+        _require(record, "order_id", errors)
+        _require(record, "order_status", errors)
         requirements = {
             "requires_order": ("order_id", "order_status"),
             "requires_payment": ("payment_id", "payment_status", "expected_amount", "provider_amount", "currency", "provider_currency"),
@@ -357,7 +368,7 @@ def validate_state(state: dict[str, Any], *, final: bool) -> dict[str, Any]:
                 for field in fields:
                     _require(record, field, errors)
 
-        if scenario["requires_order"] and record.get("order_status") != scenario["expected_order_status"]:
+        if record.get("order_status") != scenario["expected_order_status"]:
             errors.append(f"#{number}: order_status={record.get('order_status')!r}, expected {scenario['expected_order_status']!r}")
 
         expected_amount = _decimal(record.get("expected_amount"), "expected_amount", errors, number)
@@ -508,6 +519,79 @@ def _state_path(args: argparse.Namespace) -> Path:
     return Path(args.state)
 
 
+def _database_evidence_errors(
+    state: Mapping[str, Any],
+    *,
+    final: bool,
+) -> list[str]:
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    try:
+        from backend.database import SessionLocal
+        from backend.pilot_models import PilotRuntimeState
+        from backend.services.pilot_database_evidence import (
+            validate_pilot_database_evidence,
+        )
+
+        db = SessionLocal()
+        try:
+            runtime = (
+                db.query(PilotRuntimeState)
+                .filter(PilotRuntimeState.id == 1)
+                .first()
+            )
+            return validate_pilot_database_evidence(
+                db,
+                state,
+                runtime,
+                final=final,
+            )
+        finally:
+            db.close()
+    except Exception as exc:
+        return [f"pilot database evidence validation failed: {exc}"]
+
+
+def _merge_database_errors(
+    report: dict[str, Any],
+    errors: Iterable[str],
+) -> None:
+    merged = list(
+        dict.fromkeys(
+            [*report.get("errors", []), *[str(item) for item in errors]]
+        )
+    )
+    report["errors"] = merged
+    if merged and report.get("decision") != "STOP":
+        report["decision"] = "NO-GO"
+
+
+def _refresh_with_database(
+    path: Path,
+    *,
+    expected_admission: Mapping[str, Any],
+    secret: str,
+    approved_operator_names: Mapping[str, str],
+    final: bool,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    state, report = refresh_summary(
+        path,
+        expected_admission=expected_admission,
+        secret=secret,
+        approved_operator_names=approved_operator_names,
+        final=final,
+    )
+    _merge_database_errors(
+        report,
+        _database_evidence_errors(state, final=final),
+    )
+    durable_atomic_write_text(
+        path.with_name("live_pilot_summary.md"),
+        render_markdown(state, report),
+    )
+    return state, report
+
+
 def _finish(
     path: Path,
     state: dict[str, Any],
@@ -600,6 +684,12 @@ def command_record(args: argparse.Namespace) -> int:
         expected_stock_delta=args.expected_stock_delta, webhook_deliveries=args.webhook_deliveries,
         domain_effects=args.domain_effects, evidence=evidence, note=args.note,
     )
+    database_errors = _database_evidence_errors(state, final=False)
+    if database_errors:
+        raise ValueError(
+            "Pilot scenario database evidence is invalid: "
+            + "; ".join(database_errors)
+        )
     return _finish(
         path,
         state,
@@ -616,18 +706,19 @@ def command_record(args: argparse.Namespace) -> int:
 
 def command_status(args: argparse.Namespace) -> int:
     path = _state_path(args)
-    _, report = refresh_summary(
+    _, report = _refresh_with_database(
         path,
         expected_admission=args.admission_binding,
         secret=args.signing_secret,
         approved_operator_names=args.approved_operators,
+        final=False,
     )
     return _report_exit(report, final=False)
 
 
 def command_validate(args: argparse.Namespace) -> int:
     path = _state_path(args)
-    _, report = refresh_summary(
+    _, report = _refresh_with_database(
         path,
         expected_admission=args.admission_binding,
         secret=args.signing_secret,

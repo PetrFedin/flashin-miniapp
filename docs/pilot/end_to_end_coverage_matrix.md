@@ -86,3 +86,6 @@ It does **not** replace deployed provider evidence. Telegram signatures, YooKass
 ## Admission rule
 
 A process marked `PARTIAL`, `BLOCKED`, or `NOT COVERED` cannot be represented as fully proven. Code-level evidence may support readiness, but live provider, browser, DNS, HTTPS, legal and operator evidence must be attached before pilot `GO`.
+
+
+| Database-bound first-20 evidence | Signed scenario claims → exact PostgreSQL pilot slot/order/payment/refund/status/amount/currency → final completed 20-slot equality | PASS | Capability v16 fails closed on fabricated, unrelated, missing or drifted database evidence. |
