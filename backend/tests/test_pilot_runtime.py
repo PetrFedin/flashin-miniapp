@@ -24,7 +24,7 @@ def _capability(state: dict, secret: str) -> dict:
             "schema_version": 1,
             "kind": "release_capability",
             "name": "pilot_runtime_guard",
-            "version": 2,
+            "version": 8,
             "archive_sha256": state["sha256"],
             "git_commit": state["git_commit"],
             "release_id": state["release_id"],

@@ -11,6 +11,9 @@ from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from scripts.pilot_release_capability import (
+    CAPABILITY_VERSION as PILOT_RUNTIME_CAPABILITY_VERSION,
+)
 from scripts.pilot_evidence import (
     configuration_fingerprint,
     require_signing_secret,
@@ -93,7 +96,7 @@ def _validate_release_capability(
         "schema_version": 1,
         "kind": "release_capability",
         "name": "pilot_runtime_guard",
-        "version": 2,
+        "version": PILOT_RUNTIME_CAPABILITY_VERSION,
         "archive_sha256": release_state.get("sha256"),
         "git_commit": release_state.get("git_commit"),
         "release_id": release_state.get("release_id"),
