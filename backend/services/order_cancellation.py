@@ -129,7 +129,12 @@ def cancel_order_before_settlement(
         .all()
     )
 
-    release_variants(db, quantities)
+    release_variants(
+        db,
+        quantities,
+        order_id=order.id,
+        source=f"order_cancellation:{source}",
+    )
 
     if promo:
         promo.used_count = max(int(promo.used_count or 0) - 1, 0)

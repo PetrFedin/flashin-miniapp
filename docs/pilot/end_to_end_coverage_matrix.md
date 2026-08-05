@@ -89,3 +89,5 @@ A process marked `PARTIAL`, `BLOCKED`, or `NOT COVERED` cannot be represented as
 
 
 | Database-bound first-20 evidence | Signed scenario claims → exact PostgreSQL pilot slot/order/payment/refund/status/amount/currency → final completed 20-slot equality | PASS | Capability v16 fails closed on fabricated, unrelated, missing or drifted database evidence. |
+
+| Durable inventory evidence | Checkout reserve → order-linked movement ledger → payment commit/cancellation release → signed pilot stock verification | PASS | Capability v17 validates quantity, sequence, before/after continuity and order-status-compatible terminal movement. |

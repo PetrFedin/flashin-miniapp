@@ -142,10 +142,12 @@ def _host_arm(args: argparse.Namespace) -> int:
         manifest = _load_json(DEFAULT_MANIFEST, "pilot admission manifest")
         current = _load_json(DEFAULT_RELEASE, "current release pointer")
         pilot_state = _load_json(DEFAULT_PILOT_STATE, "pilot control state")
-        if pilot_state.get("schema_version") != 6:
+        if pilot_state.get("schema_version") != 7:
             raise ValueError("Pilot control state schema is unsupported")
         if pilot_state.get("database_evidence_contract") != 1:
             raise ValueError("Pilot database evidence contract is missing or unsupported")
+        if pilot_state.get("inventory_evidence_contract") != 1:
+            raise ValueError("Pilot inventory evidence contract is missing or unsupported")
         if not verify_payload_signature(pilot_state, secret):
             raise ValueError("Pilot control state signature is invalid")
         chain_errors = validate_state_chain(pilot_state)

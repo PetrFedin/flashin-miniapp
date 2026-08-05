@@ -27,7 +27,12 @@ def settle_paid_order(db, order) -> bool:
     if order.status == "cancelled" or order.payment_status == "cancelled":
         raise HTTPException(status_code=409, detail="Cancelled order requires payment review")
 
-    commit_reservations_to_sold(db, _order_item_quantities(order))
+    commit_reservations_to_sold(
+        db,
+        _order_item_quantities(order),
+        order_id=order.id,
+        source="payment_settlement",
+    )
     queue_order_paid(db, order)
 
     if order.loyalty_points_redeemed:

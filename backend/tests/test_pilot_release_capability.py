@@ -37,7 +37,7 @@ def _git(repo: Path, *args: str) -> None:
 FILE_CONTENT = {
     "backend/api/orders.py": "acquire_pilot_checkout()\nrecord_pilot_order()\n",
     "scripts/pilot_release_capability.py": "from pilot_release_contract import CAPABILITY_VERSION\n",
-    "scripts/pilot_release_contract.py": "CAPABILITY_VERSION = 16\n",
+    "scripts/pilot_release_contract.py": "CAPABILITY_VERSION = 17\n",
     "scripts/readiness_gate.py": (
         'def build_signed_live_report():\n    pass\n"kind": "pilot_live_gate"\n'
         'configuration_fingerprint(env, secret)\nrelease_binding(current_release)\n'
@@ -77,13 +77,32 @@ FILE_CONTENT = {
         "test_payment_refund_status_and_amount_are_read_from_postgresql\n"
         "test_final_go_rejects_active_or_incomplete_runtime\n"
     ),
+    "backend/services/pilot_inventory_evidence.py": (
+        "def validate_order_inventory_evidence(): pass\n"
+        "reserve/release\nreserve/commit\nsigned stock_before\n"
+        "signed expected_stock_delta\n"
+    ),
+    "backend/services/inventory.py": (
+        "InventoryMovement(\nkind=\"reserve\"\nkind=\"release\"\n"
+        "kind=\"commit\"\norder_id=order_id\n"
+    ),
+    "backend/alembic/versions/0024_inventory_movement_ledger.py": (
+        "0024_inventory_movement_ledger\n0023_pilot_state_replay_anchor\n"
+        "inventory_movements\nuq_inventory_movement_order_variant_kind\n"
+    ),
+    "backend/tests/test_inventory_movement_ledger.py": (
+        "test_reserve_and_release_are_one_durable_order_linked_chain\n"
+        "test_reserve_and_commit_capture_stock_and_reserved_snapshots\n"
+        "test_production_inventory_callsites_are_order_attributed\n"
+    ),
     "scripts/pilot_control_binding.py": (
         "def build_admission_binding(): pass\nmanifest_sha256\n"
         "def validate_admission_binding(): pass\n"
         "def require_admission_binding(): pass\n"
     ),
     "scripts/pilot_control.py": (
-        "SCHEMA_VERSION = 6\ndatabase_evidence_contract\nverified_admission_context(\n"
+        "SCHEMA_VERSION = 7\ndatabase_evidence_contract\n"
+        "inventory_evidence_contract\nverified_admission_context(\n"
         "approved_operator_names=args.approved_operators\n"
         "mutation=_mutation_from_args(\n"
         "Unattributed pilot state schema 4 cannot be reused\n"
@@ -456,7 +475,7 @@ def _release(repo: Path, tmp_path: Path, release_id: str, created_at: str) -> Pa
 
 
 def test_signed_release_capability_is_bound_to_exact_release():
-    assert CAPABILITY_VERSION == 16
+    assert CAPABILITY_VERSION == 17
     secret = "s" * 48
     state = _release_state()
     state["capabilities"] = {

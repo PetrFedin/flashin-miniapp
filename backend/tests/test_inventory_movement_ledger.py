@@ -26,14 +26,18 @@ def _session():
 
 def _order_and_variant(db, *, suffix: str):
     customer = Customer(telegram_id=f"ledger-{suffix}")
-    product = Product(name=f"Ledger product {suffix}", base_price=1000.0)
+    product = Product(
+        sku=f"LEDGER-PRODUCT-{suffix}",
+        title=f"Ledger product {suffix}",
+        slug=f"ledger-product-{suffix}",
+        price=1000.0,
+    )
     db.add_all([customer, product])
     db.flush()
     variant = ProductVariant(
         product_id=product.id,
         sku=f"LEDGER-{suffix}",
         size="ONE",
-        price=1000.0,
         stock_qty=10,
         reserved_qty=0,
     )

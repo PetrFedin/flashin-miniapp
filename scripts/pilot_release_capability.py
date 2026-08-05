@@ -35,6 +35,9 @@ REQUIRED_FILES = {
     "backend/order_statuses.py",
     "backend/services/pilot_runtime.py",
     "backend/services/pilot_database_evidence.py",
+    "backend/services/pilot_inventory_evidence.py",
+    "backend/services/inventory.py",
+    "backend/alembic/versions/0024_inventory_movement_ledger.py",
     "backend/services/pilot_circuit_breaker.py",
     "backend/services/payment_reconciliation.py",
     "backend/services/payment_settlement.py",
@@ -91,6 +94,7 @@ REQUIRED_FILES = {
     "backend/tests/test_pilot_control_durability.py",
     "backend/tests/test_pilot_runtime.py",
     "backend/tests/test_pilot_database_evidence.py",
+    "backend/tests/test_inventory_movement_ledger.py",
     "backend/tests/test_pilot_state_replay_migration.py",
     "Makefile",
     "scripts/pilot_runtime.py",
@@ -164,16 +168,20 @@ def inspect_runtime_guard(archive: Path) -> list[str]:
                 errors.append("Release is missing pilot runtime files: " + ", ".join(missing))
 
             _require_markers(bundle, files, "backend/api/orders.py", ("acquire_pilot_checkout(", "record_pilot_order("), errors)
-            _require_markers(bundle, files, "scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 16",), errors)
+            _require_markers(bundle, files, "scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 17",), errors)
             _require_markers(bundle, files, "scripts/pilot_release_capability.py", ("from pilot_release_contract import CAPABILITY_VERSION",), errors)
             _require_markers(bundle, files, "backend/services/pilot_runtime.py", ("from scripts.pilot_release_contract import CAPABILITY_VERSION", '"version": CAPABILITY_VERSION'), errors)
             _require_markers(bundle, files, "backend/services/pilot_database_evidence.py", ("def validate_pilot_database_evidence(", "pilot slot order_id", "PostgreSQL payment", "PostgreSQL refund", "final GO scenario order IDs"), errors)
+            _require_markers(bundle, files, "backend/services/pilot_inventory_evidence.py", ("def validate_order_inventory_evidence(", "reserve/release", "reserve/commit", "signed stock_before", "signed expected_stock_delta"), errors)
+            _require_markers(bundle, files, "backend/services/inventory.py", ("InventoryMovement(", "kind=\"reserve\"", "kind=\"release\"", "kind=\"commit\"", "order_id=order_id"), errors)
+            _require_markers(bundle, files, "backend/alembic/versions/0024_inventory_movement_ledger.py", ("0024_inventory_movement_ledger", "0023_pilot_state_replay_anchor", "inventory_movements", "uq_inventory_movement_order_variant_kind"), errors)
+            _require_markers(bundle, files, "backend/tests/test_inventory_movement_ledger.py", ("test_reserve_and_release_are_one_durable_order_linked_chain", "test_reserve_and_commit_capture_stock_and_reserved_snapshots", "test_production_inventory_callsites_are_order_attributed"), errors)
             _require_markers(bundle, files, "backend/tests/test_pilot_database_evidence.py", ("test_exact_completed_twenty_order_database_evidence_is_accepted", "test_missing_or_wrong_slot_order_fails_closed", "test_payment_refund_status_and_amount_are_read_from_postgresql", "test_final_go_rejects_active_or_incomplete_runtime"), errors)
             _require_markers(bundle, files, "scripts/readiness_gate.py", ("def build_signed_live_report(", '"kind": "pilot_live_gate"', "configuration_fingerprint(env, secret)", "release_binding(current_release)", "return sign_payload(payload, secret)"), errors)
             _require_markers(bundle, files, "scripts/pilot_admission.py", ("live gate evidence signature is invalid", "live gate configuration fingerprint does not match", "live gate release binding is missing", "validate_release_binding(release, current_release)", "def validate_admission_evidence_inputs(", "current_release=current_release"), errors)
             _require_markers(bundle, files, "backend/tests/test_pilot_admission.py", ("test_live_gate_rejects_tampering_configuration_and_other_release", "test_admission_create_preflight_binds_live_gate_to_current_release", "configuration fingerprint", "live gate release"), errors)
             _require_markers(bundle, files, "scripts/pilot_control_binding.py", ("def build_admission_binding(", "manifest_sha256", "def validate_admission_binding(", "def require_admission_binding("), errors)
-            _require_markers(bundle, files, "scripts/pilot_control.py", ("SCHEMA_VERSION = 6", "database_evidence_contract", "verified_admission_context(", "approved_operator_names=args.approved_operators", "mutation=_mutation_from_args(", "Unattributed pilot state schema 4 cannot be reused", "Last accountable mutation"), errors)
+            _require_markers(bundle, files, "scripts/pilot_control.py", ("SCHEMA_VERSION = 7", "database_evidence_contract", "inventory_evidence_contract", "verified_admission_context(", "approved_operator_names=args.approved_operators", "mutation=_mutation_from_args(", "Unattributed pilot state schema 4 cannot be reused", "Last accountable mutation"), errors)
             _require_markers(bundle, files, "scripts/pilot_runner.py", ("errors = verify_default_admission(ROOT)", "return pilot_control_main(args)"), errors)
             _require_markers(bundle, files, "backend/services/pilot_runtime.py", ("build_admission_binding(manifest_path, manifest)", "validate_state_descendant(", "validate_audit_log(", "approved_operators(manifest)", "validate_pilot_database_evidence(", "state.pilot_state_revision", "armed runtime pilot state replay anchor is missing"), errors)
             _require_markers(bundle, files, "scripts/pilot_runtime.py", ("build_admission_binding(DEFAULT_MANIFEST, manifest)", "validate_audit_log(", "approved_operators(manifest)", "validate_pilot_database_evidence(", "pilot_state_revision", "validate_anchor_transition(", "Stopped pilot runtime cannot change admission or release lineage"), errors)

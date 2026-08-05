@@ -22,7 +22,7 @@ def test_allowlist_is_unique_numeric_and_bounded():
 
 def test_host_arm_requires_database_bound_schema_v6_control_state():
     source = (ROOT / "scripts/pilot_runtime.py").read_text(encoding="utf-8")
-    assert 'pilot_state.get("schema_version") != 6' in source
+    assert 'pilot_state.get("schema_version") != 7' in source
     assert "database_evidence_contract" in source
     assert "validate_pilot_database_evidence(" in source
     assert "verify_payload_signature(pilot_state, secret)" in source

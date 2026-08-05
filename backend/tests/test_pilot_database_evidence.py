@@ -8,7 +8,16 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from backend.database import Base  # noqa: E402
-from backend.models import Customer, Order, Payment, ReturnRequest  # noqa: E402
+from backend.models import (
+    Customer,
+    InventoryMovement,
+    Order,
+    OrderItem,
+    Payment,
+    Product,
+    ProductVariant,
+    ReturnRequest,
+)  # noqa: E402
 from backend.pilot_models import PilotOrderSlot, PilotRuntimeState  # noqa: E402
 from backend.services.pilot_database_evidence import (  # noqa: E402
     validate_pilot_database_evidence,
@@ -126,6 +135,67 @@ def populated_session():
             currency="RUB",
         )
         session.add(order)
+        session.flush()
+        if scenario.get("requires_stock"):
+            delta = int(scenario.get("expected_stock_delta", 1))
+            product = Product(
+                sku=f"PILOT-PRODUCT-{number}",
+                title=f"Pilot stock {number}",
+                slug=f"pilot-stock-{number}",
+                price=amount,
+            )
+            session.add(product)
+            session.flush()
+            variant = ProductVariant(
+                product_id=product.id,
+                sku=f"PILOT-STOCK-{number}",
+                size="ONE",
+                stock_qty=10 - delta,
+                reserved_qty=0,
+            )
+            session.add(variant)
+            session.flush()
+            session.add(
+                OrderItem(
+                    order_id=number,
+                    product_id=product.id,
+                    variant_id=variant.id,
+                    title=product.title,
+                    size=variant.size,
+                    quantity=1,
+                    price=amount,
+                )
+            )
+            session.add(
+                InventoryMovement(
+                    order_id=number,
+                    variant_id=variant.id,
+                    kind="reserve",
+                    quantity=1,
+                    stock_before=10,
+                    stock_after=10,
+                    reserved_before=0,
+                    reserved_after=1,
+                    source="checkout",
+                )
+            )
+            session.add(
+                InventoryMovement(
+                    order_id=number,
+                    variant_id=variant.id,
+                    kind="release" if delta == 0 else "commit",
+                    quantity=1,
+                    stock_before=10,
+                    stock_after=10 - delta,
+                    reserved_before=1,
+                    reserved_after=0,
+                    source=(
+                        "order_cancellation:pilot"
+                        if delta == 0
+                        else "payment_settlement"
+                    ),
+                )
+            )
         session.add(
             PilotOrderSlot(
                 run_id=runtime.run_id,
@@ -248,5 +318,44 @@ def test_schema_five_is_explicitly_not_database_bound():
         assert validate_pilot_database_evidence(session, state, runtime) == [
             "pilot control state schema is not database-bound"
         ]
+    finally:
+        session.close()
+
+
+
+def test_stock_claim_is_read_from_contiguous_inventory_movements():
+    session, runtime = populated_session()
+    state = state_with_passed_scenarios()
+    stock_record = next(
+        record for record in state["scenarios"] if record.get("stock_before") is not None
+    )
+    stock_record["stock_after"] = 999
+    try:
+        errors = validate_pilot_database_evidence(session, state, runtime)
+        assert any("signed stock_after" in error for error in errors)
+    finally:
+        session.close()
+
+
+def test_missing_or_broken_inventory_chain_fails_closed():
+    session, runtime = populated_session()
+    state = state_with_passed_scenarios()
+    stock_record = next(
+        record for record in state["scenarios"] if record.get("stock_before") is not None
+    )
+    order_id = int(stock_record["order_id"])
+    movement = (
+        session.query(InventoryMovement)
+        .filter(
+            InventoryMovement.order_id == order_id,
+            InventoryMovement.kind == "reserve",
+        )
+        .one()
+    )
+    movement.reserved_after = 9
+    session.commit()
+    try:
+        errors = validate_pilot_database_evidence(session, state, runtime)
+        assert any("reserve inventory transition is invalid" in error for error in errors)
     finally:
         session.close()
