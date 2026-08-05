@@ -40,3 +40,18 @@ PROVIDER_OWNED_ORDER_STATUSES = frozenset(
         "cancelled",
     }
 )
+
+# Financial settlement is shared by payment idempotency, referral eligibility,
+# refunds and reconciliation. Keep the catalog in one dependency-neutral module
+# so those workflows cannot silently drift apart.
+SETTLED_ORDER_PAYMENT_STATUSES = frozenset(
+    {
+        "paid",
+        "paid_review_required",
+        "refund_processing",
+        "refund_pending",
+        "refund_review_required",
+        "partially_refunded",
+        "refunded",
+    }
+)
