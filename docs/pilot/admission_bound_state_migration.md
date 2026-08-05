@@ -43,6 +43,8 @@ make pilot-final
 
 Every target revalidates the signed admission and verifies the current state signature. Authorized record changes hold a cross-process exclusive lock while they reread and verify the exact parent file, append its SHA-256 and increment the revision. The signed JSON state is replaced first with file and parent-directory fsync; the Markdown summary is then regenerated as a derived, non-authoritative view with the exact state revision and SHA-256. A second writer waits for the lock and is then rejected as stale instead of creating or overwriting a competing signed branch. Lock acquisition has a bounded timeout and fails closed. If a process or host stops after the authoritative state commit but before the derived summary commit, the next `pilot-status` or `pilot-final` validates the signed state and repairs the summary without advancing the revision. Status and final validation are read-only, so they cannot inflate or fork the lineage. Direct calls that bypass `scripts/pilot_runner.py` are not part of the supported procedure.
 
+After any operator write reports a filesystem or summary error, do not repeat the same `pilot-record` command blindly. First run `make pilot-status`: if the signed JSON revision already advanced, treat that state as committed and use the regenerated summary; if state validation fails or the revision did not advance, stop the pilot and investigate the filesystem before another mutation.
+
 ## Expected fail-closed conditions
 
 Stop and investigate when any command reports:
