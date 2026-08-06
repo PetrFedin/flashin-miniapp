@@ -196,7 +196,7 @@ pilot-admit:
 	python3 scripts/pilot_admission.py create $(ARGS)
 
 pilot-admission-status:
-	python3 scripts/pilot_governance_admission.py verify
+	python3 scripts/pilot_governance_admission.py verify $(ARGS)
 
 pilot-lifecycle-create:
 	@echo "Usage: make pilot-lifecycle-create ARGS='--input docs/pilot/live_lifecycle_input.json'"
