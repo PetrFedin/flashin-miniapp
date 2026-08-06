@@ -82,6 +82,15 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
         "pilot-governance-create",
         "pilot-governance-attach",
         "backend,frontend,admin,browser-e2e,docker",
+        "bypass_actors",
+    ),
+    "docs/pilot/pilot_launch_runbook.md": (
+        "pilot-lifecycle-create",
+        "pilot-governance-create",
+        "pilot-admission-status",
+        "pilot-runtime-arm",
+        "pilot-runtime-stop",
+        "make pilot-final",
     ),
     "Makefile": (
         "pilot-governance-create:",
