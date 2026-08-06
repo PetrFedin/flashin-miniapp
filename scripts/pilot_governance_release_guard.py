@@ -15,9 +15,13 @@ ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_FILES: dict[str, tuple[str, ...]] = {
     "scripts/pilot_repository_governance.py": (
         '"kind": "pilot_repository_governance"',
+        "API_VERSION",
         "collect_snapshot(",
+        "_github_token(",
         "required_status_checks",
+        "ruleset_bypass_visibility",
         "administrator_bypass_blocked",
+        "GitHub ruleset bypass actors are not visible",
         "GitHub CI has no successful completed run for the current release commit",
     ),
     "scripts/pilot_governance_admission.py": (
@@ -59,6 +63,11 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
         "test_unprotected_branch_missing_checks_and_bypass_fail_closed",
         "test_governance_attachment_requires_signed_technical_owner",
     ),
+    "backend/tests/test_pilot_governance_visibility.py": (
+        "test_governance_collection_requires_github_token",
+        "test_hidden_ruleset_bypass_data_fails_closed",
+        "ruleset_bypass_visibility",
+    ),
     "backend/tests/test_pilot_governance_admission_render.py": (
         "test_final_admission_summary_keeps_lifecycle_and_governance_evidence",
         "Live lifecycle evidence",
@@ -80,6 +89,7 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
         "pilot-governance-status:",
     ),
     ".env.production.example": (
+        "PILOT_GITHUB_TOKEN=",
         "PILOT_GITHUB_REPOSITORY=",
         "PILOT_GITHUB_GOVERNANCE_MAX_AGE_MINUTES=",
     ),
