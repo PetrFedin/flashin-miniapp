@@ -100,7 +100,9 @@ def _repository_governance_sha256(
 ) -> str:
     from pilot_governance_admission import validate_attached_governance
     from pilot_governance_release_guard import require_current_governance_release
+    from pilot_operator_security import require_application_token_isolation
 
+    require_application_token_isolation(root, os.environ)
     require_current_governance_release(root)
     errors = validate_attached_governance(
         manifest_path,
