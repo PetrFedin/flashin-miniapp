@@ -31,6 +31,7 @@ RELEASE = {
     "promoted_at": "2026-08-06T11:00:00Z",
 }
 REQUIRED_CHECKS = ("backend", "frontend", "admin", "browser-e2e", "docker")
+ACTIONS_APP_ID = 15368
 
 
 def _env(**overrides):
@@ -45,6 +46,7 @@ def _env(**overrides):
         "PILOT_GITHUB_REQUIRED_CHECKS": ",".join(REQUIRED_CHECKS),
         "PILOT_GITHUB_WORKFLOW_NAME": "CI",
         "PILOT_GITHUB_WORKFLOW_PATH": "ci.yml",
+        "PILOT_GITHUB_ACTIONS_APP_ID": str(ACTIONS_APP_ID),
         "PILOT_GITHUB_GOVERNANCE_MAX_AGE_MINUTES": "60",
     }
     values.update(overrides)
@@ -67,7 +69,8 @@ def _active_rules(checks=REQUIRED_CHECKS):
             "parameters": {
                 "strict_required_status_checks_policy": True,
                 "required_status_checks": [
-                    {"context": name, "integration_id": 15368} for name in checks
+                    {"context": name, "integration_id": ACTIONS_APP_ID}
+                    for name in checks
                 ],
             },
         },
@@ -135,6 +138,11 @@ def test_ruleset_governance_report_binds_exact_release_and_successful_ci():
     assert report["branch"]["head_sha"] == RELEASE["git_commit"]
     assert report["workflow"]["conclusion"] == "success"
     assert set(report["policy"]["required_checks"]) == set(REQUIRED_CHECKS)
+    assert report["policy"]["actions_app_id"] == ACTIONS_APP_ID
+    assert all(
+        ACTIONS_APP_ID in report["policy"]["observed_check_sources"][name]
+        for name in REQUIRED_CHECKS
+    )
 
     tampered = json.loads(json.dumps(report))
     tampered["workflow"]["id"] = 999
@@ -183,6 +191,10 @@ def test_legacy_branch_protection_requires_admin_enforcement():
         "required_status_checks": {
             "strict": True,
             "contexts": list(REQUIRED_CHECKS),
+            "checks": [
+                {"context": name, "app_id": ACTIONS_APP_ID}
+                for name in REQUIRED_CHECKS
+            ],
         },
         "required_pull_request_reviews": {"required_approving_review_count": 1},
         "allow_force_pushes": {"enabled": False},
@@ -196,6 +208,7 @@ def test_legacy_branch_protection_requires_admin_enforcement():
     )
     assert errors == []
     assert normalized["policy"]["administrator_bypass_blocked"] is True
+    assert normalized["policy"]["required_status_check_sources"] is True
 
     snapshot["protection"]["enforce_admins"]["enabled"] = False
     _normalized, errors = evaluate_snapshot(
