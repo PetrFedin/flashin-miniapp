@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 from typing import Any, Mapping
 
 RELEASE_KEYS = ("release_id", "git_commit", "sha256")
+ROOT = Path(__file__).resolve().parents[1]
+LIVE_LIFECYCLE_KEY = "live_lifecycle_report_sha256"
 
 
 def sha256_file(path: Path) -> str:
@@ -17,9 +20,67 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _requires_live_lifecycle(manifest: Mapping[str, Any]) -> bool:
+    """Require v18 only for the authoritative admission schema.
+
+    Historical unit fixtures without ``schema_version`` are intentionally not
+    treated as production admission manifests. The real admission builder and
+    verifier require schema version 1, and every schema-v1 GO must carry the
+    signed live lifecycle attachment.
+    """
+    return (
+        manifest.get("schema_version") == 1
+        and manifest.get("kind") == "pilot_admission"
+        and manifest.get("decision") == "GO"
+    )
+
+
+def _runtime_evidence_env(root: Path) -> dict[str, str]:
+    from pilot_readiness import read_env
+
+    file_env = read_env(root / ".env")
+    if file_env:
+        return file_env
+    return {str(key): str(value) for key, value in os.environ.items()}
+
+
+def _live_lifecycle_sha256(
+    manifest_path: Path,
+    manifest: Mapping[str, Any],
+    *,
+    root: Path,
+) -> str:
+    from pilot_lifecycle_admission import validate_attached_lifecycle
+
+    errors = validate_attached_lifecycle(
+        manifest_path,
+        manifest,
+        env=_runtime_evidence_env(root),
+        root=root,
+    )
+    if errors:
+        raise ValueError(
+            "Pilot admission live lifecycle evidence is invalid: "
+            + "; ".join(errors)
+        )
+    evidence = manifest.get("evidence")
+    entry = (
+        evidence.get("live_lifecycle_report")
+        if isinstance(evidence, Mapping)
+        else None
+    )
+    digest = str(entry.get("sha256", "")).strip() if isinstance(entry, Mapping) else ""
+    if len(digest) != 64:
+        raise ValueError("Pilot admission live lifecycle evidence SHA-256 is invalid")
+    return digest
+
+
 def build_admission_binding(
     manifest_path: Path,
     manifest: Mapping[str, Any],
+    *,
+    root: Path | None = None,
+    require_live_lifecycle: bool | None = None,
 ) -> dict[str, Any]:
     """Create the immutable identity that a single pilot state must retain."""
     release = manifest.get("release")
@@ -36,12 +97,25 @@ def build_admission_binding(
         raise ValueError("Pilot admission release binding is incomplete")
     if len(normalized_release["sha256"]) != 64:
         raise ValueError("Pilot admission release SHA-256 is invalid")
-    return {
+
+    enforce_lifecycle = (
+        _requires_live_lifecycle(manifest)
+        if require_live_lifecycle is None
+        else require_live_lifecycle
+    )
+    binding: dict[str, Any] = {
         "manifest_sha256": sha256_file(manifest_path),
         "created_at": created_at,
         "configuration_fingerprint": fingerprint,
         "release": normalized_release,
     }
+    if enforce_lifecycle:
+        binding[LIVE_LIFECYCLE_KEY] = _live_lifecycle_sha256(
+            manifest_path,
+            manifest,
+            root=(root or ROOT),
+        )
+    return binding
 
 
 def validate_admission_binding(
@@ -56,6 +130,13 @@ def validate_admission_binding(
     for key in ("manifest_sha256", "created_at", "configuration_fingerprint"):
         if actual.get(key) != expected.get(key):
             errors.append(f"pilot control admission {key} does not match current admission")
+    expected_lifecycle = expected.get(LIVE_LIFECYCLE_KEY)
+    actual_lifecycle = actual.get(LIVE_LIFECYCLE_KEY)
+    if expected_lifecycle:
+        if actual_lifecycle != expected_lifecycle:
+            errors.append("pilot control admission live lifecycle evidence does not match")
+    elif actual_lifecycle:
+        errors.append("pilot control admission has unexpected live lifecycle evidence")
     actual_release = actual.get("release")
     expected_release = expected.get("release")
     if not isinstance(actual_release, Mapping):
