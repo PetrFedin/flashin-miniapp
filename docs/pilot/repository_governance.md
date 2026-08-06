@@ -30,17 +30,15 @@ The evidence command fails closed when any item is absent, when bypass informati
 
 ## GitHub token
 
-`PILOT_GITHUB_TOKEN` is mandatory. Use a dedicated fine-grained personal access token or GitHub App installation token owned by a repository administrator. It must be able to:
+`PILOT_GITHUB_TOKEN` is mandatory. Use a dedicated fine-grained personal access token or GitHub App installation token for this repository. For a fine-grained token, grant:
 
-- read repository and default-branch metadata;
-- read branch protection;
-- read Actions workflow runs;
-- read active rules and ruleset details;
-- return the complete `bypass_actors` property for every active ruleset.
+- **Actions: read** — to read the successful workflow run for the exact release commit;
+- **Administration: write** — to read branch protection and to make GitHub return the complete `bypass_actors` property for rulesets;
+- repository metadata access, which GitHub includes for fine-grained repository tokens.
 
-For a fine-grained token, grant the minimum repository permissions needed for Contents read, Actions read, and Administration read. The token principal must also have write access to the ruleset; GitHub intentionally omits `bypass_actors` otherwise. The gate treats an omitted property as **NO-GO**, never as an empty bypass list.
+GitHub intentionally omits `bypass_actors` when the caller does not have write access to the ruleset. The gate treats an omitted property as **NO-GO**, never as an empty bypass list.
 
-Store the token only in the production secret store or host `.env`. Never add it to source control, logs, screenshots, or pilot evidence. Rotate/revoke it after the pilot if it is not required for continuing operations.
+Use the narrowest repository scope: only `PetrFedin/flashin-miniapp`. Do not grant access to unrelated repositories. Store the token only in the production secret store or host `.env`. Never add it to source control, logs, screenshots, or pilot evidence. Rotate/revoke it after the pilot if it is not required for continuing operations.
 
 ## Environment
 
