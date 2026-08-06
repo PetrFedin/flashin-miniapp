@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Mapping
 
 FORBIDDEN_APPLICATION_ENV_KEYS = ("PILOT_GITHUB_TOKEN", "GITHUB_TOKEN")
 
@@ -24,7 +25,15 @@ def forbidden_application_env_keys(path: Path) -> list[str]:
     return list(dict.fromkeys(found))
 
 
-def validate_privileged_token_isolation(root: Path) -> list[str]:
+def forbidden_process_env_keys(env: Mapping[str, str]) -> list[str]:
+    return [
+        key
+        for key in FORBIDDEN_APPLICATION_ENV_KEYS
+        if str(env.get(key, "")).strip()
+    ]
+
+
+def validate_privileged_token_file_isolation(root: Path) -> list[str]:
     keys = forbidden_application_env_keys(root / ".env")
     if not keys:
         return []
@@ -35,7 +44,31 @@ def validate_privileged_token_isolation(root: Path) -> list[str]:
     ]
 
 
-def require_privileged_token_isolation(root: Path) -> None:
-    errors = validate_privileged_token_isolation(root)
+def validate_application_token_isolation(
+    root: Path,
+    process_env: Mapping[str, str],
+) -> list[str]:
+    errors = validate_privileged_token_file_isolation(root)
+    process_keys = forbidden_process_env_keys(process_env)
+    if process_keys:
+        errors.append(
+            "Privileged GitHub operator token is present in the application process environment: "
+            + ", ".join(process_keys)
+            + ". Remove it and restart the process before admission or pilot runtime operations."
+        )
+    return list(dict.fromkeys(errors))
+
+
+def require_privileged_token_file_isolation(root: Path) -> None:
+    errors = validate_privileged_token_file_isolation(root)
+    if errors:
+        raise ValueError("; ".join(errors))
+
+
+def require_application_token_isolation(
+    root: Path,
+    process_env: Mapping[str, str],
+) -> None:
+    errors = validate_application_token_isolation(root, process_env)
     if errors:
         raise ValueError("; ".join(errors))
