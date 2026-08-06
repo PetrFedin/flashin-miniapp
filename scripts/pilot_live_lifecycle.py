@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -38,6 +37,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_INPUT = ROOT / "docs/pilot/live_lifecycle_input.json"
 DEFAULT_REPORT = ROOT / "docs/pilot/live_lifecycle_report.json"
 CURRENT_RELEASE_PATH = ROOT / "deploy/release/runtime/current_release.json"
+EVIDENCE_DIRECTORY = Path("docs/pilot/evidence")
 SCHEMA_VERSION = 1
 MAX_EVIDENCE_FILE_BYTES = 20 * 1024 * 1024
 BASE_REQUIRED_SCENARIOS = (
@@ -49,10 +49,6 @@ BASE_REQUIRED_SCENARIOS = (
     "moysklad_live_sync",
     "notification_delivery",
 )
-CONDITIONAL_SCENARIOS = {
-    "meilisearch_live_index",
-    "media_live_delivery",
-}
 SECRET_ENV_KEYS = (
     "TELEGRAM_BOT_TOKEN",
     "BOT_TOKEN",
@@ -124,14 +120,35 @@ def _sensitive_text_errors(text: str, env: Mapping[str, str], label: str) -> lis
     return errors
 
 
-def _resolve_evidence_path(root: Path, raw: object) -> Path:
+def _input_evidence_path(root: Path, raw: object) -> tuple[Path, str]:
     value = str(raw or "").strip()
     if not value:
         raise ValueError("evidence path is missing")
+    source = Path(value).expanduser()
+    if not source.is_absolute():
+        source = root / source
+    source = source.absolute()
+    root_absolute = root.absolute()
+    try:
+        relative = source.relative_to(root_absolute)
+    except ValueError as exc:
+        raise ValueError("evidence file must be inside the pilot repository root") from exc
+    required_root = EVIDENCE_DIRECTORY.parts
+    if relative.parts[: len(required_root)] != required_root:
+        raise ValueError("evidence file must be stored under docs/pilot/evidence")
+    return source, relative.as_posix()
+
+
+def _report_evidence_path(root: Path, raw: object) -> Path:
+    value = str(raw or "").strip()
+    if not value:
+        return root / EVIDENCE_DIRECTORY / "__missing__"
     path = Path(value)
     if not path.is_absolute():
-        path = root / path
-    return path.resolve()
+        return (root / path).absolute()
+    if path.exists():
+        return path
+    return (root / EVIDENCE_DIRECTORY / path.name).absolute()
 
 
 def _validate_evidence_file(
@@ -141,21 +158,21 @@ def _validate_evidence_file(
     env: Mapping[str, str],
 ) -> list[str]:
     errors: list[str] = []
-    if not path.is_file():
-        return [f"evidence file is missing: {path}"]
     if path.is_symlink():
         errors.append(f"evidence file must not be a symlink: {path}")
+    if not path.is_file():
+        return list(dict.fromkeys(errors + [f"evidence file is missing: {path}"]))
     try:
         size = path.stat().st_size
     except OSError as exc:
-        return [f"cannot stat evidence file {path}: {exc}"]
+        return list(dict.fromkeys(errors + [f"cannot stat evidence file {path}: {exc}"]))
     if size <= 0:
         errors.append(f"evidence file is empty: {path}")
     if size > MAX_EVIDENCE_FILE_BYTES:
         errors.append(
             f"evidence file exceeds {MAX_EVIDENCE_FILE_BYTES} bytes: {path}"
         )
-    actual_sha256 = sha256_file(path) if path.is_file() else ""
+    actual_sha256 = sha256_file(path)
     if expected_sha256 is not None and actual_sha256 != expected_sha256:
         errors.append(f"evidence checksum does not match: {path}")
 
@@ -176,7 +193,7 @@ def _validate_evidence_file(
         )
         if telegram_markers >= 3:
             errors.append(f"evidence file appears to contain raw Telegram init data: {path}")
-    return errors
+    return list(dict.fromkeys(errors))
 
 
 def _validate_scenario_common(
@@ -283,7 +300,7 @@ def _normalize_input_scenarios(
                 _sensitive_text_errors(label, env, f"scenario {name} evidence label")
             )
             try:
-                path = _resolve_evidence_path(root, item.get("path"))
+                path, portable_path = _input_evidence_path(root, item.get("path"))
             except ValueError as exc:
                 errors.append(f"scenario {name} evidence #{index}: {exc}")
                 continue
@@ -298,7 +315,7 @@ def _normalize_input_scenarios(
                 normalized_evidence.append(
                     {
                         "label": label,
-                        "path": str(path),
+                        "path": portable_path,
                         "sha256": sha256_file(path),
                     }
                 )
@@ -449,11 +466,7 @@ def validate_live_lifecycle_report(
             errors.extend(
                 _sensitive_text_errors(label, env, f"scenario {name} evidence label")
             )
-            try:
-                path = _resolve_evidence_path(root, item.get("path"))
-            except ValueError as exc:
-                errors.append(f"scenario {name} evidence #{index}: {exc}")
-                continue
+            path = _report_evidence_path(root, item.get("path"))
             expected_sha256 = str(item.get("sha256", "")).strip()
             if len(expected_sha256) != 64:
                 errors.append(f"scenario {name} evidence #{index} SHA-256 is invalid")
@@ -499,7 +512,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "The report stores only identifiers, checksums and bounded notes. Raw Telegram initData and provider secrets are forbidden.",
+            "The report stores only identifiers, portable paths, checksums and bounded notes. Raw Telegram initData and provider secrets are forbidden.",
             "",
         ]
     )
