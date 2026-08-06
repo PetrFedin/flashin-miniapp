@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from pilot_admission import render_markdown as render_admission_markdown
-from pilot_admission import verify_default_admission
+from pilot_admission_path import verify_admission_path
 from pilot_evidence import (
     atomic_write_json,
     atomic_write_text,
@@ -158,7 +158,7 @@ def attach_lifecycle_report(
     *,
     root: Path = ROOT,
 ) -> dict[str, Any]:
-    baseline_errors = verify_default_admission(root)
+    baseline_errors = verify_admission_path(manifest_path, root)
     if baseline_errors:
         raise ValueError(
             "Baseline pilot admission is invalid: " + "; ".join(baseline_errors)
@@ -252,7 +252,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             )
             return 0
-        errors = verify_default_admission(ROOT)
+        errors = verify_admission_path(args.manifest, ROOT)
         if not errors:
             require_current_lifecycle_release(ROOT)
             manifest = load_json(args.manifest)
