@@ -28,6 +28,13 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
         "attach_lifecycle_report(",
         "validate_attached_lifecycle(",
         "live_lifecycle_completed",
+        "require_current_lifecycle_release(",
+    ),
+    "scripts/pilot_lifecycle_release_guard.py": (
+        "REQUIRED_FILES",
+        "inspect_lifecycle_release(",
+        "require_current_lifecycle_release(",
+        "Current release is not lifecycle-capable",
     ),
     "scripts/pilot_control_binding.py": (
         "LIVE_LIFECYCLE_KEY",
@@ -38,6 +45,11 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
         "test_live_lifecycle_report_requires_exact_deployed_scenarios_and_hashes",
         "test_go_admission_binding_requires_attached_live_lifecycle",
         "test_evidence_symlink_and_outside_repository_are_rejected",
+    ),
+    "backend/tests/test_pilot_lifecycle_release_guard.py": (
+        "test_old_runtime_capability_archive_cannot_receive_lifecycle_admission",
+        "test_exact_release_requires_every_lifecycle_file_and_marker",
+        "test_current_release_pointer_must_match_lifecycle_archive",
     ),
     "docs/pilot/live_lifecycle_evidence.md": (
         "telegram_real_auth",
