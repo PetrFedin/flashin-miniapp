@@ -1,0 +1,35 @@
+name: TypeScript platform core
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: typescript-platform-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  platform:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Reject new Python runtime changes
+        if: github.event_name == 'pull_request'
+        env:
+          NO_PYTHON_BASE: ${{ github.event.pull_request.base.sha }}
+        run: node scripts/assert-no-new-python.mjs
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install pinned TypeScript toolchain
+        working-directory: platform
+        run: npm install --ignore-scripts
+      - name: Typecheck and test commerce core
+        working-directory: platform
+        run: npm run check
