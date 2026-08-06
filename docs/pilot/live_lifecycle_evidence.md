@@ -15,7 +15,7 @@ The gate is deliberately fail-closed. Missing, stale, unsigned, checksum-drifted
 5. Complete and retain a signed production-like rollback drill.
 6. Create the baseline signed pilot admission with named owners.
 7. Execute every required deployed lifecycle scenario below.
-8. Save sanitized evidence files locally on the pilot host or approved secure evidence storage mounted on the host.
+8. Save sanitized evidence files under `docs/pilot/evidence` on the pilot host or approved secure evidence storage mounted at that repository path.
 9. Create the signed lifecycle report.
 10. Attach the lifecycle report to the signed admission.
 11. Verify the complete admission.
@@ -78,7 +78,7 @@ Each scenario must contain:
 - one to ten non-empty, regular evidence files;
 - bounded notes that describe the observation without secrets.
 
-The report records an absolute path and SHA-256 for each file. Any later file modification invalidates admission.
+The report records a portable repository-relative path and SHA-256 for each file. Any later file modification invalidates admission. The same path must resolve on the host and inside the backend container.
 
 Never store:
 
