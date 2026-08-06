@@ -28,11 +28,12 @@ The pilot remains **NO-GO** until all items below are completed for the exact re
 3. Terms of sale, privacy policy, consent text, return/refund rules and seller details are final and publicly accessible.
 4. Named business, operations, technical, legal and support owners are recorded; an on-call escalation route and external alert receiver are active.
 5. GitHub `main` is protected against direct pushes and requires the complete CI workflow before merge. Strict checks, explicit force-push/deletion restrictions and administrator/ruleset bypass policy are proven by a fresh signed repository-governance report bound to the exact release commit. Every required check is bound to the official GitHub Actions App ID `15368`; `any source` and spoofable status contexts are forbidden.
-6. Current and previous immutable releases are promoted and independently verifiable.
-7. Signed strict provider evidence passes for the exact release/configuration.
-8. Signed live readiness evidence passes against deployed public endpoints.
-9. A production-like host rollback drill completes with retained signed backup, manifest, report and measured RTO/RPO.
-10. Signed live lifecycle evidence proves the deployed paths below with named owners and checksum-bound files:
+6. The privileged repository-governance token is injected only into the single operator command that creates the report. It is absent from root `.env`, Compose/container environments, application services, logs and evidence.
+7. Current and previous immutable releases are promoted and independently verifiable.
+8. Signed strict provider evidence passes for the exact release/configuration.
+9. Signed live readiness evidence passes against deployed public endpoints.
+10. A production-like host rollback drill completes with retained signed backup, manifest, report and measured RTO/RPO.
+11. Signed live lifecycle evidence proves the deployed paths below with named owners and checksum-bound files:
    - real Telegram signed authentication;
    - YooKassa redirect and payment return;
    - duplicate payment webhook idempotency;
@@ -41,7 +42,7 @@ The pilot remains **NO-GO** until all items below are completed for the exact re
    - Telegram notification delivery;
    - live Meilisearch indexing when enabled;
    - live R2/S3/CDN delivery when durable media is enabled.
-11. The signed admission manifest includes both the live lifecycle report and the repository-governance report, and the pilot runtime is armed only for an explicit Telegram allowlist and exactly 20 orders.
+12. The signed admission manifest includes both the live lifecycle report and the repository-governance report, and the pilot runtime is armed only for an explicit Telegram allowlist and exactly 20 orders.
 
 Raw Telegram initData, GitHub tokens and provider secrets must never be stored in pilot evidence.
 
