@@ -18,6 +18,7 @@ from pilot_evidence import (
     sha256_file,
     sign_payload,
 )
+from pilot_lifecycle_release_guard import require_current_lifecycle_release
 from pilot_live_lifecycle import validate_live_lifecycle_report
 from pilot_readiness import read_env
 
@@ -162,6 +163,7 @@ def attach_lifecycle_report(
         raise ValueError(
             "Baseline pilot admission is invalid: " + "; ".join(baseline_errors)
         )
+    require_current_lifecycle_release(root)
     env = read_env(root / ".env")
     secret = require_signing_secret(env)
     manifest = load_json(manifest_path)
@@ -252,6 +254,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         errors = verify_default_admission(ROOT)
         if not errors:
+            require_current_lifecycle_release(ROOT)
             manifest = load_json(args.manifest)
             errors.extend(
                 validate_attached_lifecycle(
