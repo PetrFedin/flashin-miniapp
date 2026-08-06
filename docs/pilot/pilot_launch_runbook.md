@@ -4,7 +4,7 @@
 
 Первый реальный заказ разрешён только для **точного immutable release**, который одновременно:
 
-- прошёл полный CI (`backend`, `frontend`, `admin`, `browser-e2e`, `docker`);
+- прошёл полный CI (`backend`, `frontend`, `admin`, `browser-e2e`, `docker`) от официального GitHub Actions App;
 - развёрнут на production-подобном pilot host;
 - имеет подписанные provider, live readiness, rollback, lifecycle и repository-governance evidence;
 - имеет действующий подписанный admission с пятью именованными владельцами;
@@ -20,7 +20,8 @@
 
 - production/sandbox credentials Telegram, YooKassa, MoySklad, Meilisearch и R2/S3, если функции включены;
 - отдельный случайный `PILOT_EVIDENCE_SIGNING_SECRET`;
-- обязательный `PILOT_GITHUB_TOKEN` с доступом к branch protection, Actions runs и полным ruleset bypass data;
+- обязательный `PILOT_GITHUB_TOKEN` с `Actions: read`, `Administration: write` и доступом к полным ruleset bypass data;
+- `PILOT_GITHUB_ACTIONS_APP_ID=15368` для привязки required checks к официальному GitHub Actions App;
 - DNS и валидный HTTPS для Mini App, API, Admin и CDN;
 - публичные оферта, privacy, consent, returns/refunds и реквизиты продавца;
 - адрес возврата и рабочие контакты поддержки;
@@ -37,11 +38,12 @@
 
 1. только pull request;
 2. required checks `backend`, `frontend`, `admin`, `browser-e2e`, `docker`;
-3. strict/up-to-date checks;
-4. запрет force-push;
-5. запрет deletion;
-6. classic `enforce_admins=true` или ruleset без bypass actors;
-7. `main` остаётся default branch.
+3. для каждого required check expected source — **GitHub Actions**, App ID `15368`; `any source`, отсутствующий/другой App ID и legacy name-only contexts запрещены;
+4. strict/up-to-date checks;
+5. явный запрет force-push;
+6. явный запрет deletion;
+7. classic `enforce_admins=true` или ruleset без bypass actors;
+8. `main` остаётся default branch.
 
 После изменения governance не вносите новые коммиты в `main`, пока не будет создан новый release и заново пройдена вся цепочка.
 
@@ -146,7 +148,7 @@ make pilot-lifecycle-status
 
 ## 9. Signed repository-governance evidence
 
-Убедитесь, что защищённый `main` указывает на тот же commit, что `current_release.json`, и полный CI этого commit завершён success.
+Убедитесь, что защищённый `main` указывает на тот же commit, что `current_release.json`, полный CI этого commit завершён success, а каждый required check имеет `app_id`/`integration_id=15368`.
 
 ```bash
 make pilot-governance-create ARGS='--owner "Exact Technical Owner"'
@@ -154,7 +156,7 @@ make pilot-governance-status
 make pilot-governance-attach
 ```
 
-Collector обязан видеть полное поле `bypass_actors`. Скрытое поле, отсутствующий token, неполные checks, другой head SHA или иной workflow дают NO-GO.
+Collector обязан видеть полное поле `bypass_actors`. Скрытое поле, отсутствующий token, неполные checks, недоверенный source, другой head SHA или иной workflow дают NO-GO.
 
 ## 10. Финальная проверка допуска
 
@@ -215,6 +217,7 @@ STOP обязателен при любом из условий:
 - потерян payment/refund/business event без retry/review;
 - reconciliation, `/ready`, Admin, audit trail или alerts недоступны;
 - evidence/admission/release/governance checksum изменился;
+- required status check потерял binding к GitHub Actions App ID `15368`;
 - обнаружен secret, raw initData или лишний доступ;
 - backup/rollback недоступен.
 
