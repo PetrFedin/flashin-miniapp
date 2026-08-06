@@ -13,6 +13,7 @@ RELEASE = {
     "promoted_at": "2026-08-06T11:00:00Z",
 }
 REQUIRED_CHECKS = ("backend", "frontend", "admin", "browser-e2e", "docker")
+ACTIONS_APP_ID = 15368
 
 
 def _env():
@@ -22,6 +23,7 @@ def _env():
         "PILOT_GITHUB_REQUIRED_CHECKS": ",".join(REQUIRED_CHECKS),
         "PILOT_GITHUB_WORKFLOW_NAME": "CI",
         "PILOT_GITHUB_WORKFLOW_PATH": "ci.yml",
+        "PILOT_GITHUB_ACTIONS_APP_ID": str(ACTIONS_APP_ID),
         "PILOT_GITHUB_GOVERNANCE_MAX_AGE_MINUTES": "60",
     }
 
@@ -44,6 +46,10 @@ def _classic_snapshot():
             "required_status_checks": {
                 "strict": True,
                 "contexts": list(REQUIRED_CHECKS),
+                "checks": [
+                    {"context": name, "app_id": ACTIONS_APP_ID}
+                    for name in REQUIRED_CHECKS
+                ],
             },
             "required_pull_request_reviews": {"required_approving_review_count": 1},
             "enforce_admins": {"enabled": True},
