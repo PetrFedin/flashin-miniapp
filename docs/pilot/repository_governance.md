@@ -30,9 +30,9 @@ Configure a branch ruleset or classic branch protection for `main` with all of t
 
 The evidence command fails closed when any item is absent, when a protection property is omitted, when a required check comes from an untrusted source, when bypass information is hidden, when the remote branch head differs from the promoted release commit, or when no successful completed workflow exists for that exact commit.
 
-## GitHub token
+## Privileged operator token
 
-`PILOT_GITHUB_TOKEN` is mandatory. Use a dedicated fine-grained personal access token or GitHub App installation token for this repository. For a fine-grained token, grant:
+`PILOT_GITHUB_TOKEN` is mandatory only while the governance report is being created. Use a dedicated fine-grained personal access token or GitHub App installation token for this repository. For a fine-grained token, grant:
 
 - **Actions: read** — to read the successful workflow run for the exact release commit;
 - **Administration: write** — to read branch protection and to make GitHub return the complete `bypass_actors` property for rulesets;
@@ -40,7 +40,9 @@ The evidence command fails closed when any item is absent, when a protection pro
 
 GitHub intentionally omits `bypass_actors` when the caller does not have write access to the ruleset. The gate treats an omitted property as **NO-GO**, never as an empty bypass list.
 
-Use the narrowest repository scope: only `PetrFedin/flashin-miniapp`. Do not grant access to unrelated repositories. Store the token only in the production secret store or host `.env`. Never add it to source control, logs, screenshots, or pilot evidence. Rotate/revoke it after the pilot if it is not required for continuing operations.
+The token is an operator credential, not an application credential. **Never place it in the repository root `.env`, `.env.production`, Compose environment, container secrets, application database, pilot evidence, logs or screenshots.** The project Compose file passes root `.env` to backend, frontend, admin, bot and worker containers, so storing the token there would unnecessarily expose repository-administration access to application services.
+
+Use the narrowest repository scope: only `PetrFedin/flashin-miniapp`. Inject the token from an operator secret manager only into the single `pilot-governance-create` process, then remove it from the process environment. Rotate/revoke it after the pilot if it is not required for continuing operations.
 
 ## Required check source
 
@@ -51,12 +53,11 @@ Set `PILOT_GITHUB_ACTIONS_APP_ID=15368`, the official GitHub Actions App ID. The
 
 Names in legacy `contexts` remain visible for diagnostics but do not satisfy source binding by themselves. This prevents a user, webhook integration or another GitHub App with repository write access from spoofing a successful `backend`, `frontend`, `admin`, `browser-e2e`, or `docker` status.
 
-## Environment
+## Non-secret application configuration
 
-Set these values outside Git:
+Keep only these non-secret values in the production `.env`:
 
 ```dotenv
-PILOT_GITHUB_TOKEN=
 PILOT_GITHUB_REPOSITORY=PetrFedin/flashin-miniapp
 PILOT_GITHUB_PROTECTED_BRANCH=main
 PILOT_GITHUB_REQUIRED_CHECKS=backend,frontend,admin,browser-e2e,docker
@@ -66,15 +67,22 @@ PILOT_GITHUB_WORKFLOW_PATH=ci.yml
 PILOT_GITHUB_GOVERNANCE_MAX_AGE_MINUTES=60
 ```
 
+Do not add a `PILOT_GITHUB_TOKEN` line to this file, even with an empty placeholder.
+
 ## Execution order
 
 Governance evidence is created only after the exact immutable release is promoted and its GitHub Actions workflow has completed successfully.
 
 ```bash
 make release-status
-make pilot-governance-create ARGS='--owner "Exact technical owner name"'
+# The operator secret manager injects PILOT_GITHUB_TOKEN only for this process.
+PILOT_GITHUB_TOKEN="$TOKEN_FROM_OPERATOR_SECRET_MANAGER" \
+  make pilot-governance-create ARGS='--owner "Exact technical owner name"'
+unset PILOT_GITHUB_TOKEN
 make pilot-governance-status
 ```
+
+Avoid copying the raw token into shell history. Prefer the secret manager's process-injection command, an ephemeral environment wrapper, or a short-lived GitHub App installation token. The example above names the environment boundary; it is not a recommendation to paste a token into an interactive command line.
 
 The owner must exactly match `technical_owner` in the signed admission. Attach governance only after the live lifecycle report has already been attached:
 
@@ -89,6 +97,8 @@ make pilot-admission-status
 ## Runtime binding
 
 When the controlled pilot is initialized or armed, the runtime state stores the SHA-256 of the governance report in its immutable admission binding. Replacing the report, changing the admission, promoting another release, changing the production configuration, hiding ruleset bypass data, changing a required check source, or allowing the report to expire causes runtime validation to fail closed. A fresh signed admission and a fresh pilot state are then required.
+
+The report contains policy metadata, release identity and workflow IDs; it never contains the GitHub token. Verification of an already signed report does not require the token.
 
 ## Evidence handling
 
