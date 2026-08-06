@@ -36,6 +36,7 @@ API_VERSION = "2026-03-10"
 DEFAULT_REQUIRED_CHECKS = ("backend", "frontend", "admin", "browser-e2e", "docker")
 DEFAULT_WORKFLOW_NAME = "CI"
 DEFAULT_WORKFLOW_PATH = "ci.yml"
+DEFAULT_GITHUB_ACTIONS_APP_ID = 15368
 
 
 def _positive_int(
@@ -85,6 +86,13 @@ def settings(env: Mapping[str, str]) -> dict[str, Any]:
         "required_checks": required_checks,
         "workflow_name": workflow_name,
         "workflow_path": workflow_path,
+        "actions_app_id": _positive_int(
+            env,
+            "PILOT_GITHUB_ACTIONS_APP_ID",
+            DEFAULT_GITHUB_ACTIONS_APP_ID,
+            1,
+            2_147_483_647,
+        ),
         "max_age_minutes": _positive_int(
             env,
             "PILOT_GITHUB_GOVERNANCE_MAX_AGE_MINUTES",
@@ -195,24 +203,45 @@ def _explicitly_disabled(value: object) -> bool:
     return isinstance(value, Mapping) and value.get("enabled") is False
 
 
-def _legacy_status_contexts(protection: object) -> tuple[set[str], bool]:
+def _record_source(
+    sources: dict[str, set[int]],
+    *,
+    context: str,
+    app_id: object,
+) -> None:
+    if isinstance(app_id, int):
+        sources.setdefault(context, set()).add(app_id)
+
+
+def _legacy_status_checks(
+    protection: object,
+) -> tuple[set[str], dict[str, set[int]], bool]:
     if not isinstance(protection, Mapping):
-        return set(), False
+        return set(), {}, False
     status = protection.get("required_status_checks")
     if not isinstance(status, Mapping):
-        return set(), False
+        return set(), {}, False
     contexts = {str(item) for item in status.get("contexts", []) if str(item).strip()}
+    sources: dict[str, set[int]] = {}
     for item in status.get("checks", []):
-        if isinstance(item, Mapping) and str(item.get("context", "")).strip():
-            contexts.add(str(item["context"]).strip())
-    return contexts, status.get("strict") is True
+        if not isinstance(item, Mapping):
+            continue
+        context = str(item.get("context", "")).strip()
+        if not context:
+            continue
+        contexts.add(context)
+        _record_source(sources, context=context, app_id=item.get("app_id"))
+    return contexts, sources, status.get("strict") is True
 
 
-def _ruleset_status_contexts(active_rules: object) -> tuple[set[str], bool]:
+def _ruleset_status_checks(
+    active_rules: object,
+) -> tuple[set[str], dict[str, set[int]], bool]:
     contexts: set[str] = set()
+    sources: dict[str, set[int]] = {}
     strict = False
     if not isinstance(active_rules, list):
-        return contexts, strict
+        return contexts, sources, strict
     for rule in active_rules:
         if not isinstance(rule, Mapping) or rule.get("type") != "required_status_checks":
             continue
@@ -221,9 +250,26 @@ def _ruleset_status_contexts(active_rules: object) -> tuple[set[str], bool]:
             continue
         strict = strict or parameters.get("strict_required_status_checks_policy") is True
         for item in parameters.get("required_status_checks", []):
-            if isinstance(item, Mapping) and str(item.get("context", "")).strip():
-                contexts.add(str(item["context"]).strip())
-    return contexts, strict
+            if not isinstance(item, Mapping):
+                continue
+            context = str(item.get("context", "")).strip()
+            if not context:
+                continue
+            contexts.add(context)
+            _record_source(
+                sources,
+                context=context,
+                app_id=item.get("integration_id"),
+            )
+    return contexts, sources, strict
+
+
+def _merge_sources(*source_maps: Mapping[str, set[int]]) -> dict[str, set[int]]:
+    merged: dict[str, set[int]] = {}
+    for source_map in source_maps:
+        for context, app_ids in source_map.items():
+            merged.setdefault(context, set()).update(app_ids)
+    return merged
 
 
 def _ruleset_bypass_state(rulesets: object) -> tuple[bool, list[dict[str, Any]]]:
@@ -290,10 +336,12 @@ def evaluate_snapshot(
         for item in active_rules or []
         if isinstance(item, Mapping)
     }
-    legacy_contexts, legacy_strict = _legacy_status_contexts(protection)
-    ruleset_contexts, ruleset_strict = _ruleset_status_contexts(active_rules)
+    legacy_contexts, legacy_sources, legacy_strict = _legacy_status_checks(protection)
+    ruleset_contexts, ruleset_sources, ruleset_strict = _ruleset_status_checks(active_rules)
     contexts = legacy_contexts | ruleset_contexts
+    check_sources = _merge_sources(legacy_sources, ruleset_sources)
     required_checks = set(config["required_checks"])
+    actions_app_id = int(config["actions_app_id"])
 
     branch_protected = branch.get("protected") is True or bool(active_types)
     pull_request_required = (
@@ -301,6 +349,10 @@ def evaluate_snapshot(
         and isinstance(protection.get("required_pull_request_reviews"), Mapping)
     ) or "pull_request" in active_types
     status_checks_required = required_checks.issubset(contexts)
+    status_check_sources_required = all(
+        actions_app_id in check_sources.get(context, set())
+        for context in required_checks
+    )
     strict_status_checks = legacy_strict or ruleset_strict
     force_push_blocked = (
         isinstance(protection, Mapping)
@@ -329,6 +381,7 @@ def evaluate_snapshot(
         "branch_protected": branch_protected,
         "pull_request_required": pull_request_required,
         "required_status_checks": status_checks_required,
+        "required_status_check_sources": status_check_sources_required,
         "strict_status_checks": strict_status_checks,
         "force_push_blocked": force_push_blocked,
         "deletion_blocked": deletion_blocked,
@@ -341,6 +394,16 @@ def evaluate_snapshot(
     missing = sorted(required_checks - contexts)
     if missing:
         errors.append("GitHub required status checks are missing: " + ", ".join(missing))
+    wrong_sources = sorted(
+        context
+        for context in required_checks
+        if actions_app_id not in check_sources.get(context, set())
+    )
+    if wrong_sources:
+        errors.append(
+            "GitHub required status checks are not bound to the configured Actions app: "
+            + ", ".join(wrong_sources)
+        )
     if has_rulesets and not ruleset_bypass_visibility:
         errors.append(
             "GitHub ruleset bypass actors are not visible; the token lacks sufficient access"
@@ -395,8 +458,13 @@ def evaluate_snapshot(
         },
         "policy": {
             **checks,
+            "actions_app_id": actions_app_id,
             "required_checks": sorted(required_checks),
             "observed_status_checks": sorted(contexts),
+            "observed_check_sources": {
+                context: sorted(app_ids)
+                for context, app_ids in sorted(check_sources.items())
+            },
             "active_rule_types": sorted(active_types),
             "ruleset_ids": sorted(
                 {
@@ -514,6 +582,7 @@ def validate_report(
         "branch_protected",
         "pull_request_required",
         "required_status_checks",
+        "required_status_check_sources",
         "strict_status_checks",
         "force_push_blocked",
         "deletion_blocked",
@@ -526,11 +595,26 @@ def validate_report(
         for key in required_policy_checks:
             if policy.get(key) is not True:
                 errors.append(f"repository governance policy is not passing: {key}")
+        if policy.get("actions_app_id") != config["actions_app_id"]:
+            errors.append("repository governance Actions app ID does not match configuration")
         if set(policy.get("required_checks", [])) != set(config["required_checks"]):
             errors.append("repository governance required checks do not match configuration")
         observed = {str(item) for item in policy.get("observed_status_checks", [])}
         if not set(config["required_checks"]).issubset(observed):
             errors.append("repository governance observed status checks are incomplete")
+        observed_sources = policy.get("observed_check_sources")
+        if not isinstance(observed_sources, Mapping):
+            errors.append("repository governance observed check sources are missing")
+        else:
+            for context in config["required_checks"]:
+                source_ids = observed_sources.get(context)
+                if (
+                    not isinstance(source_ids, list)
+                    or config["actions_app_id"] not in source_ids
+                ):
+                    errors.append(
+                        f"repository governance check source is invalid: {context}"
+                    )
         if policy.get("bypass_actors"):
             errors.append("repository governance contains bypass actors")
 
@@ -568,6 +652,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             f"Branch: `{branch.get('name', 'unknown')}`",
             f"Head: `{branch.get('head_sha', 'unknown')}`",
             f"Workflow: `{workflow.get('name', 'unknown')}` / `{workflow.get('id', 'unknown')}`",
+            f"Actions app ID: `{policy.get('actions_app_id', 'unknown')}`",
             f"Owner: `{report.get('owner', 'missing')}`",
             f"Created: `{report.get('created_at')}`",
             f"Expires: `{report.get('expires_at')}`",
@@ -580,6 +665,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
                     "branch_protected",
                     "pull_request_required",
                     "required_status_checks",
+                    "required_status_check_sources",
                     "strict_status_checks",
                     "force_push_blocked",
                     "deletion_blocked",
