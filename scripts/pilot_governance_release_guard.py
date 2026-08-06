@@ -32,6 +32,7 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
     "scripts/pilot_governance_admission.py": (
         "attach_governance_report(",
         "validate_attached_governance(",
+        "verify_admission_path(",
         "repository_governance_verified",
         "Live lifecycle evidence",
         "Repository governance evidence",
@@ -56,6 +57,7 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
         "  browser-e2e:",
         "  docker:",
         "Run pilot release, governance and database guard tests",
+        "backend/tests/test_pilot_admission_path_binding.py",
         "backend/tests/test_pilot_repository_governance.py",
         "backend/tests/test_pilot_governance_visibility.py",
         "backend/tests/test_pilot_governance_classic_fail_closed.py",
