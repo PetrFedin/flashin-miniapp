@@ -28,8 +28,33 @@ ACKNOWLEDGEMENT_KEY = "live_lifecycle_completed"
 EVIDENCE_KEY = "live_lifecycle_report"
 
 
+def _portable_report_path(root: Path, report_path: Path) -> str:
+    absolute = report_path.absolute()
+    try:
+        relative = absolute.relative_to(root.absolute())
+    except ValueError as exc:
+        raise ValueError("Live lifecycle report must be inside the pilot repository root") from exc
+    if relative.parts[:2] != ("docs", "pilot"):
+        raise ValueError("Live lifecycle report must be stored under docs/pilot")
+    return relative.as_posix()
+
+
+def _resolve_report_path(root: Path, raw: object) -> Path:
+    value = str(raw or "").strip()
+    if not value:
+        return root / "docs/pilot/__missing__"
+    path = Path(value)
+    if not path.is_absolute():
+        return (root / path).absolute()
+    if path.exists():
+        return path
+    return (root / "docs/pilot" / path.name).absolute()
+
+
 def _evidence_entry(
     manifest: Mapping[str, Any],
+    *,
+    root: Path,
 ) -> tuple[Path | None, str, list[str]]:
     evidence = manifest.get("evidence")
     if not isinstance(evidence, Mapping):
@@ -37,7 +62,7 @@ def _evidence_entry(
     entry = evidence.get(EVIDENCE_KEY)
     if not isinstance(entry, Mapping):
         return None, "", ["pilot admission live lifecycle evidence is missing"]
-    path = Path(str(entry.get("path", "")).strip())
+    path = _resolve_report_path(root, entry.get("path"))
     expected_sha256 = str(entry.get("sha256", "")).strip()
     errors: list[str] = []
     if not path.is_file():
@@ -65,7 +90,7 @@ def validate_attached_lifecycle(
     elif acknowledgements.get(ACKNOWLEDGEMENT_KEY) is not True:
         errors.append("pilot admission live lifecycle acknowledgement is missing")
 
-    path, _expected_sha256, entry_errors = _evidence_entry(manifest)
+    path, _expected_sha256, entry_errors = _evidence_entry(manifest, root=root)
     errors.extend(entry_errors)
     if path is None or not path.is_file():
         return list(dict.fromkeys(errors))
@@ -90,11 +115,11 @@ def validate_attached_lifecycle(
         )
 
     approvals = manifest.get("approvals")
-    approved_names = {
-        str(value).strip()
-        for value in approvals.values()
-        if isinstance(approvals, Mapping) and str(value).strip()
-    } if isinstance(approvals, Mapping) else set()
+    approved_names = (
+        {str(value).strip() for value in approvals.values() if str(value).strip()}
+        if isinstance(approvals, Mapping)
+        else set()
+    )
     if not approved_names:
         errors.append("pilot admission named approvals are missing")
     scenarios = report.get("scenarios")
@@ -108,19 +133,6 @@ def validate_attached_lifecycle(
                 errors.append(
                     f"live lifecycle scenario {name} owner is not a signed admission owner"
                 )
-
-    if manifest_path.is_file():
-        evidence = manifest.get("evidence")
-        entry = evidence.get(EVIDENCE_KEY) if isinstance(evidence, Mapping) else None
-        if isinstance(entry, Mapping):
-            bound_manifest = str(entry.get("admission_manifest_sha256", "")).strip()
-            if bound_manifest:
-                # The manifest changes when this attachment is added, so the optional
-                # reverse binding must refer to the unsigned pre-attachment manifest.
-                # It is informational only; the authoritative binding is the signed
-                # manifest's exact report path and checksum.
-                if len(bound_manifest) != 64:
-                    errors.append("live lifecycle admission manifest SHA-256 is invalid")
     return list(dict.fromkeys(errors))
 
 
@@ -169,11 +181,11 @@ def attach_lifecycle_report(
         )
 
     approvals = manifest.get("approvals")
-    approved_names = {
-        str(value).strip()
-        for value in approvals.values()
-        if isinstance(approvals, Mapping) and str(value).strip()
-    } if isinstance(approvals, Mapping) else set()
+    approved_names = (
+        {str(value).strip() for value in approvals.values() if str(value).strip()}
+        if isinstance(approvals, Mapping)
+        else set()
+    )
     for scenario in report.get("scenarios", []):
         if not isinstance(scenario, Mapping):
             continue
@@ -187,7 +199,7 @@ def attach_lifecycle_report(
     unsigned.pop("signature", None)
     evidence = dict(unsigned.get("evidence") or {})
     evidence[EVIDENCE_KEY] = {
-        "path": str(report_path.resolve()),
+        "path": _portable_report_path(root, report_path),
         "sha256": sha256_file(report_path),
     }
     unsigned["evidence"] = evidence
