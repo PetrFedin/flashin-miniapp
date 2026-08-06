@@ -191,6 +191,10 @@ def _enabled(value: object) -> bool:
     return isinstance(value, Mapping) and value.get("enabled") is True
 
 
+def _explicitly_disabled(value: object) -> bool:
+    return isinstance(value, Mapping) and value.get("enabled") is False
+
+
 def _legacy_status_contexts(protection: object) -> tuple[set[str], bool]:
     if not isinstance(protection, Mapping):
         return set(), False
@@ -235,14 +239,16 @@ def _ruleset_bypass_state(rulesets: object) -> tuple[bool, list[dict[str, Any]]]
             visible = False
             continue
         for actor in ruleset.get("bypass_actors", []):
-            if isinstance(actor, Mapping):
-                actors.append(
-                    {
-                        "actor_type": actor.get("actor_type"),
-                        "actor_id": actor.get("actor_id"),
-                        "bypass_mode": actor.get("bypass_mode"),
-                    }
-                )
+            if not isinstance(actor, Mapping):
+                visible = False
+                continue
+            actors.append(
+                {
+                    "actor_type": actor.get("actor_type"),
+                    "actor_id": actor.get("actor_id"),
+                    "bypass_mode": actor.get("bypass_mode"),
+                }
+            )
     return visible, actors
 
 
@@ -298,11 +304,11 @@ def evaluate_snapshot(
     strict_status_checks = legacy_strict or ruleset_strict
     force_push_blocked = (
         isinstance(protection, Mapping)
-        and not _enabled(protection.get("allow_force_pushes"))
+        and _explicitly_disabled(protection.get("allow_force_pushes"))
     ) or "non_fast_forward" in active_types
     deletion_blocked = (
         isinstance(protection, Mapping)
-        and not _enabled(protection.get("allow_deletions"))
+        and _explicitly_disabled(protection.get("allow_deletions"))
     ) or "deletion" in active_types
     admins_enforced = (
         isinstance(protection, Mapping) and _enabled(protection.get("enforce_admins"))
