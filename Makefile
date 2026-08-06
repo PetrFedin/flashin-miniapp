@@ -209,8 +209,8 @@ pilot-lifecycle-status:
 	python3 scripts/pilot_lifecycle_admission.py verify $(ARGS)
 
 pilot-governance-create:
-	@echo "Usage: make pilot-governance-create ARGS='--owner \"Exact technical owner name\"'"
-	python3 scripts/pilot_repository_governance.py create $(ARGS)
+	@echo "Usage: inject PILOT_GITHUB_TOKEN only into this process, then run ARGS='--owner \"Exact technical owner name\"'"
+	python3 scripts/pilot_governance_operator.py create $(ARGS)
 
 pilot-governance-attach:
 	python3 scripts/pilot_governance_admission.py attach $(ARGS)
