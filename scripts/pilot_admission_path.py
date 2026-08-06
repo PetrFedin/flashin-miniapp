@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from pilot_admission import (
@@ -11,13 +12,13 @@ from pilot_admission import (
     validate_admission_manifest,
 )
 from pilot_evidence import load_json
-from pilot_operator_security import validate_privileged_token_isolation
+from pilot_operator_security import validate_application_token_isolation
 from pilot_readiness import read_env
 
 
 def verify_admission_path(manifest_path: Path, root: Path) -> list[str]:
     """Verify the exact manifest requested by the operator; never substitute default."""
-    isolation_errors = validate_privileged_token_isolation(root)
+    isolation_errors = validate_application_token_isolation(root, os.environ)
     if isolation_errors:
         return isolation_errors
     env = read_env(root / ".env")
