@@ -1,4 +1,4 @@
-.PHONY: help init build up down logs migrate health workers search monitoring backup restore test preflight clean deploy-prod rollback rollback-drill rollback-drill-status verify-backup seed-admin validate-env openapi release-notes diagnostics setup-wizard check-integrations provider-probes readiness pilot-sheet readiness-gate pilot-gate loadtest performance-budget security-audit media-jobs loadtest-catalog loadtest-webhooks real-e2e grafana-dashboards simple-start launch-local launch-production connected-audit simplicity-score env-todo pilot-runner pilot-init pilot-record pilot-status pilot-final pilot-admit pilot-admission-status pilot-runtime-arm pilot-runtime-status pilot-runtime-stop release-create release-verify release-status release-pack release-freeze pilot-evidence package-audit test-all transaction-integrity
+.PHONY: help init build up down logs migrate health workers search monitoring backup restore test preflight clean deploy-prod rollback rollback-drill rollback-drill-status verify-backup seed-admin validate-env openapi release-notes diagnostics setup-wizard check-integrations provider-probes readiness pilot-sheet readiness-gate pilot-gate loadtest performance-budget security-audit media-jobs loadtest-catalog loadtest-webhooks real-e2e grafana-dashboards simple-start launch-local launch-production connected-audit simplicity-score env-todo pilot-runner pilot-init pilot-record pilot-status pilot-final pilot-admit pilot-admission-status pilot-lifecycle-create pilot-lifecycle-attach pilot-lifecycle-status pilot-runtime-arm pilot-runtime-status pilot-runtime-stop release-create release-verify release-status release-pack release-freeze pilot-evidence package-audit test-all transaction-integrity
 
 help:
 	@echo "FLASHIN commands:"
@@ -18,6 +18,9 @@ help:
 	@echo "  make pilot-gate            - verify public endpoints and signed provider evidence"
 	@echo "  make rollback-drill        - execute rollback and record signed drill evidence"
 	@echo "  make pilot-admit           - create signed human/business pilot admission"
+	@echo "  make pilot-lifecycle-create - sign file-backed deployed lifecycle evidence"
+	@echo "  make pilot-lifecycle-attach - bind lifecycle evidence to pilot admission"
+	@echo "  make pilot-lifecycle-status - verify admission plus lifecycle attachment"
 	@echo "  make pilot-runner          - initialize/show admission-gated 20-order control"
 	@echo "  make pilot-runtime-arm     - open checkout for allowlisted pilot Telegram IDs"
 	@echo "  make pilot-runtime-status  - verify DB counter, evidence binding and remaining slots"
@@ -190,7 +193,17 @@ pilot-admit:
 	python3 scripts/pilot_admission.py create $(ARGS)
 
 pilot-admission-status:
-	python3 scripts/pilot_admission.py verify
+	python3 scripts/pilot_lifecycle_admission.py verify
+
+pilot-lifecycle-create:
+	@echo "Usage: make pilot-lifecycle-create ARGS='--input docs/pilot/live_lifecycle_input.json'"
+	python3 scripts/pilot_live_lifecycle.py create $(ARGS)
+
+pilot-lifecycle-attach:
+	python3 scripts/pilot_lifecycle_admission.py attach $(ARGS)
+
+pilot-lifecycle-status:
+	python3 scripts/pilot_lifecycle_admission.py verify $(ARGS)
 
 pilot-runner:
 	python3 scripts/pilot_runner.py
