@@ -67,6 +67,7 @@ jobs:
           backend/tests/test_pilot_release_capability.py
           backend/tests/test_pilot_runtime_integrity.py
           backend/tests/test_pilot_runtime_wiring.py
+          backend/tests/test_pilot_admission_path_binding.py
           backend/tests/test_pilot_repository_governance.py
           backend/tests/test_pilot_governance_visibility.py
           backend/tests/test_pilot_governance_classic_fail_closed.py
