@@ -28,6 +28,7 @@ DEFAULT_MANIFEST = ROOT / "docs/pilot/pilot_admission_manifest.json"
 DEFAULT_REPORT = ROOT / "docs/pilot/repository_governance_report.json"
 ACKNOWLEDGEMENT_KEY = "repository_governance_verified"
 EVIDENCE_KEY = "repository_governance_report"
+LIFECYCLE_EVIDENCE_KEY = "live_lifecycle_report"
 
 
 def _portable_report_path(root: Path, report_path: Path) -> str:
@@ -129,18 +130,38 @@ def validate_attached_governance(
     return list(dict.fromkeys(errors))
 
 
+def _render_evidence_block(
+    title: str,
+    entry: object,
+    note: str,
+) -> str:
+    normalized = entry if isinstance(entry, Mapping) else {}
+    path = normalized.get("path", "missing")
+    digest = normalized.get("sha256", "missing")
+    return (
+        f"\n\n## {title}\n\n"
+        + f"- Report: `{path}`\n"
+        + f"- SHA-256: `{digest}`\n"
+        + f"- {note}\n"
+    )
+
+
 def _render_manifest(manifest: Mapping[str, Any]) -> str:
     base = render_admission_markdown(manifest).rstrip()
     evidence = manifest.get("evidence")
-    entry = evidence.get(EVIDENCE_KEY) if isinstance(evidence, Mapping) else None
-    path = entry.get("path") if isinstance(entry, Mapping) else "missing"
-    digest = entry.get("sha256") if isinstance(entry, Mapping) else "missing"
+    evidence_map = evidence if isinstance(evidence, Mapping) else {}
     return (
         base
-        + "\n\n## Repository governance evidence\n\n"
-        + f"- Report: `{path}`\n"
-        + f"- SHA-256: `{digest}`\n"
-        + "- The protected branch, exact release commit and successful required CI are immutable pilot inputs.\n"
+        + _render_evidence_block(
+            "Live lifecycle evidence",
+            evidence_map.get(LIFECYCLE_EVIDENCE_KEY),
+            "Raw Telegram initData and provider secrets are forbidden in the report.",
+        )
+        + _render_evidence_block(
+            "Repository governance evidence",
+            evidence_map.get(EVIDENCE_KEY),
+            "The protected branch, exact release commit and successful required CI are immutable pilot inputs.",
+        )
     )
 
 
