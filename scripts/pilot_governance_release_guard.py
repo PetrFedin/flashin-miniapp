@@ -103,6 +103,7 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
         "bypass_actors",
     ),
     "docs/pilot/pilot_launch_runbook.md": (
+        "PILOT_GITHUB_ACTIONS_APP_ID=15368",
         "pilot-lifecycle-create",
         "pilot-governance-create",
         "pilot-admission-status",
