@@ -21,9 +21,16 @@ def sha256_file(path: Path) -> str:
 
 
 def _requires_live_lifecycle(manifest: Mapping[str, Any]) -> bool:
-    """Only a baseline-verified production GO manifest enters this path."""
+    """Require v18 only for the authoritative admission schema.
+
+    Historical unit fixtures without ``schema_version`` are intentionally not
+    treated as production admission manifests. The real admission builder and
+    verifier require schema version 1, and every schema-v1 GO must carry the
+    signed live lifecycle attachment.
+    """
     return (
-        manifest.get("kind") == "pilot_admission"
+        manifest.get("schema_version") == 1
+        and manifest.get("kind") == "pilot_admission"
         and manifest.get("decision") == "GO"
     )
 
