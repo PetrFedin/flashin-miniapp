@@ -37,6 +37,11 @@ docs/pilot/rollback_drill_report.json
 docs/pilot/rollback_drill_report.md
 docs/pilot/pilot_admission_manifest.json
 docs/pilot/pilot_admission_manifest.md
+docs/pilot/live_lifecycle_input.json
+docs/pilot/live_lifecycle_report.json
+docs/pilot/live_lifecycle_report.md
+docs/pilot/repository_governance_report.json
+docs/pilot/repository_governance_report.md
 docs/readiness_gate_report.json
 docs/readiness_gate_report.md
 docs/pilot_live_gate_report.json
