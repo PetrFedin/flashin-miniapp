@@ -1,6 +1,6 @@
 # FLASHIN repository governance gate
 
-Repository governance is a mandatory pilot input. A green CI run is insufficient when `main` can still be changed by a direct push, force-push, deletion, or an unaudited bypass after the tested commit was produced.
+Repository governance is a mandatory pilot input. A green CI run is insufficient when `main` can still be changed by a direct push, force-push, deletion, hidden ruleset bypass, or an unaudited administrator action after the tested commit was produced.
 
 The v19 gate creates a signed, short-lived report bound to:
 
@@ -9,6 +9,7 @@ The v19 gate creates a signed, short-lived report bound to:
 - the exact `git_commit` in `deploy/release/runtime/current_release.json`;
 - the exact successful `CI` workflow run for that commit;
 - required checks `backend,frontend,admin,browser-e2e,docker`;
+- the exact governance-capable release archive, including the protected CI workflow itself;
 - the production configuration fingerprint;
 - the named technical owner in the signed pilot admission.
 
@@ -21,10 +22,25 @@ Configure a branch ruleset or classic branch protection for `main` with all of t
 3. Strict status checks are enabled so the branch must be current before merge.
 4. Force-push is forbidden.
 5. Branch deletion is forbidden.
-6. Administrator enforcement is enabled for classic protection, or the active ruleset has no bypass actors.
+6. Administrator enforcement is enabled for classic protection, or every active ruleset exposes an empty `bypass_actors` list.
 7. The branch remains the repository default branch.
+8. The successful workflow is the tracked `.github/workflows/ci.yml` capability contained in the exact promoted release.
 
-The evidence command fails closed when any item is absent, when the remote branch head differs from the promoted release commit, or when no successful completed workflow exists for that exact commit.
+The evidence command fails closed when any item is absent, when bypass information is hidden, when the remote branch head differs from the promoted release commit, or when no successful completed workflow exists for that exact commit.
+
+## GitHub token
+
+`PILOT_GITHUB_TOKEN` is mandatory. Use a dedicated fine-grained personal access token or GitHub App installation token owned by a repository administrator. It must be able to:
+
+- read repository and default-branch metadata;
+- read branch protection;
+- read Actions workflow runs;
+- read active rules and ruleset details;
+- return the complete `bypass_actors` property for every active ruleset.
+
+For a fine-grained token, grant the minimum repository permissions needed for Contents read, Actions read, and Administration read. The token principal must also have write access to the ruleset; GitHub intentionally omits `bypass_actors` otherwise. The gate treats an omitted property as **NO-GO**, never as an empty bypass list.
+
+Store the token only in the production secret store or host `.env`. Never add it to source control, logs, screenshots, or pilot evidence. Rotate/revoke it after the pilot if it is not required for continuing operations.
 
 ## Environment
 
@@ -39,8 +55,6 @@ PILOT_GITHUB_WORKFLOW_NAME=CI
 PILOT_GITHUB_WORKFLOW_PATH=ci.yml
 PILOT_GITHUB_GOVERNANCE_MAX_AGE_MINUTES=60
 ```
-
-A token is recommended to avoid anonymous API rate limits and to let GitHub return authorized ruleset details, including bypass actors. Store it only in the production secret store or host `.env`; never add it to evidence.
 
 ## Execution order
 
@@ -60,11 +74,11 @@ make pilot-governance-attach
 make pilot-admission-status
 ```
 
-`pilot-admission-status` is the final verifier and checks baseline admission evidence, live lifecycle evidence, repository governance evidence, release capability, signatures, checksums, age windows, owner identity, exact release commit, and successful required CI.
+`pilot-admission-status` is the final verifier and checks baseline admission evidence, live lifecycle evidence, repository governance evidence, release capability, signatures, checksums, age windows, owner identity, exact release commit, complete bypass visibility, and successful required CI.
 
 ## Runtime binding
 
-When the controlled pilot is initialized or armed, the runtime state stores the SHA-256 of the governance report in its immutable admission binding. Replacing the report, changing the admission, promoting another release, changing the production configuration, or allowing the report to expire causes the runtime validation to fail closed. A fresh signed admission and a fresh pilot state are then required.
+When the controlled pilot is initialized or armed, the runtime state stores the SHA-256 of the governance report in its immutable admission binding. Replacing the report, changing the admission, promoting another release, changing the production configuration, hiding ruleset bypass data, or allowing the report to expire causes runtime validation to fail closed. A fresh signed admission and a fresh pilot state are then required.
 
 ## Evidence handling
 
