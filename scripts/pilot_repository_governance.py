@@ -95,14 +95,22 @@ def settings(env: Mapping[str, str]) -> dict[str, Any]:
     }
 
 
-def _api_json(url: str, *, token: str = "", allow_not_found: bool = False) -> Any:
+def _github_token(env: Mapping[str, str]) -> str:
+    token = str(env.get("PILOT_GITHUB_TOKEN") or env.get("GITHUB_TOKEN") or "").strip()
+    if not token:
+        raise ValueError(
+            "PILOT_GITHUB_TOKEN is required to read branch protection and ruleset bypass data"
+        )
+    return token
+
+
+def _api_json(url: str, *, token: str, allow_not_found: bool = False) -> Any:
     headers = {
         "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
         "User-Agent": "flashin-pilot-governance",
         "X-GitHub-Api-Version": API_VERSION,
     }
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
     request = Request(url, headers=headers)
     try:
         with urlopen(request, timeout=20) as response:  # noqa: S310 - fixed GitHub API host
@@ -125,9 +133,9 @@ def collect_snapshot(
     current_release: Mapping[str, Any],
 ) -> dict[str, Any]:
     config = settings(env)
+    token = _github_token(env)
     owner, repository_name = config["repository"].split("/", 1)
     branch = config["branch"]
-    token = str(env.get("PILOT_GITHUB_TOKEN") or env.get("GITHUB_TOKEN") or "").strip()
     base = f"https://api.github.com/repos/{quote(owner)}/{quote(repository_name)}"
 
     repository = _api_json(base, token=token)
@@ -138,7 +146,8 @@ def collect_snapshot(
         allow_not_found=True,
     )
     active_rules = _api_json(
-        f"{base}/rules/branches/{quote(branch, safe='')}", token=token
+        f"{base}/rules/branches/{quote(branch, safe='')}?per_page=100",
+        token=token,
     )
     if not isinstance(active_rules, list):
         raise ValueError("GitHub active branch rules response must be a list")
@@ -152,8 +161,9 @@ def collect_snapshot(
         }
     ):
         details = _api_json(f"{base}/rulesets/{ruleset_id}", token=token)
-        if isinstance(details, Mapping):
-            rulesets.append(dict(details))
+        if not isinstance(details, Mapping):
+            raise ValueError(f"GitHub ruleset {ruleset_id} response must be an object")
+        rulesets.append(dict(details))
 
     workflow_query = urlencode(
         {"branch": branch, "status": "completed", "per_page": 100}
@@ -210,6 +220,30 @@ def _ruleset_status_contexts(active_rules: object) -> tuple[set[str], bool]:
             if isinstance(item, Mapping) and str(item.get("context", "")).strip():
                 contexts.add(str(item["context"]).strip())
     return contexts, strict
+
+
+def _ruleset_bypass_state(rulesets: object) -> tuple[bool, list[dict[str, Any]]]:
+    if not isinstance(rulesets, list):
+        return False, []
+    visible = True
+    actors: list[dict[str, Any]] = []
+    for ruleset in rulesets:
+        if not isinstance(ruleset, Mapping):
+            visible = False
+            continue
+        if "bypass_actors" not in ruleset or not isinstance(ruleset.get("bypass_actors"), list):
+            visible = False
+            continue
+        for actor in ruleset.get("bypass_actors", []):
+            if isinstance(actor, Mapping):
+                actors.append(
+                    {
+                        "actor_type": actor.get("actor_type"),
+                        "actor_id": actor.get("actor_id"),
+                        "bypass_mode": actor.get("bypass_mode"),
+                    }
+                )
+    return visible, actors
 
 
 def evaluate_snapshot(
@@ -273,27 +307,17 @@ def evaluate_snapshot(
     admins_enforced = (
         isinstance(protection, Mapping) and _enabled(protection.get("enforce_admins"))
     )
-    bypass_actors: list[dict[str, Any]] = []
-    if isinstance(rulesets, list):
-        for ruleset in rulesets:
-            if not isinstance(ruleset, Mapping):
-                continue
-            for actor in ruleset.get("bypass_actors", []):
-                if isinstance(actor, Mapping):
-                    bypass_actors.append(
-                        {
-                            "actor_type": actor.get("actor_type"),
-                            "actor_id": actor.get("actor_id"),
-                            "bypass_mode": actor.get("bypass_mode"),
-                        }
-                    )
+
     has_rulesets = isinstance(rulesets, list) and bool(rulesets)
+    ruleset_bypass_visibility, bypass_actors = _ruleset_bypass_state(rulesets)
     if has_rulesets:
-        admin_bypass_blocked = not bypass_actors
+        administrator_bypass_blocked = ruleset_bypass_visibility and not bypass_actors
     elif isinstance(protection, Mapping):
-        admin_bypass_blocked = admins_enforced
+        ruleset_bypass_visibility = True
+        administrator_bypass_blocked = admins_enforced
     else:
-        admin_bypass_blocked = False
+        ruleset_bypass_visibility = False
+        administrator_bypass_blocked = False
 
     checks = {
         "branch_protected": branch_protected,
@@ -302,7 +326,8 @@ def evaluate_snapshot(
         "strict_status_checks": strict_status_checks,
         "force_push_blocked": force_push_blocked,
         "deletion_blocked": deletion_blocked,
-        "administrator_bypass_blocked": admin_bypass_blocked,
+        "ruleset_bypass_visibility": ruleset_bypass_visibility,
+        "administrator_bypass_blocked": administrator_bypass_blocked,
     }
     for name, passed in checks.items():
         if passed is not True:
@@ -310,10 +335,14 @@ def evaluate_snapshot(
     missing = sorted(required_checks - contexts)
     if missing:
         errors.append("GitHub required status checks are missing: " + ", ".join(missing))
-    if bypass_actors and not admins_enforced:
-        errors.append("GitHub rulesets contain bypass actors while administrators are not enforced")
+    if has_rulesets and not ruleset_bypass_visibility:
+        errors.append(
+            "GitHub ruleset bypass actors are not visible; the token lacks sufficient access"
+        )
+    if bypass_actors:
+        errors.append("GitHub rulesets contain bypass actors")
 
-    successful_runs = []
+    successful_runs: list[Mapping[str, Any]] = []
     if isinstance(workflow_runs, list):
         successful_runs = [
             item
@@ -347,6 +376,7 @@ def evaluate_snapshot(
         }
 
     normalized = {
+        "github_api_version": API_VERSION,
         "repository": {
             "full_name": repository.get("full_name"),
             "default_branch": repository.get("default_branch"),
@@ -430,6 +460,8 @@ def validate_report(
         errors.append("repository governance evidence kind is invalid")
     if report.get("decision") != "GO":
         errors.append("repository governance decision is not GO")
+    if report.get("github_api_version") != API_VERSION:
+        errors.append("repository governance GitHub API version is invalid")
     if not verify_payload_signature(report, secret):
         errors.append("repository governance evidence signature is invalid")
     if report.get("configuration_fingerprint") != configuration_fingerprint(env, secret):
@@ -448,12 +480,20 @@ def validate_report(
             ),
         )
     )
+
     repository = report.get("repository")
     branch = report.get("branch")
     policy = report.get("policy")
     workflow = report.get("workflow")
-    if not isinstance(repository, Mapping) or repository.get("full_name") != config["repository"]:
-        errors.append("repository governance repository does not match configuration")
+    if not isinstance(repository, Mapping):
+        errors.append("repository governance repository evidence is missing")
+    else:
+        if repository.get("full_name") != config["repository"]:
+            errors.append("repository governance repository does not match configuration")
+        if repository.get("default_branch") != config["branch"]:
+            errors.append("repository governance default branch does not match configuration")
+        if repository.get("archived") is not False:
+            errors.append("repository governance repository is archived")
     if not isinstance(branch, Mapping):
         errors.append("repository governance branch evidence is missing")
     else:
@@ -463,6 +503,7 @@ def validate_report(
             errors.append("repository governance branch head does not match current release")
         if branch.get("protected") is not True:
             errors.append("repository governance branch is not protected")
+
     required_policy_checks = (
         "branch_protected",
         "pull_request_required",
@@ -470,6 +511,7 @@ def validate_report(
         "strict_status_checks",
         "force_push_blocked",
         "deletion_blocked",
+        "ruleset_bypass_visibility",
         "administrator_bypass_blocked",
     )
     if not isinstance(policy, Mapping):
@@ -480,20 +522,26 @@ def validate_report(
                 errors.append(f"repository governance policy is not passing: {key}")
         if set(policy.get("required_checks", [])) != set(config["required_checks"]):
             errors.append("repository governance required checks do not match configuration")
+        observed = {str(item) for item in policy.get("observed_status_checks", [])}
+        if not set(config["required_checks"]).issubset(observed):
+            errors.append("repository governance observed status checks are incomplete")
         if policy.get("bypass_actors"):
             errors.append("repository governance contains bypass actors")
+
     if not isinstance(workflow, Mapping):
         errors.append("repository governance workflow evidence is missing")
     else:
         if workflow.get("name") != config["workflow_name"]:
             errors.append("repository governance workflow name does not match")
-        workflow_path = str(workflow.get("path", ""))
-        if workflow_path and not workflow_path.endswith("/" + config["workflow_path"]):
+        workflow_path = str(workflow.get("path", "")).strip()
+        if not workflow_path or not workflow_path.endswith("/" + config["workflow_path"]):
             errors.append("repository governance workflow path does not match")
         if workflow.get("head_sha") != expected_release.get("git_commit"):
             errors.append("repository governance workflow head does not match current release")
         if workflow.get("status") != "completed" or workflow.get("conclusion") != "success":
             errors.append("repository governance workflow is not successfully completed")
+        if not isinstance(workflow.get("id"), int) or workflow.get("id", 0) <= 0:
+            errors.append("repository governance workflow run ID is invalid")
     if not str(report.get("owner", "")).strip():
         errors.append("repository governance owner is missing")
     return list(dict.fromkeys(errors))
@@ -529,6 +577,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
                     "strict_status_checks",
                     "force_push_blocked",
                     "deletion_blocked",
+                    "ruleset_bypass_visibility",
                     "administrator_bypass_blocked",
                 )
             ],
