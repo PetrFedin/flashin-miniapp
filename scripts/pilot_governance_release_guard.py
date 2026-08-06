@@ -16,12 +16,16 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
     "scripts/pilot_repository_governance.py": (
         '"kind": "pilot_repository_governance"',
         "API_VERSION",
+        "DEFAULT_GITHUB_ACTIONS_APP_ID",
         "collect_snapshot(",
         "_github_token(",
         "_explicitly_disabled(",
         "required_status_checks",
+        "required_status_check_sources",
+        "observed_check_sources",
         "ruleset_bypass_visibility",
         "administrator_bypass_blocked",
+        "GitHub required status checks are not bound to the configured Actions app",
         "GitHub ruleset bypass actors are not visible",
         "GitHub CI has no successful completed run for the current release commit",
     ),
@@ -63,6 +67,7 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
         "test_ruleset_governance_report_binds_exact_release_and_successful_ci",
         "test_unprotected_branch_missing_checks_and_bypass_fail_closed",
         "test_governance_attachment_requires_signed_technical_owner",
+        "required_status_check_sources",
     ),
     "backend/tests/test_pilot_governance_visibility.py": (
         "test_governance_collection_requires_github_token",
@@ -74,6 +79,11 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
         "test_classic_protection_rejects_explicit_force_push_or_deletion_enablement",
         "allow_force_pushes",
         "allow_deletions",
+    ),
+    "backend/tests/test_pilot_governance_check_sources.py": (
+        "test_ruleset_status_names_from_wrong_integration_fail_closed",
+        "test_classic_status_contexts_without_actions_app_binding_fail_closed",
+        "not bound to the configured Actions app",
     ),
     "backend/tests/test_pilot_governance_admission_render.py": (
         "test_final_admission_summary_keeps_lifecycle_and_governance_evidence",
@@ -89,6 +99,7 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
         "pilot-governance-create",
         "pilot-governance-attach",
         "backend,frontend,admin,browser-e2e,docker",
+        "PILOT_GITHUB_ACTIONS_APP_ID=15368",
         "bypass_actors",
     ),
     "docs/pilot/pilot_launch_runbook.md": (
@@ -107,6 +118,7 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
     ".env.production.example": (
         "PILOT_GITHUB_TOKEN=",
         "PILOT_GITHUB_REPOSITORY=",
+        "PILOT_GITHUB_ACTIONS_APP_ID=15368",
         "PILOT_GITHUB_GOVERNANCE_MAX_AGE_MINUTES=",
     ),
 }
