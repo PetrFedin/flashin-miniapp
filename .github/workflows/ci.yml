@@ -68,6 +68,10 @@ jobs:
           backend/tests/test_pilot_runtime_integrity.py
           backend/tests/test_pilot_runtime_wiring.py
           backend/tests/test_pilot_repository_governance.py
+          backend/tests/test_pilot_governance_visibility.py
+          backend/tests/test_pilot_governance_classic_fail_closed.py
+          backend/tests/test_pilot_governance_check_sources.py
+          backend/tests/test_pilot_governance_admission_render.py
           backend/tests/test_pilot_governance_release_guard.py
       - name: Run pilot money circuit-breaker tests
         run: >-
