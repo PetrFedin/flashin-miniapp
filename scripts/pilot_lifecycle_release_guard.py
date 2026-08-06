@@ -24,9 +24,15 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
         "validate_live_lifecycle_report(",
         "docs/pilot/evidence",
     ),
+    "scripts/pilot_admission_path.py": (
+        "verify_admission_path(",
+        "validate_admission_manifest(",
+        "never substitute default",
+    ),
     "scripts/pilot_lifecycle_admission.py": (
         "attach_lifecycle_report(",
         "validate_attached_lifecycle(",
+        "verify_admission_path(",
         "live_lifecycle_completed",
         "require_current_lifecycle_release(",
     ),
@@ -45,6 +51,11 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
         "test_live_lifecycle_report_requires_exact_deployed_scenarios_and_hashes",
         "test_go_admission_binding_requires_attached_live_lifecycle",
         "test_evidence_symlink_and_outside_repository_are_rejected",
+    ),
+    "backend/tests/test_pilot_admission_path_binding.py": (
+        "test_lifecycle_attach_validates_the_exact_operator_manifest",
+        "test_governance_attach_validates_the_exact_operator_manifest",
+        "custom manifest is invalid",
     ),
     "backend/tests/test_pilot_lifecycle_release_guard.py": (
         "test_old_runtime_capability_archive_cannot_receive_lifecycle_admission",
