@@ -1,5 +1,5 @@
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 import sys
 
@@ -61,8 +61,16 @@ def _write_env(root: Path, env):
     )
 
 
+def _paths(root: Path):
+    pilot_dir = root / "docs/pilot"
+    evidence_dir = pilot_dir / "evidence"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    return pilot_dir, evidence_dir
+
+
 def _input(root: Path, env, *, owner="Operations", notes="controlled live observation"):
-    evidence = root / "evidence.txt"
+    _pilot_dir, evidence_dir = _paths(root)
+    evidence = evidence_dir / "evidence.txt"
     evidence.write_text("FLASHIN controlled pilot evidence\n", encoding="utf-8")
     scenarios = []
     for index, name in enumerate(required_scenarios(env), start=1):
@@ -98,12 +106,12 @@ def _report(root: Path, env, **input_kwargs):
     return report, evidence
 
 
-def _manifest(root: Path, env, report, report_path: Path, *, attached=True):
+def _manifest(env, report_path: Path, *, attached=True):
     evidence = {}
     acknowledgements = {}
     if attached:
         evidence["live_lifecycle_report"] = {
-            "path": str(report_path),
+            "path": "docs/pilot/live_lifecycle_report.json",
             "sha256": sha256_file(report_path),
         }
         acknowledgements["live_lifecycle_completed"] = True
@@ -135,6 +143,11 @@ def test_live_lifecycle_report_requires_exact_deployed_scenarios_and_hashes(tmp_
         max_age_hours=24,
         now=NOW,
     ) == []
+    assert all(
+        item["path"].startswith("docs/pilot/evidence/")
+        for scenario in report["scenarios"]
+        for item in scenario["evidence"]
+    )
 
     evidence.write_text("changed evidence\n", encoding="utf-8")
     errors = validate_live_lifecycle_report(
@@ -225,20 +238,55 @@ def test_tampering_staleness_and_raw_init_data_fail_closed(tmp_path):
         )
 
 
+def test_evidence_symlink_and_outside_repository_are_rejected(tmp_path):
+    env = _env()
+    _pilot_dir, evidence_dir = _paths(tmp_path)
+    target = evidence_dir / "target.txt"
+    target.write_text("safe\n", encoding="utf-8")
+    link = evidence_dir / "link.txt"
+    link.symlink_to(target)
+    payload, _ = _input(tmp_path, env)
+    payload["scenarios"][0]["evidence"][0]["path"] = str(link)
+    with pytest.raises(ValueError, match="must not be a symlink"):
+        build_report(
+            payload,
+            root=tmp_path,
+            env=env,
+            current_release=RELEASE,
+            max_age_hours=24,
+            now=NOW,
+        )
+
+    outside = tmp_path.parent / "outside-evidence.txt"
+    outside.write_text("safe\n", encoding="utf-8")
+    payload, _ = _input(tmp_path, env)
+    payload["scenarios"][0]["evidence"][0]["path"] = str(outside)
+    with pytest.raises(ValueError, match="inside the pilot repository root"):
+        build_report(
+            payload,
+            root=tmp_path,
+            env=env,
+            current_release=RELEASE,
+            max_age_hours=24,
+            now=NOW,
+        )
+
+
 def test_go_admission_binding_requires_attached_live_lifecycle(tmp_path):
     env = _env()
     _write_env(tmp_path, env)
     report, _ = _report(tmp_path, env)
-    report_path = tmp_path / "live_lifecycle_report.json"
+    pilot_dir, _ = _paths(tmp_path)
+    report_path = pilot_dir / "live_lifecycle_report.json"
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
-    manifest_path = tmp_path / "pilot_admission_manifest.json"
-    missing = _manifest(tmp_path, env, report, report_path, attached=False)
+    manifest_path = pilot_dir / "pilot_admission_manifest.json"
+    missing = _manifest(env, report_path, attached=False)
     manifest_path.write_text(json.dumps(missing), encoding="utf-8")
     with pytest.raises(ValueError, match="live lifecycle evidence is invalid"):
         build_admission_binding(manifest_path, missing, root=tmp_path)
 
-    attached = _manifest(tmp_path, env, report, report_path, attached=True)
+    attached = _manifest(env, report_path, attached=True)
     manifest_path.write_text(json.dumps(attached), encoding="utf-8")
     assert validate_attached_lifecycle(
         manifest_path,
@@ -256,10 +304,11 @@ def test_live_lifecycle_owner_must_match_signed_admission_owner(tmp_path):
     env = _env()
     _write_env(tmp_path, env)
     report, _ = _report(tmp_path, env, owner="Unknown Operator")
-    report_path = tmp_path / "live_lifecycle_report.json"
+    pilot_dir, _ = _paths(tmp_path)
+    report_path = pilot_dir / "live_lifecycle_report.json"
     report_path.write_text(json.dumps(report), encoding="utf-8")
-    manifest = _manifest(tmp_path, env, report, report_path, attached=True)
-    manifest_path = tmp_path / "pilot_admission_manifest.json"
+    manifest = _manifest(env, report_path, attached=True)
+    manifest_path = pilot_dir / "pilot_admission_manifest.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     errors = validate_attached_lifecycle(
