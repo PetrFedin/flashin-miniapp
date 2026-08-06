@@ -18,6 +18,7 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
         "API_VERSION",
         "collect_snapshot(",
         "_github_token(",
+        "_explicitly_disabled(",
         "required_status_checks",
         "ruleset_bypass_visibility",
         "administrator_bypass_blocked",
@@ -67,6 +68,12 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
         "test_governance_collection_requires_github_token",
         "test_hidden_ruleset_bypass_data_fails_closed",
         "ruleset_bypass_visibility",
+    ),
+    "backend/tests/test_pilot_governance_classic_fail_closed.py": (
+        "test_classic_protection_requires_explicit_force_push_and_deletion_flags",
+        "test_classic_protection_rejects_explicit_force_push_or_deletion_enablement",
+        "allow_force_pushes",
+        "allow_deletions",
     ),
     "backend/tests/test_pilot_governance_admission_render.py": (
         "test_final_admission_summary_keeps_lifecycle_and_governance_evidence",
