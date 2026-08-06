@@ -112,6 +112,20 @@ def _github_token(env: Mapping[str, str]) -> str:
     return token
 
 
+def _runtime_env(root: Path = ROOT) -> dict[str, str]:
+    """Load app configuration without persisting the privileged operator token."""
+    file_env = read_env(root / ".env")
+    process_env = {str(key): str(value) for key, value in os.environ.items()}
+    if not file_env:
+        return process_env
+    merged = dict(file_env)
+    for key in ("PILOT_GITHUB_TOKEN", "GITHUB_TOKEN"):
+        value = process_env.get(key, "").strip()
+        if value:
+            merged[key] = value
+    return merged
+
+
 def _api_json(url: str, *, token: str, allow_not_found: bool = False) -> Any:
     headers = {
         "Accept": "application/vnd.github+json",
@@ -691,7 +705,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    env = read_env(ROOT / ".env") or {str(k): str(v) for k, v in os.environ.items()}
+    env = _runtime_env(ROOT)
     try:
         current = load_verified_release_state(
             ROOT / "deploy/release/runtime/current_release.json"
