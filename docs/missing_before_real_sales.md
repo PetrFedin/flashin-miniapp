@@ -14,7 +14,8 @@ The repository already contains and tests:
 - fulfillment, shipment, tracking and delivery completion;
 - support, privacy, notifications, webhooks, business events and scheduler operations;
 - monitoring, signed backup/restore and full signed release rollback;
-- a fail-closed first-20-order runtime with automatic STOP on critical financial integrity failures.
+- a fail-closed first-20-order runtime with automatic STOP on critical financial integrity failures;
+- signed live lifecycle and GitHub repository-governance admission bindings.
 
 These capabilities are necessary but do not by themselves authorize real money.
 
@@ -26,7 +27,7 @@ The pilot remains **NO-GO** until all items below are completed for the exact re
 2. Public Mini App, API and Admin DNS names resolve to the pilot host and serve valid HTTPS certificates.
 3. Terms of sale, privacy policy, consent text, return/refund rules and seller details are final and publicly accessible.
 4. Named business, operations, technical, legal and support owners are recorded; an on-call escalation route and external alert receiver are active.
-5. GitHub `main` is protected against direct pushes and requires the complete CI workflow before merge. Administrator bypass is restricted and audited.
+5. GitHub `main` is protected against direct pushes and requires the complete CI workflow before merge. Strict checks, force-push/deletion restrictions and administrator/ruleset bypass policy are proven by a fresh signed repository-governance report bound to the exact release commit.
 6. Current and previous immutable releases are promoted and independently verifiable.
 7. Signed strict provider evidence passes for the exact release/configuration.
 8. Signed live readiness evidence passes against deployed public endpoints.
@@ -40,9 +41,9 @@ The pilot remains **NO-GO** until all items below are completed for the exact re
    - Telegram notification delivery;
    - live Meilisearch indexing when enabled;
    - live R2/S3/CDN delivery when durable media is enabled.
-11. The signed admission manifest includes the live lifecycle report and the pilot runtime is armed only for an explicit Telegram allowlist and exactly 20 orders.
+11. The signed admission manifest includes both the live lifecycle report and the repository-governance report, and the pilot runtime is armed only for an explicit Telegram allowlist and exactly 20 orders.
 
-Raw Telegram initData and provider secrets must never be stored in pilot evidence.
+Raw Telegram initData, GitHub tokens and provider secrets must never be stored in pilot evidence.
 
 ## Mandatory gates after the first 20 orders
 
