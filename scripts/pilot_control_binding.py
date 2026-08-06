@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -27,6 +28,15 @@ def _requires_live_lifecycle(manifest: Mapping[str, Any]) -> bool:
     )
 
 
+def _runtime_evidence_env(root: Path) -> dict[str, str]:
+    from pilot_readiness import read_env
+
+    file_env = read_env(root / ".env")
+    if file_env:
+        return file_env
+    return {str(key): str(value) for key, value in os.environ.items()}
+
+
 def _live_lifecycle_sha256(
     manifest_path: Path,
     manifest: Mapping[str, Any],
@@ -34,12 +44,11 @@ def _live_lifecycle_sha256(
     root: Path,
 ) -> str:
     from pilot_lifecycle_admission import validate_attached_lifecycle
-    from pilot_readiness import read_env
 
     errors = validate_attached_lifecycle(
         manifest_path,
         manifest,
-        env=read_env(root / ".env"),
+        env=_runtime_evidence_env(root),
         root=root,
     )
     if errors:
