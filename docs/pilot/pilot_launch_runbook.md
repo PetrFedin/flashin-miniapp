@@ -20,7 +20,7 @@
 
 - production/sandbox credentials Telegram, YooKassa, MoySklad, Meilisearch и R2/S3, если функции включены;
 - отдельный случайный `PILOT_EVIDENCE_SIGNING_SECRET`;
-- обязательный `PILOT_GITHUB_TOKEN` с `Actions: read`, `Administration: write` и доступом к полным ruleset bypass data;
+- отдельный краткоживущий operator-only `PILOT_GITHUB_TOKEN` с `Actions: read`, `Administration: write` и доступом к полным ruleset bypass data;
 - `PILOT_GITHUB_ACTIONS_APP_ID=15368` для привязки required checks к официальному GitHub Actions App;
 - DNS и валидный HTTPS для Mini App, API, Admin и CDN;
 - публичные оферта, privacy, consent, returns/refunds и реквизиты продавца;
@@ -30,7 +30,7 @@
 - два разных проверяемых immutable release: `current` и `previous`;
 - проверенный backup и подписанный production-like rollback drill.
 
-Секреты, raw Telegram `initData`, cookies и authorization headers запрещено сохранять в evidence.
+GitHub governance token запрещено хранить в root `.env`: Compose передаёт этот файл application containers. Секреты, raw Telegram `initData`, cookies и authorization headers запрещено сохранять в evidence.
 
 ## 1. Защитить исходный код
 
@@ -54,7 +54,7 @@ make validate-env
 make readiness-gate
 ```
 
-`readiness-gate` должен завершиться GO до deploy. Никакие значения из `.env.production.example` не являются реальными секретами.
+`readiness-gate` должен завершиться GO до deploy. Никакие значения из `.env.production.example` не являются реальными секретами. В production `.env` должны находиться только не-секретные GitHub governance settings; строка `PILOT_GITHUB_TOKEN` там запрещена.
 
 ## 3. Создать и развернуть два immutable release
 
@@ -150,13 +150,20 @@ make pilot-lifecycle-status
 
 Убедитесь, что защищённый `main` указывает на тот же commit, что `current_release.json`, полный CI этого commit завершён success, а каждый required check имеет `app_id`/`integration_id=15368`.
 
+Токен подаётся только в процесс создания отчёта. Не записывайте его в `.env`, Compose secret или контейнер:
+
 ```bash
-make pilot-governance-create ARGS='--owner "Exact Technical Owner"'
+# Предпочтительно: secret-manager запускает одну команду с ephemeral env.
+PILOT_GITHUB_TOKEN="$TOKEN_FROM_OPERATOR_SECRET_MANAGER" \
+  make pilot-governance-create ARGS='--owner "Exact Technical Owner"'
+unset PILOT_GITHUB_TOKEN
 make pilot-governance-status
 make pilot-governance-attach
 ```
 
-Collector обязан видеть полное поле `bypass_actors`. Скрытое поле, отсутствующий token, неполные checks, недоверенный source, другой head SHA или иной workflow дают NO-GO.
+Не вставляйте raw token в интерактивную shell history; используйте process injection секрет-менеджера или краткоживущий GitHub App installation token.
+
+Collector обязан видеть полное поле `bypass_actors`. Скрытое поле, отсутствующий token, неполные checks, недоверенный source, другой head SHA или иной workflow дают NO-GO. Проверка уже подписанного отчёта токен не требует.
 
 ## 10. Финальная проверка допуска
 
@@ -218,7 +225,8 @@ STOP обязателен при любом из условий:
 - reconciliation, `/ready`, Admin, audit trail или alerts недоступны;
 - evidence/admission/release/governance checksum изменился;
 - required status check потерял binding к GitHub Actions App ID `15368`;
-- обнаружен secret, raw initData или лишний доступ;
+- GitHub operator token обнаружен в `.env`, container environment, logs или evidence;
+- обнаружен provider secret, raw initData или лишний доступ;
 - backup/rollback недоступен.
 
 После STOP не используйте `--resume`, пока incident не закрыт, полный CI не зелёный и все затронутые evidence/admission не выпущены заново.
