@@ -6,6 +6,7 @@ from typing import Any, Mapping
 from sqlalchemy.orm import Session
 
 from ..models import Order, Payment, ReturnRequest
+from .pilot_inventory_evidence import validate_order_inventory_evidence
 from ..pilot_models import PilotOrderSlot, PilotRuntimeState
 
 MONEY_TOLERANCE = Decimal("0.01")
@@ -123,13 +124,15 @@ def validate_pilot_database_evidence(
 ) -> list[str]:
     """Verify signed scenario claims against the exact PostgreSQL pilot run."""
     errors: list[str] = []
-    if pilot_state.get("schema_version") != 6:
+    if pilot_state.get("schema_version") != 7:
         return ["pilot control state schema is not database-bound"]
     if (
         pilot_state.get("database_evidence_contract")
         != DATABASE_EVIDENCE_CONTRACT
     ):
         return ["pilot database evidence contract is missing or unsupported"]
+    if pilot_state.get("inventory_evidence_contract") != 1:
+        return ["pilot inventory evidence contract is missing or unsupported"]
 
     scenarios = pilot_state.get("scenarios")
     if not isinstance(scenarios, list) or len(scenarios) != 20:
@@ -213,6 +216,7 @@ def validate_pilot_database_evidence(
             errors.append(
                 f"#{number}: pilot slot customer does not own PostgreSQL order {order_id}"
             )
+        errors.extend(validate_order_inventory_evidence(db, record, order))
 
         recorded_order_status = str(record.get("order_status") or "").strip()
         if recorded_order_status != str(order.status):

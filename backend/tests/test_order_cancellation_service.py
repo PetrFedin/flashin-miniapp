@@ -78,7 +78,7 @@ def test_provider_cancellation_releases_every_linked_resource(monkeypatch):
     monkeypatch.setattr(
         order_cancellation,
         "release_variants",
-        lambda _db, quantities: released.append(quantities),
+        lambda _db, quantities, **kwargs: released.append((quantities, kwargs)),
     )
     monkeypatch.setattr(order_cancellation, "utcnow_naive", lambda: released_at)
     monkeypatch.setattr(
@@ -94,7 +94,12 @@ def test_provider_cancellation_releases_every_linked_resource(monkeypatch):
     )
 
     assert changed is True
-    assert released == [{11: 2, 12: 1}]
+    assert released == [
+        (
+            {11: 2, 12: 1},
+            {"order_id": 41, "source": "order_cancellation:provider"},
+        )
+    ]
     assert promo.used_count == 3
     assert all(hold.status == "released" for hold in holds)
     assert all(hold.released_at == released_at for hold in holds)

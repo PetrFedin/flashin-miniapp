@@ -34,7 +34,7 @@ from pilot_readiness import read_env
 from script_time import utc_timestamp
 
 ROOT = Path(__file__).resolve().parents[1]
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 DEFAULT_STATE_PATH = Path("docs/pilot/live_pilot_state.json")
 DEFAULT_MANIFEST_PATH = Path("docs/pilot/pilot_admission_manifest.json")
 ALLOWED_RESULTS = {"todo", "running", "pass", "fail", "blocked"}
@@ -142,6 +142,7 @@ def new_state(
     state = {
         "schema_version": SCHEMA_VERSION,
         "database_evidence_contract": 1,
+        "inventory_evidence_contract": 1,
         "pilot_name": "FLASHIN first 20 orders",
         "created_at": now,
         "updated_at": now,
@@ -206,10 +207,17 @@ def load_state(
             "Database-unverified pilot state schema 5 cannot be reused. Archive it and "
             "initialize a fresh database-bound pilot state."
         )
+    if schema == 6:
+        raise ValueError(
+            "Inventory-unverified pilot state schema 6 cannot be reused. Archive it and "
+            "initialize a fresh inventory-ledger-bound pilot state."
+        )
     if schema != SCHEMA_VERSION:
         raise ValueError(f"Unsupported pilot state schema {schema}; expected {SCHEMA_VERSION}")
     if state.get("database_evidence_contract") != 1:
         raise ValueError("Pilot database evidence contract is missing or unsupported")
+    if state.get("inventory_evidence_contract") != 1:
+        raise ValueError("Pilot inventory evidence contract is missing or unsupported")
     if not secret:
         raise ValueError("Pilot control signing secret is required")
     if not verify_payload_signature(state, secret):

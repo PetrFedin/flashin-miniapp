@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .database import Base
 
@@ -294,6 +294,40 @@ class AuditLog(Base):
     entity_id: Mapped[str] = mapped_column(String(120), default="")
     payload: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class InventoryMovement(Base):
+    __tablename__ = "inventory_movements"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('reserve', 'release', 'commit')",
+            name="ck_inventory_movements_kind",
+        ),
+        CheckConstraint(
+            "quantity > 0",
+            name="ck_inventory_movements_quantity_positive",
+        ),
+        UniqueConstraint(
+            "order_id",
+            "variant_id",
+            "kind",
+            name="uq_inventory_movement_order_variant_kind",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id", ondelete="CASCADE"), index=True)
+    variant_id: Mapped[int] = mapped_column(
+        ForeignKey("product_variants.id", ondelete="RESTRICT"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(32))
+    quantity: Mapped[int] = mapped_column(Integer)
+    stock_before: Mapped[int] = mapped_column(Integer)
+    stock_after: Mapped[int] = mapped_column(Integer)
+    reserved_before: Mapped[int] = mapped_column(Integer)
+    reserved_after: Mapped[int] = mapped_column(Integer)
+    source: Mapped[str] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 
 class InventoryAdjustment(Base):

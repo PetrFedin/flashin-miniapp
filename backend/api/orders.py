@@ -379,7 +379,13 @@ def checkout(
         )
 
         for cart_item in sorted(cart.items, key=lambda item: item.variant_id):
-            variant = reserve_variant(db, cart_item.variant_id, cart_item.quantity)
+            variant = reserve_variant(
+                db,
+                cart_item.variant_id,
+                cart_item.quantity,
+                order_id=order.id,
+                source="checkout",
+            )
             product = cart_item.product
             db.add(
                 OrderItem(

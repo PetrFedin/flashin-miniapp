@@ -1,6 +1,6 @@
 # Signed admission-bound pilot state migration
 
-This runbook applies when upgrading the controlled first-20-order pilot to state schema v6.
+This runbook applies when upgrading the controlled first-20-order pilot to state schema v7.
 
 ## Safety invariant
 
@@ -13,22 +13,22 @@ The signing secret is the trust boundary for admission and pilot-state evidence.
 ## Before initialization
 
 1. Confirm that the production `.env` contains the intended provider and pilot settings plus the protected `PILOT_EVIDENCE_SIGNING_SECRET`.
-2. Confirm that current and previous release pointers are different and both expose the same signed pilot capability v16. Mixed capability versions fail closed and require a fresh release promotion before admission.
-3. Verify the release in both supported Python modes: backend services import the audit and lineage modules through the `scripts.*` package, while operator commands execute them directly from the `scripts` directory. Both paths must load the same capability v16 code and pass before deployment.
+2. Confirm that current and previous release pointers are different and both expose the same signed pilot capability v17. Mixed capability versions fail closed and require a fresh release promotion before admission.
+3. Verify the release in both supported Python modes: backend services import the audit and lineage modules through the `scripts.*` package, while operator commands execute them directly from the `scripts` directory. Both paths must load the same capability v17 code and pass before deployment.
 4. Keep `live_pilot_state.json`, its `.lock` file and `live_pilot_summary.md` on the same POSIX filesystem mounted read-write for operator commands. The filesystem must provide working advisory `flock` semantics; object storage and unverified network filesystems are not supported.
 5. Generate fresh provider, live-gate and rollback evidence.
 6. Create the signed admission manifest with named owners and all required acknowledgements. Each owner value must identify one accountable individual. Team names, role aliases, shared accounts and generic values such as `Operations` are not acceptable production identities. If an owner changes, stop runtime and create a fresh signed admission before that person records another mutation.
 7. Run `make pilot-admission-status`; continue only when it returns GO with no errors.
 
-## Existing schema v1, v2, v3, v4 or v5 state
+## Existing schema v1, v2, v3, v4, v5 or v6 state
 
-Schema v1 is admission-unbound. Schema v2 is admission-bound but unsigned. Schema v3 is signed but has no database-anchored replay lineage. Schema v4 has replay protection but no admission-owner audit. Schema v5 has accountable signed mutations but does not prove recorded IDs against PostgreSQL. All five are intentionally rejected and are never migrated in place.
+Schema v1 is admission-unbound. Schema v2 is admission-bound but unsigned. Schema v3 is signed but has no database-anchored replay lineage. Schema v4 has replay protection but no admission-owner audit. Schema v5 has accountable signed mutations but does not prove recorded IDs against PostgreSQL. Schema v6 verifies order/payment/refund rows but not durable inventory movements. All six are intentionally rejected and are never migrated in place.
 
 1. Stop the pilot runtime.
 2. Copy `docs/pilot/live_pilot_state.json` and `docs/pilot/live_pilot_summary.md` to an access-controlled evidence archive with a timestamp.
 3. Record the archive location and SHA-256 in the change log or incident record.
 4. Remove the active legacy state only after the archive has been verified.
-5. Create a fresh database-bound schema v6 state with `make pilot-init`.
+5. Create a fresh inventory-ledger-bound schema v7 state with `make pilot-init`.
 6. Run `make pilot-status` and confirm there is no signature, lineage, audit-owner, database-evidence or admission-binding error.
 
 Never edit the schema number manually and never copy scenario results into a state bound to another admission.
@@ -78,7 +78,7 @@ After initialization, arm the allowlist with `make pilot-runtime-arm ARGS='--tel
 2. Archive the current state and summary.
 3. Generate fresh evidence for the new release, configuration or owner set.
 4. Create a new signed admission.
-5. Initialize a fresh database-bound schema v6 state.
+5. Initialize a fresh inventory-ledger-bound schema v7 state.
 6. Re-arm runtime only after admission, state and PostgreSQL evidence verification pass.
 
 Scenario results from the previous admission remain evidence for that run; they do not count toward the new run.
@@ -95,3 +95,14 @@ A scenario may be recorded as `pass` only after its exact sequence has a Postgre
 The signed `order_id` must equal the order attached to that slot. Payment and refund identifiers must resolve to exactly one row owned by the same order, while recorded statuses, amounts and currencies must match PostgreSQL. Do not enter a webhook event ID, checkout idempotency key, receipt number or human-readable order number in these fields.
 
 Final GO additionally requires runtime status `completed`, exactly 20 accepted orders and an exact sequence-by-sequence match between all 20 scenarios and slots. Database unavailability, ambiguous provider identifiers or any mismatch fails closed.
+
+
+## Inventory movement evidence
+
+Every production reserve, release and commit writes an order-linked
+`inventory_movements` row in the same transaction as the stock mutation.
+Each order-item variant has one reserve and at most one terminal release or
+commit, with contiguous stock/reserved before-and-after values. Pilot stock
+claims are calculated from this ledger; manually typed stock numbers cannot
+produce GO. Missing, duplicated, non-contiguous or status-incompatible
+movement chains fail closed.

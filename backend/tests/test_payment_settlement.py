@@ -30,7 +30,9 @@ def patch_side_effects(monkeypatch):
     monkeypatch.setattr(
         payment_settlement,
         "commit_reservations_to_sold",
-        lambda db, quantities: calls.append(("inventory", quantities)),
+        lambda db, quantities, **kwargs: calls.append(
+            ("inventory", quantities, kwargs)
+        ),
     )
     monkeypatch.setattr(
         payment_settlement,
@@ -100,7 +102,11 @@ def test_paid_order_settlement_applies_all_side_effects_once(monkeypatch):
 
     assert order.status == "paid"
     assert order.payment_status == "paid"
-    assert ("inventory", {11: 3, 12: 4}) in calls
+    assert (
+        "inventory",
+        {11: 3, 12: 4},
+        {"order_id": 7, "source": "payment_settlement"},
+    ) in calls
     assert ("points", 3, -100.0, "loyalty_redeemed", 7) in calls
     assert ("points", 3, 12.5, "order_paid", 7) in calls
     assert ("redemption", 3, None, 7, 100.0) in calls

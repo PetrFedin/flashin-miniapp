@@ -3,7 +3,12 @@ from collections.abc import Mapping
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from ..models import InventoryAdjustment, InventorySnapshot, ProductVariant
+from ..models import (
+    InventoryAdjustment,
+    InventoryMovement,
+    InventorySnapshot,
+    ProductVariant,
+)
 
 
 def _validate_positive_quantity(quantity: int) -> None:
@@ -72,17 +77,75 @@ def _load_locked_variants(
     return normalized, by_id
 
 
-def reserve_variant(db: Session, variant_id: int, quantity: int) -> ProductVariant:
+def _record_movement(
+    db: Session,
+    *,
+    order_id: int | None,
+    variant: ProductVariant,
+    kind: str,
+    quantity: int,
+    stock_before: int,
+    reserved_before: int,
+    source: str,
+) -> None:
+    if order_id is None:
+        return
+    if isinstance(order_id, bool) or not isinstance(order_id, int) or order_id <= 0:
+        raise HTTPException(status_code=400, detail="Order id must be a positive integer")
+    normalized_source = (source or "").strip()[:128]
+    if not normalized_source:
+        raise HTTPException(status_code=400, detail="Inventory movement source is required")
+    db.add(
+        InventoryMovement(
+            order_id=order_id,
+            variant_id=variant.id,
+            kind=kind,
+            quantity=quantity,
+            stock_before=stock_before,
+            stock_after=variant.stock_qty,
+            reserved_before=reserved_before,
+            reserved_after=variant.reserved_qty,
+            source=normalized_source,
+        )
+    )
+
+
+def reserve_variant(
+    db: Session,
+    variant_id: int,
+    quantity: int,
+    *,
+    order_id: int | None = None,
+    source: str = "reserve",
+) -> ProductVariant:
     _validate_positive_quantity(quantity)
     variant = _load_locked_variant(db, variant_id)
     available_qty = variant.stock_qty - variant.reserved_qty
     if available_qty < quantity:
         raise HTTPException(status_code=409, detail=f"Size {variant.size} is out of stock")
+    stock_before = variant.stock_qty
+    reserved_before = variant.reserved_qty
     variant.reserved_qty += quantity
+    _record_movement(
+        db,
+        order_id=order_id,
+        variant=variant,
+        kind="reserve",
+        quantity=quantity,
+        stock_before=stock_before,
+        reserved_before=reserved_before,
+        source=source,
+    )
     return variant
 
 
-def release_variants(db: Session, quantities: Mapping[int, int]) -> None:
+def release_variants(
+    db: Session,
+    quantities: Mapping[int, int],
+    *,
+    order_id: int | None = None,
+    source: str = "release",
+) -> None:
     normalized, variants = _load_locked_variants(db, quantities)
     for variant_id, quantity in normalized.items():
         if variants[variant_id].reserved_qty < quantity:
@@ -91,14 +154,45 @@ def release_variants(db: Session, quantities: Mapping[int, int]) -> None:
                 detail=f"Reserved quantity mismatch for variant {variant_id}",
             )
     for variant_id, quantity in normalized.items():
-        variants[variant_id].reserved_qty -= quantity
+        variant = variants[variant_id]
+        stock_before = variant.stock_qty
+        reserved_before = variant.reserved_qty
+        variant.reserved_qty -= quantity
+        _record_movement(
+            db,
+            order_id=order_id,
+            variant=variant,
+            kind="release",
+            quantity=quantity,
+            stock_before=stock_before,
+            reserved_before=reserved_before,
+            source=source,
+        )
 
 
-def release_variant(db: Session, variant_id: int, quantity: int) -> None:
-    release_variants(db, {variant_id: quantity})
+def release_variant(
+    db: Session,
+    variant_id: int,
+    quantity: int,
+    *,
+    order_id: int | None = None,
+    source: str = "release",
+) -> None:
+    release_variants(
+        db,
+        {variant_id: quantity},
+        order_id=order_id,
+        source=source,
+    )
 
 
-def commit_reservations_to_sold(db: Session, quantities: Mapping[int, int]) -> None:
+def commit_reservations_to_sold(
+    db: Session,
+    quantities: Mapping[int, int],
+    *,
+    order_id: int | None = None,
+    source: str = "commit",
+) -> None:
     normalized, variants = _load_locked_variants(db, quantities)
     for variant_id, quantity in normalized.items():
         variant = variants[variant_id]
@@ -114,12 +208,36 @@ def commit_reservations_to_sold(db: Session, quantities: Mapping[int, int]) -> N
             )
     for variant_id, quantity in normalized.items():
         variant = variants[variant_id]
+        stock_before = variant.stock_qty
+        reserved_before = variant.reserved_qty
         variant.reserved_qty -= quantity
         variant.stock_qty -= quantity
+        _record_movement(
+            db,
+            order_id=order_id,
+            variant=variant,
+            kind="commit",
+            quantity=quantity,
+            stock_before=stock_before,
+            reserved_before=reserved_before,
+            source=source,
+        )
 
 
-def commit_reserved_to_sold(db: Session, variant_id: int, quantity: int) -> None:
-    commit_reservations_to_sold(db, {variant_id: quantity})
+def commit_reserved_to_sold(
+    db: Session,
+    variant_id: int,
+    quantity: int,
+    *,
+    order_id: int | None = None,
+    source: str = "commit",
+) -> None:
+    commit_reservations_to_sold(
+        db,
+        {variant_id: quantity},
+        order_id=order_id,
+        source=source,
+    )
 
 
 def adjust_stock(

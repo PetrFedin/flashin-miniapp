@@ -27,7 +27,7 @@ def _capability(state: dict, secret: str) -> dict:
             "schema_version": 1,
             "kind": "release_capability",
             "name": "pilot_runtime_guard",
-            "version": 16,
+            "version": 17,
             "archive_sha256": state["sha256"],
             "git_commit": state["git_commit"],
             "release_id": state["release_id"],
@@ -79,8 +79,9 @@ def _runtime(tmp_path: Path, *, accepted_orders: int = 0):
     pilot_created_at = "2026-08-03T18:00:00Z"
     pilot_path = pilot_docs / "live_pilot_state.json"
     pilot_payload = {
-        "schema_version": 6,
+        "schema_version": 7,
         "database_evidence_contract": 1,
+        "inventory_evidence_contract": 1,
         "revision": 1,
         "state_history_sha256": [],
         "created_at": pilot_created_at,

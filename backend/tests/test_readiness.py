@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from backend.api import health
 
 
-CURRENT_HEAD = "0023_pilot_state_replay_anchor"
+CURRENT_HEAD = "0024_inventory_movement_ledger"
 
 
 class ScalarResult:
