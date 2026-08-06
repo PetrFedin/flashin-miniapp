@@ -26,11 +26,12 @@ The pilot remains **NO-GO** until all items below are completed for the exact re
 2. Public Mini App, API and Admin DNS names resolve to the pilot host and serve valid HTTPS certificates.
 3. Terms of sale, privacy policy, consent text, return/refund rules and seller details are final and publicly accessible.
 4. Named business, operations, technical, legal and support owners are recorded; an on-call escalation route and external alert receiver are active.
-5. Current and previous immutable releases are promoted and independently verifiable.
-6. Signed strict provider evidence passes for the exact release/configuration.
-7. Signed live readiness evidence passes against deployed public endpoints.
-8. A production-like host rollback drill completes with retained signed backup, manifest, report and measured RTO/RPO.
-9. Signed live lifecycle evidence proves the deployed paths below with named owners and checksum-bound files:
+5. GitHub `main` is protected against direct pushes and requires the complete CI workflow before merge. Administrator bypass is restricted and audited.
+6. Current and previous immutable releases are promoted and independently verifiable.
+7. Signed strict provider evidence passes for the exact release/configuration.
+8. Signed live readiness evidence passes against deployed public endpoints.
+9. A production-like host rollback drill completes with retained signed backup, manifest, report and measured RTO/RPO.
+10. Signed live lifecycle evidence proves the deployed paths below with named owners and checksum-bound files:
    - real Telegram signed authentication;
    - YooKassa redirect and payment return;
    - duplicate payment webhook idempotency;
@@ -39,7 +40,7 @@ The pilot remains **NO-GO** until all items below are completed for the exact re
    - Telegram notification delivery;
    - live Meilisearch indexing when enabled;
    - live R2/S3/CDN delivery when durable media is enabled.
-10. The signed admission manifest includes the live lifecycle report and the pilot runtime is armed only for an explicit Telegram allowlist and exactly 20 orders.
+11. The signed admission manifest includes the live lifecycle report and the pilot runtime is armed only for an explicit Telegram allowlist and exactly 20 orders.
 
 Raw Telegram initData and provider secrets must never be stored in pilot evidence.
 
@@ -55,4 +56,4 @@ Mass launch remains forbidden until:
 - backup restoration and rollback evidence are retained outside the application host;
 - the final signed pilot decision is GO and a separate mass-launch approval is issued.
 
-A successful code CI run is not a substitute for these deployed, provider and human-operational gates.
+A successful code CI run is not a substitute for these deployed, provider, repository-governance and human-operational gates.
