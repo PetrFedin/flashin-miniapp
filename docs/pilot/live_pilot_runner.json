@@ -1,145 +1,207 @@
 {
-  "created_at": "2026-07-02T19:00:08.191479",
+  "schema_version": 2,
+  "created_at": "2026-07-02T19:00:08.191479Z",
+  "instructions": "Do not mark pass without deployed evidence. Critical steps require pass; optional steps require pass or skip with a reason.",
   "steps": [
     {
       "id": "P01",
       "title": "Open Mini App in Telegram",
       "critical": true,
       "status": "todo",
-      "comment": ""
+      "observed_at": null,
+      "owner": "",
+      "comment": "",
+      "evidence": []
     },
     {
       "id": "P02",
       "title": "Open catalog",
       "critical": true,
       "status": "todo",
-      "comment": ""
+      "observed_at": null,
+      "owner": "",
+      "comment": "",
+      "evidence": []
     },
     {
       "id": "P03",
       "title": "Open product card",
       "critical": true,
       "status": "todo",
-      "comment": ""
+      "observed_at": null,
+      "owner": "",
+      "comment": "",
+      "evidence": []
     },
     {
       "id": "P04",
       "title": "Add product to cart",
       "critical": true,
       "status": "todo",
-      "comment": ""
+      "observed_at": null,
+      "owner": "",
+      "comment": "",
+      "evidence": []
     },
     {
       "id": "P05",
       "title": "Apply promo code if available",
       "critical": false,
       "status": "todo",
-      "comment": ""
+      "observed_at": null,
+      "owner": "",
+      "comment": "",
+      "evidence": []
     },
     {
       "id": "P06",
       "title": "Apply loyalty points if available",
       "critical": false,
       "status": "todo",
-      "comment": ""
+      "observed_at": null,
+      "owner": "",
+      "comment": "",
+      "evidence": []
     },
     {
       "id": "P07",
       "title": "Apply referral code if available",
       "critical": false,
       "status": "todo",
-      "comment": ""
+      "observed_at": null,
+      "owner": "",
+      "comment": "",
+      "evidence": []
     },
     {
       "id": "P08",
       "title": "Create checkout",
       "critical": true,
       "status": "todo",
-      "comment": ""
+      "observed_at": null,
+      "owner": "",
+      "comment": "",
+      "evidence": []
     },
     {
       "id": "P09",
       "title": "Create YooKassa payment",
       "critical": true,
       "status": "todo",
-      "comment": ""
+      "observed_at": null,
+      "owner": "",
+      "comment": "",
+      "evidence": []
     },
     {
       "id": "P10",
       "title": "Complete test payment",
       "critical": true,
       "status": "todo",
-      "comment": ""
+      "observed_at": null,
+      "owner": "",
+      "comment": "",
+      "evidence": []
     },
     {
       "id": "P11",
       "title": "Verify payment webhook",
       "critical": true,
       "status": "todo",
-      "comment": ""
+      "observed_at": null,
+      "owner": "",
+      "comment": "",
+      "evidence": []
     },
     {
       "id": "P12",
       "title": "Verify order paid",
       "critical": true,
       "status": "todo",
-      "comment": ""
+      "observed_at": null,
+      "owner": "",
+      "comment": "",
+      "evidence": []
     },
     {
       "id": "P13",
       "title": "Verify stock writeoff/reservation",
       "critical": true,
       "status": "todo",
-      "comment": ""
+      "observed_at": null,
+      "owner": "",
+      "comment": "",
+      "evidence": []
     },
     {
       "id": "P14",
       "title": "Verify fulfillment task",
       "critical": true,
       "status": "todo",
-      "comment": ""
+      "observed_at": null,
+      "owner": "",
+      "comment": "",
+      "evidence": []
     },
     {
       "id": "P15",
       "title": "Create support ticket",
       "critical": false,
       "status": "todo",
-      "comment": ""
+      "observed_at": null,
+      "owner": "",
+      "comment": "",
+      "evidence": []
     },
     {
       "id": "P16",
       "title": "Create refund request",
       "critical": true,
       "status": "todo",
-      "comment": ""
+      "observed_at": null,
+      "owner": "",
+      "comment": "",
+      "evidence": []
     },
     {
       "id": "P17",
       "title": "Approve refund",
       "critical": true,
       "status": "todo",
-      "comment": ""
+      "observed_at": null,
+      "owner": "",
+      "comment": "",
+      "evidence": []
     },
     {
       "id": "P18",
       "title": "Verify loyalty points returned",
       "critical": false,
       "status": "todo",
-      "comment": ""
+      "observed_at": null,
+      "owner": "",
+      "comment": "",
+      "evidence": []
     },
     {
       "id": "P19",
       "title": "Verify admin audit trail",
       "critical": true,
       "status": "todo",
-      "comment": ""
+      "observed_at": null,
+      "owner": "",
+      "comment": "",
+      "evidence": []
     },
     {
       "id": "P20",
       "title": "Verify customer notification",
       "critical": false,
       "status": "todo",
-      "comment": ""
+      "observed_at": null,
+      "owner": "",
+      "comment": "",
+      "evidence": []
     }
   ]
 }
