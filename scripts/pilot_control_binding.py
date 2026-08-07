@@ -12,6 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 LIVE_LIFECYCLE_KEY = "live_lifecycle_report_sha256"
 REPOSITORY_GOVERNANCE_KEY = "repository_governance_report_sha256"
 LAUNCH_CHECKLIST_KEY = "launch_checklist_report_sha256"
+CONTROLLED_JOURNEY_KEY = "controlled_journey_binding_sha256"
+CONTROLLED_JOURNEY_REPORT = Path("docs/pilot/journey_binding_report.json")
 
 
 def sha256_file(path: Path) -> str:
@@ -180,6 +182,24 @@ def _launch_checklist_sha256(
     return digest
 
 
+def _controlled_journey_binding_sha256(*, root: Path) -> str:
+    """Require the exact v29 lineage gate before pilot state can be initialized/reused."""
+    from pilot_journey_binding import verify_journey_binding
+
+    errors = verify_journey_binding(root)
+    if errors:
+        raise ValueError(
+            "Pilot controlled journey binding is invalid: " + "; ".join(errors)
+        )
+    report_path = root / CONTROLLED_JOURNEY_REPORT
+    if report_path.is_symlink() or not report_path.is_file():
+        raise ValueError("Pilot controlled journey binding report is missing or unsafe")
+    digest = sha256_file(report_path)
+    if len(digest) != 64:
+        raise ValueError("Pilot controlled journey binding SHA-256 is invalid")
+    return digest
+
+
 def build_admission_binding(
     manifest_path: Path,
     manifest: Mapping[str, Any],
@@ -188,12 +208,16 @@ def build_admission_binding(
     require_live_lifecycle: bool | None = None,
     require_repository_governance: bool | None = None,
     require_launch_checklist: bool | None = None,
+    require_controlled_journey_binding: bool | None = None,
     now=None,
 ) -> dict[str, Any]:
     """Create the immutable identity that a single pilot state must retain.
 
     ``now`` exists only to make evidence-age validation deterministic in tests.
     Production callers omit it and therefore validate against the real UTC clock.
+    Once the authoritative launch checklist is required, the v29 controlled
+    journey lineage gate is required by default as well. Tests for older layers
+    may explicitly disable only that downstream gate.
     """
     release = manifest.get("release")
     if not isinstance(release, Mapping):
@@ -225,6 +249,11 @@ def build_admission_binding(
         if require_launch_checklist is None
         else require_launch_checklist
     )
+    enforce_journey = (
+        enforce_launch
+        if require_controlled_journey_binding is None
+        else require_controlled_journey_binding
+    )
     binding: dict[str, Any] = {
         "manifest_sha256": sha256_file(manifest_path),
         "created_at": created_at,
@@ -252,6 +281,10 @@ def build_admission_binding(
             manifest,
             root=evidence_root,
             now=now,
+        )
+    if enforce_journey:
+        binding[CONTROLLED_JOURNEY_KEY] = _controlled_journey_binding_sha256(
+            root=evidence_root,
         )
     return binding
 
@@ -289,6 +322,13 @@ def validate_admission_binding(
             errors.append("pilot control admission launch checklist evidence does not match")
     elif actual_launch:
         errors.append("pilot control admission has unexpected launch checklist evidence")
+    expected_journey = expected.get(CONTROLLED_JOURNEY_KEY)
+    actual_journey = actual.get(CONTROLLED_JOURNEY_KEY)
+    if expected_journey:
+        if actual_journey != expected_journey:
+            errors.append("pilot control admission controlled journey binding does not match")
+    elif actual_journey:
+        errors.append("pilot control admission has unexpected controlled journey binding")
     actual_release = actual.get("release")
     expected_release = expected.get("release")
     if not isinstance(actual_release, Mapping):
