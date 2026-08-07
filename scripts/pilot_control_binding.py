@@ -215,9 +215,9 @@ def build_admission_binding(
 
     ``now`` exists only to make evidence-age validation deterministic in tests.
     Production callers omit it and therefore validate against the real UTC clock.
-    Once the authoritative launch checklist is required, the v29 controlled
-    journey lineage gate is required by default as well. Tests for older layers
-    may explicitly disable only that downstream gate.
+    Once the complete authoritative lifecycle + governance + checklist chain is
+    required, the v29 controlled journey lineage gate is required by default as
+    well. Tests for older individual layers may explicitly disable those layers.
     """
     release = manifest.get("release")
     if not isinstance(release, Mapping):
@@ -250,7 +250,7 @@ def build_admission_binding(
         else require_launch_checklist
     )
     enforce_journey = (
-        enforce_launch
+        enforce_lifecycle and enforce_governance and enforce_launch
         if require_controlled_journey_binding is None
         else require_controlled_journey_binding
     )
