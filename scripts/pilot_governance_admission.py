@@ -29,6 +29,9 @@ DEFAULT_REPORT = ROOT / "docs/pilot/repository_governance_report.json"
 ACKNOWLEDGEMENT_KEY = "repository_governance_verified"
 EVIDENCE_KEY = "repository_governance_report"
 LIFECYCLE_EVIDENCE_KEY = "live_lifecycle_report"
+MANDATORY_PILOT_CHECKS = frozenset(
+    {"backend", "frontend", "admin", "browser-e2e", "integrated-e2e", "docker"}
+)
 
 
 def _portable_report_path(root: Path, report_path: Path) -> str:
@@ -77,6 +80,20 @@ def _evidence_entry(
     return path, expected_sha256, errors
 
 
+def _mandatory_check_errors(report: Mapping[str, Any]) -> list[str]:
+    policy = report.get("policy")
+    if not isinstance(policy, Mapping):
+        return ["repository governance policy is missing mandatory pilot checks"]
+    raw_checks = policy.get("required_checks")
+    if not isinstance(raw_checks, (list, tuple)):
+        return ["repository governance required check list is missing"]
+    observed = {str(value).strip() for value in raw_checks if str(value).strip()}
+    missing = sorted(MANDATORY_PILOT_CHECKS - observed)
+    if not missing:
+        return []
+    return ["repository governance is missing mandatory pilot checks: " + ", ".join(missing)]
+
+
 def validate_attached_governance(
     manifest_path: Path,
     manifest: Mapping[str, Any],
@@ -103,6 +120,7 @@ def validate_attached_governance(
     except ValueError as exc:
         return list(dict.fromkeys(errors + [str(exc)]))
 
+    errors.extend(_mandatory_check_errors(report))
     release = manifest.get("release")
     if not isinstance(release, Mapping):
         errors.append("pilot admission release binding is missing")
@@ -199,10 +217,13 @@ def attach_governance_report(
         for key in ("release_id", "git_commit", "sha256")
     ):
         raise ValueError("Pilot admission release does not match current governance-capable release")
-    governance_errors = validate_report(
-        report,
-        env=env,
-        expected_release=release,
+    governance_errors = _mandatory_check_errors(report)
+    governance_errors.extend(
+        validate_report(
+            report,
+            env=env,
+            expected_release=release,
+        )
     )
     if governance_errors:
         raise ValueError(
