@@ -63,6 +63,8 @@ PROBES = (
     Probe("r2_s3", "check_r2_s3.py", 60, condition="durable_media"),
     Probe("meilisearch", "check_meilisearch.py", 30, condition="search_enabled"),
 )
+EVIDENCE_PROBE_NAMES = frozenset(probe.name for probe in PROBES)
+EVIDENCE_RESULT_KEYS = frozenset({"name", "ok", "returncode", "stdout", "stderr"})
 
 
 def build_probe_plan(env: Mapping[str, str]) -> list[dict[str, Any]]:
@@ -206,6 +208,41 @@ def run_probe(
         }
 
 
+def evidence_safe_result(result: Mapping[str, Any]) -> dict[str, Any]:
+    """Collapse transient probe output to a bounded status-only evidence record."""
+    raw_name = str(result.get("name", ""))
+    name = raw_name if raw_name in EVIDENCE_PROBE_NAMES else "unknown"
+    raw_returncode = result.get("returncode")
+    returncode = (
+        raw_returncode
+        if isinstance(raw_returncode, int) and not isinstance(raw_returncode, bool)
+        else None
+    )
+    return {
+        "name": name,
+        "ok": result.get("ok") is True,
+        "returncode": returncode,
+        "stdout": "",
+        "stderr": "",
+    }
+
+
+def status_only_report_errors(report: Mapping[str, Any]) -> list[str]:
+    """Reject signed provider evidence that retains arbitrary subprocess output."""
+    errors: list[str] = []
+    results = report.get("results")
+    if not isinstance(results, list):
+        return errors
+    for item in results:
+        if not isinstance(item, Mapping):
+            continue
+        if set(item) - EVIDENCE_RESULT_KEYS:
+            errors.append("provider evidence result contains unsupported fields")
+        if str(item.get("stdout", "")).strip() or str(item.get("stderr", "")).strip():
+            errors.append("provider evidence must not retain probe stdout/stderr")
+    return list(dict.fromkeys(errors))
+
+
 def load_current_release(root: Path = ROOT) -> dict[str, Any]:
     state = load_json(root / "deploy/release/runtime/current_release.json")
     archive = Path(str(state.get("archive", "")))
@@ -234,7 +271,8 @@ def build_report(
 ) -> dict[str, Any]:
     secret = require_signing_secret(env)
     created = (created_at or utc_now()).astimezone(UTC)
-    failed = [result for result in results if not result.get("ok")]
+    evidence_results = [evidence_safe_result(result) for result in results]
+    failed = [result for result in evidence_results if not result.get("ok")]
     payload: dict[str, Any] = {
         "schema_version": 1,
         "kind": "provider_probes",
@@ -248,14 +286,14 @@ def build_report(
         "configuration_fingerprint": configuration_fingerprint(env, secret),
         "go": not failed if strict else True,
         "summary": {
-            "total": len(results),
-            "passed": sum(1 for result in results if result.get("ok")),
+            "total": len(evidence_results),
+            "passed": sum(1 for result in evidence_results if result.get("ok")),
             "failed": len(failed),
         },
         "side_effects": {
             "yookassa": "1.00 RUB pending test payment; idempotent per release and return URL",
         },
-        "results": list(results),
+        "results": evidence_results,
     }
     return sign_payload(payload, secret)
 
@@ -303,7 +341,8 @@ def verify_existing_report(
         current_release=current_release,
         max_age_minutes=max_age_minutes,
     )
-    return report, errors
+    errors.extend(status_only_report_errors(report))
+    return report, list(dict.fromkeys(errors))
 
 
 def _safe_summary(report: Mapping[str, Any] | None, errors: Sequence[str]) -> dict[str, Any]:
