@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from ..database import utcnow_naive
 from ..models import DeliveryShipment, Order
+from .moysklad_outbound import enqueue_moysklad_demand
 from .notifications import queue_order_status
 
 _SHIPMENT_TRANSITIONS = {
@@ -123,6 +124,7 @@ def transition_shipment(
         order.status = "shipped"
         order.delivery_status = "shipped"
         order.tracking_number = normalized_tracking
+        enqueue_moysklad_demand(db, order.id)
     elif normalized_status == "delivered":
         if shipment.status != "shipped" or not shipment.tracking_number.strip():
             raise ValueError("Only a tracked shipment can be marked delivered")

@@ -44,6 +44,10 @@ services:
     restart: unless-stopped
     stop_grace_period: 30s
 
+  provider_command_jobs:
+    restart: unless-stopped
+    stop_grace_period: 30s
+
   moysklad_sync:
     restart: unless-stopped
     stop_grace_period: 30s

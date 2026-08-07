@@ -240,6 +240,58 @@ def commit_reserved_to_sold(
     )
 
 
+def restore_sold_variants(
+    db: Session,
+    quantities: Mapping[int, int],
+    *,
+    order_id: int,
+    source: str = "refund_return",
+) -> bool:
+    """Restore sold inventory once after a completed full refund.
+
+    A single order can only have one full cumulative refund. The movement
+    ledger's order/variant/kind uniqueness makes the stock restoration durable
+    and idempotent across duplicate provider webhooks and reconciliation runs.
+    """
+    normalized, variants = _load_locked_variants(db, quantities)
+    existing_rows = (
+        db.query(InventoryMovement)
+        .filter(
+            InventoryMovement.order_id == order_id,
+            InventoryMovement.kind == "return",
+            InventoryMovement.variant_id.in_(sorted(normalized)),
+        )
+        .order_by(InventoryMovement.variant_id.asc())
+        .with_for_update()
+        .all()
+    )
+    if existing_rows:
+        existing = {row.variant_id: row.quantity for row in existing_rows}
+        if existing == normalized:
+            return False
+        raise HTTPException(
+            status_code=409,
+            detail="Refund inventory restoration is only partially recorded and requires review",
+        )
+
+    for variant_id, quantity in normalized.items():
+        variant = variants[variant_id]
+        stock_before = variant.stock_qty
+        reserved_before = variant.reserved_qty
+        variant.stock_qty += quantity
+        _record_movement(
+            db,
+            order_id=order_id,
+            variant=variant,
+            kind="return",
+            quantity=quantity,
+            stock_before=stock_before,
+            reserved_before=reserved_before,
+            source=source,
+        )
+    return True
+
+
 def adjust_stock(
     db: Session,
     variant_id: int,

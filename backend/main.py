@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from . import checkout_models as _checkout_models  # noqa: F401
 from . import model_constraints as _model_constraints  # noqa: F401
 from . import notification_models as _notification_models  # noqa: F401
+from . import provider_models as _provider_models  # noqa: F401
 from .api.admin import router as admin_router
 from .api.admin_auth import router as admin_auth_router
 from .api.admin_notifications import router as admin_notifications_router
@@ -48,6 +49,7 @@ from .api.products import router as products_router
 from .api.profile import router as profile_router
 from .api.recommendations import router as recommendations_router
 from .api.reconciliation import router as reconciliation_router
+from .api.refund_webhooks import router as refund_webhooks_router
 from .api.restock import router as restock_router
 from .api.returns import router as returns_router
 from .api.search import router as search_router
@@ -109,7 +111,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(
-    title="FLASHIN Mini App Backend v52",
+    title="FLASHIN Mini App Backend v53",
     docs_url=None if is_production else "/docs",
     redoc_url=None if is_production else "/redoc",
     openapi_url=None if is_production else "/openapi.json",
@@ -141,6 +143,7 @@ app.include_router(cart_items_router, prefix="/api")
 app.include_router(order_cancellation_router, prefix="/api")
 app.include_router(orders_router, prefix="/api")
 app.include_router(payments_router, prefix="/api")
+app.include_router(refund_webhooks_router, prefix="/api")
 app.include_router(analytics_router, prefix="/api")
 app.include_router(admin_auth_router, prefix="/api")
 app.include_router(admin_router, prefix="/api")
@@ -190,4 +193,4 @@ if settings.metrics_enabled:
 
 @app.get("/", include_in_schema=not is_production)
 def root():
-    return {"message": "FLASHIN Mini App API v52", "env": settings.app_env}
+    return {"message": "FLASHIN Mini App API v53", "env": settings.app_env}

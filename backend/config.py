@@ -71,6 +71,11 @@ class Settings(BaseSettings):
     moysklad_sale_price_type: str = ""
     moysklad_size_attribute_names: str = "Размер,Size"
     moysklad_color_attribute_names: str = "Цвет,Color"
+    moysklad_order_export_enabled: bool = False
+    moysklad_organization_id: str = ""
+    moysklad_agent_id: str = ""
+    moysklad_store_id: str = ""
+    moysklad_delivery_service_id: str = ""
 
     cdn_public_base_url: str = "https://cdn.flashin.store"
     loyalty_points_per_ruble: float = 0.01
@@ -218,15 +223,30 @@ class Settings(BaseSettings):
         ):
             errors.append("MEILISEARCH_MASTER_KEY is missing or unsafe")
 
-        moysklad_configured = bool(
-            self.moysklad_token.strip()
-            or self.moysklad_login.strip()
-            or self.moysklad_password.strip()
-        )
+        token_auth = bool(self.moysklad_token.strip())
+        basic_login = bool(self.moysklad_login.strip())
+        basic_password = bool(self.moysklad_password)
+        basic_auth = basic_login and basic_password
+        moysklad_configured = token_auth or basic_login or basic_password
+        if basic_login != basic_password:
+            errors.append("MOYSKLAD_LOGIN and MOYSKLAD_PASSWORD must be configured together")
         if moysklad_configured and not self.moysklad_sale_price_type.strip():
             errors.append(
                 "MOYSKLAD_SALE_PRICE_TYPE is required when MoySklad synchronization is configured"
             )
+        if self.moysklad_order_export_enabled:
+            if not (token_auth or basic_auth):
+                errors.append("MoySklad credentials are required when order export is enabled")
+            if not self.moysklad_base_url.startswith("https://"):
+                errors.append("MOYSKLAD_BASE_URL must use HTTPS when order export is enabled")
+            for name, value in (
+                ("MOYSKLAD_ORGANIZATION_ID", self.moysklad_organization_id),
+                ("MOYSKLAD_AGENT_ID", self.moysklad_agent_id),
+                ("MOYSKLAD_STORE_ID", self.moysklad_store_id),
+                ("MOYSKLAD_DELIVERY_SERVICE_ID", self.moysklad_delivery_service_id),
+            ):
+                if not value.strip():
+                    errors.append(f"{name} is required when MoySklad order export is enabled")
 
         if errors:
             raise ValueError("Unsafe production configuration: " + "; ".join(errors))

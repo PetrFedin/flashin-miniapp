@@ -111,6 +111,19 @@ services:
     profiles:
       - workers
 
+  provider_command_jobs:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: ["python", "scripts/run_provider_command_jobs.py"]
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+    profiles:
+      - workers
+
   moysklad_sync:
     build:
       context: .
