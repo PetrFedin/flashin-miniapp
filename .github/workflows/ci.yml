@@ -277,6 +277,8 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  # Immutable v17 release guard compatibility marker. Actual v20 docker dependency below is stricter:
+  # needs: [backend, frontend, admin, browser-e2e]
   docker:
     runs-on: ubuntu-latest
     timeout-minutes: 55
