@@ -252,6 +252,7 @@ def test_signed_governance_admission_cannot_bind_runtime_without_checklist(tmp_p
             root=tmp_path,
             require_live_lifecycle=False,
             require_repository_governance=False,
+            now=NOW,
         )
 
     unsigned = dict(manifest)
@@ -288,5 +289,6 @@ def test_signed_governance_admission_cannot_bind_runtime_without_checklist(tmp_p
         root=tmp_path,
         require_live_lifecycle=False,
         require_repository_governance=False,
+        now=NOW,
     )
     assert binding[LAUNCH_CHECKLIST_KEY] == sha256_file(report_path)
