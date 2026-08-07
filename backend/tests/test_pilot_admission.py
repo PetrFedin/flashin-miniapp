@@ -50,7 +50,7 @@ def release(release_id: str, char: str):
 
 def provider_report(now, values, current):
     results = [
-        {"name": name, "ok": True, "returncode": 0, "stdout": "ok", "stderr": ""}
+        {"name": name, "ok": True, "returncode": 0, "stdout": "", "stderr": ""}
         for name in ("telegram", "yookassa", "moysklad", "r2_s3", "meilisearch")
     ]
     payload = {
@@ -275,7 +275,6 @@ def test_live_gate_rejects_tampering_configuration_and_other_release():
     assert any("live gate release" in item for item in errors)
 
 
-
 def test_admission_create_preflight_binds_live_gate_to_current_release(tmp_path: Path):
     values = env()
     current = release("current", "a")
@@ -318,3 +317,43 @@ def test_admission_create_preflight_binds_live_gate_to_current_release(tmp_path:
         rollback_max_age_days=30,
     )
     assert any("live gate release" in item for item in errors)
+
+
+def test_admission_preflight_rejects_resigned_provider_output():
+    values = env()
+    current = release("current", "a")
+    previous = release("previous", "b")
+    now = datetime.now(UTC)
+    provider = provider_report(now, values, current)
+    provider.pop("signature", None)
+    provider["results"][0]["stderr"] = "private-provider-error-body"
+    provider["results"][0]["provider_reference"] = "private-provider-id"
+    provider = sign_payload(provider, values["PILOT_EVIDENCE_SIGNING_SECRET"])
+    live = live_report(now, values, current)
+
+    backup = ROOT / "backend/tests/.provider-evidence-admission-v28-backup"
+    try:
+        backup.write_bytes(b"backup")
+        rollback = build_rollback_drill_report(
+            from_release=current,
+            to_release=previous,
+            backup_path=backup,
+            env=values,
+            completed_at=now,
+            max_age_days=30,
+        )
+        errors = validate_admission_evidence_inputs(
+            provider,
+            live,
+            rollback,
+            env=values,
+            current_release=current,
+            provider_max_age_minutes=60,
+            live_max_age_minutes=30,
+            rollback_max_age_days=30,
+        )
+    finally:
+        backup.unlink(missing_ok=True)
+
+    assert "provider evidence must not retain probe stdout/stderr" in errors
+    assert "provider evidence result contains unsupported fields" in errors
