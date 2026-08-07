@@ -61,7 +61,12 @@ from .api.wishlist import router as wishlist_router
 from .config import get_settings
 from .database import Base, SessionLocal, engine, get_db
 from .middleware.admin_order_state_guard import AdminOrderStateGuardMiddleware
-from .middleware.metrics import MetricsMiddleware, collect_pilot_metrics, metrics_response
+from .middleware.metrics import (
+    MetricsMiddleware,
+    collect_pilot_metrics,
+    collect_provider_command_metrics,
+    metrics_response,
+)
 from .middleware.rate_limit import InMemoryRateLimitMiddleware
 from .middleware.security_headers import SecurityHeadersMiddleware
 from .seed import bootstrap_admin, seed_products
@@ -188,6 +193,7 @@ if settings.metrics_enabled:
     @app.get("/metrics", include_in_schema=False)
     def metrics(db: Session = Depends(get_db)):
         collect_pilot_metrics(db, settings)
+        collect_provider_command_metrics(db)
         return metrics_response()
 
 
