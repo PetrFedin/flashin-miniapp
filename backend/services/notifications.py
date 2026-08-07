@@ -105,3 +105,23 @@ def queue_order_status(db: Session, order: Order) -> bool:
             f"order:{order.id}:status:{order.status}:delivery:{order.delivery_status}"
         ),
     )
+
+
+def queue_order_refund(
+    db: Session,
+    order: Order,
+    *,
+    return_id: int,
+    amount: float,
+    full_refund: bool,
+) -> bool:
+    label = "полностью возвращена" if full_refund else "частично возвращена"
+    return queue_notification(
+        db,
+        order.customer.telegram_id,
+        (
+            f"↩️ По заказу #{order.id} сумма {float(amount):.2f} {order.currency} "
+            f"{label}."
+        ),
+        event_key=f"order:{order.id}:refund:{int(return_id)}:succeeded",
+    )

@@ -31,7 +31,7 @@ def test_refund_smoke_uses_real_routes_and_transactional_postgres():
     assert "fake_create_yookassa_refund" in source
 
 
-def test_refund_smoke_proves_partial_then_full_money_and_loyalty_state():
+def test_refund_smoke_proves_partial_then_full_money_loyalty_and_inventory_state():
     source = SMOKE.read_text(encoding="utf-8")
 
     required_assertions = (
@@ -43,13 +43,16 @@ def test_refund_smoke_proves_partial_then_full_money_and_loyalty_state():
         '"reject amount above remaining balance"',
         'persisted_order.status == "refunded"',
         'persisted_order.payment_status == "refunded"',
-        "persisted_variant.stock_qty == 3",
+        "persisted_variant.stock_qty == 5",
         "persisted_variant.reserved_qty == 0",
         'persisted_hold.status == "refunded"',
         'Decimal("500.00")',
         'remaining_refundable_amount(db, persisted_order) == Decimal("0.00")',
         '("order_refund_reversal", Decimal("-17.00"))',
         '("loyalty_refund", Decimal("100.00"))',
+        'InventoryMovement.kind == "return"',
+        "return_movements[0].stock_before == 3",
+        "return_movements[0].stock_after == 5",
         "len(refund_create_calls) == 2",
         "len(provider_refunds) == 2",
     )
@@ -57,7 +60,7 @@ def test_refund_smoke_proves_partial_then_full_money_and_loyalty_state():
         assert fragment in source
 
 
-def test_refund_smoke_proves_replay_does_not_repeat_provider_refund():
+def test_refund_smoke_proves_replay_does_not_repeat_provider_refund_or_stock_return():
     source = SMOKE.read_text(encoding="utf-8")
 
     assert '"replay partial refund approval"' in source
@@ -66,6 +69,7 @@ def test_refund_smoke_proves_replay_does_not_repeat_provider_refund():
     assert 'second_refund_replay["idempotent"] is True' in source
     assert source.count("assert len(refund_create_calls) == 1") == 2
     assert "assert len(refund_create_calls) == 2" in source
+    assert "assert len(return_movements) == 1" in source
 
 
 def test_provider_refund_key_and_cumulative_policy_remain_explicit():
@@ -83,7 +87,8 @@ def test_provider_refund_key_and_cumulative_policy_remain_explicit():
     assert '"flashin:yookassa:refund:"' in payments
     assert "cumulative_total > order_total" in refund_state
     assert "cumulative_total == order_total" in refund_state
-    assert "loyalty_adjusted_only_after_full_cumulative_refund" in refund_state
+    assert "loyalty_and_inventory_adjusted_only_after_full_cumulative_refund" in refund_state
+    assert "restore_sold_variants" in refund_state
 
 
 def test_ci_runs_cumulative_refund_smoke_before_full_backend_suite():

@@ -6,6 +6,9 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from ..models import Order, ReturnRequest
+from .inventory import restore_sold_variants
+from .moysklad_outbound import enqueue_moysklad_sales_return
+from .notifications import queue_order_refund
 from .refund_loyalty import apply_full_refund_loyalty
 
 _MONEY_STEP = Decimal("0.01")
@@ -68,6 +71,28 @@ def remaining_refundable_amount(
     return remaining
 
 
+def _order_item_quantities(order: Order) -> dict[int, int]:
+    quantities: dict[int, int] = {}
+    for item in order.items:
+        quantities[item.variant_id] = quantities.get(item.variant_id, 0) + item.quantity
+    if not quantities:
+        raise HTTPException(status_code=409, detail="Refunded order has no inventory items")
+    return quantities
+
+
+def _idempotent_succeeded_result(db: Session, ret: ReturnRequest, order: Order) -> dict[str, object]:
+    order_total = refund_money(order.total_amount, "order total")
+    cumulative_total = completed_refund_total(db, order.id)
+    if cumulative_total > order_total:
+        raise HTTPException(status_code=409, detail="Cumulative refunds exceed order total")
+    return {
+        "cumulative_refund_amount": float(cumulative_total),
+        "remaining_refundable_amount": float(order_total - cumulative_total),
+        "idempotent": True,
+        "return_status": ret.status,
+    }
+
+
 def apply_provider_refund_status(
     db: Session,
     ret: ReturnRequest,
@@ -76,6 +101,9 @@ def apply_provider_refund_status(
 ) -> dict[str, object]:
     normalized_status = provider_status.strip().lower()
     if normalized_status == "succeeded":
+        if ret.status in _FINAL_REFUND_STATUSES:
+            return _idempotent_succeeded_result(db, ret, order)
+
         order_total = refund_money(order.total_amount, "order total")
         previous_total = completed_refund_total(
             db,
@@ -98,6 +126,7 @@ def apply_provider_refund_status(
             "cumulative_refund_amount": float(cumulative_total),
             "remaining_refundable_amount": float(order_total - cumulative_total),
         }
+
         if full_refund:
             result.update(
                 apply_full_refund_loyalty(
@@ -107,8 +136,25 @@ def apply_provider_refund_status(
                     redeemed_points=order.loyalty_points_redeemed,
                 )
             )
+            restored = restore_sold_variants(
+                db,
+                _order_item_quantities(order),
+                order_id=order.id,
+                source="full_refund",
+            )
+            result["inventory_restored"] = restored
+            if order.delivery_status in {"shipped", "delivered"}:
+                enqueue_moysklad_sales_return(db, order.id, ret.id)
         else:
-            result["policy"] = "loyalty_adjusted_only_after_full_cumulative_refund"
+            result["policy"] = "loyalty_and_inventory_adjusted_only_after_full_cumulative_refund"
+
+        queue_order_refund(
+            db,
+            order,
+            return_id=ret.id,
+            amount=float(current_amount),
+            full_refund=full_refund,
+        )
         return result
 
     if normalized_status == "canceled":

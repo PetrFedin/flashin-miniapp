@@ -16,6 +16,7 @@ def _order(total=1000.0):
         loyalty_points_redeemed=100.0,
         status="refund_requested",
         payment_status="refund_processing",
+        delivery_status="not_started",
     )
 
 
@@ -46,8 +47,10 @@ def test_provider_refund_amount_validates_currency():
     assert exc.value.status_code == 409
 
 
-def test_full_refund_applies_loyalty_reversal(monkeypatch):
+def test_full_refund_applies_loyalty_and_inventory_reversal(monkeypatch):
     called = {}
+    restored = []
+    notifications = []
 
     def fake_apply(db, *, customer_id, order_id, redeemed_points):
         called.update(
@@ -57,8 +60,19 @@ def test_full_refund_applies_loyalty_reversal(monkeypatch):
         )
         return {"ok": True}
 
+    def fake_restore(db, quantities, *, order_id, source):
+        restored.append((dict(quantities), order_id, source))
+        return True
+
+    def fake_notification(db, order, *, return_id, amount, full_refund):
+        notifications.append((order.id, return_id, amount, full_refund))
+        return True
+
     monkeypatch.setattr(refund_state, "completed_refund_total", lambda *args, **kwargs: Decimal("0.00"))
     monkeypatch.setattr(refund_state, "apply_full_refund_loyalty", fake_apply)
+    monkeypatch.setattr(refund_state, "_order_item_quantities", lambda _order: {77: 2})
+    monkeypatch.setattr(refund_state, "restore_sold_variants", fake_restore)
+    monkeypatch.setattr(refund_state, "queue_order_refund", fake_notification)
     order = _order()
     ret = _return()
 
@@ -68,17 +82,28 @@ def test_full_refund_applies_loyalty_reversal(monkeypatch):
     assert order.status == "refunded"
     assert order.payment_status == "refunded"
     assert called == {"customer_id": 7, "order_id": 42, "redeemed_points": 100.0}
+    assert restored == [({77: 2}, 42, "full_refund")]
+    assert notifications == [(42, 100, 1000.0, True)]
     assert result["ok"] is True
+    assert result["inventory_restored"] is True
     assert result["cumulative_refund_amount"] == 1000.0
     assert result["remaining_refundable_amount"] == 0.0
 
 
-def test_partial_refund_does_not_silently_recalculate_loyalty(monkeypatch):
+def test_partial_refund_does_not_silently_recalculate_loyalty_or_inventory(monkeypatch):
     def fail_if_called(*args, **kwargs):
-        raise AssertionError("full-refund loyalty handler must not run")
+        raise AssertionError("full-refund loyalty/inventory handler must not run")
+
+    notifications = []
+
+    def fake_notification(db, order, *, return_id, amount, full_refund):
+        notifications.append((order.id, return_id, amount, full_refund))
+        return True
 
     monkeypatch.setattr(refund_state, "completed_refund_total", lambda *args, **kwargs: Decimal("0.00"))
     monkeypatch.setattr(refund_state, "apply_full_refund_loyalty", fail_if_called)
+    monkeypatch.setattr(refund_state, "restore_sold_variants", fail_if_called)
+    monkeypatch.setattr(refund_state, "queue_order_refund", fake_notification)
     order = _order()
     ret = _return(250.0)
 
@@ -87,9 +112,10 @@ def test_partial_refund_does_not_silently_recalculate_loyalty(monkeypatch):
     assert ret.status == "approved_partial"
     assert order.status == "partially_refunded"
     assert order.payment_status == "partially_refunded"
-    assert result["policy"] == "loyalty_adjusted_only_after_full_cumulative_refund"
+    assert result["policy"] == "loyalty_and_inventory_adjusted_only_after_full_cumulative_refund"
     assert result["cumulative_refund_amount"] == 250.0
     assert result["remaining_refundable_amount"] == 750.0
+    assert notifications == [(42, 100, 250.0, False)]
 
 
 def test_canceled_and_pending_refunds_preserve_reconcilable_states(monkeypatch):

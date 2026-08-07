@@ -15,6 +15,7 @@ from .models import (
     CartItem,
     CrmProfile,
     FulfillmentTask,
+    InventoryMovement,
     LoyaltyRedemptionHold,
     LoyaltyTransaction,
     Order,
@@ -41,6 +42,13 @@ def _index_names(table) -> set[str]:
 def _check(table, name: str, expression: str) -> None:
     if name not in _constraint_names(table):
         table.append_constraint(CheckConstraint(expression, name=name))
+
+
+def _replace_check(table, name: str, expression: str) -> None:
+    for constraint in list(table.constraints):
+        if constraint.name == name:
+            table.constraints.remove(constraint)
+    table.append_constraint(CheckConstraint(expression, name=name))
 
 
 def _unique(table, name: str, *columns: str) -> None:
@@ -70,6 +78,11 @@ def apply_model_constraints() -> None:
     _check(ProductVariant.__table__, "ck_product_variants_stock_nonnegative", "stock_qty >= 0")
     _check(ProductVariant.__table__, "ck_product_variants_reserved_nonnegative", "reserved_qty >= 0")
     _check(ProductVariant.__table__, "ck_product_variants_reserved_within_stock", "reserved_qty <= stock_qty")
+    _replace_check(
+        InventoryMovement.__table__,
+        "ck_inventory_movements_kind",
+        "kind IN ('reserve', 'release', 'commit', 'return')",
+    )
 
     _check(CartItem.__table__, "ck_cart_items_quantity_positive", "quantity > 0")
     _check(CartItem.__table__, "ck_cart_items_quantity_limit", "quantity <= 10")

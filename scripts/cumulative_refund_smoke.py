@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Exercise partial then full cumulative refunds through real HTTP and PostgreSQL.
 
-All application state is created in an outer transaction and rolled back. Only
-external YooKassa payment/refund calls are replaced with deterministic fakes;
-FastAPI routes, authorization dependencies, persistence, loyalty, inventory,
-and refund state transitions are real.
+All local application state uses real routes and transactional persistence. Only
+YooKassa HTTP calls are replaced with deterministic fakes. The smoke proves
+partial-refund money/loyalty invariants and replay safety, rejects over-refunds,
+and proves a full cumulative refund restores sold inventory exactly once while
+queueing customer notifications idempotently.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ from backend.models import (
     CrmProfile,
     Customer,
     FulfillmentTask,
+    InventoryMovement,
     LoyaltyRedemptionHold,
     LoyaltyTransaction,
     Notification,
@@ -131,12 +133,13 @@ def main() -> int:
         )
         db.add_all([customer, admin, product, variant, promo])
         db.flush()
-        profile = CrmProfile(
-            customer_id=customer.id,
-            segment="refund-smoke",
-            loyalty_points=500,
+        db.add(
+            CrmProfile(
+                customer_id=customer.id,
+                segment="refund-smoke",
+                loyalty_points=500,
+            )
         )
-        db.add(profile)
         db.commit()
 
         def override_db():
@@ -283,14 +286,13 @@ def main() -> int:
         )
         assert payment["status"] == "succeeded"
         provider_payment_id = payment["provider_payment_id"]
+        db.expire_all()
+        assert db.query(ProductVariant).filter(ProductVariant.id == variant.id).one().stock_qty == 3
 
         first_return = _expect(
             client.post(
                 "/api/returns",
-                json={
-                    "order_id": order_id,
-                    "reason": "Partial refund smoke request",
-                },
+                json={"order_id": order_id, "reason": "Partial refund smoke request"},
             ),
             200,
             "create first return",
@@ -344,15 +346,23 @@ def main() -> int:
             ("loyalty_redeemed", Decimal("-100.00")),
             ("order_paid", Decimal("17.00")),
         ]
+        partial_variant = db.query(ProductVariant).filter(ProductVariant.id == variant.id).one()
+        assert partial_variant.stock_qty == 3
+        assert (
+            db.query(InventoryMovement)
+            .filter(
+                InventoryMovement.order_id == order_id,
+                InventoryMovement.kind == "return",
+            )
+            .count()
+            == 0
+        )
         assert remaining_refundable_amount(db, partial_order) == Decimal("1000.00")
 
         second_return = _expect(
             client.post(
                 "/api/returns",
-                json={
-                    "order_id": order_id,
-                    "reason": "Refund the remaining balance",
-                },
+                json={"order_id": order_id, "reason": "Refund the remaining balance"},
             ),
             200,
             "create second return",
@@ -399,10 +409,7 @@ def main() -> int:
         third_return = _expect_error(
             client.post(
                 "/api/returns",
-                json={
-                    "order_id": order_id,
-                    "reason": "No balance should remain",
-                },
+                json={"order_id": order_id, "reason": "No balance should remain"},
             ),
             409,
             "reject return after full refund",
@@ -437,6 +444,14 @@ def main() -> int:
             .order_by(LoyaltyTransaction.id.asc())
             .all()
         )
+        return_movements = (
+            db.query(InventoryMovement)
+            .filter(
+                InventoryMovement.order_id == order_id,
+                InventoryMovement.kind == "return",
+            )
+            .all()
+        )
         notifications = (
             db.query(Notification)
             .filter(Notification.telegram_id == customer.telegram_id)
@@ -447,11 +462,16 @@ def main() -> int:
             .filter(NotificationEventKey.event_key == f"order:{order_id}:paid")
             .all()
         )
+        event_keys = (
+            db.query(NotificationEventKey)
+            .filter(NotificationEventKey.event_key.like(f"order:{order_id}:%"))
+            .all()
+        )
 
         assert persisted_order.status == "refunded"
         assert persisted_order.payment_status == "refunded"
         assert persisted_payment.status == "succeeded"
-        assert persisted_variant.stock_qty == 3
+        assert persisted_variant.stock_qty == 5
         assert persisted_variant.reserved_qty == 0
         assert persisted_promo.used_count == 1
         assert persisted_cart.status == "converted"
@@ -465,7 +485,10 @@ def main() -> int:
         assert _money(returns[0].refund_amount) == Decimal("700.00")
         assert returns[1].status == "approved"
         assert _money(returns[1].refund_amount) == Decimal("1000.00")
-        assert sum((_money(row.refund_amount) for row in returns), Decimal("0.00")) == Decimal("1700.00")
+        assert sum(
+            (_money(row.refund_amount) for row in returns),
+            Decimal("0.00"),
+        ) == Decimal("1700.00")
         assert remaining_refundable_amount(db, persisted_order) == Decimal("0.00")
 
         assert [(row.reason, _money(row.points_delta)) for row in loyalty_rows] == [
@@ -474,8 +497,13 @@ def main() -> int:
             ("order_refund_reversal", Decimal("-17.00")),
             ("loyalty_refund", Decimal("100.00")),
         ]
-        assert len(notifications) == 1
+        assert len(return_movements) == 1
+        assert return_movements[0].quantity == 2
+        assert return_movements[0].stock_before == 3
+        assert return_movements[0].stock_after == 5
+        assert len(notifications) == 3
         assert len(paid_keys) == 1
+        assert len(event_keys) == 3
         assert db.query(FulfillmentTask).filter(FulfillmentTask.order_id == order_id).count() == 1
         assert db.query(Payment).filter(Payment.order_id == order_id).count() == 1
         assert (
@@ -507,7 +535,9 @@ def main() -> int:
                     "refunds": ["700.00", "1000.00"],
                     "remaining": "0.00",
                     "loyalty_after_full_refund": f"{_money(persisted_profile.loyalty_points):.2f}",
-                    "stock_after_financial_refund": persisted_variant.stock_qty,
+                    "stock_after_full_refund": persisted_variant.stock_qty,
+                    "return_movements": len(return_movements),
+                    "notifications": len(notifications),
                     "provider_refund_calls": len(refund_create_calls),
                 },
                 ensure_ascii=False,

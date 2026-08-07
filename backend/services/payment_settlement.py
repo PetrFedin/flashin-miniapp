@@ -9,6 +9,7 @@ from .loyalty import (
     mark_redemption_committed,
     reward_referral_after_first_paid_order,
 )
+from .moysklad_outbound import enqueue_moysklad_customer_order
 from .notifications import queue_order_paid
 from .outbox import enqueue_event_for_destinations, enqueue_webhook
 from .timeline import add_timeline_event
@@ -80,4 +81,5 @@ def settle_paid_order(db, order) -> bool:
 
     order.payment_status = "paid"
     order.status = "paid"
+    enqueue_moysklad_customer_order(db, order.id)
     return True
