@@ -4,10 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
+import re
 import subprocess
 import sys
+import urllib.parse
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -42,6 +45,7 @@ SECRET_KEYS = {
     "MEILISEARCH_MASTER_KEY",
     "PILOT_EVIDENCE_SIGNING_SECRET",
 }
+_TELEGRAM_BOT_URL_RE = re.compile(r"https://api\.telegram\.org/bot[^/\s]+", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -87,17 +91,41 @@ def build_probe_plan(env: Mapping[str, str]) -> list[dict[str, Any]]:
     return plan
 
 
-def _redaction_values(env: Mapping[str, str]) -> list[str]:
-    values = []
+def _raw_secret_values(env: Mapping[str, str]) -> set[str]:
+    values: set[str] = set()
     for key in SECRET_KEYS:
         value = str(env.get(key, "")).strip()
         if len(value) >= 4:
-            values.append(value)
-    return sorted(set(values), key=len, reverse=True)
+            values.add(value)
+    return values
+
+
+def _redaction_values(env: Mapping[str, str]) -> list[str]:
+    raw = _raw_secret_values(env)
+    values = set(raw)
+    for secret in raw:
+        values.add(urllib.parse.quote(secret, safe=""))
+        values.add(urllib.parse.quote_plus(secret))
+
+    yookassa_shop_id = str(env.get("YOOKASSA_SHOP_ID", "")).strip()
+    yookassa_secret = str(env.get("YOOKASSA_SECRET_KEY", "")).strip()
+    if yookassa_shop_id and yookassa_secret:
+        values.add(
+            base64.b64encode(f"{yookassa_shop_id}:{yookassa_secret}".encode("utf-8")).decode("ascii")
+        )
+
+    moysklad_login = str(env.get("MOYSKLAD_LOGIN", "")).strip()
+    moysklad_password = str(env.get("MOYSKLAD_PASSWORD", ""))
+    if moysklad_login and moysklad_password:
+        values.add(
+            base64.b64encode(f"{moysklad_login}:{moysklad_password}".encode("utf-8")).decode("ascii")
+        )
+
+    return sorted((value for value in values if len(value) >= 4), key=len, reverse=True)
 
 
 def redact(text: str, env: Mapping[str, str]) -> str:
-    result = text
+    result = _TELEGRAM_BOT_URL_RE.sub("https://api.telegram.org/bot<redacted>", text)
     for secret in _redaction_values(env):
         result = result.replace(secret, "<redacted>")
     return result
@@ -174,7 +202,7 @@ def run_probe(
             "ok": False,
             "returncode": None,
             "stdout": "",
-            "stderr": redact(f"{exc.__class__.__name__}: {exc}", env),
+            "stderr": exc.__class__.__name__,
         }
 
 
