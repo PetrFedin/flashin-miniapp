@@ -4,7 +4,7 @@
 
 Первый реальный заказ разрешён только для **точного immutable release**, который одновременно:
 
-- прошёл полный CI (`backend`, `frontend`, `admin`, `browser-e2e`, `docker`) от официального GitHub Actions App;
+- прошёл полный CI (`backend`, `frontend`, `admin`, `browser-e2e`, `integrated-e2e`, `docker`) от официального GitHub Actions App;
 - развёрнут на production-подобном pilot host;
 - имеет подписанные provider, live readiness, rollback, lifecycle и repository-governance evidence;
 - имеет действующий подписанный admission с пятью именованными владельцами;
@@ -14,13 +14,15 @@
 
 Любое изменение release, production configuration, evidence-файла, admission manifest или GitHub `main` требует остановки runtime и нового полного допуска.
 
+`integrated-e2e` — обязательный internal-stack gate: он проводит подписанный тестовый Telegram WebApp payload через реальный Mini App -> FastAPI -> PostgreSQL -> payment domain -> Admin fulfillment/delivery -> Mini App refresh. В нём заменена только внешняя HTTP-граница YooKassa. Этот PASS не заменяет реальные Telegram/YooKassa/MoySklad/CDN evidence.
+
 ## Обязательные внешние входы
 
 До технического допуска должны существовать:
 
 - production/sandbox credentials Telegram, YooKassa, MoySklad, Meilisearch и R2/S3, если функции включены;
 - отдельный случайный `PILOT_EVIDENCE_SIGNING_SECRET`;
-- отдельный краткоживущий operator-only `PILOT_GITHUB_TOKEN` с `Actions: read`, `Administration: write` и доступом к полным ruleset bypass data;
+- отдельный краткоживущий operator-only `PILOT_GITHUB_TOKEN` с минимально достаточными `Actions: read` и `Administration: read`, включая доступ к полным ruleset bypass data;
 - `PILOT_GITHUB_ACTIONS_APP_ID=15368` для привязки required checks к официальному GitHub Actions App;
 - DNS и валидный HTTPS для Mini App, API, Admin и CDN;
 - публичные оферта, privacy, consent, returns/refunds и реквизиты продавца;
@@ -37,7 +39,7 @@ GitHub governance token запрещено хранить в root `.env`: Compos
 До создания governance evidence настройте для GitHub `main` ruleset или classic branch protection:
 
 1. только pull request;
-2. required checks `backend`, `frontend`, `admin`, `browser-e2e`, `docker`;
+2. required checks `backend`, `frontend`, `admin`, `browser-e2e`, `integrated-e2e`, `docker`;
 3. для каждого required check expected source — **GitHub Actions**, App ID `15368`; `any source`, отсутствующий/другой App ID и legacy name-only contexts запрещены;
 4. strict/up-to-date checks;
 5. явный запрет force-push;
@@ -45,7 +47,7 @@ GitHub governance token запрещено хранить в root `.env`: Compos
 7. classic `enforce_admins=true` или ruleset без bypass actors;
 8. `main` остаётся default branch.
 
-После изменения governance не вносите новые коммиты в `main`, пока не будет создан новый release и заново пройдена вся цепочка.
+После изменения governance не вносите новые коммиты в `main`, пока не будет создан новый release и заново пройдена вся цепочка. На момент подготовки v20 API GitHub показывал `main` как unprotected, поэтому этот шаг нельзя считать выполненным по одному только зелёному CI.
 
 ## 2. Проверить production configuration
 
@@ -125,7 +127,7 @@ make pilot-admit ARGS='\
 
 ## 8. Реальные deployed lifecycle scenarios
 
-Выполните все обязательные сценарии из `docs/pilot/live_lifecycle_evidence.md`:
+Выполните все обязательные сценарии из `docs/pilot/live_lifecycle_evidence.md` и все P01-P20 шаги `docs/pilot/live_pilot_runner.json`:
 
 - real Telegram signed authentication;
 - YooKassa redirect и return;
@@ -144,11 +146,11 @@ make pilot-lifecycle-attach
 make pilot-lifecycle-status
 ```
 
-Каждый scenario owner должен дословно совпадать с одним из владельцев signed admission.
+Каждый scenario owner должен дословно совпадать с одним из владельцев signed admission. Ни один обязательный P01-P20 шаг не может оставаться `todo` или `failed` к моменту финального допуска.
 
 ## 9. Signed repository-governance evidence
 
-Убедитесь, что защищённый `main` указывает на тот же commit, что `current_release.json`, полный CI этого commit завершён success, а каждый required check имеет `app_id`/`integration_id=15368`.
+Убедитесь, что защищённый `main` указывает на тот же commit, что `current_release.json`, полный **push CI** этого commit завершён success, а все шесть required checks (`backend`, `frontend`, `admin`, `browser-e2e`, `integrated-e2e`, `docker`) имеют `app_id`/`integration_id=15368`.
 
 Токен подаётся только в процесс создания отчёта. Не записывайте его в `.env`, Compose secret или контейнер:
 
@@ -163,7 +165,7 @@ make pilot-governance-attach
 
 Не вставляйте raw token в интерактивную shell history; используйте process injection секрет-менеджера или краткоживущий GitHub App installation token.
 
-Collector обязан видеть полное поле `bypass_actors`. Скрытое поле, отсутствующий token, неполные checks, недоверенный source, другой head SHA или иной workflow дают NO-GO. Проверка уже подписанного отчёта токен не требует.
+Collector обязан видеть полное поле `bypass_actors`. Скрытое поле, отсутствующий token, неполные checks, недоверенный source, другой head SHA, PR-only run вместо успешного `push` run или иной workflow дают NO-GO. Проверка уже подписанного отчёта токен не требует. Admission v20 дополнительно fail-closed требует наличие всех шести checks даже при устаревшей env-конфигурации.
 
 ## 10. Финальная проверка допуска
 
@@ -224,7 +226,7 @@ STOP обязателен при любом из условий:
 - потерян payment/refund/business event без retry/review;
 - reconciliation, `/ready`, Admin, audit trail или alerts недоступны;
 - evidence/admission/release/governance checksum изменился;
-- required status check потерял binding к GitHub Actions App ID `15368`;
+- любой из шести required checks потерял binding к GitHub Actions App ID `15368`;
 - GitHub operator token обнаружен в `.env`, container environment, logs или evidence;
 - обнаружен provider secret, raw initData или лишний доступ;
 - backup/rollback недоступен.
