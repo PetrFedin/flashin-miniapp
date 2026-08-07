@@ -6,7 +6,10 @@ export default defineConfig({
   testDir: "./integrated",
   timeout: 60_000,
   expect: { timeout: 10_000 },
-  retries: process.env.CI ? 1 : 0,
+  // This journey mutates one real PostgreSQL order through payment and fulfillment.
+  // Retrying against the same database would create false secondary failures or mask
+  // the first failure, so exact-run evidence is deliberately single-attempt.
+  retries: 0,
   workers: 1,
   reporter: process.env.CI
     ? [["line"], ["html", { outputFolder: "playwright-integrated-report", open: "never" }]]
