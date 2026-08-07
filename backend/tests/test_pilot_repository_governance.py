@@ -8,6 +8,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import pilot_evidence  # noqa: E402
 import pilot_governance_release_guard  # noqa: E402
 from pilot_control_binding import (  # noqa: E402
     REPOSITORY_GOVERNANCE_KEY,
@@ -281,6 +282,7 @@ def test_governance_attachment_requires_signed_technical_owner(tmp_path, monkeyp
         "require_current_governance_release",
         lambda _root: RELEASE,
     )
+    monkeypatch.setattr(pilot_evidence, "utc_now", lambda: NOW)
     binding = build_admission_binding(
         manifest_path,
         manifest,
