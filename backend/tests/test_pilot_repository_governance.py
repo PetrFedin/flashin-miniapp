@@ -31,7 +31,14 @@ RELEASE = {
     "sha256": "b" * 64,
     "promoted_at": "2026-08-06T11:00:00Z",
 }
-REQUIRED_CHECKS = ("backend", "frontend", "admin", "browser-e2e", "docker")
+REQUIRED_CHECKS = (
+    "backend",
+    "frontend",
+    "admin",
+    "browser-e2e",
+    "integrated-e2e",
+    "docker",
+)
 ACTIONS_APP_ID = 15368
 
 
