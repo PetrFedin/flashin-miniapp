@@ -12,6 +12,9 @@ from ..services.moysklad_outbound import (
     export_demand,
     export_sales_return,
 )
+from ..services.provider_command_safety import (
+    enforce_terminal_provider_command_pilot_stop,
+)
 from ..services.provider_commands import (
     claim_provider_commands,
     fail_provider_command,
@@ -19,6 +22,7 @@ from ..services.provider_commands import (
 )
 
 _Handler = Callable[[Session, dict[str, Any]], Awaitable[str]]
+_TERMINAL_FAILURE_STATES = {"failed", "review_required"}
 
 
 async def _customer_order(db: Session, payload: dict[str, Any]) -> str:
@@ -60,6 +64,11 @@ _HANDLERS: dict[str, _Handler] = {
 
 
 async def process_provider_commands(db: Session, limit: int = 50) -> dict[str, int]:
+    # Recover a missed pilot stop before taking more work. This also covers the
+    # case where a prior worker process persisted a terminal command and died
+    # before it could persist the circuit-breaker transition.
+    enforce_terminal_provider_command_pilot_stop(db)
+
     claimed = claim_provider_commands(db, provider="moysklad", limit=limit)
     result = {
         "claimed": len(claimed),
@@ -101,6 +110,8 @@ async def process_provider_commands(db: Session, limit: int = 50) -> dict[str, i
                 review_required=True,
             )
             result[state] = result.get(state, 0) + 1
+            if state in _TERMINAL_FAILURE_STATES:
+                enforce_terminal_provider_command_pilot_stop(db)
         except Exception as exc:
             state = fail_provider_command(
                 db,
@@ -109,5 +120,7 @@ async def process_provider_commands(db: Session, limit: int = 50) -> dict[str, i
                 exc,
             )
             result[state] = result.get(state, 0) + 1
+            if state in _TERMINAL_FAILURE_STATES:
+                enforce_terminal_provider_command_pilot_stop(db)
 
     return result
