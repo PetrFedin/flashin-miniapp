@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Read-only Meilisearch health and product-index probe."""
+"""Read-only Meilisearch health and product-index probe with bounded output."""
+
+from __future__ import annotations
 
 import json
 import os
@@ -9,12 +11,13 @@ import urllib.request
 
 
 def _get_json(url: str, key: str) -> object:
-    headers = {"Accept": "application/json", "User-Agent": "flashin-meilisearch-probe/1.0"}
+    headers = {"Accept": "application/json", "User-Agent": "flashin-meilisearch-probe/2.0"}
     if key:
         headers["Authorization"] = f"Bearer {key}"
     request = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(request, timeout=15) as response:
-        return json.loads(response.read().decode("utf-8"))
+        raw = response.read().decode("utf-8")
+    return json.loads(raw)
 
 
 def main() -> int:
@@ -34,8 +37,11 @@ def main() -> int:
     except urllib.error.HTTPError as exc:
         print(f"Meilisearch probe failed: HTTP {exc.code}")
         return 1
+    except (urllib.error.URLError, TimeoutError, OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        print(f"Meilisearch probe failed: {exc.__class__.__name__}")
+        return 1
     except Exception as exc:
-        print(f"Meilisearch probe failed: {exc.__class__.__name__}: {exc}")
+        print(f"Meilisearch probe failed: {exc.__class__.__name__}")
         return 1
 
     if not isinstance(health, dict) or health.get("status") != "available":
@@ -52,9 +58,9 @@ def main() -> int:
         json.dumps(
             {
                 "status": "ok",
-                "index": index,
-                "documents": stats["numberOfDocuments"],
-                "is_indexing": stats.get("isIndexing"),
+                "provider": "meilisearch",
+                "documents_present": True,
+                "is_indexing": bool(stats.get("isIndexing")),
             },
             ensure_ascii=False,
         )

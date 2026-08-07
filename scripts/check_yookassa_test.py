@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create one idempotent 1 RUB YooKassa pilot probe payment for the current release."""
+"""Create one idempotent 1 RUB YooKassa pilot probe payment with bounded output."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def validate_response(body: Mapping[str, Any]) -> list[str]:
         errors.append("payment id is missing")
     status = str(body.get("status", ""))
     if status not in ALLOWED_STATUSES:
-        errors.append(f"unexpected payment status: {status or 'missing'}")
+        errors.append("payment status is invalid")
     amount = body.get("amount")
     if not isinstance(amount, Mapping):
         errors.append("payment amount is missing")
@@ -41,9 +41,9 @@ def validate_response(body: Mapping[str, Any]) -> list[str]:
             errors.append("payment amount is invalid")
         else:
             if value != Decimal("1.00"):
-                errors.append(f"payment amount mismatch: {value}")
+                errors.append("payment amount mismatch")
         if amount.get("currency") != "RUB":
-            errors.append(f"payment currency mismatch: {amount.get('currency')!r}")
+            errors.append("payment currency mismatch")
     if status == "pending":
         confirmation = body.get("confirmation")
         if not isinstance(confirmation, Mapping) or not confirmation.get("confirmation_url"):
@@ -87,29 +87,39 @@ def main() -> int:
             "Content-Type": "application/json",
             "Idempotence-Key": idempotence_key,
             "Authorization": f"Basic {auth}",
-            "User-Agent": "flashin-pilot-provider-probe/2.0",
+            "User-Agent": "flashin-pilot-provider-probe/3.0",
         },
     )
 
     try:
         with urllib.request.urlopen(request, timeout=20) as response:
-            body = json.loads(response.read().decode("utf-8"))
+            raw = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
-        detail = exc.read(2000).decode("utf-8", errors="replace")
-        print(json.dumps({"ok": False, "error": f"YooKassa HTTP {exc.code}", "detail": detail}, ensure_ascii=False))
+        print(json.dumps({"ok": False, "error": f"YooKassa HTTP {exc.code}"}, ensure_ascii=False))
+        return 1
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        print(json.dumps({"ok": False, "error": exc.__class__.__name__}, ensure_ascii=False))
         return 1
     except Exception as exc:
-        print(json.dumps({"ok": False, "error": f"{exc.__class__.__name__}: {exc}"}, ensure_ascii=False))
+        print(json.dumps({"ok": False, "error": exc.__class__.__name__}, ensure_ascii=False))
+        return 1
+
+    try:
+        body = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        print(json.dumps({"ok": False, "error": "invalid provider JSON"}))
+        return 1
+    if not isinstance(body, Mapping):
+        print(json.dumps({"ok": False, "error": "invalid provider object"}))
         return 1
 
     errors = validate_response(body)
     safe = {
         "ok": not errors,
         "provider": "yookassa",
-        "payment_id": body.get("id"),
-        "status": body.get("status"),
-        "amount": (body.get("amount") or {}).get("value"),
-        "currency": (body.get("amount") or {}).get("currency"),
+        "status": body.get("status") if body.get("status") in ALLOWED_STATUSES else "invalid",
+        "amount": "1.00" if isinstance(body.get("amount"), Mapping) and body.get("amount", {}).get("value") == "1.00" else "invalid",
+        "currency": "RUB" if isinstance(body.get("amount"), Mapping) and body.get("amount", {}).get("currency") == "RUB" else "invalid",
         "confirmation_required": body.get("status") == "pending",
         "idempotence_scope": "current-release-and-return-url",
         "errors": errors,
