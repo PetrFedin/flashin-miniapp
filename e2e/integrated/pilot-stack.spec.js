@@ -92,11 +92,12 @@ test("real storefront, API, PostgreSQL and admin fulfillment share one order", a
   const checkoutResponse = await checkoutResponsePromise;
   const paymentResponse = await paymentResponsePromise;
   const order = await checkoutResponse.json();
-  const payment = await paymentResponse.json();
   expect(order.id).toBeGreaterThan(0);
-  expect(payment.order_id).toBe(order.id);
-  expect(payment.status).toBe("succeeded");
+  expect(paymentResponse.ok()).toBeTruthy();
 
+  // The successful payment response triggers an immediate provider redirect. Reading
+  // its body after navigation is racy in Chromium; the real persisted result is
+  // asserted below through the post-redirect Mini App state and the same Admin DB row.
   await expect(page.getByRole("button", { name: "Заказы" })).toHaveClass(/active/);
   await expect(page.getByRole("status")).toContainText(`Заказ #${order.id} оплачен`);
   await expect(page.getByText("Оплачено", { exact: true })).toBeVisible();
