@@ -8,6 +8,7 @@ from pathlib import Path
 
 from pilot_admission import verify_default_admission
 from pilot_control import main as pilot_control_main
+from pilot_journey_binding import verify_journey_binding
 from pilot_launch_admission import verify_final_admission
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +19,8 @@ def main(argv: list[str] | None = None) -> int:
     errors = verify_default_admission(ROOT)
     if not errors:
         errors = verify_final_admission(root=ROOT)
+    if not errors:
+        errors = verify_journey_binding(ROOT)
     if errors:
         print("Pilot runner blocked by admission policy:")
         for error in errors:
