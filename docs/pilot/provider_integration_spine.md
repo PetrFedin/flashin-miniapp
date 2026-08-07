@@ -1,4 +1,4 @@
-# Provider integration spine — pilot v22
+# Provider integration spine — pilot v24
 
 This runbook binds the production order lifecycle to the external providers used
 by the FLASHIN pilot. It does **not** mark live provider evidence as complete.
@@ -133,6 +133,29 @@ The scheduler also processes provider commands once per minute under a PostgreSQ
 advisory lock. `provider_command_jobs` polls by default every 15 seconds; configure
 `PROVIDER_COMMAND_POLL_SECONDS` only within 5–300 seconds.
 
+### Pilot safety coupling
+
+The provider worker reconciles terminal MoySklad commands against orders admitted
+to the **current** pilot run before each claim cycle and immediately after a
+command becomes terminal. A current-run order with `review_required` or terminal
+`failed` stops the pilot runtime and therefore closes new pilot checkout until an
+operator reconciles the provider state and explicitly starts a new admitted run.
+
+This coupling is intentionally bounded:
+
+- `pending` and `processing` retries do not stop the pilot;
+- commands for historical runs or orders outside the pilot do not stop it;
+- non-order commands do not stop it;
+- providers outside the current pilot-critical set do not stop it;
+- stop reasons contain only bounded status categories and never command payloads,
+  provider error bodies, external IDs, or idempotency keys.
+
+Stopping pilot admission does not discard the durable provider command. Workers
+continue their normal reconciliation path so already-paid orders can still reach
+a consistent external state. If a worker dies after persisting a terminal command
+but before persisting the pilot stop, the next worker cycle performs the same
+terminal sweep before claiming more work.
+
 ## Fulfillment
 
 Successful payment creates exactly one fulfillment task. The guarded lifecycle is:
@@ -176,6 +199,10 @@ the external MoySklad HTTP boundary is replaced by a deterministic local fake.
 `backend/tests/test_refund_webhooks.py` verifies that a spoofed webhook amount is
 ignored in favor of an authoritative provider re-fetch and that a duplicate
 `refund.succeeded` is idempotent.
+
+`backend/tests/test_provider_command_pilot_safety.py` verifies that terminal
+MoySklad commands for current-run pilot orders stop admission, while transient
+retries and historical/non-pilot/noncritical commands do not.
 
 These are internal CI gates only. Before real money, collect separate live evidence
 for Telegram signed auth, YooKassa sandbox payment/return/webhooks, MoySklad
