@@ -319,7 +319,7 @@ def test_admission_create_preflight_binds_live_gate_to_current_release(tmp_path:
     assert any("live gate release" in item for item in errors)
 
 
-def test_admission_preflight_rejects_resigned_provider_output():
+def test_admission_preflight_rejects_resigned_provider_output(tmp_path: Path):
     values = env()
     current = release("current", "a")
     previous = release("previous", "b")
@@ -330,30 +330,27 @@ def test_admission_preflight_rejects_resigned_provider_output():
     provider["results"][0]["provider_reference"] = "private-provider-id"
     provider = sign_payload(provider, values["PILOT_EVIDENCE_SIGNING_SECRET"])
     live = live_report(now, values, current)
+    backup = tmp_path / "backup.sql.gz"
+    backup.write_bytes(b"backup")
+    rollback = build_rollback_drill_report(
+        from_release=current,
+        to_release=previous,
+        backup_path=backup,
+        env=values,
+        completed_at=now,
+        max_age_days=30,
+    )
 
-    backup = ROOT / "backend/tests/.provider-evidence-admission-v28-backup"
-    try:
-        backup.write_bytes(b"backup")
-        rollback = build_rollback_drill_report(
-            from_release=current,
-            to_release=previous,
-            backup_path=backup,
-            env=values,
-            completed_at=now,
-            max_age_days=30,
-        )
-        errors = validate_admission_evidence_inputs(
-            provider,
-            live,
-            rollback,
-            env=values,
-            current_release=current,
-            provider_max_age_minutes=60,
-            live_max_age_minutes=30,
-            rollback_max_age_days=30,
-        )
-    finally:
-        backup.unlink(missing_ok=True)
+    errors = validate_admission_evidence_inputs(
+        provider,
+        live,
+        rollback,
+        env=values,
+        current_release=current,
+        provider_max_age_minutes=60,
+        live_max_age_minutes=30,
+        rollback_max_age_days=30,
+    )
 
     assert "provider evidence must not retain probe stdout/stderr" in errors
     assert "provider evidence result contains unsupported fields" in errors
