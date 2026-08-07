@@ -7,11 +7,14 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import pilot_journey_binding  # noqa: E402
 from pilot_control import load_state, new_state as _new_state  # noqa: E402
 from pilot_control_audit import build_audit_entry, normalize_mutation  # noqa: E402
 from pilot_control_binding import (  # noqa: E402
+    CONTROLLED_JOURNEY_KEY,
     build_admission_binding,
     require_admission_binding,
+    sha256_file,
     validate_admission_binding,
 )
 
@@ -89,3 +92,38 @@ def test_runner_revalidates_even_when_state_exists():
     assert "errors = verify_default_admission(ROOT)" in source
     assert "return pilot_control_main(args)" in source
     assert "if not STATE_PATH.exists()" not in source
+
+
+def test_central_admission_binding_blocks_missing_controlled_journey(tmp_path):
+    path = tmp_path / "pilot_admission_manifest.json"
+    manifest = _manifest(path)
+
+    with pytest.raises(ValueError, match="controlled journey binding is invalid"):
+        build_admission_binding(
+            path,
+            manifest,
+            root=tmp_path,
+            require_controlled_journey_binding=True,
+        )
+
+
+def test_central_admission_binding_persists_exact_journey_report_sha(tmp_path, monkeypatch):
+    path = tmp_path / "pilot_admission_manifest.json"
+    manifest = _manifest(path)
+    report_path = tmp_path / "docs/pilot/journey_binding_report.json"
+    report_path.parent.mkdir(parents=True)
+    report_path.write_text('{"go":true}\n', encoding="utf-8")
+    monkeypatch.setattr(pilot_journey_binding, "verify_journey_binding", lambda root: [])
+
+    binding = build_admission_binding(
+        path,
+        manifest,
+        root=tmp_path,
+        require_controlled_journey_binding=True,
+    )
+
+    assert binding[CONTROLLED_JOURNEY_KEY] == sha256_file(report_path)
+    changed = {**binding, CONTROLLED_JOURNEY_KEY: "0" * 64}
+    state = new_state(binding)
+    errors = validate_admission_binding(state, changed)
+    assert "pilot control admission controlled journey binding does not match" in errors
