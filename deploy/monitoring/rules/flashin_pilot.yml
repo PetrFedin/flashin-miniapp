@@ -78,3 +78,58 @@ groups:
         annotations:
           summary: Controlled pilot is close to the 20-order limit
           description: Three or fewer controlled checkout slots remain. Prepare final reconciliation and closure.
+
+      - alert: FlashinProviderCommandMetricsUnavailable
+        expr: absent(flashin_provider_command_metrics_collection_success) or flashin_provider_command_metrics_collection_success == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: flashin-backend
+          component: provider-integration
+        annotations:
+          summary: Provider command metrics are unavailable
+          description: The pilot cannot confirm delivery state for durable MoySklad commands. Stop new pilot checkout until telemetry is restored.
+
+      - alert: FlashinProviderCommandReviewRequired
+        expr: flashin_provider_commands{provider="moysklad",status="review_required"} > 0
+        for: 0m
+        labels:
+          severity: critical
+          service: flashin-backend
+          component: provider-integration
+        annotations:
+          summary: MoySklad command requires operator review
+          description: At least one deterministic MoySklad mapping, money or configuration error requires resolution before the pilot continues.
+
+      - alert: FlashinProviderCommandFailed
+        expr: flashin_provider_commands{provider="moysklad",status="failed"} > 0
+        for: 0m
+        labels:
+          severity: critical
+          service: flashin-backend
+          component: provider-integration
+        annotations:
+          summary: MoySklad command exhausted retries
+          description: At least one durable MoySklad command reached terminal failure. Reconcile the related order before further pilot checkout.
+
+      - alert: FlashinProviderCommandLeaseExpired
+        expr: flashin_provider_command_due{provider="moysklad",kind="expired_processing"} > 0
+        for: 2m
+        labels:
+          severity: critical
+          service: flashin-backend
+          component: provider-integration
+        annotations:
+          summary: MoySklad command lease remains expired
+          description: A provider command processing lease has remained recoverable for two minutes, indicating a stalled or unhealthy worker.
+
+      - alert: FlashinProviderCommandBacklogStale
+        expr: (flashin_provider_command_actionable{provider="moysklad"} > 0) and on(provider) (flashin_provider_command_oldest_actionable_age_seconds{provider="moysklad"} > 300)
+        for: 5m
+        labels:
+          severity: warning
+          service: flashin-backend
+          component: provider-integration
+        annotations:
+          summary: MoySklad provider backlog is stale
+          description: A durable MoySklad command has required delivery or operator action for more than five minutes. Investigate provider availability and retry state.
