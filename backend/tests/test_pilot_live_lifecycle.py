@@ -284,7 +284,7 @@ def test_go_admission_binding_requires_attached_live_lifecycle(tmp_path):
     missing = _manifest(env, report_path, attached=False)
     manifest_path.write_text(json.dumps(missing), encoding="utf-8")
     with pytest.raises(ValueError, match="live lifecycle evidence is invalid"):
-        build_admission_binding(manifest_path, missing, root=tmp_path)
+        build_admission_binding(manifest_path, missing, root=tmp_path, now=NOW)
 
     attached = _manifest(env, report_path, attached=True)
     manifest_path.write_text(json.dumps(attached), encoding="utf-8")
@@ -296,7 +296,7 @@ def test_go_admission_binding_requires_attached_live_lifecycle(tmp_path):
         max_age_hours=24,
         now=NOW,
     ) == []
-    binding = build_admission_binding(manifest_path, attached, root=tmp_path)
+    binding = build_admission_binding(manifest_path, attached, root=tmp_path, now=NOW)
     assert binding["live_lifecycle_report_sha256"] == sha256_file(report_path)
 
 
