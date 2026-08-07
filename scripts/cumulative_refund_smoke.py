@@ -3,9 +3,9 @@
 
 All local application state uses real routes and transactional persistence. Only
 YooKassa HTTP calls are replaced with deterministic fakes. The smoke proves
-that partial refunds do not fabricate item-level stock returns, while the full
-cumulative refund restores sold inventory exactly once and queues customer
-notifications idempotently.
+partial-refund money/loyalty invariants and replay safety, rejects over-refunds,
+and proves a full cumulative refund restores sold inventory exactly once while
+queueing customer notifications idempotently.
 """
 
 from __future__ import annotations
@@ -62,6 +62,13 @@ def _expect(response, status_code: int, step: str) -> dict:
     payload = response.json()
     if not isinstance(payload, dict):
         raise AssertionError(f"{step} returned a non-object payload: {payload!r}")
+    return payload
+
+
+def _expect_error(response, status_code: int, step: str) -> dict:
+    payload = _expect(response, status_code, step)
+    if "detail" not in payload:
+        raise AssertionError(f"{step} returned no error detail: {payload!r}")
     return payload
 
 
@@ -169,7 +176,12 @@ def main() -> int:
             }
 
         async def fake_fetch_yookassa_payment(payment_id: str) -> dict:
-            return provider_payments[payment_id]
+            try:
+                return provider_payments[payment_id]
+            except KeyError as exc:
+                raise AssertionError(
+                    f"Unexpected provider payment lookup: {payment_id}"
+                ) from exc
 
         async def fake_create_yookassa_refund(
             payment_id: str,
@@ -179,11 +191,10 @@ def main() -> int:
             return_id: int,
         ) -> dict:
             normalized_amount = _money(amount)
-            refund_create_calls.append(
-                (payment_id, normalized_amount, currency, order_id, return_id)
-            )
+            call = (payment_id, normalized_amount, currency, order_id, return_id)
+            refund_create_calls.append(call)
             refund_id = f"refund-{token}-{return_id}"
-            provider_refunds[refund_id] = {
+            expected = {
                 "id": refund_id,
                 "status": "succeeded",
                 "payment_id": payment_id,
@@ -192,14 +203,23 @@ def main() -> int:
                     "currency": currency,
                 },
             }
+            existing = provider_refunds.get(refund_id)
+            if existing and existing != expected:
+                raise AssertionError("Provider refund idempotency payload changed")
+            provider_refunds[refund_id] = expected
             return {
                 "refund_id": refund_id,
                 "status": "succeeded",
-                "amount": provider_refunds[refund_id]["amount"],
+                "amount": expected["amount"],
             }
 
         async def fake_fetch_yookassa_refund(refund_id: str) -> dict:
-            return provider_refunds[refund_id]
+            try:
+                return provider_refunds[refund_id]
+            except KeyError as exc:
+                raise AssertionError(
+                    f"Unexpected provider refund lookup: {refund_id}"
+                ) from exc
 
         app.dependency_overrides[get_db] = override_db
         app.dependency_overrides[get_current_customer] = override_customer
@@ -210,7 +230,7 @@ def main() -> int:
         returns_api.fetch_yookassa_refund = fake_fetch_yookassa_refund
         client = TestClient(app)
 
-        _expect(
+        cart = _expect(
             client.post(
                 "/api/cart/items",
                 json={
@@ -222,21 +242,26 @@ def main() -> int:
             200,
             "add cart item",
         )
+        assert _money(cart["total_amount"]) == Decimal("2000.00")
+
         cart = _expect(
             client.post("/api/cart/promo", json={"code": promo.code}),
             200,
             "apply promotion",
         )
         assert _money(cart["promo_discount_amount"]) == Decimal("200.00")
+
         cart = _expect(
             client.post("/api/cart/loyalty", json={"points": 100}),
             200,
             "reserve loyalty points",
         )
+        assert cart["loyalty_points_reserved"] == 100
+        assert _money(cart["loyalty_discount_amount"]) == Decimal("100.00")
         assert _money(cart["final_amount"]) == Decimal("1700.00")
 
         checkout_key = f"refund-checkout-{token}"
-        order_payload = _expect(
+        order = _expect(
             client.post(
                 "/api/orders/checkout",
                 headers={"Idempotency-Key": checkout_key},
@@ -251,16 +276,16 @@ def main() -> int:
             200,
             "checkout",
         )
-        order_id = int(order_payload["id"])
-        assert _money(order_payload["total_amount"]) == Decimal("1700.00")
+        order_id = int(order["id"])
+        assert _money(order["total_amount"]) == Decimal("1700.00")
 
-        payment_payload = _expect(
+        payment = _expect(
             client.post("/api/payments", json={"order_id": order_id}),
             200,
             "create and settle payment",
         )
-        assert payment_payload["status"] == "succeeded"
-        provider_payment_id = payment_payload["provider_payment_id"]
+        assert payment["status"] == "succeeded"
+        provider_payment_id = payment["provider_payment_id"]
         db.expire_all()
         assert db.query(ProductVariant).filter(ProductVariant.id == variant.id).one().stock_qty == 3
 
@@ -270,9 +295,11 @@ def main() -> int:
                 json={"order_id": order_id, "reason": "Partial refund smoke request"},
             ),
             200,
-            "create partial return",
+            "create first return",
         )
         first_return_id = int(first_return["id"])
+        assert first_return["status"] == "requested"
+
         first_refund = _expect(
             client.post(
                 "/api/returns/admin/approve",
@@ -281,14 +308,52 @@ def main() -> int:
             200,
             "approve partial refund",
         )
+        assert first_refund["status"] == "succeeded"
         assert first_refund["return_status"] == "approved_partial"
+        assert _money(first_refund["refund_amount"]) == Decimal("700.00")
+        assert first_refund["idempotent"] is False
+
+        first_refund_replay = _expect(
+            client.post(
+                "/api/returns/admin/approve",
+                json={"return_id": first_return_id, "amount": 700},
+            ),
+            200,
+            "replay partial refund approval",
+        )
+        assert first_refund_replay["idempotent"] is True
+        assert len(refund_create_calls) == 1
+
         db.expire_all()
         partial_order = db.query(Order).filter(Order.id == order_id).one()
+        partial_profile = db.query(CrmProfile).filter(CrmProfile.customer_id == customer.id).one()
+        partial_hold = (
+            db.query(LoyaltyRedemptionHold)
+            .filter(LoyaltyRedemptionHold.order_id == order_id)
+            .one()
+        )
+        partial_loyalty = (
+            db.query(LoyaltyTransaction)
+            .filter(LoyaltyTransaction.order_id == order_id)
+            .order_by(LoyaltyTransaction.id.asc())
+            .all()
+        )
+        assert partial_order.status == "partially_refunded"
         assert partial_order.payment_status == "partially_refunded"
-        assert db.query(ProductVariant).filter(ProductVariant.id == variant.id).one().stock_qty == 3
+        assert _money(partial_profile.loyalty_points) == Decimal("417.00")
+        assert partial_hold.status == "committed"
+        assert [(row.reason, _money(row.points_delta)) for row in partial_loyalty] == [
+            ("loyalty_redeemed", Decimal("-100.00")),
+            ("order_paid", Decimal("17.00")),
+        ]
+        partial_variant = db.query(ProductVariant).filter(ProductVariant.id == variant.id).one()
+        assert partial_variant.stock_qty == 3
         assert (
             db.query(InventoryMovement)
-            .filter(InventoryMovement.order_id == order_id, InventoryMovement.kind == "return")
+            .filter(
+                InventoryMovement.order_id == order_id,
+                InventoryMovement.kind == "return",
+            )
             .count()
             == 0
         )
@@ -300,36 +365,73 @@ def main() -> int:
                 json={"order_id": order_id, "reason": "Refund the remaining balance"},
             ),
             200,
-            "create final return",
+            "create second return",
         )
         second_return_id = int(second_return["id"])
+        assert second_return["status"] == "requested"
+
+        over_refund = _expect_error(
+            client.post(
+                "/api/returns/admin/approve",
+                json={"return_id": second_return_id, "amount": 1000.01},
+            ),
+            409,
+            "reject amount above remaining balance",
+        )
+        assert "remaining refundable balance" in str(over_refund["detail"])
+        assert len(refund_create_calls) == 1
+
         second_refund = _expect(
             client.post(
                 "/api/returns/admin/approve",
                 json={"return_id": second_return_id, "amount": 1000},
             ),
             200,
-            "approve full cumulative refund",
+            "approve remaining refund",
         )
+        assert second_refund["status"] == "succeeded"
         assert second_refund["return_status"] == "approved"
+        assert _money(second_refund["refund_amount"]) == Decimal("1000.00")
+        assert second_refund["idempotent"] is False
 
-        replay = _expect(
+        second_refund_replay = _expect(
             client.post(
                 "/api/returns/admin/approve",
                 json={"return_id": second_return_id, "amount": 1000},
             ),
             200,
-            "replay full cumulative refund",
+            "replay full cumulative refund approval",
         )
-        assert replay["idempotent"] is True
+        assert second_refund_replay["idempotent"] is True
         assert len(refund_create_calls) == 2
+        assert len(provider_refunds) == 2
+
+        third_return = _expect_error(
+            client.post(
+                "/api/returns",
+                json={"order_id": order_id, "reason": "No balance should remain"},
+            ),
+            409,
+            "reject return after full refund",
+        )
+        assert "Only paid orders" in str(third_return["detail"])
 
         db.expire_all()
         persisted_order = db.query(Order).filter(Order.id == order_id).one()
+        persisted_payment = (
+            db.query(Payment)
+            .filter(Payment.provider_payment_id == provider_payment_id)
+            .one()
+        )
         persisted_variant = db.query(ProductVariant).filter(ProductVariant.id == variant.id).one()
+        persisted_promo = db.query(PromoCode).filter(PromoCode.id == promo.id).one()
         persisted_profile = db.query(CrmProfile).filter(CrmProfile.customer_id == customer.id).one()
-        persisted_hold = db.query(LoyaltyRedemptionHold).filter(LoyaltyRedemptionHold.order_id == order_id).one()
         persisted_cart = db.query(Cart).filter(Cart.customer_id == customer.id).one()
+        persisted_hold = (
+            db.query(LoyaltyRedemptionHold)
+            .filter(LoyaltyRedemptionHold.order_id == order_id)
+            .one()
+        )
         returns = (
             db.query(ReturnRequest)
             .filter(ReturnRequest.order_id == order_id)
@@ -344,12 +446,20 @@ def main() -> int:
         )
         return_movements = (
             db.query(InventoryMovement)
-            .filter(InventoryMovement.order_id == order_id, InventoryMovement.kind == "return")
+            .filter(
+                InventoryMovement.order_id == order_id,
+                InventoryMovement.kind == "return",
+            )
             .all()
         )
         notifications = (
             db.query(Notification)
             .filter(Notification.telegram_id == customer.telegram_id)
+            .all()
+        )
+        paid_keys = (
+            db.query(NotificationEventKey)
+            .filter(NotificationEventKey.event_key == f"order:{order_id}:paid")
             .all()
         )
         event_keys = (
@@ -360,25 +470,39 @@ def main() -> int:
 
         assert persisted_order.status == "refunded"
         assert persisted_order.payment_status == "refunded"
+        assert persisted_payment.status == "succeeded"
         assert persisted_variant.stock_qty == 5
         assert persisted_variant.reserved_qty == 0
+        assert persisted_promo.used_count == 1
         assert persisted_cart.status == "converted"
         assert persisted_hold.status == "refunded"
+        assert persisted_hold.released_at is not None
+        assert _money(persisted_hold.points) == Decimal("100.00")
         assert _money(persisted_profile.loyalty_points) == Decimal("500.00")
+
         assert len(returns) == 2
-        assert [row.status for row in returns] == ["approved_partial", "approved"]
+        assert returns[0].status == "approved_partial"
+        assert _money(returns[0].refund_amount) == Decimal("700.00")
+        assert returns[1].status == "approved"
+        assert _money(returns[1].refund_amount) == Decimal("1000.00")
+        assert sum(
+            (_money(row.refund_amount) for row in returns),
+            Decimal("0.00"),
+        ) == Decimal("1700.00")
         assert remaining_refundable_amount(db, persisted_order) == Decimal("0.00")
+
+        assert [(row.reason, _money(row.points_delta)) for row in loyalty_rows] == [
+            ("loyalty_redeemed", Decimal("-100.00")),
+            ("order_paid", Decimal("17.00")),
+            ("order_refund_reversal", Decimal("-17.00")),
+            ("loyalty_refund", Decimal("100.00")),
+        ]
         assert len(return_movements) == 1
         assert return_movements[0].quantity == 2
         assert return_movements[0].stock_before == 3
         assert return_movements[0].stock_after == 5
-        assert [row.reason for row in loyalty_rows] == [
-            "loyalty_redeemed",
-            "order_paid",
-            "order_refund_reversal",
-            "loyalty_refund",
-        ]
         assert len(notifications) == 3
+        assert len(paid_keys) == 1
         assert len(event_keys) == 3
         assert db.query(FulfillmentTask).filter(FulfillmentTask.order_id == order_id).count() == 1
         assert db.query(Payment).filter(Payment.order_id == order_id).count() == 1
@@ -391,7 +515,17 @@ def main() -> int:
             .count()
             == 1
         )
+        assert {call[1] for call in refund_create_calls} == {
+            Decimal("700.00"),
+            Decimal("1000.00"),
+        }
         assert all(call[0] == provider_payment_id for call in refund_create_calls)
+        assert all(call[2] == "RUB" for call in refund_create_calls)
+        assert all(call[3] == order_id for call in refund_create_calls)
+        assert {call[4] for call in refund_create_calls} == {
+            first_return_id,
+            second_return_id,
+        }
 
         print(
             json.dumps(
@@ -400,6 +534,7 @@ def main() -> int:
                     "order_id": order_id,
                     "refunds": ["700.00", "1000.00"],
                     "remaining": "0.00",
+                    "loyalty_after_full_refund": f"{_money(persisted_profile.loyalty_points):.2f}",
                     "stock_after_full_refund": persisted_variant.stock_qty,
                     "return_movements": len(return_movements),
                     "notifications": len(notifications),
