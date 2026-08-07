@@ -1,6 +1,11 @@
 from pathlib import Path
+import sys
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+from pilot_governance_admission import _mandatory_check_errors  # noqa: E402
+
 REQUIRED_CHECKS = "backend,frontend,admin,browser-e2e,integrated-e2e,docker"
 
 
@@ -16,6 +21,24 @@ def test_integrated_e2e_is_a_required_governance_check():
     assert "  integrated-e2e:" in workflow
     assert "Run real internal-stack browser journey" in workflow
     assert "needs: [backend, frontend, admin, browser-e2e, integrated-e2e]" in workflow
+
+
+def test_signed_admission_rejects_legacy_five_check_governance_report():
+    legacy_report = {
+        "policy": {
+            "required_checks": ["backend", "frontend", "admin", "browser-e2e", "docker"]
+        }
+    }
+    current_report = {
+        "policy": {
+            "required_checks": REQUIRED_CHECKS.split(",")
+        }
+    }
+
+    assert _mandatory_check_errors(current_report) == []
+    assert _mandatory_check_errors(legacy_report) == [
+        "repository governance is missing mandatory pilot checks: integrated-e2e"
+    ]
 
 
 def test_integrated_e2e_runs_real_flashin_api_and_database_without_page_api_mocks():
