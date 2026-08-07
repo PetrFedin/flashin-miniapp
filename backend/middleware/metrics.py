@@ -8,6 +8,11 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
 from ..services.pilot_observability import build_pilot_operations_status
+from ..services.provider_observability import (
+    PROVIDER_COMMAND_MONITORED_PROVIDERS,
+    PROVIDER_COMMAND_STATUSES,
+    build_provider_command_status,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -76,12 +81,43 @@ PILOT_MONEY_ATTENTION = Gauge(
     ["kind"],
 )
 
+PROVIDER_COMMAND_METRICS_COLLECTION_SUCCESS = Gauge(
+    "flashin_provider_command_metrics_collection_success",
+    "Whether the latest provider-command metric collection completed successfully",
+)
+PROVIDER_COMMANDS = Gauge(
+    "flashin_provider_commands",
+    "Durable external-provider commands by bounded provider and status",
+    ["provider", "status"],
+)
+PROVIDER_COMMAND_OLDEST_AGE_SECONDS = Gauge(
+    "flashin_provider_command_oldest_age_seconds",
+    "Age in seconds of the oldest durable provider command in a bounded status",
+    ["provider", "status"],
+)
+PROVIDER_COMMAND_ACTIONABLE = Gauge(
+    "flashin_provider_command_actionable",
+    "Commands that are pending, processing, failed or require operator review",
+    ["provider"],
+)
+PROVIDER_COMMAND_OLDEST_ACTIONABLE_AGE_SECONDS = Gauge(
+    "flashin_provider_command_oldest_actionable_age_seconds",
+    "Age in seconds of the oldest provider command requiring delivery or operator action",
+    ["provider"],
+)
+PROVIDER_COMMAND_DUE = Gauge(
+    "flashin_provider_command_due",
+    "Provider commands currently due for execution or lease recovery",
+    ["provider", "kind"],
+)
+
 _RUNTIME_STATUSES = ("not_armed", "active", "stopped", "completed", "unknown")
 _MONEY_KINDS = (
     "payment_review",
     "refund_attention",
     "reconciliation_mismatch",
 )
+_PROVIDER_DUE_KINDS = ("pending", "expired_processing")
 
 
 def _metric_path(request: Any) -> str:
@@ -108,6 +144,57 @@ def _reset_pilot_metrics(*, enforced: bool) -> None:
     PILOT_ARTIFACT_INTEGRITY_HEALTHY.set(0)
     for kind in _MONEY_KINDS:
         PILOT_MONEY_ATTENTION.labels(kind=kind).set(0)
+
+
+def _reset_provider_command_metrics() -> None:
+    PROVIDER_COMMAND_METRICS_COLLECTION_SUCCESS.set(0)
+    for provider in PROVIDER_COMMAND_MONITORED_PROVIDERS:
+        for status in PROVIDER_COMMAND_STATUSES:
+            PROVIDER_COMMANDS.labels(provider=provider, status=status).set(0)
+            PROVIDER_COMMAND_OLDEST_AGE_SECONDS.labels(
+                provider=provider,
+                status=status,
+            ).set(0)
+        PROVIDER_COMMAND_ACTIONABLE.labels(provider=provider).set(0)
+        PROVIDER_COMMAND_OLDEST_ACTIONABLE_AGE_SECONDS.labels(provider=provider).set(0)
+        for kind in _PROVIDER_DUE_KINDS:
+            PROVIDER_COMMAND_DUE.labels(provider=provider, kind=kind).set(0)
+
+
+def collect_provider_command_metrics(db: "Session") -> bool:
+    _reset_provider_command_metrics()
+    try:
+        for provider in PROVIDER_COMMAND_MONITORED_PROVIDERS:
+            snapshot = build_provider_command_status(db, provider=provider)
+            counts = snapshot["counts"]
+            oldest = snapshot["oldest_age_seconds"]
+            if not isinstance(counts, dict) or not isinstance(oldest, dict):
+                raise TypeError("Invalid provider command metrics snapshot")
+            for status in PROVIDER_COMMAND_STATUSES:
+                PROVIDER_COMMANDS.labels(provider=provider, status=status).set(
+                    int(counts[status])
+                )
+                PROVIDER_COMMAND_OLDEST_AGE_SECONDS.labels(
+                    provider=provider,
+                    status=status,
+                ).set(float(oldest[status]))
+            PROVIDER_COMMAND_ACTIONABLE.labels(provider=provider).set(
+                int(snapshot["actionable_count"])
+            )
+            PROVIDER_COMMAND_OLDEST_ACTIONABLE_AGE_SECONDS.labels(
+                provider=provider
+            ).set(float(snapshot["oldest_actionable_age_seconds"]))
+            PROVIDER_COMMAND_DUE.labels(provider=provider, kind="pending").set(
+                int(snapshot["due_pending"])
+            )
+            PROVIDER_COMMAND_DUE.labels(
+                provider=provider,
+                kind="expired_processing",
+            ).set(int(snapshot["expired_processing"]))
+        PROVIDER_COMMAND_METRICS_COLLECTION_SUCCESS.set(1)
+        return True
+    except Exception:
+        return False
 
 
 def collect_pilot_metrics(db: "Session", settings: "Settings") -> bool:
