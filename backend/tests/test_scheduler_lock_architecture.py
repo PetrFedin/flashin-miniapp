@@ -14,6 +14,7 @@ ENTRYPOINTS = {
     "scripts/run_event_jobs.py": 'run_locked_db_job("events"',
     "scripts/run_sla_jobs.py": 'run_locked_db_job("sla"',
     "scripts/run_outbox_jobs.py": 'run_locked_async_db_job("outbox"',
+    "scripts/run_provider_command_jobs.py": 'run_locked_async_db_job("provider-commands"',
     "scripts/run_moysklad_sync.py": "main()",
 }
 
@@ -54,6 +55,7 @@ def test_scheduler_wraps_every_registered_job_with_its_own_lock_id():
     )
     async_jobs = (
         "outbox",
+        "provider-commands",
         "refund-reconciliation",
         "moysklad-sync",
     )
@@ -65,7 +67,7 @@ def test_scheduler_wraps_every_registered_job_with_its_own_lock_id():
         assert f'_run_async_db_job("{job_name}"' in source or (
             f'"{job_name}",' in source and "_run_async_db_job(" in source
         )
-    assert source.count("scheduler.add_job(") == 8
+    assert source.count("scheduler.add_job(") == 9
     assert '"max_instances": 1' in source
 
 
