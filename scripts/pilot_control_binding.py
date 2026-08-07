@@ -11,6 +11,7 @@ RELEASE_KEYS = ("release_id", "git_commit", "sha256")
 ROOT = Path(__file__).resolve().parents[1]
 LIVE_LIFECYCLE_KEY = "live_lifecycle_report_sha256"
 REPOSITORY_GOVERNANCE_KEY = "repository_governance_report_sha256"
+LAUNCH_CHECKLIST_KEY = "launch_checklist_report_sha256"
 
 
 def sha256_file(path: Path) -> str:
@@ -49,6 +50,21 @@ def _requires_repository_governance(manifest: Mapping[str, Any]) -> bool:
         and acknowledgements.get("live_lifecycle_completed") is True
         and isinstance(evidence, Mapping)
         and isinstance(evidence.get("live_lifecycle_report"), Mapping)
+    )
+
+
+def _requires_launch_checklist(manifest: Mapping[str, Any]) -> bool:
+    """Require v21 once a real signed admission has repository governance attached."""
+    acknowledgements = manifest.get("acknowledgements")
+    evidence = manifest.get("evidence")
+    signature = manifest.get("signature")
+    return (
+        _requires_repository_governance(manifest)
+        and isinstance(signature, Mapping)
+        and isinstance(acknowledgements, Mapping)
+        and acknowledgements.get("repository_governance_verified") is True
+        and isinstance(evidence, Mapping)
+        and isinstance(evidence.get("repository_governance_report"), Mapping)
     )
 
 
@@ -127,6 +143,37 @@ def _repository_governance_sha256(
     return digest
 
 
+def _launch_checklist_sha256(
+    manifest_path: Path,
+    manifest: Mapping[str, Any],
+    *,
+    root: Path,
+) -> str:
+    from pilot_launch_admission import validate_attached_launch_checklist
+
+    errors = validate_attached_launch_checklist(
+        manifest_path,
+        manifest,
+        env=_runtime_evidence_env(root),
+        root=root,
+    )
+    if errors:
+        raise ValueError(
+            "Pilot admission launch checklist evidence is invalid: "
+            + "; ".join(errors)
+        )
+    evidence = manifest.get("evidence")
+    entry = (
+        evidence.get("launch_checklist_report")
+        if isinstance(evidence, Mapping)
+        else None
+    )
+    digest = str(entry.get("sha256", "")).strip() if isinstance(entry, Mapping) else ""
+    if len(digest) != 64:
+        raise ValueError("Pilot admission launch checklist evidence SHA-256 is invalid")
+    return digest
+
+
 def build_admission_binding(
     manifest_path: Path,
     manifest: Mapping[str, Any],
@@ -134,6 +181,7 @@ def build_admission_binding(
     root: Path | None = None,
     require_live_lifecycle: bool | None = None,
     require_repository_governance: bool | None = None,
+    require_launch_checklist: bool | None = None,
 ) -> dict[str, Any]:
     """Create the immutable identity that a single pilot state must retain."""
     release = manifest.get("release")
@@ -161,6 +209,11 @@ def build_admission_binding(
         if require_repository_governance is None
         else require_repository_governance
     )
+    enforce_launch = (
+        _requires_launch_checklist(manifest)
+        if require_launch_checklist is None
+        else require_launch_checklist
+    )
     binding: dict[str, Any] = {
         "manifest_sha256": sha256_file(manifest_path),
         "created_at": created_at,
@@ -176,6 +229,12 @@ def build_admission_binding(
         )
     if enforce_governance:
         binding[REPOSITORY_GOVERNANCE_KEY] = _repository_governance_sha256(
+            manifest_path,
+            manifest,
+            root=evidence_root,
+        )
+    if enforce_launch:
+        binding[LAUNCH_CHECKLIST_KEY] = _launch_checklist_sha256(
             manifest_path,
             manifest,
             root=evidence_root,
@@ -209,6 +268,13 @@ def validate_admission_binding(
             errors.append("pilot control admission repository governance evidence does not match")
     elif actual_governance:
         errors.append("pilot control admission has unexpected repository governance evidence")
+    expected_launch = expected.get(LAUNCH_CHECKLIST_KEY)
+    actual_launch = actual.get(LAUNCH_CHECKLIST_KEY)
+    if expected_launch:
+        if actual_launch != expected_launch:
+            errors.append("pilot control admission launch checklist evidence does not match")
+    elif actual_launch:
+        errors.append("pilot control admission has unexpected launch checklist evidence")
     actual_release = actual.get("release")
     expected_release = expected.get("release")
     if not isinstance(actual_release, Mapping):
