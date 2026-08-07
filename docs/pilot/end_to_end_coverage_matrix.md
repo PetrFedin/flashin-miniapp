@@ -60,6 +60,20 @@ FLASHIN now has **two separate browser evidence layers** and both are required:
 
 The integrated wrapper is test-only and fails to boot unless `APP_ENV` is `test`/`ci` and `INTEGRATED_E2E=true`. It is not wired to production Compose. The only replaced internal-to-external boundary is YooKassa HTTP; the FLASHIN payment route, persistence and settlement logic remain real.
 
+## Browser journeys
+
+Nine stateful Playwright journeys remain the broad deterministic UI regression baseline from the immutable v17 release capability. The v20 `integrated-e2e` journey is an additional real-stack gate, not a replacement for those browser contracts.
+
+The service-operation browser evidence still binds actions to an accountable active Admin ID, and fulfillment evidence still verifies the full picklist before ready/shipment transitions. These phrases remain explicit because immutable release archives verify their capability markers during every full backend run.
+
+## Transactional referral evidence
+
+The PostgreSQL referral smoke proves the invariant `first paid order -> one inviter reward`, rejects late attribution, and prevents duplicate provider callbacks from duplicating referral rewards.
+
+## Signed backup and restore evidence
+
+The signed backup/restore gate binds archive SHA/size, Alembic revision, schema fingerprint and critical-table content fingerprints, rejects tampering, and proves an isolated destructive restore before release rollback is allowed.
+
 ## Transactional and infrastructure evidence
 
 The backend CI suite separately runs real PostgreSQL smokes for customer journey, referral attribution, cancellation, fulfillment, payment review, cumulative refunds, business-event recovery, webhook leases, notification leases, scheduler locking and refund reconciliation.
