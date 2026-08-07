@@ -15,7 +15,10 @@ The repository already contains and tests:
 - support, privacy, notifications, webhooks, business events and scheduler operations;
 - monitoring, signed backup/restore and full signed release rollback;
 - a fail-closed first-20-order runtime with automatic STOP on critical financial integrity failures;
-- signed live lifecycle and GitHub repository-governance admission bindings.
+- signed live lifecycle and GitHub repository-governance admission bindings;
+- a mandatory `integrated-e2e` gate that drives a valid test Telegram WebApp signature through the real Mini App, FastAPI, PostgreSQL and Admin fulfillment/delivery path while replacing only the external YooKassa HTTP boundary.
+
+The exact v20 `main` release `39c9faa0309bcf5ce669ec246d10761e47108a87` passed the `push` CI with all six jobs: `backend`, `frontend`, `admin`, `browser-e2e`, `integrated-e2e`, `docker`. This proves the internal application stack, migrations, transactional smokes, browser contracts, signed backup/restore, release rollback and production Compose isolation for that commit. It does **not** prove deployed Telegram, YooKassa, MoySklad, Meilisearch, R2/CDN, DNS/HTTPS or human-operational gates.
 
 These capabilities are necessary but do not by themselves authorize real money.
 
@@ -27,7 +30,7 @@ The pilot remains **NO-GO** until all items below are completed for the exact re
 2. Public Mini App, API and Admin DNS names resolve to the pilot host and serve valid HTTPS certificates.
 3. Terms of sale, privacy policy, consent text, return/refund rules and seller details are final and publicly accessible.
 4. Named business, operations, technical, legal and support owners are recorded; an on-call escalation route and external alert receiver are active.
-5. GitHub `main` is protected against direct pushes and requires the complete CI workflow before merge. Strict checks, explicit force-push/deletion restrictions and administrator/ruleset bypass policy are proven by a fresh signed repository-governance report bound to the exact release commit. Every required check is bound to the official GitHub Actions App ID `15368`; `any source` and spoofable status contexts are forbidden.
+5. GitHub `main` is protected against direct pushes and requires the complete CI workflow before merge: strict `backend`, `frontend`, `admin`, `browser-e2e`, `integrated-e2e`, `docker`, explicit force-push/deletion restrictions and administrator/ruleset bypass policy. A fresh signed repository-governance report must bind those checks to the exact release commit and to the official GitHub Actions App ID `15368`; `any source` and spoofable status contexts are forbidden.
 6. The privileged repository-governance token is injected only into the single operator command that creates the report. It is absent from root `.env`, Compose/container environments, application services, logs and evidence.
 7. Current and previous immutable releases are promoted and independently verifiable.
 8. Signed strict provider evidence passes for the exact release/configuration.
@@ -42,7 +45,8 @@ The pilot remains **NO-GO** until all items below are completed for the exact re
    - Telegram notification delivery;
    - live Meilisearch indexing when enabled;
    - live R2/S3/CDN delivery when durable media is enabled.
-12. The signed admission manifest includes both the live lifecycle report and the repository-governance report, and the pilot runtime is armed only for an explicit Telegram allowlist and exactly 20 orders.
+12. All P01-P20 steps in the live pilot runner are completed with no `todo` or `failed` state.
+13. The signed admission manifest includes both the live lifecycle report and the repository-governance report, and the pilot runtime is armed only for an explicit Telegram allowlist and exactly 20 orders.
 
 Raw Telegram initData, GitHub tokens and provider secrets must never be stored in pilot evidence.
 
