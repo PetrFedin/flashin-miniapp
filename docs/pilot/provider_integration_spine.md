@@ -1,4 +1,4 @@
-# Provider integration spine — pilot v24
+# Provider integration spine — pilot v25
 
 This runbook binds the production order lifecycle to the external providers used
 by the FLASHIN pilot. It does **not** mark live provider evidence as complete.
@@ -91,6 +91,36 @@ MOYSKLAD_DELIVERY_SERVICE_ID=...
 A login/password pair may be used instead of a token, but both values must be
 present together. Production refuses to start with outbound export enabled and
 an incomplete configuration.
+
+### Read-only outbound readiness probe
+
+Before a real-money pilot, run the signed live-provider probe on the deployed
+release. `scripts/check_integrations.py` invokes `scripts/check_moysklad.py` as a
+required provider check. The MoySklad probe now fails closed unless outbound
+export is enabled and the exact configured targets can be read from the account:
+
+- organization → `entity/organization/<configured-id>`;
+- agent/counterparty → `entity/counterparty/<configured-id>`;
+- store → `entity/store/<configured-id>`;
+- delivery service → `entity/service/<configured-id>`.
+
+It also verifies the product catalog is reachable and non-empty. Every provider
+request in this probe is `GET`: it does not create a customer order, demand,
+sales return, stock movement, or any other MoySklad object. The response ID and
+entity type must match the configured target and the target must not be archived.
+Failure output uses only bounded target categories; configured UUIDs, provider
+response bodies, authorization values, and target URLs are not emitted.
+
+For a fresh signed provider report:
+
+```bash
+python scripts/check_integrations.py run --acknowledge-side-effects
+```
+
+The acknowledgement is required because the combined provider runner's YooKassa
+probe creates its documented idempotent 1.00 RUB pending test payment. The
+MoySklad portion remains read-only. CI mocks prove probe behavior only; only a
+fresh signed report from the deployed release can count as live provider evidence.
 
 Document mapping:
 
@@ -204,10 +234,14 @@ ignored in favor of an authoritative provider re-fetch and that a duplicate
 MoySklad commands for current-run pilot orders stop admission, while transient
 retries and historical/non-pilot/noncritical commands do not.
 
+`backend/tests/test_moysklad_readiness_probe.py` verifies that the pilot probe
+uses GET-only requests, requires all four outbound target IDs, rejects wrong or
+archived targets, and never emits configured target UUIDs in success/failure text.
+
 These are internal CI gates only. Before real money, collect separate live evidence
 for Telegram signed auth, YooKassa sandbox payment/return/webhooks, MoySklad
-created documents/stock, and Telegram delivery, then complete the signed P01–P20
-launch checklist.
+readiness plus created documents/stock, and Telegram delivery, then complete the
+signed P01–P20 launch checklist.
 
 ## Pilot deployment order
 
@@ -215,11 +249,11 @@ launch checklist.
 2. deploy the exact signed release SHA;
 3. provision DNS/TLS and secrets outside Git;
 4. configure YooKassa HTTP notifications;
-5. set and verify MoySklad account/entity IDs;
+5. set MoySklad account/entity IDs and run the read-only outbound readiness probe;
 6. start API, bot, notification worker, provider command worker, scheduler and
    monitoring;
 7. run migrations through head (`0026_inventory_return_movement` or later);
-8. verify provider connectivity without storing secrets in evidence;
+8. create and verify fresh signed provider evidence without storing secrets;
 9. execute P01–P20 on the deployed environment;
 10. create signed lifecycle, governance and launch-checklist evidence;
 11. arm the 20-order pilot only after final admission returns `go=true`.
