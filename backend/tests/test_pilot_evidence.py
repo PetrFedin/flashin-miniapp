@@ -45,7 +45,7 @@ def release(name: str = "current", sha: str = "a" * 64) -> dict[str, str]:
 
 def provider_report(now: datetime, values: dict[str, str], current: dict[str, str]):
     results = [
-        {"name": name, "ok": True, "returncode": 0, "stdout": "ok", "stderr": ""}
+        {"name": name, "ok": True, "returncode": 0, "stdout": "", "stderr": ""}
         for name in ("telegram", "yookassa", "moysklad", "r2_s3", "meilisearch")
     ]
     payload = {
@@ -119,6 +119,27 @@ def test_provider_evidence_requires_each_probe_exactly_once():
         report, env=values, current_release=current, now=now, max_age_minutes=60
     )
     assert any("exactly once" in item for item in errors)
+
+
+def test_provider_evidence_shared_validator_rejects_resigned_noisy_results():
+    values = env()
+    current = release()
+    now = datetime(2026, 8, 3, 18, 0, tzinfo=UTC)
+    report = provider_report(now, values, current)
+    report.pop("signature", None)
+    report["results"][0]["stdout"] = "provider-private-body"
+    report["results"][0]["provider_body"] = "unexpected-private-field"
+    report["results"][1]["returncode"] = 7
+    report = sign_payload(report, values["PILOT_EVIDENCE_SIGNING_SECRET"])
+
+    errors = validate_provider_report(
+        report, env=values, current_release=current, now=now, max_age_minutes=60
+    )
+
+    assert "provider evidence must not retain probe stdout/stderr" in errors
+    assert "provider evidence result contains unsupported fields" in errors
+    assert "passing provider evidence result must have returncode 0" in errors
+    assert not any("signature is invalid" in item for item in errors)
 
 
 def test_rollback_drill_evidence_detects_backup_tampering(tmp_path: Path):
