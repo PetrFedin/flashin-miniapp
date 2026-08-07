@@ -21,6 +21,7 @@ EXPECTED_PROVIDER_PROBES = {
     "r2_s3",
     "meilisearch",
 }
+PROVIDER_RESULT_KEYS = frozenset({"name", "ok", "returncode", "stdout", "stderr"})
 CONFIG_FINGERPRINT_KEYS = (
     "APP_ENV",
     "API_PUBLIC_URL",
@@ -216,6 +217,35 @@ def validate_evidence_window(
     return errors
 
 
+def validate_provider_result_records(results: Any) -> list[str]:
+    """Validate the status-only persisted shape shared by verify and admission."""
+    if not isinstance(results, list):
+        return ["provider evidence results must be a list"]
+
+    errors: list[str] = []
+    for item in results:
+        if not isinstance(item, Mapping):
+            errors.append("provider evidence result must be an object")
+            continue
+        fields = set(item)
+        if fields - PROVIDER_RESULT_KEYS:
+            errors.append("provider evidence result contains unsupported fields")
+        if PROVIDER_RESULT_KEYS - fields:
+            errors.append("provider evidence result fields are incomplete")
+        if str(item.get("stdout", "")).strip() or str(item.get("stderr", "")).strip():
+            errors.append("provider evidence must not retain probe stdout/stderr")
+        if not isinstance(item.get("ok"), bool):
+            errors.append("provider evidence result ok must be boolean")
+        returncode = item.get("returncode")
+        if returncode is not None and (
+            not isinstance(returncode, int) or isinstance(returncode, bool)
+        ):
+            errors.append("provider evidence returncode must be an integer or null")
+        if item.get("ok") is True and returncode != 0:
+            errors.append("passing provider evidence result must have returncode 0")
+    return list(dict.fromkeys(errors))
+
+
 def validate_provider_report(
     report: Mapping[str, Any],
     *,
@@ -258,8 +288,8 @@ def validate_provider_report(
     )
 
     results = report.get("results")
+    errors.extend(validate_provider_result_records(results))
     if not isinstance(results, list):
-        errors.append("provider evidence results must be a list")
         results = []
     names = [str(item.get("name", "")) for item in results if isinstance(item, Mapping)]
     if set(names) != EXPECTED_PROVIDER_PROBES or len(names) != len(EXPECTED_PROVIDER_PROBES):
