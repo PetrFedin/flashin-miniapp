@@ -61,8 +61,20 @@ jobs:
         run: find scripts -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
       - name: Run pilot checkout runtime tests
         run: python -m pytest -q backend/tests/test_pilot_runtime.py backend/tests/test_pilot_runtime_cli.py
-      - name: Run pilot release and database guard tests
-        run: python -m pytest -q backend/tests/test_pilot_release_capability.py backend/tests/test_pilot_runtime_integrity.py backend/tests/test_pilot_runtime_wiring.py
+      - name: Run pilot release, governance and database guard tests
+        run: >-
+          python -m pytest -q
+          backend/tests/test_pilot_release_capability.py
+          backend/tests/test_pilot_runtime_integrity.py
+          backend/tests/test_pilot_runtime_wiring.py
+          backend/tests/test_pilot_admission_path_binding.py
+          backend/tests/test_pilot_repository_governance.py
+          backend/tests/test_pilot_governance_visibility.py
+          backend/tests/test_pilot_governance_classic_fail_closed.py
+          backend/tests/test_pilot_governance_check_sources.py
+          backend/tests/test_pilot_governance_operator_isolation.py
+          backend/tests/test_pilot_governance_admission_render.py
+          backend/tests/test_pilot_governance_release_guard.py
       - name: Run pilot money circuit-breaker tests
         run: >-
           python -m pytest -q

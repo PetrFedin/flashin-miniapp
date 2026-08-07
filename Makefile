@@ -1,4 +1,4 @@
-.PHONY: help init build up down logs migrate health workers search monitoring backup restore test preflight clean deploy-prod rollback rollback-drill rollback-drill-status verify-backup seed-admin validate-env openapi release-notes diagnostics setup-wizard check-integrations provider-probes readiness pilot-sheet readiness-gate pilot-gate loadtest performance-budget security-audit media-jobs loadtest-catalog loadtest-webhooks real-e2e grafana-dashboards simple-start launch-local launch-production connected-audit simplicity-score env-todo pilot-runner pilot-init pilot-record pilot-status pilot-final pilot-admit pilot-admission-status pilot-lifecycle-create pilot-lifecycle-attach pilot-lifecycle-status pilot-runtime-arm pilot-runtime-status pilot-runtime-stop release-create release-verify release-status release-pack release-freeze pilot-evidence package-audit test-all transaction-integrity
+.PHONY: help init build up down logs migrate health workers search monitoring backup restore test preflight clean deploy-prod rollback rollback-drill rollback-drill-status verify-backup seed-admin validate-env openapi release-notes diagnostics setup-wizard check-integrations provider-probes readiness pilot-sheet readiness-gate pilot-gate loadtest performance-budget security-audit media-jobs loadtest-catalog loadtest-webhooks real-e2e grafana-dashboards simple-start launch-local launch-production connected-audit simplicity-score env-todo pilot-runner pilot-init pilot-record pilot-status pilot-final pilot-admit pilot-admission-status pilot-lifecycle-create pilot-lifecycle-attach pilot-lifecycle-status pilot-governance-create pilot-governance-attach pilot-governance-status pilot-runtime-arm pilot-runtime-status pilot-runtime-stop release-create release-verify release-status release-pack release-freeze pilot-evidence package-audit test-all transaction-integrity
 
 help:
 	@echo "FLASHIN commands:"
@@ -21,6 +21,9 @@ help:
 	@echo "  make pilot-lifecycle-create - sign file-backed deployed lifecycle evidence"
 	@echo "  make pilot-lifecycle-attach - bind lifecycle evidence to pilot admission"
 	@echo "  make pilot-lifecycle-status - verify admission plus lifecycle attachment"
+	@echo "  make pilot-governance-create - sign exact GitHub branch/rules/CI evidence"
+	@echo "  make pilot-governance-attach - bind GitHub governance evidence to admission"
+	@echo "  make pilot-governance-status - verify admission, lifecycle and governance"
 	@echo "  make pilot-runner          - initialize/show admission-gated 20-order control"
 	@echo "  make pilot-runtime-arm     - open checkout for allowlisted pilot Telegram IDs"
 	@echo "  make pilot-runtime-status  - verify DB counter, evidence binding and remaining slots"
@@ -193,7 +196,7 @@ pilot-admit:
 	python3 scripts/pilot_admission.py create $(ARGS)
 
 pilot-admission-status:
-	python3 scripts/pilot_lifecycle_admission.py verify
+	python3 scripts/pilot_governance_admission.py verify $(ARGS)
 
 pilot-lifecycle-create:
 	@echo "Usage: make pilot-lifecycle-create ARGS='--input docs/pilot/live_lifecycle_input.json'"
@@ -204,6 +207,16 @@ pilot-lifecycle-attach:
 
 pilot-lifecycle-status:
 	python3 scripts/pilot_lifecycle_admission.py verify $(ARGS)
+
+pilot-governance-create:
+	@echo "Usage: inject PILOT_GITHUB_TOKEN only into this process, then run ARGS='--owner \"Exact technical owner name\"'"
+	python3 scripts/pilot_governance_operator.py create $(ARGS)
+
+pilot-governance-attach:
+	python3 scripts/pilot_governance_admission.py attach $(ARGS)
+
+pilot-governance-status:
+	python3 scripts/pilot_governance_admission.py verify $(ARGS)
 
 pilot-runner:
 	python3 scripts/pilot_runner.py

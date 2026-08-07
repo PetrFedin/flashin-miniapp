@@ -10,6 +10,7 @@ from typing import Any, Mapping
 RELEASE_KEYS = ("release_id", "git_commit", "sha256")
 ROOT = Path(__file__).resolve().parents[1]
 LIVE_LIFECYCLE_KEY = "live_lifecycle_report_sha256"
+REPOSITORY_GOVERNANCE_KEY = "repository_governance_report_sha256"
 
 
 def sha256_file(path: Path) -> str:
@@ -32,6 +33,22 @@ def _requires_live_lifecycle(manifest: Mapping[str, Any]) -> bool:
         manifest.get("schema_version") == 1
         and manifest.get("kind") == "pilot_admission"
         and manifest.get("decision") == "GO"
+    )
+
+
+def _requires_repository_governance(manifest: Mapping[str, Any]) -> bool:
+    acknowledgements = manifest.get("acknowledgements")
+    evidence = manifest.get("evidence")
+    pilot_contract = manifest.get("pilot_contract")
+    return (
+        _requires_live_lifecycle(manifest)
+        and isinstance(pilot_contract, Mapping)
+        and pilot_contract.get("maximum_orders") == 20
+        and pilot_contract.get("mass_admission_forbidden") is True
+        and isinstance(acknowledgements, Mapping)
+        and acknowledgements.get("live_lifecycle_completed") is True
+        and isinstance(evidence, Mapping)
+        and isinstance(evidence.get("live_lifecycle_report"), Mapping)
     )
 
 
@@ -75,12 +92,48 @@ def _live_lifecycle_sha256(
     return digest
 
 
+def _repository_governance_sha256(
+    manifest_path: Path,
+    manifest: Mapping[str, Any],
+    *,
+    root: Path,
+) -> str:
+    from pilot_governance_admission import validate_attached_governance
+    from pilot_governance_release_guard import require_current_governance_release
+    from pilot_operator_security import require_application_token_isolation
+
+    require_application_token_isolation(root, os.environ)
+    require_current_governance_release(root)
+    errors = validate_attached_governance(
+        manifest_path,
+        manifest,
+        env=_runtime_evidence_env(root),
+        root=root,
+    )
+    if errors:
+        raise ValueError(
+            "Pilot admission repository governance evidence is invalid: "
+            + "; ".join(errors)
+        )
+    evidence = manifest.get("evidence")
+    entry = (
+        evidence.get("repository_governance_report")
+        if isinstance(evidence, Mapping)
+        else None
+    )
+    digest = str(entry.get("sha256", "")).strip() if isinstance(entry, Mapping) else ""
+    if len(digest) != 64:
+        raise ValueError("Pilot admission repository governance evidence SHA-256 is invalid")
+    return digest
+
+
 def build_admission_binding(
     manifest_path: Path,
     manifest: Mapping[str, Any],
     *,
     root: Path | None = None,
     require_live_lifecycle: bool | None = None,
+    require_repository_governance: bool | None = None,
 ) -> dict[str, Any]:
     """Create the immutable identity that a single pilot state must retain."""
     release = manifest.get("release")
@@ -103,17 +156,29 @@ def build_admission_binding(
         if require_live_lifecycle is None
         else require_live_lifecycle
     )
+    enforce_governance = (
+        _requires_repository_governance(manifest)
+        if require_repository_governance is None
+        else require_repository_governance
+    )
     binding: dict[str, Any] = {
         "manifest_sha256": sha256_file(manifest_path),
         "created_at": created_at,
         "configuration_fingerprint": fingerprint,
         "release": normalized_release,
     }
+    evidence_root = root or ROOT
     if enforce_lifecycle:
         binding[LIVE_LIFECYCLE_KEY] = _live_lifecycle_sha256(
             manifest_path,
             manifest,
-            root=(root or ROOT),
+            root=evidence_root,
+        )
+    if enforce_governance:
+        binding[REPOSITORY_GOVERNANCE_KEY] = _repository_governance_sha256(
+            manifest_path,
+            manifest,
+            root=evidence_root,
         )
     return binding
 
@@ -137,6 +202,13 @@ def validate_admission_binding(
             errors.append("pilot control admission live lifecycle evidence does not match")
     elif actual_lifecycle:
         errors.append("pilot control admission has unexpected live lifecycle evidence")
+    expected_governance = expected.get(REPOSITORY_GOVERNANCE_KEY)
+    actual_governance = actual.get(REPOSITORY_GOVERNANCE_KEY)
+    if expected_governance:
+        if actual_governance != expected_governance:
+            errors.append("pilot control admission repository governance evidence does not match")
+    elif actual_governance:
+        errors.append("pilot control admission has unexpected repository governance evidence")
     actual_release = actual.get("release")
     expected_release = expected.get("release")
     if not isinstance(actual_release, Mapping):

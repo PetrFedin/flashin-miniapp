@@ -18,8 +18,11 @@ The gate is deliberately fail-closed. Missing, stale, unsigned, checksum-drifted
 8. Save sanitized evidence files under `docs/pilot/evidence` on the pilot host or approved secure evidence storage mounted at that repository path.
 9. Create the signed lifecycle report.
 10. Attach the lifecycle report to the signed admission.
-11. Verify the complete admission.
-12. Initialize the 20-order control state and arm runtime only for the explicit Telegram allowlist.
+11. Verify the lifecycle attachment.
+12. Create fresh signed repository-governance evidence for the exact promoted release commit and successful required CI.
+13. Attach repository-governance evidence to the signed admission.
+14. Verify the complete admission, lifecycle and governance chain.
+15. Initialize the 20-order control state and arm runtime only for the explicit Telegram allowlist.
 
 ## Required deployed scenarios
 
@@ -88,6 +91,7 @@ Never store:
 - MoySklad passwords or tokens;
 - S3/R2 credentials;
 - Meilisearch master keys;
+- GitHub tokens;
 - the pilot evidence signing secret.
 
 Use sanitized JSON, provider IDs, order IDs, timestamps, bounded logs, screenshots without credentials and reconciliation exports without customer-sensitive data.
@@ -106,13 +110,21 @@ Attach the report to the current baseline admission and re-sign it:
 make pilot-lifecycle-attach
 ```
 
-Verify baseline admission, attachment, owners, release/config binding, freshness and every evidence checksum:
+Verify baseline admission, lifecycle attachment, owners, release/config binding, freshness and every evidence checksum:
 
 ```bash
 make pilot-lifecycle-status
 ```
 
-Only after the command returns `go: true`:
+Create repository-governance evidence only after GitHub `main` is protected and required CI has succeeded for the exact promoted release commit. The owner must exactly match the signed `technical_owner`:
+
+```bash
+make pilot-governance-create ARGS='--owner "Named Technical Owner"'
+make pilot-governance-attach
+make pilot-admission-status
+```
+
+Only after the final command returns `go: true`:
 
 ```bash
 make pilot-init ARGS='--operator-role operations_owner --operator "Named Operations Owner" --reason "Initialize controlled 20-order pilot"'
@@ -131,6 +143,10 @@ Pilot arm remains blocked when any of the following is true:
 - Meilisearch/media evidence is omitted while the corresponding production feature is enabled;
 - a scenario owner is not one of the signed admission owners;
 - an evidence file is missing, empty, oversized, modified or contains configured secrets/raw Telegram initData;
-- an old pilot state is bound to a different lifecycle report SHA-256.
+- repository-governance evidence is missing, stale, unsigned or owned by someone other than the signed technical owner;
+- the protected branch head differs from the promoted release commit;
+- pull-request-only changes, strict required checks, force-push/deletion restrictions or administrator/ruleset bypass controls are not active;
+- no successful completed `CI` run exists for the exact release commit;
+- an old pilot state is bound to a different lifecycle or repository-governance report SHA-256.
 
 Do not repair evidence in place during an active pilot. Stop runtime, record the incident, create fresh evidence and issue a fresh signed admission/control state.

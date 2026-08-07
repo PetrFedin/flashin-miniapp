@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Attach and verify signed live lifecycle evidence on a pilot admission."""
+"""Attach and verify signed repository-governance evidence on a pilot admission."""
 
 from __future__ import annotations
 
@@ -18,15 +18,17 @@ from pilot_evidence import (
     sha256_file,
     sign_payload,
 )
-from pilot_lifecycle_release_guard import require_current_lifecycle_release
-from pilot_live_lifecycle import validate_live_lifecycle_report
+from pilot_governance_release_guard import require_current_governance_release
+from pilot_lifecycle_admission import validate_attached_lifecycle
 from pilot_readiness import read_env
+from pilot_repository_governance import validate_report
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = ROOT / "docs/pilot/pilot_admission_manifest.json"
-DEFAULT_REPORT = ROOT / "docs/pilot/live_lifecycle_report.json"
-ACKNOWLEDGEMENT_KEY = "live_lifecycle_completed"
-EVIDENCE_KEY = "live_lifecycle_report"
+DEFAULT_REPORT = ROOT / "docs/pilot/repository_governance_report.json"
+ACKNOWLEDGEMENT_KEY = "repository_governance_verified"
+EVIDENCE_KEY = "repository_governance_report"
+LIFECYCLE_EVIDENCE_KEY = "live_lifecycle_report"
 
 
 def _portable_report_path(root: Path, report_path: Path) -> str:
@@ -34,9 +36,9 @@ def _portable_report_path(root: Path, report_path: Path) -> str:
     try:
         relative = absolute.relative_to(root.absolute())
     except ValueError as exc:
-        raise ValueError("Live lifecycle report must be inside the pilot repository root") from exc
+        raise ValueError("Repository governance report must be inside the pilot repository root") from exc
     if relative.parts[:2] != ("docs", "pilot"):
-        raise ValueError("Live lifecycle report must be stored under docs/pilot")
+        raise ValueError("Repository governance report must be stored under docs/pilot")
     return relative.as_posix()
 
 
@@ -62,34 +64,35 @@ def _evidence_entry(
         return None, "", ["pilot admission evidence map is missing"]
     entry = evidence.get(EVIDENCE_KEY)
     if not isinstance(entry, Mapping):
-        return None, "", ["pilot admission live lifecycle evidence is missing"]
+        return None, "", ["pilot admission repository governance evidence is missing"]
     path = _resolve_report_path(root, entry.get("path"))
     expected_sha256 = str(entry.get("sha256", "")).strip()
     errors: list[str] = []
     if not path.is_file():
-        errors.append("pilot admission live lifecycle evidence file is missing")
+        errors.append("pilot admission repository governance evidence file is missing")
     if len(expected_sha256) != 64:
-        errors.append("pilot admission live lifecycle evidence SHA-256 is invalid")
+        errors.append("pilot admission repository governance evidence SHA-256 is invalid")
     elif path.is_file() and sha256_file(path) != expected_sha256:
-        errors.append("pilot admission live lifecycle evidence checksum does not match")
+        errors.append("pilot admission repository governance evidence checksum does not match")
     return path, expected_sha256, errors
 
 
-def validate_attached_lifecycle(
+def validate_attached_governance(
     manifest_path: Path,
     manifest: Mapping[str, Any],
     *,
     env: Mapping[str, str],
     root: Path = ROOT,
-    max_age_hours: int | None = None,
+    max_age_minutes: int | None = None,
     now=None,
 ) -> list[str]:
+    del manifest_path
     errors: list[str] = []
     acknowledgements = manifest.get("acknowledgements")
     if not isinstance(acknowledgements, Mapping):
         errors.append("pilot admission acknowledgements are missing")
     elif acknowledgements.get(ACKNOWLEDGEMENT_KEY) is not True:
-        errors.append("pilot admission live lifecycle acknowledgement is missing")
+        errors.append("pilot admission repository governance acknowledgement is missing")
 
     path, _expected_sha256, entry_errors = _evidence_entry(manifest, root=root)
     errors.extend(entry_errors)
@@ -105,54 +108,64 @@ def validate_attached_lifecycle(
         errors.append("pilot admission release binding is missing")
     else:
         errors.extend(
-            validate_live_lifecycle_report(
+            validate_report(
                 report,
-                root=root,
                 env=env,
                 expected_release=release,
-                max_age_hours=max_age_hours,
+                max_age_minutes=max_age_minutes,
                 now=now,
             )
         )
 
     approvals = manifest.get("approvals")
-    approved_names = (
-        {str(value).strip() for value in approvals.values() if str(value).strip()}
+    technical_owner = (
+        str(approvals.get("technical_owner", "")).strip()
         if isinstance(approvals, Mapping)
-        else set()
+        else ""
     )
-    if not approved_names:
-        errors.append("pilot admission named approvals are missing")
-    scenarios = report.get("scenarios")
-    if isinstance(scenarios, list) and approved_names:
-        for scenario in scenarios:
-            if not isinstance(scenario, Mapping):
-                continue
-            owner = str(scenario.get("owner", "")).strip()
-            name = str(scenario.get("name", "unknown")).strip()
-            if owner not in approved_names:
-                errors.append(
-                    f"live lifecycle scenario {name} owner is not a signed admission owner"
-                )
+    if not technical_owner:
+        errors.append("pilot admission technical owner is missing")
+    elif str(report.get("owner", "")).strip() != technical_owner:
+        errors.append("repository governance owner is not the signed technical owner")
     return list(dict.fromkeys(errors))
+
+
+def _render_evidence_block(
+    title: str,
+    entry: object,
+    note: str,
+) -> str:
+    normalized = entry if isinstance(entry, Mapping) else {}
+    path = normalized.get("path", "missing")
+    digest = normalized.get("sha256", "missing")
+    return (
+        f"\n\n## {title}\n\n"
+        + f"- Report: `{path}`\n"
+        + f"- SHA-256: `{digest}`\n"
+        + f"- {note}\n"
+    )
 
 
 def _render_manifest(manifest: Mapping[str, Any]) -> str:
     base = render_admission_markdown(manifest).rstrip()
     evidence = manifest.get("evidence")
-    entry = evidence.get(EVIDENCE_KEY) if isinstance(evidence, Mapping) else None
-    path = entry.get("path") if isinstance(entry, Mapping) else "missing"
-    digest = entry.get("sha256") if isinstance(entry, Mapping) else "missing"
+    evidence_map = evidence if isinstance(evidence, Mapping) else {}
     return (
         base
-        + "\n\n## Live lifecycle evidence\n\n"
-        + f"- Report: `{path}`\n"
-        + f"- SHA-256: `{digest}`\n"
-        + "- Raw Telegram initData and provider secrets are forbidden in the report.\n"
+        + _render_evidence_block(
+            "Live lifecycle evidence",
+            evidence_map.get(LIFECYCLE_EVIDENCE_KEY),
+            "Raw Telegram initData and provider secrets are forbidden in the report.",
+        )
+        + _render_evidence_block(
+            "Repository governance evidence",
+            evidence_map.get(EVIDENCE_KEY),
+            "The protected branch, exact release commit and successful required CI are immutable pilot inputs.",
+        )
     )
 
 
-def attach_lifecycle_report(
+def attach_governance_report(
     manifest_path: Path,
     report_path: Path,
     *,
@@ -163,39 +176,47 @@ def attach_lifecycle_report(
         raise ValueError(
             "Baseline pilot admission is invalid: " + "; ".join(baseline_errors)
         )
-    require_current_lifecycle_release(root)
+    current_release = require_current_governance_release(root)
     env = read_env(root / ".env")
     secret = require_signing_secret(env)
     manifest = load_json(manifest_path)
+    lifecycle_errors = validate_attached_lifecycle(
+        manifest_path,
+        manifest,
+        env=env,
+        root=root,
+    )
+    if lifecycle_errors:
+        raise ValueError(
+            "Live lifecycle attachment is invalid: " + "; ".join(lifecycle_errors)
+        )
     report = load_json(report_path)
     release = manifest.get("release")
     if not isinstance(release, Mapping):
         raise ValueError("Pilot admission release binding is missing")
-    lifecycle_errors = validate_live_lifecycle_report(
+    if any(
+        str(release.get(key, "")) != str(current_release.get(key, ""))
+        for key in ("release_id", "git_commit", "sha256")
+    ):
+        raise ValueError("Pilot admission release does not match current governance-capable release")
+    governance_errors = validate_report(
         report,
-        root=root,
         env=env,
         expected_release=release,
     )
-    if lifecycle_errors:
+    if governance_errors:
         raise ValueError(
-            "Live lifecycle evidence is invalid: " + "; ".join(lifecycle_errors)
+            "Repository governance evidence is invalid: " + "; ".join(governance_errors)
         )
 
     approvals = manifest.get("approvals")
-    approved_names = (
-        {str(value).strip() for value in approvals.values() if str(value).strip()}
+    technical_owner = (
+        str(approvals.get("technical_owner", "")).strip()
         if isinstance(approvals, Mapping)
-        else set()
+        else ""
     )
-    for scenario in report.get("scenarios", []):
-        if not isinstance(scenario, Mapping):
-            continue
-        owner = str(scenario.get("owner", "")).strip()
-        if owner not in approved_names:
-            raise ValueError(
-                f"Lifecycle owner {owner or 'missing'} is not present in signed admission approvals"
-            )
+    if str(report.get("owner", "")).strip() != technical_owner:
+        raise ValueError("Repository governance owner must equal the signed technical owner")
 
     unsigned = dict(manifest)
     unsigned.pop("signature", None)
@@ -209,7 +230,7 @@ def attach_lifecycle_report(
     acknowledgements[ACKNOWLEDGEMENT_KEY] = True
     unsigned["acknowledgements"] = acknowledgements
     signed = sign_payload(unsigned, secret)
-    attached_errors = validate_attached_lifecycle(
+    attached_errors = validate_attached_governance(
         manifest_path,
         signed,
         env=env,
@@ -217,7 +238,7 @@ def attach_lifecycle_report(
     )
     if attached_errors:
         raise ValueError(
-            "Attached live lifecycle evidence is invalid: "
+            "Attached repository governance evidence is invalid: "
             + "; ".join(attached_errors)
         )
     atomic_write_json(manifest_path, signed)
@@ -228,10 +249,10 @@ def attach_lifecycle_report(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    attach = sub.add_parser("attach", help="Attach lifecycle evidence to admission")
+    attach = sub.add_parser("attach", help="Attach governance evidence to admission")
     attach.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     attach.add_argument("--report", type=Path, default=DEFAULT_REPORT)
-    verify = sub.add_parser("verify", help="Verify admission and lifecycle attachment")
+    verify = sub.add_parser("verify", help="Verify admission, lifecycle and governance")
     verify.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     return parser
 
@@ -240,13 +261,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         if args.command == "attach":
-            manifest = attach_lifecycle_report(args.manifest, args.report, root=ROOT)
+            manifest = attach_governance_report(args.manifest, args.report, root=ROOT)
             print(
                 json.dumps(
                     {
                         "go": True,
                         "manifest": str(args.manifest),
-                        "lifecycle": manifest["evidence"][EVIDENCE_KEY],
+                        "governance": manifest["evidence"][EVIDENCE_KEY],
                     },
                     ensure_ascii=False,
                 )
@@ -254,13 +275,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         errors = verify_admission_path(args.manifest, ROOT)
         if not errors:
-            require_current_lifecycle_release(ROOT)
+            require_current_governance_release(ROOT)
             manifest = load_json(args.manifest)
+            env = read_env(ROOT / ".env")
             errors.extend(
                 validate_attached_lifecycle(
                     args.manifest,
                     manifest,
-                    env=read_env(ROOT / ".env"),
+                    env=env,
+                    root=ROOT,
+                )
+            )
+            errors.extend(
+                validate_attached_governance(
+                    args.manifest,
+                    manifest,
+                    env=env,
                     root=ROOT,
                 )
             )
