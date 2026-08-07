@@ -82,6 +82,7 @@ def _live_lifecycle_sha256(
     manifest: Mapping[str, Any],
     *,
     root: Path,
+    now=None,
 ) -> str:
     from pilot_lifecycle_admission import validate_attached_lifecycle
 
@@ -90,6 +91,7 @@ def _live_lifecycle_sha256(
         manifest,
         env=_runtime_evidence_env(root),
         root=root,
+        now=now,
     )
     if errors:
         raise ValueError(
@@ -113,6 +115,7 @@ def _repository_governance_sha256(
     manifest: Mapping[str, Any],
     *,
     root: Path,
+    now=None,
 ) -> str:
     from pilot_governance_admission import validate_attached_governance
     from pilot_governance_release_guard import require_current_governance_release
@@ -125,6 +128,7 @@ def _repository_governance_sha256(
         manifest,
         env=_runtime_evidence_env(root),
         root=root,
+        now=now,
     )
     if errors:
         raise ValueError(
@@ -148,6 +152,7 @@ def _launch_checklist_sha256(
     manifest: Mapping[str, Any],
     *,
     root: Path,
+    now=None,
 ) -> str:
     from pilot_launch_admission import validate_attached_launch_checklist
 
@@ -156,6 +161,7 @@ def _launch_checklist_sha256(
         manifest,
         env=_runtime_evidence_env(root),
         root=root,
+        now=now,
     )
     if errors:
         raise ValueError(
@@ -182,8 +188,13 @@ def build_admission_binding(
     require_live_lifecycle: bool | None = None,
     require_repository_governance: bool | None = None,
     require_launch_checklist: bool | None = None,
+    now=None,
 ) -> dict[str, Any]:
-    """Create the immutable identity that a single pilot state must retain."""
+    """Create the immutable identity that a single pilot state must retain.
+
+    ``now`` exists only to make evidence-age validation deterministic in tests.
+    Production callers omit it and therefore validate against the real UTC clock.
+    """
     release = manifest.get("release")
     if not isinstance(release, Mapping):
         raise ValueError("Pilot admission release binding is missing")
@@ -226,18 +237,21 @@ def build_admission_binding(
             manifest_path,
             manifest,
             root=evidence_root,
+            now=now,
         )
     if enforce_governance:
         binding[REPOSITORY_GOVERNANCE_KEY] = _repository_governance_sha256(
             manifest_path,
             manifest,
             root=evidence_root,
+            now=now,
         )
     if enforce_launch:
         binding[LAUNCH_CHECKLIST_KEY] = _launch_checklist_sha256(
             manifest_path,
             manifest,
             root=evidence_root,
+            now=now,
         )
     return binding
 
