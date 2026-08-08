@@ -53,11 +53,14 @@ def _https_url(value: object) -> tuple[bool, str]:
     raw = str(value or "").strip()
     try:
         parsed = urlparse(raw)
+        port = parsed.port
     except ValueError:
-        return False, "invalid URL"
+        return False, "invalid URL or port"
     if parsed.scheme != "https" or not parsed.hostname:
         return False, "must be an absolute HTTPS URL"
-    if parsed.port not in {None, 443, 8443}:
+    if parsed.username or parsed.password:
+        return False, "credentials must not be embedded in public URLs"
+    if port not in {None, 443, 8443}:
         return False, "HTTPS port must be 443 or 8443"
     return True, "HTTPS URL"
 
