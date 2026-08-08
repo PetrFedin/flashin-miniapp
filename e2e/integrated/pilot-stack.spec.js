@@ -181,7 +181,11 @@ test("Telegram -> YooKassa webhook -> stock/MoySklad -> fulfillment -> refund ->
   await adminPage.getByLabel(`Сумма возврата ${returnId}`).fill(String(state.order.total_amount));
   adminPage.once("dialog", (dialog) => dialog.accept());
   await returnsQueue.getByRole("button", { name: "Подтвердить refund" }).click();
-  await expect(adminPage.getByRole("status")).toContainText(`Возврат #${returnId} передан платёжному провайдеру`);
+  await expect(
+    adminPage.getByRole("status").filter({
+      hasText: `Возврат #${returnId} передан платёжному провайдеру`,
+    }),
+  ).toBeVisible();
 
   state = await orderState(adminPage.request, order.id);
   expect(state.order.status).toBe("refund_requested");
