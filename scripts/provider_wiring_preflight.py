@@ -16,7 +16,10 @@ from pathlib import Path
 from typing import Mapping
 from urllib.parse import urlparse
 
-from pilot_readiness import read_env
+try:
+    from .pilot_readiness import read_env
+except ImportError:  # Direct execution: python scripts/provider_wiring_preflight.py
+    from pilot_readiness import read_env
 
 ROOT = Path(__file__).resolve().parents[1]
 
