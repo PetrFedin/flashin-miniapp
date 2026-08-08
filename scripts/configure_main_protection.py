@@ -17,8 +17,12 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 from urllib.parse import quote
 
-from pilot_operator_security import require_privileged_token_file_isolation
-from pilot_readiness import read_env
+try:
+    from .pilot_operator_security import require_privileged_token_file_isolation
+    from .pilot_readiness import read_env
+except ImportError:  # Direct execution: python scripts/configure_main_protection.py
+    from pilot_operator_security import require_privileged_token_file_isolation
+    from pilot_readiness import read_env
 
 ROOT = Path(__file__).resolve().parents[1]
 API_ROOT = "https://api.github.com"
