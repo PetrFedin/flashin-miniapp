@@ -1,4 +1,5 @@
 import json
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -7,9 +8,10 @@ from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from backend.database import Base
+from backend.database import Base, utcnow_naive
 from backend.models import Customer, Order
 from backend.pilot_models import PilotOrderSlot, PilotRuntimeState
+from backend.provider_models import ProviderCommand
 from backend.services.pilot_runtime import (
     acquire_pilot_checkout,
     record_pilot_order,
@@ -162,6 +164,7 @@ def _runtime(tmp_path: Path, *, accepted_orders: int = 0):
         max_orders=20,
         accepted_orders=accepted_orders,
         allowed_telegram_ids='["123456"]',
+        opened_at=utcnow_naive(),
     )
     session.add(state)
     for sequence in range(1, accepted_orders + 1):
@@ -341,7 +344,6 @@ def test_pilot_state_bound_to_other_admission_fails_closed(tmp_path):
     assert mismatch.value.status_code == 503
 
 
-
 def test_tampered_pilot_control_state_fails_closed_on_checkout(tmp_path):
     db, customer, settings, env, pilot_path, *_ = _runtime(tmp_path)
     payload = json.loads(pilot_path.read_text(encoding="utf-8"))
@@ -351,7 +353,6 @@ def test_tampered_pilot_control_state_fails_closed_on_checkout(tmp_path):
     with pytest.raises(HTTPException) as tampered:
         acquire_pilot_checkout(db, customer=customer, settings=settings, env=env)
     assert tampered.value.status_code == 503
-
 
 
 def test_runtime_anchor_advances_to_descendant_and_rejects_replay(tmp_path):
@@ -389,3 +390,66 @@ def test_unrelated_valid_signed_state_branch_fails_closed(tmp_path):
     with pytest.raises(HTTPException) as unrelated:
         acquire_pilot_checkout(db, customer=customer, settings=settings, env=env)
     assert unrelated.value.status_code == 503
+
+
+def test_current_run_provider_failure_blocks_new_checkout_without_leaking_details(tmp_path):
+    db, customer, settings, env, *_ = _runtime(tmp_path)
+    state = db.get(PilotRuntimeState, 1)
+    db.add(
+        ProviderCommand(
+            provider="moysklad",
+            command_type="customer_order.create",
+            idempotency_key="private-pilot-command-key",
+            aggregate_type="order",
+            aggregate_id="private-order-id",
+            payload_json='{"secret":"must-not-leak"}',
+            status="failed",
+            last_error="private provider failure detail",
+            created_at=state.opened_at,
+        )
+    )
+    db.commit()
+
+    with pytest.raises(HTTPException) as blocked:
+        acquire_pilot_checkout(db, customer=customer, settings=settings, env=env)
+
+    assert blocked.value.status_code == 423
+    assert blocked.value.detail == {
+        "code": "pilot_checkout_unavailable",
+        "message": "Checkout is temporarily unavailable during the controlled pilot.",
+    }
+    serialized = json.dumps(blocked.value.detail)
+    assert "private-pilot-command-key" not in serialized
+    assert "must-not-leak" not in serialized
+    assert "provider failure" not in serialized
+
+
+def test_historical_provider_failure_before_runtime_window_does_not_block_checkout(tmp_path):
+    db, customer, settings, env, *_ = _runtime(tmp_path)
+    state = db.get(PilotRuntimeState, 1)
+    db.add(
+        ProviderCommand(
+            provider="moysklad",
+            command_type="customer_order.create",
+            idempotency_key="historical-command",
+            status="failed",
+            created_at=state.opened_at - timedelta(seconds=1),
+        )
+    )
+    db.commit()
+
+    context = acquire_pilot_checkout(db, customer=customer, settings=settings, env=env)
+    assert context is not None
+    assert context.sequence == 1
+
+
+def test_active_runtime_without_opened_at_fails_integrity_check(tmp_path):
+    db, customer, settings, env, *_ = _runtime(tmp_path)
+    state = db.get(PilotRuntimeState, 1)
+    state.opened_at = None
+    db.commit()
+
+    with pytest.raises(HTTPException) as invalid:
+        acquire_pilot_checkout(db, customer=customer, settings=settings, env=env)
+    assert invalid.value.status_code == 503
+    assert invalid.value.detail["code"] == "pilot_runtime_integrity_failure"
