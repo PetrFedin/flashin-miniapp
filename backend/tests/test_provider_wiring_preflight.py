@@ -18,6 +18,7 @@ def valid_env() -> dict[str, str]:
         "MOYSKLAD_ORGANIZATION_ID": "org-1",
         "MOYSKLAD_AGENT_ID": "agent-1",
         "MOYSKLAD_STORE_ID": "store-1",
+        "MOYSKLAD_DELIVERY_SERVICE_ID": "delivery-service-1",
         "SCHEDULER_ENABLED": "true",
         "PILOT_RUNTIME_ENFORCED": "true",
     }
@@ -48,3 +49,12 @@ def test_provider_wiring_preflight_rejects_mismatched_telegram_aliases():
     report = validate_wiring(env)
     failed = {item["name"] for item in report["checks"] if not item["ok"]}
     assert "telegram_token_alias_consistency" in failed
+
+
+def test_provider_wiring_preflight_requires_delivery_service_for_full_pilot():
+    env = valid_env()
+    env["MOYSKLAD_DELIVERY_SERVICE_ID"] = ""
+
+    report = validate_wiring(env)
+    failed = {item["name"] for item in report["checks"] if not item["ok"]}
+    assert "moysklad:moysklad_delivery_service_id" in failed
