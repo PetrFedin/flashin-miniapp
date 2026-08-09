@@ -86,7 +86,7 @@ Every new PostgreSQL backup has a signed manifest binding archive SHA/size, Alem
 
 The full release rollback drill builds different immutable current/previous releases, creates a signed restore-proven backup, invokes the real rollback path, proves runtime STOP, database restoration, health, service restart and release pointer promotion. External providers are deliberately not called in CI.
 
-## External evidence boundary
+## Evidence boundary
 
 Repository CI is strong **internal-stack, provider-adapter and release-mechanics evidence**. It is not authorization for real money.
 
