@@ -56,7 +56,7 @@ MOYSKLAD_TOKEN=<preferred access token>
 MOYSKLAD_ORGANIZATION_ID=<uuid>
 MOYSKLAD_AGENT_ID=<uuid>
 MOYSKLAD_STORE_ID=<uuid>
-MOYSKLAD_DELIVERY_SERVICE_ID=<uuid if paid delivery is exported>
+MOYSKLAD_DELIVERY_SERVICE_ID=<uuid>
 
 SCHEDULER_ENABLED=true
 PILOT_RUNTIME_ENFORCED=true
@@ -137,7 +137,7 @@ The outbound document chain is durable and idempotent:
 
 A sales return is not sent until the corresponding demand was successfully created. Permanent mapping/configuration errors move provider commands to review instead of blind infinite retries.
 
-Each sold product/variant used in the pilot must have an unambiguous MoySklad assortment mapping. The target account must provide organization, counterparty/agent and store identifiers. Paid delivery additionally needs a mapped delivery service.
+Each sold product/variant used in the pilot must have an unambiguous MoySklad assortment mapping. The full pilot account must provide organization, counterparty/agent, store **and delivery-service** identifiers. The outbound builder consumes the delivery-service position only when `delivery_price > 0`, but the pilot preflight requires the mapping up front so a paid-delivery scenario cannot unexpectedly enter `review_required` after payment.
 
 Official API reference: https://dev.moysklad.ru/doc/api/remap/1.2/
 
