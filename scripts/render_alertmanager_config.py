@@ -17,6 +17,8 @@ from urllib.parse import urlparse
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SECRET_ENV = ROOT / "deploy" / "secrets" / "alertmanager.env"
 DEFAULT_OUTPUT = ROOT / "deploy" / "runtime" / "alertmanager.yml"
+RUNTIME_DIRECTORY_MODE = 0o700
+RUNTIME_CONFIG_MODE = 0o644
 _PLACEHOLDER_MARKERS = (
     "replace",
     "change-me",
@@ -167,6 +169,11 @@ def render_config(settings: AlertmanagerSettings) -> str:
 
 def _write_atomic(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    if os.name == "posix":
+        # The deployment-only input remains 0600. The generated config is mounted
+        # into a non-root Alertmanager container, so protect it on the host by a
+        # private runtime directory while keeping the file itself container-readable.
+        os.chmod(path.parent, RUNTIME_DIRECTORY_MODE)
     file_descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{path.name}.",
         dir=path.parent,
@@ -174,13 +181,13 @@ def _write_atomic(path: Path, content: str) -> None:
     )
     temporary = Path(temporary_name)
     try:
-        os.fchmod(file_descriptor, 0o600)
+        os.fchmod(file_descriptor, RUNTIME_CONFIG_MODE)
         with os.fdopen(file_descriptor, "w", encoding="utf-8") as handle:
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
-        os.chmod(path, 0o600)
+        os.chmod(path, RUNTIME_CONFIG_MODE)
     finally:
         temporary.unlink(missing_ok=True)
 
