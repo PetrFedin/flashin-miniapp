@@ -111,6 +111,8 @@ jobs:
         run: python scripts/full_fulfillment_smoke.py
       - name: Run transactional payment review smoke
         run: python scripts/payment_review_smoke.py
+      - name: Run missed payment callback reconciliation smoke
+        run: python scripts/payment_reconciliation_recovery_smoke.py
       - name: Run transactional cumulative refund smoke
         run: python scripts/cumulative_refund_smoke.py
       - name: Run atomic business event worker smoke
