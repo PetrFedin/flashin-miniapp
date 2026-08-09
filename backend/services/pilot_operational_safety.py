@@ -85,38 +85,19 @@ def _provider_queue(
     overdue_before: datetime,
     created_since: datetime | None,
 ) -> tuple[dict[str, Any], list[str]]:
-    counts, unknown = _grouped_counts(
-        db,
-        ProviderCommand,
-        _PROVIDER_STATUSES,
-        created_since=created_since,
-    )
-    # ProviderCommand may contain other durable providers later. The pilot gate
-    # intentionally monitors only the MoySklad order/stock document spine.
-    other_provider_counts = (
-        db.query(ProviderCommand.status, func.count(ProviderCommand.id))
-        .filter(ProviderCommand.provider != "moysklad")
-    )
-    other_provider_counts = _scoped(
-        other_provider_counts,
-        ProviderCommand,
-        created_since,
-    )
-    other_total = sum(int(count or 0) for _status, count in other_provider_counts.group_by(ProviderCommand.status).all())
-    if other_total:
-        scoped_moysklad = db.query(
-            ProviderCommand.status,
-            func.count(ProviderCommand.id),
-        ).filter(ProviderCommand.provider == "moysklad")
-        scoped_moysklad = _scoped(scoped_moysklad, ProviderCommand, created_since)
-        counts = {status: 0 for status in _PROVIDER_STATUSES}
-        unknown = 0
-        for status, count in scoped_moysklad.group_by(ProviderCommand.status).all():
-            normalized = str(status or "").strip().lower()
-            if normalized in counts:
-                counts[normalized] = int(count or 0)
-            else:
-                unknown += int(count or 0)
+    counts = {status: 0 for status in _PROVIDER_STATUSES}
+    unknown = 0
+    counts_query = db.query(
+        ProviderCommand.status,
+        func.count(ProviderCommand.id),
+    ).filter(ProviderCommand.provider == "moysklad")
+    counts_query = _scoped(counts_query, ProviderCommand, created_since)
+    for status, count in counts_query.group_by(ProviderCommand.status).all():
+        normalized = str(status or "").strip().lower()
+        if normalized in counts:
+            counts[normalized] = int(count or 0)
+        else:
+            unknown += int(count or 0)
 
     due = or_(
         ProviderCommand.next_attempt_at.is_(None),
@@ -147,6 +128,12 @@ def _provider_queue(
     expired_query = _scoped(expired_query, ProviderCommand, created_since)
     expired_processing = int(expired_query.scalar() or 0)
 
+    oldest_query = db.query(func.min(ProviderCommand.created_at)).filter(
+        ProviderCommand.provider == "moysklad",
+        ProviderCommand.status.in_(("pending", "processing", "failed", "review_required")),
+    )
+    oldest_query = _scoped(oldest_query, ProviderCommand, created_since)
+
     terminal = int(counts["failed"]) + int(counts["review_required"])
     blockers: list[str] = []
     if terminal:
@@ -166,13 +153,7 @@ def _provider_queue(
             "overdue_pending": overdue_pending,
             "expired_processing": expired_processing,
             "terminal": terminal,
-            "oldest_actionable_age_seconds": _oldest_age_seconds(
-                db,
-                ProviderCommand,
-                ("pending", "processing", "failed", "review_required"),
-                now,
-                created_since=created_since,
-            ),
+            "oldest_actionable_age_seconds": _age_seconds(now, oldest_query.scalar()),
         },
         blockers,
     )
