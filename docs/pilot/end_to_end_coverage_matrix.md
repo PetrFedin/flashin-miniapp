@@ -20,6 +20,7 @@ Status values: `PASS`, `PARTIAL`, `BLOCKED`, `NOT COVERED`.
 | Checkout | Cart -> delivery form -> order | Idempotency tests, transactional journey and integrated E2E real `/api/orders/checkout` against PostgreSQL | PASS | Repeat in deployed Telegram Mini App |
 | Payment creation | Order -> payment service -> provider -> persisted payment | Real `/api/payments` and domain settlement run in `integrated-e2e`; only external YooKassa HTTP is replaced by a local deterministic boundary | PARTIAL | YooKassa sandbox/live credentials, real redirect and provider-side payment evidence |
 | Payment callback | YooKassa -> canonical `/api/webhooks/yookassa` -> authoritative provider read -> idempotent paid/review effect | `integrated-e2e` sends the canonical callback twice after provider-state transition; payment idempotency, reconciliation and circuit-breaker tests cover duplicate and recovery paths; legacy payment/refund callback routes remain registered during migration | PASS | One real duplicate YooKassa sandbox/live webhook in pilot environment |
+| Missed payment callback recovery | persisted latest YooKassa attempt -> scheduler -> authoritative provider GET -> payment settlement/cancellation/review -> downstream effects | Mandatory `payment_reconciliation_recovery_smoke.py` creates a real PostgreSQL checkout and pending payment, deliberately sends no webhook, changes only the deterministic provider state to `succeeded`, then proves automatic paid settlement, stock commit, fulfillment creation, one paid notification and one durable MoySklad customer-order command; `PaymentEvent` remains absent and replay creates no duplicate effects | PASS | Observe the scheduler recover one controlled sandbox/live payment whose callback is intentionally unavailable or delayed, retaining provider and database evidence |
 | Payment return | Provider return -> `/payment-result` -> polling -> order view | Frontend return-route tests/browser polling plus integrated redirect back to the real Mini App route after payment confirmation | PARTIAL | Deployed YooKassa return URL with real sandbox/live payment |
 | Order history | Profile/orders -> details/status | Backend API tests, mocked browser navigation and integrated final order refresh | PASS | Repeat against deployed customer history |
 | Order cancellation | Eligible order -> cancel -> stock/promo/loyalty reversal | Transactional cancellation smoke plus customer/Admin browser paths | PASS | Pilot stock and loyalty reversal evidence |
@@ -28,10 +29,10 @@ Status values: `PASS`, `PARTIAL`, `BLOCKED`, `NOT COVERED`.
 | Stock restoration after refund | paid stock commit -> full refund -> return inventory movement -> stock restored exactly once | `integrated-e2e` verifies final stock returns to the seeded quantity and exactly one `return` movement exists despite duplicate refund callbacks | PASS | Compare the same SKU against live MoySklad after a controlled refund |
 | Support | Customer ticket -> named Admin owner -> status/priority | Admin-only ownership/state-machine tests and browser assignment/update | PASS | Map active Admin IDs to named pilot owners; notification/SLA evidence |
 | Privacy | Customer export/request -> Admin -> terminal result | Backend privacy/idempotency tests and browser workflow | PASS | Legal retention review and one deployed controlled request |
-| Notifications | Domain event -> durable notification -> lease -> send/retry | Notification lease/retry tests and smoke; `integrated-e2e` verifies paid/refund notifications are persisted and the refund notification is created exactly once | PASS | Telegram sandbox/live delivery evidence from the deployed worker |
+| Notifications | Domain event -> durable notification -> lease -> Telegram transport -> send/retry | Notification lease/retry tests and PostgreSQL lease smoke; `notification_transport_smoke.py` runs the real `send_pending_batch` adapter through claim/lease/finalize and verifies the exact `send_message` handoff plus no resend after `sent`; `integrated-e2e` verifies paid/refund notifications are persisted exactly once | PASS | Telegram sandbox/live delivery evidence from the deployed worker and Bot API |
 | Business events | Failed event -> diagnosis -> replay -> queue | Worker/recovery smokes and Admin browser recovery/replay | PASS | Observe deployed replay and poison-event alert |
 | Webhooks | Event -> outbox -> leased delivery/retry | Webhook lease/integrity smokes | PASS | External receiver sandbox evidence |
-| Scheduler | Scheduled job -> distributed lock -> one execution | Scheduler lock smoke | PASS | Observe on deployed pilot |
+| Scheduler | Scheduled job -> distributed lock -> one execution | Scheduler lock smoke; payment reconciliation is registered as a locked async job every two minutes and refund reconciliation every five minutes | PASS | Observe both reconciliation jobs on deployed pilot |
 | Stock sync | MoySklad -> mapping -> local product/variant/stock | Backend sync tests | PARTIAL | Token plus 5-10 real products/variants and retained sync evidence |
 | MoySklad outbound documents | paid order -> `customerorder`; shipped order -> `demand`; refunded order -> `salesreturn` | Mandatory backend CI provider-spine smoke uses real PostgreSQL and the real provider-command worker, replacing only MoySklad HTTP; it verifies command dispatch, `external_id` persistence and document payload/link relationships for all three document types | PASS | Live MoySklad token, organization/agent/store IDs and retained provider-side document IDs |
 | Search index | Product change -> Meilisearch -> storefront search | Backend search tests and production graph | PARTIAL | Production/pilot key and index rebuild evidence |
@@ -64,6 +65,10 @@ The integrated wrapper is test-only and fails to boot unless `APP_ENV` is `test`
 
 MoySklad outbound execution is proven separately by the mandatory `provider_integration_spine_smoke.py` backend CI step: it uses the real PostgreSQL provider-command lifecycle and worker for `customerorder`, `demand` and `salesreturn`, replacing only the remote MoySklad HTTP boundary.
 
+The callback-loss recovery path is proven separately by `payment_reconciliation_recovery_smoke.py`: no payment webhook is sent, the authoritative provider state is changed to succeeded, and the scheduler job's domain path settles the order exactly once through inventory, fulfillment, notification persistence and MoySklad command enqueue.
+
+The Telegram worker adapter is proven by `notification_transport_smoke.py`: the real PostgreSQL delivery lease path reaches the real `send_pending_batch` code and an isolated Bot-like transport receives the exact `send_message` call; a replay after `sent` produces no second send.
+
 ## Browser journeys
 
 Nine stateful Playwright journeys remain the broad deterministic UI regression baseline from the immutable v17 release capability. The `integrated-e2e` journey is an additional real-stack gate, not a replacement for those browser contracts.
@@ -80,7 +85,7 @@ The signed backup/restore gate binds archive SHA/size, Alembic revision, schema 
 
 ## Transactional and infrastructure evidence
 
-The backend CI suite separately runs real PostgreSQL smokes for the provider integration spine, customer journey, referral attribution, cancellation, fulfillment, payment review, cumulative refunds, business-event recovery, webhook leases, notification leases, scheduler locking and refund reconciliation.
+The backend CI suite separately runs real PostgreSQL smokes for the provider integration spine, customer journey, referral attribution, cancellation, fulfillment, payment review, missed-payment callback reconciliation, cumulative refunds, business-event recovery, webhook leases, notification leases, Telegram notification transport, scheduler locking and refund reconciliation.
 
 Every new PostgreSQL backup has a signed manifest binding archive SHA/size, Alembic revision, schema fingerprint and critical table content fingerprints. The mandatory restore drill rejects tampering and proves destructive restoration of a known sentinel.
 
