@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -345,20 +346,21 @@ def build_pilot_operational_safety(
     *,
     grace_minutes: int = DEFAULT_OPERATIONAL_QUEUE_GRACE_MINUTES,
     created_since: datetime | None = None,
-    require_worker_liveness: bool = False,
+    require_worker_liveness: bool | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Return an identifier-free, fail-closed view of pilot operations.
 
     ``created_since`` should be the runtime ``opened_at`` timestamp. Queue
-    safety always uses that scope. Production pilot callers also set
-    ``require_worker_liveness=True`` so scheduler/notification heartbeats must
-    be fresh and post-arm before checkout can proceed.
+    safety always uses that scope. Worker liveness defaults on automatically in
+    production (`APP_ENV=production`) and can be forced explicitly by tests.
     """
     normalized_grace = _grace_minutes(grace_minutes)
     effective_now = now or utcnow_naive()
     if created_since is not None and created_since > effective_now:
         raise ValueError("Pilot operational queue scope cannot start in the future")
+    if require_worker_liveness is None:
+        require_worker_liveness = os.getenv("APP_ENV", "development").strip().lower() == "production"
     if require_worker_liveness and created_since is None:
         raise ValueError("Pilot worker liveness requires a runtime scope")
     overdue_before = effective_now - timedelta(minutes=normalized_grace)
