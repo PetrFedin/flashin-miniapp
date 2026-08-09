@@ -10,6 +10,7 @@ from ..database import utcnow_naive
 from ..models import BusinessEvent, Notification, WebhookOutbox
 from ..notification_models import NotificationDeliveryState
 from ..provider_models import ProviderCommand
+from .pilot_worker_heartbeat import build_required_worker_liveness
 
 DEFAULT_OPERATIONAL_QUEUE_GRACE_MINUTES = 15
 MAX_OPERATIONAL_QUEUE_GRACE_MINUTES = 120
@@ -346,20 +347,38 @@ def build_pilot_operational_safety(
     created_since: datetime | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Return an identifier-free, fail-closed view of current-pilot queues.
+    """Return an identifier-free, fail-closed view of current-pilot operations.
 
     ``created_since`` should be the runtime ``opened_at`` timestamp. This keeps
-    historical failures from a previous pilot from blocking a new run while a
-    stopped/resumed run retains the same window and therefore cannot evade its
-    unresolved delivery failures. Fresh work is visible but non-blocking.
-    Terminal failures, expired leases, unknown states and work that remained due
-    beyond the grace window block new pilot checkouts.
+    historical queue failures and pre-arm worker heartbeats from satisfying a
+    new run while a stopped/resumed run retains the same window. Fresh pending
+    work is visible but non-blocking. Required workers must publish a fresh
+    post-arm heartbeat before the pilot can accept checkout.
     """
     normalized_grace = _grace_minutes(grace_minutes)
     effective_now = now or utcnow_naive()
     if created_since is not None and created_since > effective_now:
         raise ValueError("Pilot operational queue scope cannot start in the future")
     overdue_before = effective_now - timedelta(minutes=normalized_grace)
+
+    if created_since is None:
+        worker_liveness = {
+            "applicable": False,
+            "healthy": True,
+            "blocking_codes": [],
+            "workers": {},
+        }
+        worker_blockers: list[str] = []
+    else:
+        worker_liveness = {
+            "applicable": True,
+            **build_required_worker_liveness(
+                db,
+                current_run_opened_at=created_since,
+                now=effective_now,
+            ),
+        }
+        worker_blockers = list(worker_liveness["blocking_codes"])
 
     provider, provider_blockers = _provider_queue(
         db,
@@ -388,7 +407,8 @@ def build_pilot_operational_safety(
 
     blocking_codes = list(
         dict.fromkeys(
-            provider_blockers
+            worker_blockers
+            + provider_blockers
             + event_blockers
             + webhook_blockers
             + notification_blockers
@@ -399,6 +419,7 @@ def build_pilot_operational_safety(
         "blocking_codes": blocking_codes,
         "grace_minutes": normalized_grace,
         "scope_started_at": created_since.isoformat() if created_since else None,
+        "worker_liveness": worker_liveness,
         "queues": {
             "moysklad_commands": provider,
             "business_events": events,
