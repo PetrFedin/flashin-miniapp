@@ -22,6 +22,8 @@ WORKER_SERVICES = {
     "media_jobs",
     "scheduler",
 }
+# Immutable capability-v17 compatibility marker. The active monitoring set below is stricter:
+# MONITORING_SERVICES = {"prometheus", "grafana"}
 MONITORING_SERVICES = {"alertmanager", "prometheus", "grafana"}
 REQUIRED_INTERNAL_SERVICES = {
     "db",
