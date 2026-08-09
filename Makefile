@@ -1,4 +1,4 @@
-.PHONY: help init build up down logs migrate health workers search monitoring backup restore test preflight clean deploy-prod rollback rollback-drill rollback-drill-status verify-backup seed-admin validate-env openapi release-notes diagnostics setup-wizard check-integrations provider-probes readiness pilot-sheet readiness-gate pilot-gate loadtest performance-budget security-audit media-jobs loadtest-catalog loadtest-webhooks real-e2e grafana-dashboards simple-start launch-local launch-production connected-audit simplicity-score env-todo pilot-runner pilot-init pilot-record pilot-status pilot-final pilot-admit pilot-admission-status pilot-lifecycle-create pilot-lifecycle-attach pilot-lifecycle-status pilot-governance-create pilot-governance-attach pilot-governance-status pilot-runtime-arm pilot-runtime-status pilot-runtime-stop release-create release-verify release-status release-pack release-freeze pilot-evidence package-audit test-all transaction-integrity
+.PHONY: help init build up down logs migrate health workers search monitoring backup restore test preflight clean deploy-prod rollback rollback-drill rollback-drill-status verify-backup seed-admin validate-env openapi release-notes diagnostics setup-wizard check-integrations provider-probes readiness pilot-sheet readiness-gate pilot-gate pilot-live-verify telegram-launch-check telegram-launch-configure telegram-real-auth loadtest performance-budget security-audit media-jobs loadtest-catalog loadtest-webhooks real-e2e real-order-e2e real-lifecycle-e2e grafana-dashboards simple-start launch-local launch-production connected-audit simplicity-score env-todo pilot-runner pilot-init pilot-record pilot-status pilot-final pilot-admit pilot-admission-status pilot-lifecycle-create pilot-lifecycle-attach pilot-lifecycle-status pilot-governance-create pilot-governance-attach pilot-governance-status pilot-runtime-arm pilot-runtime-status pilot-runtime-stop release-create release-verify release-status release-pack release-freeze pilot-evidence package-audit test-all transaction-integrity
 
 help:
 	@echo "FLASHIN commands:"
@@ -16,6 +16,12 @@ help:
 	@echo "  make readiness-gate        - strict predeploy GO/NO-GO gate"
 	@echo "  make provider-probes       - run side-effectful live provider probes once"
 	@echo "  make pilot-gate            - verify public endpoints and signed provider evidence"
+	@echo "  make pilot-live-verify     - read-only Telegram launch check plus live pilot gate"
+	@echo "  make telegram-launch-check - verify Telegram Bot identity/default Mini App menu"
+	@echo "  make telegram-launch-configure ARGS='...' - converge Telegram menu only with explicit operator acknowledgement"
+	@echo "  make telegram-real-auth ARGS='...' - prove deployed real Telegram initData auth with explicit provisioning acknowledgement"
+	@echo "  make real-order-e2e        - run guarded deployed order/payment/fulfillment E2E"
+	@echo "  make real-lifecycle-e2e    - run guarded deployed terminal refund/lifecycle E2E"
 	@echo "  make rollback-drill        - execute rollback and record signed drill evidence"
 	@echo "  make pilot-admit           - create signed human/business pilot admission"
 	@echo "  make pilot-lifecycle-create - sign file-backed deployed lifecycle evidence"
@@ -144,6 +150,21 @@ readiness-gate:
 pilot-gate:
 	python3 scripts/readiness_gate.py --phase live
 
+pilot-live-verify:
+	$(MAKE) telegram-launch-check
+	$(MAKE) pilot-gate
+
+telegram-launch-check:
+	python3 scripts/check_telegram_bot.py
+
+telegram-launch-configure:
+	@echo "Read-only when provider state already matches; any mutation requires explicit acknowledgement passed in ARGS."
+	python3 scripts/configure_telegram_launch_surface.py $(ARGS)
+
+telegram-real-auth:
+	@echo "Requires TELEGRAM_INIT_DATA and TELEGRAM_EXPECTED_USER_ID in the process environment; customer provisioning requires explicit acknowledgement in ARGS."
+	python3 scripts/telegram_real_auth_smoke.py $(ARGS)
+
 
 loadtest:
 	API_BASE=http://localhost:8000 k6 run deploy/loadtest/k6_smoke.js
@@ -167,6 +188,12 @@ loadtest-webhooks:
 
 real-e2e:
 	RUN_REAL_E2E=1 pytest backend/tests/e2e
+
+real-order-e2e:
+	RUN_REAL_E2E=1 python -m pytest -q backend/tests/e2e/test_real_order_flow_runner.py
+
+real-lifecycle-e2e:
+	RUN_REAL_LIFECYCLE_E2E=1 python -m pytest -q backend/tests/e2e/test_order_payment_refund_flow.py
 
 grafana-dashboards:
 	@ls -1 deploy/grafana/dashboards
