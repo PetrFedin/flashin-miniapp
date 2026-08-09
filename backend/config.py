@@ -98,6 +98,7 @@ class Settings(BaseSettings):
     pilot_evidence_signing_secret: str = ""
     pilot_runtime_enforced: bool = False
     pilot_runtime_max_orders: int = 20
+    pilot_operational_queue_grace_minutes: int = 15
     pilot_admission_manifest_path: str = "docs/pilot/pilot_admission_manifest.json"
     pilot_state_path: str = "docs/pilot/live_pilot_state.json"
     pilot_current_release_path: str = "deploy/release/runtime/current_release.json"
@@ -144,6 +145,10 @@ class Settings(BaseSettings):
             raise ValueError("MOYSKLAD_COLOR_ATTRIBUTE_NAMES must not be empty")
         if not 1 <= self.pilot_runtime_max_orders <= 20:
             raise ValueError("PILOT_RUNTIME_MAX_ORDERS must be between 1 and 20")
+        if not 1 <= self.pilot_operational_queue_grace_minutes <= 120:
+            raise ValueError(
+                "PILOT_OPERATIONAL_QUEUE_GRACE_MINUTES must be between 1 and 120"
+            )
 
         if self.app_env.strip().lower() != "production":
             return self
