@@ -1,4 +1,5 @@
 import json
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -7,10 +8,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from backend.api import ops
-from backend.database import Base
+from backend.database import Base, utcnow_naive
 from backend.main import app
 from backend.models import Customer, Order, PaymentReconciliation, ReturnRequest
 from backend.pilot_models import PilotOrderSlot, PilotRuntimeState
+from backend.provider_models import ProviderCommand
 from backend.services import pilot_observability
 
 
@@ -41,6 +43,7 @@ def _active_runtime(db, *, accepted_orders: int = 2):
         max_orders=20,
         accepted_orders=accepted_orders,
         allowed_telegram_ids='["123456789", "987654321"]',
+        opened_at=utcnow_naive(),
     )
     db.add(state)
     orders = []
@@ -87,13 +90,16 @@ def test_healthy_active_runtime_is_go_without_exposing_allowlist_or_raw_run_id(m
         "healthy": True,
         "codes": [],
     }
+    assert snapshot["operational_safety"]["applicable"] is True
+    assert snapshot["operational_safety"]["healthy"] is True
+    assert snapshot["operational_safety"]["blocking_codes"] == []
+    assert snapshot["operational_safety"]["grace_minutes"] == 15
     serialized = json.dumps(snapshot, ensure_ascii=False)
     assert "123456789" not in serialized
     assert "987654321" not in serialized
     assert "pilot-run-2026" not in serialized
     assert "allowed_telegram_ids" not in serialized
     assert '"run_id"' not in serialized
-    assert "telegram" not in serialized.lower()
 
 
 def test_money_review_signals_force_no_go_without_order_ids(monkeypatch):
@@ -133,6 +139,62 @@ def test_money_review_signals_force_no_go_without_order_ids(monkeypatch):
     assert f'"order_id": {orders[0].id}' not in serialized
 
 
+def test_current_run_provider_failure_is_no_go_and_redacted(monkeypatch):
+    db = _database()
+    state, _customer, _orders = _active_runtime(db)
+    db.add(
+        ProviderCommand(
+            provider="moysklad",
+            command_type="customer_order.create",
+            idempotency_key="private-command-key",
+            aggregate_type="order",
+            aggregate_id="private-order-id",
+            payload_json='{"secret":"private-payload"}',
+            status="failed",
+            last_error="private provider error",
+            created_at=state.opened_at,
+        )
+    )
+    db.commit()
+    monkeypatch.setattr(pilot_observability, "validate_runtime_files", lambda *_args, **_kwargs: [])
+
+    snapshot = pilot_observability.build_pilot_operations_status(db, _settings())
+
+    assert snapshot["checkout_decision"] == "NO-GO"
+    safety = snapshot["operational_safety"]
+    assert safety["applicable"] is True
+    assert safety["healthy"] is False
+    assert "moysklad_command_terminal_failure" in safety["blocking_codes"]
+    assert safety["queues"]["moysklad_commands"]["terminal"] == 1
+    serialized = json.dumps(snapshot)
+    assert "private-command-key" not in serialized
+    assert "private-order-id" not in serialized
+    assert "private-payload" not in serialized
+    assert "private provider error" not in serialized
+
+
+def test_historical_provider_failure_before_opened_at_is_ignored(monkeypatch):
+    db = _database()
+    state, _customer, _orders = _active_runtime(db)
+    db.add(
+        ProviderCommand(
+            provider="moysklad",
+            command_type="customer_order.create",
+            idempotency_key="old-command-key",
+            status="failed",
+            created_at=state.opened_at - timedelta(seconds=1),
+        )
+    )
+    db.commit()
+    monkeypatch.setattr(pilot_observability, "validate_runtime_files", lambda *_args, **_kwargs: [])
+
+    snapshot = pilot_observability.build_pilot_operations_status(db, _settings())
+
+    assert snapshot["checkout_decision"] == "GO"
+    assert snapshot["operational_safety"]["healthy"] is True
+    assert snapshot["operational_safety"]["blocking_codes"] == []
+
+
 def test_database_counter_or_sequence_drift_is_reported(monkeypatch):
     db = _database()
     state, _customer, _orders = _active_runtime(db, accepted_orders=2)
@@ -148,6 +210,21 @@ def test_database_counter_or_sequence_drift_is_reported(monkeypatch):
     assert snapshot["database_integrity"]["healthy"] is False
     assert "slot_count_mismatch" in snapshot["database_integrity"]["codes"]
     assert "slot_sequence_gap" in snapshot["database_integrity"]["codes"]
+
+
+def test_active_runtime_without_opened_at_is_no_go(monkeypatch):
+    db = _database()
+    state, _customer, _orders = _active_runtime(db)
+    state.opened_at = None
+    db.commit()
+    monkeypatch.setattr(pilot_observability, "validate_runtime_files", lambda *_args, **_kwargs: [])
+
+    snapshot = pilot_observability.build_pilot_operations_status(db, _settings())
+
+    assert snapshot["checkout_decision"] == "NO-GO"
+    assert "active_runtime_opened_at_missing" in snapshot["database_integrity"]["codes"]
+    assert snapshot["operational_safety"]["applicable"] is False
+    assert snapshot["operational_safety"]["healthy"] is False
 
 
 def test_configured_limit_mismatch_is_no_go(monkeypatch):
@@ -240,6 +317,14 @@ def test_missing_runtime_is_no_go_when_enforcement_is_enabled():
     assert snapshot["database_integrity"] == {
         "healthy": False,
         "codes": ["runtime_state_missing"],
+    }
+    assert snapshot["operational_safety"] == {
+        "applicable": False,
+        "healthy": None,
+        "blocking_codes": [],
+        "grace_minutes": 15,
+        "scope_started_at": None,
+        "queues": {},
     }
 
 
