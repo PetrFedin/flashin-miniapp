@@ -106,10 +106,15 @@ docker compose run --rm backend python scripts/check_transaction_integrity.py
 echo "Verifying first-20-order runtime integrity..."
 docker compose run --rm backend python scripts/check_pilot_runtime_integrity.py
 
-echo "Starting Alertmanager before the rest of monitoring..."
-docker compose up -d alertmanager
+if docker compose ps --status running --services 2>/dev/null | grep -qx prometheus; then
+  echo "Stopping existing Prometheus before isolated Alertmanager delivery proof..."
+  docker compose stop prometheus
+fi
 
-echo "Proving external alert delivery before release promotion..."
+echo "Starting a fresh Alertmanager before the rest of monitoring..."
+docker compose up -d --force-recreate alertmanager
+
+echo "Proving isolated external alert delivery before release promotion..."
 docker compose run --rm --no-deps backend python scripts/alertmanager_delivery_smoke.py
 
 echo "Starting production services, workers, search and internal monitoring..."
@@ -222,6 +227,6 @@ if [ -n "$backup_file" ]; then
   echo "Rollback drill input: scripts/rollback.sh previous '$backup_file'"
 fi
 echo "Prometheus, Alertmanager and Grafana are internal-only. Use an authenticated SSH tunnel for operator access."
-echo "External alert delivery smoke passed before release promotion."
+echo "Isolated external alert delivery smoke passed before release promotion."
 echo "Run 'make pilot-gate' only after the guarded current and previous releases, rollback drill and provider evidence are ready."
 echo "Pilot runtime remains stopped. Re-run admission and 'make pilot-runtime-arm' before checkout."
