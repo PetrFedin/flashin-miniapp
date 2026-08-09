@@ -16,6 +16,10 @@ from backend.jobs.scheduler_lock import run_locked_async_db_job, run_locked_db_j
 from backend.jobs.sla_jobs import mark_overdue_sla
 from backend.services.crm import recompute_all_profiles
 from backend.services.moysklad import sync_assortment_to_catalog
+from backend.services.pilot_worker_heartbeat import (
+    SCHEDULER_WORKER,
+    record_worker_heartbeat,
+)
 from backend.services.recommendations import rebuild_basic_recommendations
 
 
@@ -40,6 +44,12 @@ def _run_async_db_job(job_name, callback):
     return outcome
 
 
+def _record_scheduler_heartbeat():
+    seen_at = record_worker_heartbeat(SCHEDULER_WORKER)
+    print("pilot-worker-heartbeat", {"worker": SCHEDULER_WORKER, "status": "ok"})
+    return seen_at
+
+
 def main():
     settings = get_settings()
     if not settings.scheduler_enabled:
@@ -52,6 +62,13 @@ def main():
             "max_instances": 1,
             "misfire_grace_time": 300,
         }
+    )
+    scheduler.add_job(
+        _record_scheduler_heartbeat,
+        "interval",
+        seconds=30,
+        id="pilot-worker-heartbeat",
+        next_run_time=utcnow_naive(),
     )
     scheduler.add_job(
         lambda: _run_db_job("campaigns", queue_due_campaigns),
