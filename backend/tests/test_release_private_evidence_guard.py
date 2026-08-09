@@ -42,6 +42,11 @@ def test_guard_detects_force_tracked_private_evidence(tmp_path):
     ]
 
 
+def test_current_repository_has_no_tracked_private_evidence():
+    module = _load_guard()
+    assert module.tracked_private_evidence(ROOT) == []
+
+
 def test_repository_ignores_private_evidence_and_release_workflow_runs_guard():
     gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
     release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")

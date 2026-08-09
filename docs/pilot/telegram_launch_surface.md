@@ -11,6 +11,24 @@ For the production pilot:
 3. Keep the application's `/start` inline Web App button enabled as a second launch path; it uses the same `MINI_APP_URL` configuration.
 4. Optionally configure the bot's Main Mini App/profile **Open App** entry point as well. The probe records `has_main_web_app`, but the mandatory release condition is the exact default menu Web App URL because that URL can be read back and verified through the Bot API.
 
+## Idempotent operator configuration
+
+The repository includes `scripts/configure_telegram_launch_surface.py` to converge the bot's **default** menu button on the configured production Mini App without blindly writing provider state. It always reads the current default button first.
+
+A read-only check requires only the normal production Telegram environment:
+
+```bash
+python3 scripts/configure_telegram_launch_surface.py
+```
+
+If the existing menu already matches `MINI_APP_URL` and `TELEGRAM_MENU_BUTTON_TEXT` (default `Open FLASHIN`), the command returns GO without a provider mutation. If drift is detected it fails closed. Apply the change only with an explicit operator acknowledgement:
+
+```bash
+python3 scripts/configure_telegram_launch_surface.py --acknowledge-provider-change
+```
+
+The acknowledged path calls Telegram `setChatMenuButton` for the default button and then immediately calls `getChatMenuButton` again. Success is reported only when the read-back type, text and normalized HTTPS URL match the requested configuration. Output is bounded and does not contain the bot token, configured URL or remote drift value.
+
 ## What the live provider probe verifies
 
 `scripts/check_telegram_bot.py` performs two read-only Bot API calls:
