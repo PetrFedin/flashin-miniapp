@@ -123,6 +123,8 @@ jobs:
         run: python scripts/webhook_outbox_lease_smoke.py
       - name: Run owned notification delivery lease smoke
         run: python scripts/notification_delivery_lease_smoke.py
+      - name: Run Telegram notification transport smoke
+        run: python scripts/notification_transport_smoke.py
       - name: Run distributed scheduler lock smoke
         run: python scripts/scheduler_lock_smoke.py
       - name: Run durable refund reconciliation review smoke
