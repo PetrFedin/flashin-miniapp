@@ -11,6 +11,10 @@ from sqlalchemy.orm import Session
 
 from ..models import Order, PaymentReconciliation, ReturnRequest
 from ..pilot_models import PilotOrderSlot, PilotRuntimeState
+from .pilot_operational_safety import (
+    DEFAULT_OPERATIONAL_QUEUE_GRACE_MINUTES,
+    build_pilot_operational_safety,
+)
 from .pilot_runtime import validate_runtime_files
 
 if TYPE_CHECKING:
@@ -169,6 +173,17 @@ def _money_attention(db: Session, order_ids: list[int]) -> dict[str, int | bool]
     }
 
 
+def _not_applicable_operational_safety(*, healthy: bool | None = None) -> dict[str, Any]:
+    return {
+        "applicable": False,
+        "healthy": healthy,
+        "blocking_codes": [],
+        "grace_minutes": DEFAULT_OPERATIONAL_QUEUE_GRACE_MINUTES,
+        "scope_started_at": None,
+        "queues": {},
+    }
+
+
 def build_pilot_operations_status(
     db: Session,
     settings: "Settings",
@@ -222,6 +237,7 @@ def build_pilot_operations_status(
                 "codes": [],
             },
             "money_attention": _money_attention(db, []),
+            "operational_safety": _not_applicable_operational_safety(),
         }
 
     slots = (
@@ -270,6 +286,8 @@ def build_pilot_operations_status(
         database_codes.append("release_binding_invalid")
     if state.status in {"active", "stopped", "completed"} and not state.pilot_state_created_at:
         database_codes.append("pilot_state_binding_missing")
+    if state.status == "active" and state.opened_at is None:
+        database_codes.append("active_runtime_opened_at_missing")
     if state.status == "active" and allowlist_count == 0:
         database_codes.append("active_allowlist_empty")
     if state.status == "active" and state.accepted_orders >= state.max_orders:
@@ -292,6 +310,29 @@ def build_pilot_operations_status(
         artifact_healthy = not artifact_codes
 
     money_attention = _money_attention(db, order_ids)
+    if state.opened_at is None:
+        operational_safety = _not_applicable_operational_safety(
+            healthy=False if state.status == "active" else None
+        )
+    else:
+        try:
+            operational_safety = {
+                "applicable": True,
+                **build_pilot_operational_safety(
+                    db,
+                    created_since=state.opened_at,
+                ),
+            }
+        except Exception:
+            operational_safety = {
+                "applicable": True,
+                "healthy": False,
+                "blocking_codes": ["operational_safety_evaluation_failed"],
+                "grace_minutes": DEFAULT_OPERATIONAL_QUEUE_GRACE_MINUTES,
+                "scope_started_at": _timestamp(state.opened_at),
+                "queues": {},
+            }
+
     remaining_orders = max(int(state.max_orders) - int(state.accepted_orders), 0)
     database_healthy = not database_codes
     integrity_healthy = database_healthy and artifact_healthy is True
@@ -301,6 +342,7 @@ def build_pilot_operations_status(
         and remaining_orders > 0
         and integrity_healthy
         and not money_attention["attention_required"]
+        and operational_safety["healthy"] is True
     )
 
     return {
@@ -334,4 +376,5 @@ def build_pilot_operations_status(
             "codes": artifact_codes,
         },
         "money_attention": money_attention,
+        "operational_safety": operational_safety,
     }
