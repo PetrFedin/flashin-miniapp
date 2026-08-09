@@ -213,6 +213,28 @@ services:
     profiles:
       - search
 
+  alertmanager:
+    image: prom/alertmanager:v0.33.1
+    command:
+      - --config.file=/run/secrets/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --web.listen-address=:9093
+      - --cluster.listen-address=
+    secrets:
+      - source: alertmanager_config
+        target: alertmanager.yml
+    volumes:
+      - alertmanager_data:/alertmanager
+    ports:
+      - "9093:9093"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9093/-/ready >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    profiles:
+      - monitoring
+
   prometheus:
     image: prom/prometheus:v3.5.3
     command:
@@ -228,6 +250,8 @@ services:
       - "9090:9090"
     depends_on:
       backend:
+        condition: service_healthy
+      alertmanager:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9090/-/ready >/dev/null 2>&1"]
@@ -277,11 +301,16 @@ services:
     profiles:
       - production
 
+secrets:
+  alertmanager_config:
+    file: ${ALERTMANAGER_CONFIG_FILE:-./deploy/alertmanager/alertmanager.dev.yml}
+
 volumes:
   pgdata:
   media:
   meili_data:
   caddydata:
   caddyconfig:
+  alertmanager_data:
   prometheus_data:
   grafana_data:

@@ -37,6 +37,9 @@ trap deploy_failure ERR
 echo "Running strict predeploy readiness gate..."
 python3 scripts/readiness_gate.py --phase predeploy
 
+echo "Rendering root-only Alertmanager configuration..."
+python3 scripts/render_alertmanager_config.py
+
 echo "Creating immutable release archive from clean tracked files..."
 release_archive=$(python3 scripts/release_control.py create --print-path)
 python3 scripts/release_control.py verify --archive "$release_archive" >/dev/null
@@ -103,10 +106,16 @@ docker compose run --rm backend python scripts/check_transaction_integrity.py
 echo "Verifying first-20-order runtime integrity..."
 docker compose run --rm backend python scripts/check_pilot_runtime_integrity.py
 
+echo "Starting Alertmanager before the rest of monitoring..."
+docker compose up -d alertmanager
+
+echo "Proving external alert delivery before release promotion..."
+docker compose run --rm --no-deps backend python scripts/alertmanager_delivery_smoke.py
+
 echo "Starting production services, workers, search and internal monitoring..."
 docker compose up -d \
   db backend frontend admin bot caddy \
-  notification_worker scheduler meilisearch prometheus grafana
+  notification_worker scheduler meilisearch alertmanager prometheus grafana
 
 echo "Waiting for migration-aware backend readiness inside Docker network..."
 backend_ready=0
@@ -143,7 +152,7 @@ fi
 echo "Applying search index settings..."
 docker compose run --rm backend python scripts/configure_meilisearch.py
 
-echo "Waiting for Prometheus rules and pilot metrics..."
+echo "Waiting for Prometheus rules, pilot metrics and Alertmanager discovery..."
 prometheus_ready=0
 for _ in $(seq 1 60); do
   metrics_payload="$(
@@ -156,17 +165,23 @@ for _ in $(seq 1 60); do
       curl -fsS 'http://prometheus:9090/api/v1/rules' \
       2>/dev/null || true
   )"
+  alertmanagers_payload="$(
+    docker compose exec -T backend \
+      curl -fsS 'http://prometheus:9090/api/v1/alertmanagers' \
+      2>/dev/null || true
+  )"
   if printf '%s' "$metrics_payload" | grep -q 'flashin_pilot_metrics_collection_success' \
-    && printf '%s' "$rules_payload" | grep -q 'FlashinPilotRuntimeStopped'; then
+    && printf '%s' "$rules_payload" | grep -q 'FlashinPilotRuntimeStopped' \
+    && printf '%s' "$alertmanagers_payload" | grep -q 'alertmanager:9093'; then
     prometheus_ready=1
-    echo "Prometheus pilot metrics and rules ready"
+    echo "Prometheus pilot metrics, rules and Alertmanager discovery ready"
     break
   fi
   sleep 2
 done
 if [ "$prometheus_ready" -ne 1 ]; then
-  echo "Prometheus did not load pilot metrics and alert rules"
-  docker compose logs prometheus
+  echo "Prometheus did not load pilot metrics, alert rules or Alertmanager target"
+  docker compose logs prometheus alertmanager
   exit 1
 fi
 
@@ -186,7 +201,7 @@ if [ "$grafana_ready" -ne 1 ]; then
   exit 1
 fi
 
-for service in db backend frontend admin bot caddy notification_worker scheduler meilisearch prometheus grafana; do
+for service in db backend frontend admin bot caddy notification_worker scheduler meilisearch alertmanager prometheus grafana; do
   if ! docker compose ps --status running --services | grep -qx "$service"; then
     echo "$service is not running"
     docker compose logs "$service"
@@ -206,6 +221,7 @@ echo "Deploy completed and release promoted: $release_archive"
 if [ -n "$backup_file" ]; then
   echo "Rollback drill input: scripts/rollback.sh previous '$backup_file'"
 fi
-echo "Prometheus and Grafana are internal-only. Use an authenticated SSH tunnel for operator access."
+echo "Prometheus, Alertmanager and Grafana are internal-only. Use an authenticated SSH tunnel for operator access."
+echo "External alert delivery smoke passed before release promotion."
 echo "Run 'make pilot-gate' only after the guarded current and previous releases, rollback drill and provider evidence are ready."
 echo "Pilot runtime remains stopped. Re-run admission and 'make pilot-runtime-arm' before checkout."

@@ -14,6 +14,7 @@ WORKER_SERVICES = {
     "notification_worker",
     "ops_jobs",
     "outbox_jobs",
+    "provider_command_jobs",
     "moysklad_sync",
     "campaign_jobs",
     "sla_jobs",
@@ -21,7 +22,7 @@ WORKER_SERVICES = {
     "media_jobs",
     "scheduler",
 }
-MONITORING_SERVICES = {"prometheus", "grafana"}
+MONITORING_SERVICES = {"alertmanager", "prometheus", "grafana"}
 REQUIRED_INTERNAL_SERVICES = {
     "db",
     "backend",
@@ -33,6 +34,8 @@ REQUIRED_INTERNAL_SERVICES = {
 EXPECTED_PUBLIC_PORTS = {(80, "tcp"), (443, "tcp")}
 PRODUCTION_PROFILES = ("production", "workers", "scheduler", "search", "monitoring")
 RESTART_POLICY = "unless-stopped"
+ALERTMANAGER_SECRET = "alertmanager_config"
+ALERTMANAGER_RUNTIME_CONFIG = "deploy/runtime/alertmanager.yml"
 
 
 def _published_ports(service: Mapping) -> set[tuple[int, str]]:
@@ -64,6 +67,15 @@ def _healthcheck_text(service: Mapping) -> str:
     return ""
 
 
+def _command_text(service: Mapping) -> str:
+    command = service.get("command")
+    if isinstance(command, str):
+        return command
+    if isinstance(command, Sequence) and not isinstance(command, (str, bytes)):
+        return " ".join(str(value) for value in command)
+    return ""
+
+
 def _dependency_condition(service: Mapping, dependency: str) -> str | None:
     depends_on = service.get("depends_on")
     if not isinstance(depends_on, Mapping):
@@ -84,11 +96,25 @@ def _mounts_by_target(service: Mapping) -> dict[str, Mapping]:
     return result
 
 
+def _secret_sources(service: Mapping) -> set[str]:
+    result: set[str] = set()
+    for secret in service.get("secrets") or []:
+        if isinstance(secret, str):
+            result.add(secret)
+        elif isinstance(secret, Mapping) and secret.get("source"):
+            result.add(str(secret["source"]))
+    return result
+
+
 def _pinned_image(service: Mapping) -> bool:
     image = str(service.get("image") or "").strip()
     if not image or ":" not in image:
         return False
     return not image.endswith(":latest")
+
+
+def _normalized_path(value: object) -> str:
+    return str(value or "").replace("\\", "/").lstrip("./")
 
 
 def validate_config(config: Mapping) -> list[str]:
@@ -146,6 +172,36 @@ def validate_config(config: Mapping) -> list[str]:
         if isinstance(worker, Mapping) and _dependency_condition(worker, "db") != "service_healthy":
             errors.append(f"{worker_name} must wait for a healthy database")
 
+    alertmanager = services.get("alertmanager")
+    if isinstance(alertmanager, Mapping):
+        if not _pinned_image(alertmanager):
+            errors.append("Alertmanager must use a pinned image tag")
+        if "/-/ready" not in _healthcheck_text(alertmanager):
+            errors.append("Alertmanager healthcheck must use /-/ready")
+        if ALERTMANAGER_SECRET not in _secret_sources(alertmanager):
+            errors.append("Alertmanager must consume the rendered config as a Compose secret")
+        if "/run/secrets/alertmanager.yml" not in _command_text(alertmanager):
+            errors.append("Alertmanager must load /run/secrets/alertmanager.yml")
+        storage = _mounts_by_target(alertmanager).get("/alertmanager")
+        if not storage:
+            errors.append("Alertmanager must use durable /alertmanager storage")
+        elif str(storage.get("type") or "") != "volume":
+            errors.append("Alertmanager /alertmanager storage must be a named volume")
+
+    secrets = config.get("secrets")
+    if not isinstance(secrets, Mapping) or ALERTMANAGER_SECRET not in secrets:
+        errors.append("Compose must define the alertmanager_config secret")
+    else:
+        secret = secrets.get(ALERTMANAGER_SECRET)
+        if not isinstance(secret, Mapping):
+            errors.append("alertmanager_config secret has invalid configuration")
+        else:
+            configured_file = _normalized_path(secret.get("file"))
+            if not configured_file.endswith(ALERTMANAGER_RUNTIME_CONFIG):
+                errors.append(
+                    "Production Alertmanager secret must use deploy/runtime/alertmanager.yml"
+                )
+
     prometheus = services.get("prometheus")
     if isinstance(prometheus, Mapping):
         if not _pinned_image(prometheus):
@@ -154,6 +210,8 @@ def validate_config(config: Mapping) -> list[str]:
             errors.append("Prometheus healthcheck must use /-/ready")
         if _dependency_condition(prometheus, "backend") != "service_healthy":
             errors.append("Prometheus must wait for a healthy backend")
+        if _dependency_condition(prometheus, "alertmanager") != "service_healthy":
+            errors.append("Prometheus must wait for healthy Alertmanager")
         mounts = _mounts_by_target(prometheus)
         for target in ("/etc/prometheus/prometheus.yml", "/etc/prometheus/rules"):
             mount = mounts.get(target)

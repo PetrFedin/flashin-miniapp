@@ -24,6 +24,7 @@ from pilot_readiness import (
     build_predeploy_checks,
     build_report,
     read_env,
+    run_command,
     write_report,
 )
 from provider_wiring_preflight import validate_wiring
@@ -55,6 +56,35 @@ def _provider_wiring_checks(env: Mapping[str, str]) -> list[CheckResult]:
         for item in report.get("checks", [])
         if isinstance(item, Mapping)
     ]
+
+
+def _alertmanager_config_check() -> CheckResult:
+    return run_command(
+        "alertmanager:config",
+        ["python3", "scripts/render_alertmanager_config.py", "--check"],
+        root=ROOT,
+    )
+
+
+def _alertmanager_live_delivery_check() -> CheckResult:
+    return run_command(
+        "live:alertmanager_delivery",
+        [
+            "docker",
+            "compose",
+            "-f",
+            "docker-compose.yml",
+            "-f",
+            "docker-compose.production.yml",
+            "exec",
+            "-T",
+            "backend",
+            "python",
+            "scripts/alertmanager_delivery_smoke.py",
+        ],
+        root=ROOT,
+        timeout=120,
+    )
 
 
 def build_signed_live_report(
@@ -97,8 +127,10 @@ def main() -> int:
     env = read_env(ROOT / ".env")
     checks = build_predeploy_checks(ROOT)
     checks.extend(_provider_wiring_checks(env))
+    checks.append(_alertmanager_config_check())
     if args.phase == "live":
         checks.extend(build_live_checks(ROOT))
+        checks.append(_alertmanager_live_delivery_check())
 
     report = build_report(args.phase, checks)
     if args.phase == "live":
