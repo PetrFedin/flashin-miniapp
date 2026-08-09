@@ -345,23 +345,25 @@ def build_pilot_operational_safety(
     *,
     grace_minutes: int = DEFAULT_OPERATIONAL_QUEUE_GRACE_MINUTES,
     created_since: datetime | None = None,
+    require_worker_liveness: bool = False,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Return an identifier-free, fail-closed view of current-pilot operations.
+    """Return an identifier-free, fail-closed view of pilot operations.
 
-    ``created_since`` should be the runtime ``opened_at`` timestamp. This keeps
-    historical queue failures and pre-arm worker heartbeats from satisfying a
-    new run while a stopped/resumed run retains the same window. Fresh pending
-    work is visible but non-blocking. Required workers must publish a fresh
-    post-arm heartbeat before the pilot can accept checkout.
+    ``created_since`` should be the runtime ``opened_at`` timestamp. Queue
+    safety always uses that scope. Production pilot callers also set
+    ``require_worker_liveness=True`` so scheduler/notification heartbeats must
+    be fresh and post-arm before checkout can proceed.
     """
     normalized_grace = _grace_minutes(grace_minutes)
     effective_now = now or utcnow_naive()
     if created_since is not None and created_since > effective_now:
         raise ValueError("Pilot operational queue scope cannot start in the future")
+    if require_worker_liveness and created_since is None:
+        raise ValueError("Pilot worker liveness requires a runtime scope")
     overdue_before = effective_now - timedelta(minutes=normalized_grace)
 
-    if created_since is None:
+    if not require_worker_liveness:
         worker_liveness = {
             "applicable": False,
             "healthy": True,
@@ -370,6 +372,7 @@ def build_pilot_operational_safety(
         }
         worker_blockers: list[str] = []
     else:
+        assert created_since is not None
         worker_liveness = {
             "applicable": True,
             **build_required_worker_liveness(
