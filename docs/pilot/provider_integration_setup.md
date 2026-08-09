@@ -91,7 +91,7 @@ The probe verifies the bot credential with Telegram `getMe`; it does not replace
 
 ## 3. YooKassa
 
-FLASHIN uses HTTP Basic Auth with shop id + secret key.
+FLASHIN authenticates its **outgoing YooKassa API requests** with HTTP Basic Auth using shop id + secret key. For HTTP Basic Auth merchant integrations, the notification subscription itself is configured in the YooKassa Personal Area. The incoming YooKassa callback is not required to carry the merchant's Basic Auth credentials and FLASHIN does not depend on such a header.
 
 In YooKassa Personal Area -> Integration -> HTTP notifications configure exactly:
 
@@ -108,7 +108,7 @@ Enable these events for the pilot:
 
 The legacy endpoints `/api/payments/webhook/yookassa` and `/api/returns/webhook/yookassa` stay available only for migration/rollback compatibility. Do not configure them as separate production notification URLs.
 
-YooKassa requires HTTPS notification URLs on port 443 or 8443 and TLS 1.2+. FLASHIN answers HTTP 200 only after the callback was accepted/processed. Both payment and refund processors re-fetch the current provider object before mutating local money/order state, so webhook fields are not treated as authoritative.
+YooKassa requires HTTPS notification URLs on port 443 or 8443 and TLS 1.2+. FLASHIN answers HTTP 200 only after the callback was accepted/processed. For callback authenticity and freshness, both payment and refund processors re-fetch the current provider object using the authenticated YooKassa API before mutating local money/order state; webhook body fields are not treated as authoritative. An ingress/proxy IP allowlist may be added as defense in depth, but it must not replace the authoritative provider read.
 
 Official references:
 
@@ -159,9 +159,9 @@ Production deployment must keep these paths live:
 
 The scheduler is the production orchestrator; the individual worker-profile services remain useful for isolated operations/tests but are not required to run alongside the scheduler for the same scheduled jobs.
 
-## 6. Internal E2E gate
+## 6. Internal E2E gates
 
-The required `integrated-e2e` job now drives one PostgreSQL order through:
+The required `integrated-e2e` browser job drives one PostgreSQL order through:
 
 1. signed Telegram Mini App authentication;
 2. cart + promo + idempotent checkout;
@@ -169,17 +169,19 @@ The required `integrated-e2e` job now drives one PostgreSQL order through:
 4. browser confirmation redirect;
 5. duplicate `payment.succeeded` callbacks through `/api/webhooks/yookassa`;
 6. authoritative provider GET and settlement;
-7. stock `reserve -> commit`, fulfillment task and MoySklad customer-order command;
-8. pick/pack/ready, shipment and MoySklad demand command;
+7. stock `reserve -> commit`, fulfillment task and MoySklad customer-order command creation;
+8. pick/pack/ready, shipment and MoySklad demand command creation;
 9. delivered order;
 10. customer return request;
 11. admin full-refund approval producing a pending provider refund;
 12. duplicate `refund.succeeded` callbacks through the same canonical webhook;
-13. stock `return`, loyalty reversal, MoySklad sales-return command and one refund notification.
+13. stock `return`, loyalty reversal, MoySklad sales-return command creation and one refund notification.
 
-The test asserts that duplicate callbacks do not duplicate inventory return movements, provider commands or deterministic refund notifications.
+The test asserts that duplicate callbacks do not duplicate inventory return movements, provider commands or deterministic refund notifications. Its YooKassa HTTP boundary is deterministic/test-only; Telegram notification delivery and MoySklad HTTP dispatch are not claimed by this browser test.
 
-This remains an internal-stack test. External YooKassa/MoySklad/Telegram HTTP boundaries are simulated; live lifecycle evidence is still mandatory before runtime admission.
+A second mandatory backend CI gate, `scripts/provider_integration_spine_smoke.py`, takes the durable MoySklad commands through the real PostgreSQL provider-command worker and validates `customerorder -> demand -> salesreturn`, external IDs and payload/link relationships. Only the remote MoySklad HTTP boundary is replaced there. Notification delivery lease/retry behavior is covered by the separate mandatory notification-delivery smoke.
+
+Together these gates prove the internal chain without pretending that live Telegram/YooKassa/MoySklad provider calls occurred. Live lifecycle evidence remains mandatory before runtime admission.
 
 ## 7. Live pilot evidence
 
