@@ -11,9 +11,21 @@ def test_alert_delivery_smoke_is_isolated_from_existing_prometheus_traffic():
     stop_prometheus = source.index("docker compose stop prometheus")
     fresh_alertmanager = source.index("docker compose up -d --force-recreate alertmanager")
     delivery_smoke = source.index("python scripts/alertmanager_delivery_smoke.py")
-    start_monitoring = source.index("notification_worker scheduler meilisearch alertmanager prometheus grafana")
+    start_workers = source.index(
+        "notification_worker provider_command_jobs scheduler meilisearch",
+        delivery_smoke,
+    )
+    start_monitoring = source.index("alertmanager prometheus grafana", start_workers)
     promote_release = source.index("python3 scripts/release_control.py promote")
 
-    assert stop_prometheus < fresh_alertmanager < delivery_smoke < start_monitoring < promote_release
+    assert (
+        stop_prometheus
+        < fresh_alertmanager
+        < delivery_smoke
+        < start_workers
+        < start_monitoring
+        < promote_release
+    )
     assert "ps --status running --services" in source
     assert "Proving isolated external alert delivery before release promotion" in source
+    assert "provider_command_jobs" in source
