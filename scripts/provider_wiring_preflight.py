@@ -121,7 +121,12 @@ def validate_wiring(env: Mapping[str, str]) -> dict[str, object]:
     export_enabled = _truthy(env.get("MOYSKLAD_ORDER_EXPORT_ENABLED"))
     add("moysklad_order_export", export_enabled, "MoySklad outbound order documents must be enabled")
     if export_enabled:
-        for key in ("MOYSKLAD_ORGANIZATION_ID", "MOYSKLAD_AGENT_ID", "MOYSKLAD_STORE_ID"):
+        for key in (
+            "MOYSKLAD_ORGANIZATION_ID",
+            "MOYSKLAD_AGENT_ID",
+            "MOYSKLAD_STORE_ID",
+            "MOYSKLAD_DELIVERY_SERVICE_ID",
+        ):
             add(f"moysklad:{key.lower()}", _present(env.get(key)), f"{key} is configured")
 
     add("scheduler_enabled", _truthy(env.get("SCHEDULER_ENABLED")), "Scheduler must process provider commands and reconciliation")
