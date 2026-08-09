@@ -45,7 +45,7 @@ services:
 YAML
 
 export COMPOSE_FILE="$ROOT/docker-compose.yml:$OVERRIDE_FILE"
-export COMPOSE_PROFILES="production,workers,scheduler,search"
+export COMPOSE_PROFILES="production,workers,scheduler,search,monitoring"
 
 rm -rf deploy/release/runtime
 mkdir -p deploy/release/runtime deploy/release/builds docs/pilot
@@ -110,8 +110,12 @@ docker compose exec -T db sh -ec \
   'exec psql --set ON_ERROR_STOP=on -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"' \
   sh "$mutate_sql" >/dev/null
 
-# Start the current deployment so rollback proves runtime stop and service restart.
-docker compose up -d db backend frontend admin bot caddy notification_worker scheduler meilisearch
+# Start the current deployment so rollback proves runtime stop, durable provider
+# dispatch and monitoring restart in addition to public service recovery.
+docker compose up -d \
+  db backend frontend admin bot caddy \
+  notification_worker provider_command_jobs scheduler meilisearch \
+  alertmanager prometheus grafana
 for _ in $(seq 1 90); do
   if docker compose exec -T backend curl -fsS http://localhost:8000/ready >/dev/null 2>&1; then
     break
@@ -141,6 +145,18 @@ if [ "$restored_name" != "$ORIGINAL_NAME" ]; then
   echo "Rollback database sentinel mismatch: expected '$ORIGINAL_NAME', got '$restored_name'" >&2
   exit 1
 fi
+
+for service in provider_command_jobs alertmanager prometheus grafana; do
+  if ! docker compose ps --status running --services | grep -qx "$service"; then
+    echo "Rollback smoke missing required operational service: $service" >&2
+    exit 1
+  fi
+done
+
+docker compose exec -T backend curl -fsS http://alertmanager:9093/-/ready >/dev/null
+docker compose exec -T backend curl -fsS http://grafana:3000/api/health >/dev/null
+alertmanagers_payload="$(docker compose exec -T backend curl -fsS http://prometheus:9090/api/v1/alertmanagers)"
+printf '%s' "$alertmanagers_payload" | grep -q 'alertmanager:9093'
 
 python3 scripts/backup_integrity.py verify-live \
   --backup "$BACKUP_FILE" \
@@ -174,6 +190,8 @@ print(json.dumps({
     "container_smoke": report["checks"]["container_smoke"],
     "runtime_image_rebuilt": True,
     "release_pointer_promoted": True,
+    "provider_command_worker_restored": True,
+    "monitoring_restored": True,
     "signed_evidence_verified": True,
 }, ensure_ascii=False))
 PY

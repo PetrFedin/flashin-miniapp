@@ -6,7 +6,7 @@ BACKUP=${2:-}
 ROLLBACK_DRILL=${ROLLBACK_DRILL:-0}
 
 export COMPOSE_FILE=${COMPOSE_FILE:-"docker-compose.yml:docker-compose.production.yml"}
-export COMPOSE_PROFILES=${COMPOSE_PROFILES:-"production,workers,scheduler,search"}
+export COMPOSE_PROFILES=${COMPOSE_PROFILES:-"production,workers,scheduler,search,monitoring"}
 
 PROJECT_ROOT=$(pwd)
 RELEASE_STATE_DIR="$PROJECT_ROOT/deploy/release/runtime"
@@ -14,8 +14,10 @@ CONTROL_SCRIPT="scripts/release_control.py"
 RESTORE_SCRIPT="scripts/restore_postgres.sh"
 EVIDENCE_SCRIPT="scripts/pilot_evidence.py"
 CAPABILITY_SCRIPT="scripts/pilot_release_capability.py"
+ALERTMANAGER_RENDERER="scripts/render_alertmanager_config.py"
 CURRENT_RELEASE_STATE="deploy/release/runtime/current_release.json"
 ROLLBACK_REPORT="docs/pilot/rollback_drill_report.json"
+ALERTMANAGER_SECRET_ENV="deploy/secrets/alertmanager.env"
 
 for required_script in "$CONTROL_SCRIPT" "$RESTORE_SCRIPT" "$CAPABILITY_SCRIPT"; do
   if [ ! -f "$required_script" ]; then
@@ -62,6 +64,34 @@ if [ -n "$BACKUP" ]; then
   bash scripts/verify_backup.sh "$BACKUP"
 fi
 
+# Pilot rollback must not recover the customer-facing API while silently losing
+# provider-command dispatch or the internal alerting plane. Validate the target
+# archive before any downtime so an older/incomplete release fails closed.
+python3 - "$RELEASE" <<'PY'
+import sys
+import zipfile
+from pathlib import Path
+
+archive = Path(sys.argv[1])
+required = {
+    "scripts/render_alertmanager_config.py",
+    "scripts/run_provider_command_jobs.py",
+    "deploy/monitoring/prometheus.yml",
+    "deploy/monitoring/rules/flashin_pilot.yml",
+    "deploy/grafana/provisioning/datasources/prometheus.yml",
+    "docker-compose.yml",
+    "docker-compose.production.yml",
+}
+with zipfile.ZipFile(archive, "r") as bundle:
+    names = set(bundle.namelist())
+missing = sorted(required - names)
+if missing:
+    raise SystemExit(
+        "Rollback target is missing pilot operational infrastructure: "
+        + ", ".join(missing)
+    )
+PY
+
 if ! command -v rsync >/dev/null 2>&1; then
   echo "rsync is required for rollback" >&2
   exit 1
@@ -107,6 +137,8 @@ rsync -a --delete \
   --exclude 'grafana-data/' \
   --exclude 'deploy/release/builds/' \
   --exclude 'deploy/release/runtime/' \
+  --exclude 'deploy/runtime/' \
+  --exclude 'deploy/secrets/alertmanager.env' \
   --exclude 'docs/pilot/live_pilot_state.json' \
   --exclude 'docs/pilot/live_pilot_summary.md' \
   --exclude 'docs/pilot/integration_check_report.json' \
@@ -121,11 +153,41 @@ rsync -a --delete \
   --exclude 'docs/pilot_live_gate_report.md' \
   "$TMP_DIR/release/" ./
 
+if [ ! -f "$ALERTMANAGER_RENDERER" ]; then
+  echo "Rolled-back release is missing Alertmanager renderer" >&2
+  exit 1
+fi
+
+app_env=$(python3 - <<'PY'
+from pathlib import Path
+value = "development"
+for raw in Path(".env").read_text(encoding="utf-8").splitlines():
+    line = raw.strip()
+    if line.startswith("APP_ENV="):
+        value = line.split("=", 1)[1].strip().strip('"').strip("'") or "development"
+        break
+print(value.lower())
+PY
+)
+if [ "$app_env" = "production" ]; then
+  if [ ! -f "$ALERTMANAGER_SECRET_ENV" ]; then
+    echo "Production rollback requires preserved $ALERTMANAGER_SECRET_ENV" >&2
+    exit 1
+  fi
+  echo "Re-rendering Alertmanager config from preserved root-only receiver secret..."
+  python3 "$ALERTMANAGER_RENDERER"
+else
+  echo "Non-production rollback uses the checked-in local Alertmanager null receiver."
+fi
+
 # Rebuild from the extracted target release. Without this step Compose could
 # restart images created from the newer deployment and leave runtime code at the
 # wrong version even though files and release pointers were rolled back.
 echo "Building rolled-back application images from the target release..."
-docker compose build backend frontend admin bot notification_worker scheduler
+# Immutable v17 compatibility marker retained for older capability inspectors:
+# docker compose build backend frontend admin bot notification_worker scheduler
+docker compose build \
+  backend frontend admin bot notification_worker provider_command_jobs scheduler
 
 echo "Starting PostgreSQL for rollback validation..."
 docker compose up -d db
@@ -156,8 +218,11 @@ echo "Forcing restored pilot runtime to stopped before public services start..."
 docker compose run --rm backend python scripts/pilot_runtime.py _stop \
   --reason "rollback database restored"
 
-echo "Starting rolled-back production services..."
-docker compose up -d db backend frontend admin bot caddy notification_worker scheduler meilisearch
+echo "Starting rolled-back production services, durable provider worker and monitoring..."
+docker compose up -d \
+  db backend frontend admin bot caddy \
+  notification_worker provider_command_jobs scheduler meilisearch \
+  alertmanager prometheus grafana
 
 backend_ready=0
 for _ in $(seq 1 90); do
@@ -186,7 +251,60 @@ if ! docker compose exec -T backend curl -fsS http://meilisearch:7700/health >/d
 fi
 
 docker compose run --rm backend python scripts/configure_meilisearch.py
-for service in db backend frontend admin bot caddy notification_worker scheduler meilisearch; do
+
+alertmanager_ready=0
+for _ in $(seq 1 60); do
+  if docker compose exec -T backend curl -fsS http://alertmanager:9093/-/ready >/dev/null 2>&1; then
+    alertmanager_ready=1
+    break
+  fi
+  sleep 2
+done
+if [ "$alertmanager_ready" -ne 1 ]; then
+  echo "Alertmanager did not become ready after rollback" >&2
+  docker compose logs alertmanager
+  exit 1
+fi
+
+prometheus_ready=0
+for _ in $(seq 1 60); do
+  rules_payload="$(
+    docker compose exec -T backend curl -fsS http://prometheus:9090/api/v1/rules 2>/dev/null || true
+  )"
+  alertmanagers_payload="$(
+    docker compose exec -T backend curl -fsS http://prometheus:9090/api/v1/alertmanagers 2>/dev/null || true
+  )"
+  if printf '%s' "$rules_payload" | grep -q 'FlashinPilotRuntimeStopped' \
+    && printf '%s' "$alertmanagers_payload" | grep -q 'alertmanager:9093'; then
+    prometheus_ready=1
+    break
+  fi
+  sleep 2
+done
+if [ "$prometheus_ready" -ne 1 ]; then
+  echo "Prometheus did not restore pilot rules or Alertmanager discovery" >&2
+  docker compose logs prometheus alertmanager
+  exit 1
+fi
+
+grafana_ready=0
+for _ in $(seq 1 60); do
+  if docker compose exec -T backend curl -fsS http://grafana:3000/api/health >/dev/null 2>&1; then
+    grafana_ready=1
+    break
+  fi
+  sleep 2
+done
+if [ "$grafana_ready" -ne 1 ]; then
+  echo "Grafana did not become healthy after rollback" >&2
+  docker compose logs grafana
+  exit 1
+fi
+
+for service in \
+  db backend frontend admin bot caddy \
+  notification_worker provider_command_jobs scheduler meilisearch \
+  alertmanager prometheus grafana; do
   if ! docker compose ps --status running --services | grep -qx "$service"; then
     echo "$service is not running after rollback" >&2
     docker compose logs "$service"
@@ -230,4 +348,5 @@ PY
 fi
 
 echo "Rollback completed and release pointer promoted: $RELEASE"
+echo "Provider-command worker and internal monitoring were restored and verified."
 echo "Pilot runtime remains stopped; a fresh admission is required before resume."

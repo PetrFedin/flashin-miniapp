@@ -117,10 +117,11 @@ docker compose up -d --force-recreate alertmanager
 echo "Proving isolated external alert delivery before release promotion..."
 docker compose run --rm --no-deps backend python scripts/alertmanager_delivery_smoke.py
 
-echo "Starting production services, workers, search and internal monitoring..."
+echo "Starting production services, durable provider worker, search and internal monitoring..."
 docker compose up -d \
   db backend frontend admin bot caddy \
-  notification_worker scheduler meilisearch alertmanager prometheus grafana
+  notification_worker provider_command_jobs scheduler meilisearch \
+  alertmanager prometheus grafana
 
 echo "Waiting for migration-aware backend readiness inside Docker network..."
 backend_ready=0
@@ -206,7 +207,10 @@ if [ "$grafana_ready" -ne 1 ]; then
   exit 1
 fi
 
-for service in db backend frontend admin bot caddy notification_worker scheduler meilisearch alertmanager prometheus grafana; do
+for service in \
+  db backend frontend admin bot caddy \
+  notification_worker provider_command_jobs scheduler meilisearch \
+  alertmanager prometheus grafana; do
   if ! docker compose ps --status running --services | grep -qx "$service"; then
     echo "$service is not running"
     docker compose logs "$service"
@@ -227,6 +231,7 @@ if [ -n "$backup_file" ]; then
   echo "Rollback drill input: scripts/rollback.sh previous '$backup_file'"
 fi
 echo "Prometheus, Alertmanager and Grafana are internal-only. Use an authenticated SSH tunnel for operator access."
+echo "Dedicated provider-command polling and scheduler fallback are both running."
 echo "Isolated external alert delivery smoke passed before release promotion."
 echo "Run 'make pilot-gate' only after the guarded current and previous releases, rollback drill and provider evidence are ready."
 echo "Pilot runtime remains stopped. Re-run admission and 'make pilot-runtime-arm' before checkout."
