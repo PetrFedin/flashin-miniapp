@@ -5,6 +5,8 @@ ROOT = Path(__file__).resolve().parents[2]
 LOCK_SERVICE = ROOT / "backend" / "jobs" / "scheduler_lock.py"
 SCHEDULER = ROOT / "backend" / "jobs" / "scheduler_app.py"
 MOYSKLAD_JOB = ROOT / "backend" / "jobs" / "moysklad_jobs.py"
+BOT_WORKER = ROOT / "bot" / "send_notifications.py"
+HEARTBEAT_SERVICE = ROOT / "backend" / "services" / "pilot_worker_heartbeat.py"
 SMOKE = ROOT / "scripts" / "scheduler_lock_smoke.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 
@@ -43,7 +45,7 @@ def test_scheduler_lock_key_is_deterministic_signed_and_namespaced():
     assert "_JOB_NAME_MAX_LENGTH = 120" in source
 
 
-def test_scheduler_wraps_every_registered_job_with_its_own_lock_id():
+def test_scheduler_wraps_every_business_job_and_registers_one_logical_heartbeat():
     source = SCHEDULER.read_text(encoding="utf-8")
 
     db_jobs = (
@@ -68,9 +70,35 @@ def test_scheduler_wraps_every_registered_job_with_its_own_lock_id():
         assert f'_run_async_db_job("{job_name}"' in source or (
             f'"{job_name}",' in source and "_run_async_db_job(" in source
         )
-    assert source.count("scheduler.add_job(") == len(db_jobs) + len(async_jobs)
+    assert source.count("scheduler.add_job(") == len(db_jobs) + len(async_jobs) + 1
+    assert source.count('id="pilot-worker-heartbeat"') == 1
+    assert "seconds=30" in source
+    assert "record_worker_heartbeat(SCHEDULER_WORKER)" in source
     assert source.count('id="payment-reconciliation"') == 1
     assert '"max_instances": 1' in source
+
+
+def test_notification_worker_heartbeats_only_after_a_completed_poll_pass():
+    source = BOT_WORKER.read_text(encoding="utf-8")
+
+    poll_position = source.index("result = await send_pending_batch(bot)")
+    heartbeat_position = source.index("record_worker_heartbeat(NOTIFICATION_WORKER)")
+    sleep_position = source.index("await asyncio.sleep(POLL_SECONDS)")
+
+    assert poll_position < heartbeat_position < sleep_position
+    assert "POLL_SECONDS = max(1.0" in source
+    assert "except Exception as exc:" in source
+
+
+def test_worker_liveness_thresholds_are_stric_relative_to_runtime_cadence():
+    source = HEARTBEAT_SERVICE.read_text(encoding="utf-8")
+
+    assert 'SCHEDULER_WORKER: 90' in source
+    assert 'NOTIFICATION_WORKER: 45' in source
+    assert "row.last_seen_at >= current_run_opened_at" in source
+    assert "age_seconds <= stale_seconds" in source
+    assert 'f"{worker_name}_heartbeat_missing"' in source
+    assert 'f"{worker_name}_heartbeat_stale"' in source
 
 
 def test_one_shot_entrypoints_share_scheduler_lock_ids():
