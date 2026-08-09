@@ -13,6 +13,10 @@ from backend.services.notification_delivery import (
     renew_delivery_lease,
     validate_batch_size,
 )
+from backend.services.pilot_worker_heartbeat import (
+    NOTIFICATION_WORKER,
+    record_worker_heartbeat,
+)
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
@@ -132,6 +136,10 @@ async def worker() -> None:
         while True:
             try:
                 result = await send_pending_batch(bot)
+                # Publish liveness only after a complete DB claim/delivery pass.
+                # If the notification loop itself is broken, the heartbeat stops
+                # and pilot admission fails closed before backlog has to build.
+                record_worker_heartbeat(NOTIFICATION_WORKER)
                 if result["seen"]:
                     print(result)
             except Exception as exc:
