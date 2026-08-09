@@ -14,7 +14,9 @@
 
 Любое изменение release, production configuration, evidence-файла, admission manifest или GitHub `main` требует остановки runtime и нового полного допуска.
 
-`integrated-e2e` — обязательный internal-stack gate: он проводит подписанный тестовый Telegram WebApp payload через реальный Mini App -> FastAPI -> PostgreSQL -> payment domain -> Admin fulfillment/delivery -> Mini App refresh. В нём заменена только внешняя HTTP-граница YooKassa. Этот PASS не заменяет реальные Telegram/YooKassa/MoySklad/CDN evidence.
+`integrated-e2e` — обязательный internal-stack gate: он проводит подписанный тестовый Telegram WebApp payload через реальный Mini App -> FastAPI -> PostgreSQL -> payment -> canonical YooKassa callback -> stock -> Admin fulfillment/delivery -> return/refund callback -> stock restoration -> notification -> terminal Mini App/Admin state. В нём заменена внешняя HTTP-граница YooKassa. Этот PASS не заменяет реальные Telegram/YooKassa/MoySklad/CDN evidence.
+
+Отдельный обязательный backend provider-spine smoke проводит `customerorder -> demand -> salesreturn` через реальный PostgreSQL provider-command lifecycle и worker, заменяя только удалённую HTTP-границу MoySklad. Он доказывает внутренний outbound mapping/dispatch, но не существование документов в живом аккаунте MoySklad.
 
 ## Обязательные внешние входы
 
@@ -22,7 +24,8 @@
 
 - production/sandbox credentials Telegram, YooKassa, MoySklad, Meilisearch и R2/S3, если функции включены;
 - отдельный случайный `PILOT_EVIDENCE_SIGNING_SECRET`;
-- отдельный краткоживущий operator-only `PILOT_GITHUB_TOKEN` с минимально достаточными `Actions: read` и `Administration: read`, включая доступ к полным ruleset bypass data;
+- отдельный краткоживущий operator-only GitHub token с `Administration: write` **только на время применения branch protection**;
+- отдельный краткоживущий operator-only GitHub token с минимально достаточными `Actions: read` и `Administration: read` для чтения protection/ruleset и выпуска repository-governance evidence;
 - `PILOT_GITHUB_ACTIONS_APP_ID=15368` для привязки required checks к официальному GitHub Actions App;
 - DNS и валидный HTTPS для Mini App, API, Admin и CDN;
 - публичные оферта, privacy, consent, returns/refunds и реквизиты продавца;
@@ -32,7 +35,7 @@
 - два разных проверяемых immutable release: `current` и `previous`;
 - проверенный backup и подписанный production-like rollback drill.
 
-GitHub governance token запрещено хранить в root `.env`: Compose передаёт этот файл application containers. Секреты, raw Telegram `initData`, cookies и authorization headers запрещено сохранять в evidence.
+GitHub operator tokens запрещено хранить в root `.env`: Compose передаёт этот файл application containers. Секреты, raw Telegram `initData`, cookies и authorization headers запрещено сохранять в evidence.
 
 ## 1. Защитить исходный код
 
@@ -47,16 +50,33 @@ GitHub governance token запрещено хранить в root `.env`: Compos
 7. classic `enforce_admins=true` или ruleset без bypass actors;
 8. `main` остаётся default branch.
 
-После изменения governance не вносите новые коммиты в `main`, пока не будет создан новый release и заново пройдена вся цепочка. На момент подготовки v20 API GitHub показывал `main` как unprotected, поэтому этот шаг нельзя считать выполненным по одному только зелёному CI.
+Сначала проверьте exact policy локальным dry-run без токена:
+
+```bash
+python3 scripts/configure_main_protection.py
+```
+
+Для применения classic branch protection передайте `Administration: write` token **только в процесс этой команды**:
+
+```bash
+PILOT_GITHUB_TOKEN="$TOKEN_FROM_OPERATOR_SECRET_MANAGER" \
+  python3 scripts/configure_main_protection.py --apply
+unset PILOT_GITHUB_TOKEN
+```
+
+Команда fail-closed требует ровно шесть checks и GitHub Actions App ID `15368`, включает strict checks, PR-only, `enforce_admins`, conversation resolution и запрещает force-push/deletion. Если используется organization ruleset вместо classic protection, настройте эквивалентную политику и затем докажите её governance collector-ом.
+
+После изменения governance не вносите новые коммиты в `main`, пока не будет создан новый release и заново пройдена вся цепочка. Если API GitHub показывает `main` как unprotected, этот шаг нельзя считать выполненным по одному только зелёному CI.
 
 ## 2. Проверить production configuration
 
 ```bash
 make validate-env
+python3 scripts/provider_wiring_preflight.py --env .env
 make readiness-gate
 ```
 
-`readiness-gate` должен завершиться GO до deploy. Никакие значения из `.env.production.example` не являются реальными секретами. В production `.env` должны находиться только не-секретные GitHub governance settings; строка `PILOT_GITHUB_TOKEN` там запрещена.
+Все три шага должны завершиться GO до deploy. Provider preflight fail-closed проверяет production HTTPS URLs, точный YooKassa callback `${API_PUBLIC_URL}/api/webhooks/yookassa`, точный return URL `${MINI_APP_URL}/payment-result`, Telegram token wiring, YooKassa credentials, MoySklad credentials/organization/agent/store IDs, outbound enablement, scheduler и pilot runtime guard. Никакие значения из `.env.production.example` не являются реальными секретами. В production `.env` должны находиться только не-секретные GitHub governance settings; строка `PILOT_GITHUB_TOKEN` там запрещена.
 
 ## 3. Создать и развернуть два immutable release
 
@@ -97,7 +117,7 @@ make provider-probes
 make check-integrations
 ```
 
-Отчёт должен быть strict, свежим, подписанным и привязанным к точному release/configuration.
+Отчёт должен быть strict, свежим, подписанным и привязанным к точному release/configuration. Для Telegram/YooKassa/MoySklad PASS должен отражать реальный ответ внешнего provider, а не CI fake/stub.
 
 ## 6. Публичный live readiness gate
 
@@ -130,13 +150,22 @@ make pilot-admit ARGS='\
 Выполните все обязательные сценарии из `docs/pilot/live_lifecycle_evidence.md` и все P01-P20 шаги `docs/pilot/live_pilot_runner.json`:
 
 - real Telegram signed authentication;
-- YooKassa redirect и return;
-- duplicate webhook idempotency;
-- sandbox refund/reconciliation;
-- live MoySklad sync;
+- YooKassa redirect, canonical `/api/webhooks/yookassa` callback и return;
+- duplicate payment/refund webhook idempotency;
+- sandbox/live refund и authoritative reconciliation;
+- live MoySklad sync и outbound `customerorder`/`demand`/`salesreturn`;
 - Telegram notification delivery;
 - Meilisearch indexing, если включён;
 - R2/S3/CDN delivery, если включён.
+
+Guarded runners для deployed pilot environment:
+
+```bash
+RUN_REAL_E2E=1 python -m pytest -q backend/tests/e2e/test_real_order_flow_runner.py
+RUN_REAL_LIFECYCLE_E2E=1 python -m pytest -q backend/tests/e2e/test_order_payment_refund_flow.py
+```
+
+Первый runner создаёт/проводит реальный order/payment/fulfillment путь; второй является terminal verifier и проверяет финальные order/payment/delivery/return/stock/refund-notification/diagnostics состояния. Не включайте эти флаги в обычный CI.
 
 Сохраните только sanitized evidence под `docs/pilot/evidence`, затем:
 
@@ -152,7 +181,7 @@ make pilot-lifecycle-status
 
 Убедитесь, что защищённый `main` указывает на тот же commit, что `current_release.json`, полный **push CI** этого commit завершён success, а все шесть required checks (`backend`, `frontend`, `admin`, `browser-e2e`, `integrated-e2e`, `docker`) имеют `app_id`/`integration_id=15368`.
 
-Токен подаётся только в процесс создания отчёта. Не записывайте его в `.env`, Compose secret или контейнер:
+Для evidence используйте read-capable governance token; write-права после применения protection здесь не нужны. Токен подаётся только в процесс создания отчёта. Не записывайте его в `.env`, Compose secret или контейнер:
 
 ```bash
 # Предпочтительно: secret-manager запускает одну команду с ephemeral env.
@@ -165,7 +194,7 @@ make pilot-governance-attach
 
 Не вставляйте raw token в интерактивную shell history; используйте process injection секрет-менеджера или краткоживущий GitHub App installation token.
 
-Collector обязан видеть полное поле `bypass_actors`. Скрытое поле, отсутствующий token, неполные checks, недоверенный source, другой head SHA, PR-only run вместо успешного `push` run или иной workflow дают NO-GO. Проверка уже подписанного отчёта токен не требует. Admission v20 дополнительно fail-closed требует наличие всех шести checks даже при устаревшей env-конфигурации.
+Collector обязан видеть полное поле `bypass_actors`. Скрытое поле, отсутствующий token, неполные checks, недоверенный source, другой head SHA, PR-only run вместо успешного `push` run или иной workflow дают NO-GO. Проверка уже подписанного отчёта токен не требует. Governance tooling fail-closed требует наличие всех шести checks даже при отсутствии `PILOT_GITHUB_REQUIRED_CHECKS` в env.
 
 ## 10. Финальная проверка допуска
 
