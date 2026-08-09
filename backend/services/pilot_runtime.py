@@ -27,6 +27,7 @@ from scripts.pilot_evidence import (
 
 from ..database import utcnow_naive
 from .pilot_database_evidence import validate_pilot_database_evidence
+from .pilot_operational_safety import build_pilot_operational_safety
 from ..pilot_models import PilotOrderSlot, PilotRuntimeState
 
 if TYPE_CHECKING:
@@ -287,6 +288,8 @@ def acquire_pilot_checkout(
         raise _blocked()
     if state.max_orders != settings.pilot_runtime_max_orders or state.max_orders != 20:
         raise _integrity_failure()
+    if state.opened_at is None:
+        raise _integrity_failure()
 
     current_anchor: dict[str, Any] = {}
     current_pilot_state: dict[str, Any] = {}
@@ -309,6 +312,16 @@ def acquire_pilot_checkout(
     )
     if database_errors:
         raise _integrity_failure()
+
+    try:
+        operational_safety = build_pilot_operational_safety(
+            db,
+            created_since=state.opened_at,
+        )
+    except ValueError:
+        raise _integrity_failure()
+    if operational_safety["healthy"] is not True:
+        raise _blocked()
 
     state.pilot_state_revision = int(current_anchor["revision"])
     state.pilot_state_sha256 = str(current_anchor["sha256"])
