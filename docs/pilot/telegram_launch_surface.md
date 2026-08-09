@@ -11,7 +11,7 @@ For the production pilot:
 3. Keep the application's `/start` inline Web App button enabled as a second launch path; it uses the same `MINI_APP_URL` configuration.
 4. Optionally configure the bot's Main Mini App/profile **Open App** entry point as well. The probe records `has_main_web_app`, but the mandatory release condition is the exact default menu Web App URL because that URL can be read back and verified through the Bot API.
 
-## What the live probe verifies
+## What the live provider probe verifies
 
 `scripts/check_telegram_bot.py` performs two read-only Bot API calls:
 
@@ -27,8 +27,29 @@ The probe is GO only when:
 
 The probe does not print the token, bot ID, username, configured URL or mismatching remote URL. `check_integrations.py` further collapses probe output to status-only signed provider evidence.
 
+## Prove real Telegram authentication on the deployed stack
+
+A correct menu button still does not prove that a real Telegram client can authenticate against the deployed API. Before pilot admission, open the production Mini App from the allowlisted pilot Telegram account and capture the current `window.Telegram.WebApp.initData` value from that live session. Keep it ephemeral: do not paste it into Git, lifecycle JSON, screenshots, shell history, tickets or chat logs.
+
+Load the value into the current shell without putting it in the command line, set the expected allowlisted Telegram user ID and production API URL, then run the guarded smoke:
+
+```bash
+read -r -s TELEGRAM_INIT_DATA
+export TELEGRAM_INIT_DATA
+export TELEGRAM_EXPECTED_USER_ID='<allowlisted numeric Telegram id>'
+export API_PUBLIC_URL='https://api.flashin.store'
+python3 scripts/telegram_real_auth_smoke.py --acknowledge-customer-provisioning
+unset TELEGRAM_INIT_DATA TELEGRAM_EXPECTED_USER_ID
+```
+
+The acknowledgement is mandatory because `/api/auth/telegram` may create or update the pilot customer's CRM profile. The smoke does **not** create an order or payment. It submits the live signed `initData` to `/api/auth/telegram`, keeps the returned customer JWT in memory only, calls `/api/auth/me`, and verifies that the authenticated identity matches the expected pilot Telegram ID.
+
+On success it writes a sanitized `0600` evidence file below `docs/pilot/evidence/` containing only booleans, the scenario name and observation timestamp. The raw `initData`, JWT, Telegram ID, username and provider bodies are never written to the evidence file or stdout. The directory is intentionally Git-ignored and excluded from Docker build context; the Release workflow additionally fails if any file under it has been force-added to Git.
+
+Use the emitted evidence path and SHA-256 when preparing the `telegram_real_auth` scenario in `docs/pilot/live_lifecycle_input.json`. Keep the evidence file local/private; do not commit it.
+
 ## Why this is part of pilot admission
 
 A valid bot token alone can coexist with a stale BotFather menu URL. In that state every backend/payment/fulfillment test can be green while a pilot user opens an old or wrong Mini App. The launch-surface check closes that gap before signed provider evidence can be GO.
 
-This check remains a provider configuration proof, not a substitute for the deployed Telegram WebApp authentication/lifecycle E2E. The final pilot still requires a real Telegram launch and signed `initData` path through the deployed Mini App and API.
+The deployed live-auth smoke closes the next gap: it proves that Telegram's signed client payload is accepted by the production authentication endpoint and yields the expected customer session. It remains separate from payment and fulfillment evidence, which must still be captured by the guarded real-provider lifecycle.

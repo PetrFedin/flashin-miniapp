@@ -28,6 +28,9 @@ jobs:
       - name: Run repository preflight
         run: python3 scripts/preflight.py
 
+      - name: Refuse tracked private pilot evidence
+        run: python3 scripts/release_private_evidence_guard.py
+
       - name: Build verified immutable release archive
         id: package
         shell: bash
