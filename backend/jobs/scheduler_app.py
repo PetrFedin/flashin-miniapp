@@ -9,6 +9,7 @@ from backend.jobs.event_jobs import run_event_dispatcher
 from backend.jobs.moysklad_jobs import run_moysklad_pipeline
 from backend.jobs.ops_jobs import create_inventory_snapshot, queue_abandoned_cart_notifications
 from backend.jobs.outbox_jobs import process_outbox
+from backend.jobs.payment_jobs import reconcile_pending_payments
 from backend.jobs.provider_command_jobs import process_provider_commands
 from backend.jobs.refund_jobs import reconcile_pending_refunds
 from backend.jobs.scheduler_lock import run_locked_async_db_job, run_locked_db_job
@@ -96,6 +97,15 @@ def main():
         "interval",
         minutes=1,
         id="provider-commands",
+    )
+    scheduler.add_job(
+        lambda: _run_async_db_job(
+            "payment-reconciliation",
+            reconcile_pending_payments,
+        ),
+        "interval",
+        minutes=2,
+        id="payment-reconciliation",
     )
     scheduler.add_job(
         lambda: _run_async_db_job(
