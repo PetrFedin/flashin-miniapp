@@ -53,3 +53,29 @@ def test_real_e2e_targets_use_guard_flags():
         "RUN_REAL_LIFECYCLE_E2E=1 python -m pytest -q "
         "backend/tests/e2e/test_order_payment_refund_flow.py"
     )
+
+
+def test_final_admission_targets_require_p01_p20_checklist():
+    assert _recipe("pilot-checklist-create") == (
+        "python3 scripts/pilot_launch_checklist.py create $(ARGS)"
+    )
+    assert _recipe("pilot-checklist-status") == (
+        "python3 scripts/pilot_launch_checklist.py verify $(ARGS)"
+    )
+    assert _recipe("pilot-checklist-attach") == (
+        "python3 scripts/pilot_launch_admission.py attach $(ARGS)"
+    )
+
+    final_status = _recipe("pilot-admission-status")
+    assert final_status == "python3 scripts/pilot_launch_admission.py verify $(ARGS)"
+    assert "pilot_governance_admission.py verify" not in final_status
+
+
+def test_runtime_arm_reverifies_final_admission_before_mutation():
+    recipe = _recipe("pilot-runtime-arm")
+    final_gate = "python3 scripts/pilot_launch_admission.py verify"
+    arm = "python3 scripts/pilot_runtime.py arm $(ARGS)"
+    assert final_gate in recipe
+    assert arm in recipe
+    assert recipe.index(final_gate) < recipe.index(arm)
+    assert "pilot_launch_admission.py verify $(ARGS)" not in recipe

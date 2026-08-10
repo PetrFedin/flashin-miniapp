@@ -1,4 +1,4 @@
-.PHONY: help init build up down logs migrate health workers search monitoring backup restore test preflight clean deploy-prod rollback rollback-drill rollback-drill-status verify-backup seed-admin validate-env openapi release-notes diagnostics setup-wizard check-integrations provider-probes readiness pilot-sheet readiness-gate pilot-gate pilot-live-verify telegram-launch-check telegram-launch-configure telegram-real-auth loadtest performance-budget security-audit media-jobs loadtest-catalog loadtest-webhooks real-e2e real-order-e2e real-lifecycle-e2e grafana-dashboards simple-start launch-local launch-production connected-audit simplicity-score env-todo pilot-runner pilot-init pilot-record pilot-status pilot-final pilot-admit pilot-admission-status pilot-lifecycle-create pilot-lifecycle-attach pilot-lifecycle-status pilot-governance-create pilot-governance-attach pilot-governance-status pilot-runtime-arm pilot-runtime-status pilot-runtime-stop release-create release-verify release-status release-pack release-freeze pilot-evidence package-audit test-all transaction-integrity
+.PHONY: help init build up down logs migrate health workers search monitoring backup restore test preflight clean deploy-prod rollback rollback-drill rollback-drill-status verify-backup seed-admin validate-env openapi release-notes diagnostics setup-wizard check-integrations provider-probes readiness pilot-sheet readiness-gate pilot-gate pilot-live-verify telegram-launch-check telegram-launch-configure telegram-real-auth loadtest performance-budget security-audit media-jobs loadtest-catalog loadtest-webhooks real-e2e real-order-e2e real-lifecycle-e2e grafana-dashboards simple-start launch-local launch-production connected-audit simplicity-score env-todo pilot-runner pilot-init pilot-record pilot-status pilot-final pilot-admit pilot-admission-status pilot-lifecycle-create pilot-lifecycle-attach pilot-lifecycle-status pilot-governance-create pilot-governance-attach pilot-governance-status pilot-checklist-create pilot-checklist-status pilot-checklist-attach pilot-runtime-arm pilot-runtime-status pilot-runtime-stop release-create release-verify release-status release-pack release-freeze pilot-evidence package-audit test-all transaction-integrity
 
 help:
 	@echo "FLASHIN commands:"
@@ -30,8 +30,12 @@ help:
 	@echo "  make pilot-governance-create - sign exact GitHub branch/rules/CI evidence"
 	@echo "  make pilot-governance-attach - bind GitHub governance evidence to admission"
 	@echo "  make pilot-governance-status - verify admission, lifecycle and governance"
+	@echo "  make pilot-checklist-create - create signed final P01-P20 launch checklist evidence"
+	@echo "  make pilot-checklist-status - verify signed P01-P20 launch checklist evidence"
+	@echo "  make pilot-checklist-attach - bind final P01-P20 checklist to pilot admission"
+	@echo "  make pilot-admission-status - verify final lifecycle + governance + P01-P20 admission chain"
 	@echo "  make pilot-runner          - initialize/show admission-gated 20-order control"
-	@echo "  make pilot-runtime-arm     - open checkout for allowlisted pilot Telegram IDs"
+	@echo "  make pilot-runtime-arm     - reverify final admission, then open checkout for allowlisted pilot Telegram IDs"
 	@echo "  make pilot-runtime-status  - verify DB counter, evidence binding and remaining slots"
 	@echo "  make pilot-runtime-stop    - immediately block new pilot checkout"
 	@echo "  make pilot-status          - recalculate current pilot decision"
@@ -223,7 +227,7 @@ pilot-admit:
 	python3 scripts/pilot_admission.py create $(ARGS)
 
 pilot-admission-status:
-	python3 scripts/pilot_governance_admission.py verify $(ARGS)
+	python3 scripts/pilot_launch_admission.py verify $(ARGS)
 
 pilot-lifecycle-create:
 	@echo "Usage: make pilot-lifecycle-create ARGS='--input docs/pilot/live_lifecycle_input.json'"
@@ -245,6 +249,15 @@ pilot-governance-attach:
 pilot-governance-status:
 	python3 scripts/pilot_governance_admission.py verify $(ARGS)
 
+pilot-checklist-create:
+	python3 scripts/pilot_launch_checklist.py create $(ARGS)
+
+pilot-checklist-status:
+	python3 scripts/pilot_launch_checklist.py verify $(ARGS)
+
+pilot-checklist-attach:
+	python3 scripts/pilot_launch_admission.py attach $(ARGS)
+
 pilot-runner:
 	python3 scripts/pilot_runner.py
 
@@ -254,6 +267,7 @@ pilot-init:
 
 pilot-runtime-arm:
 	@echo "Usage: make pilot-runtime-arm ARGS='--telegram-id 123456789 [--telegram-id ...] [--resume]'"
+	python3 scripts/pilot_launch_admission.py verify
 	python3 scripts/pilot_runtime.py arm $(ARGS)
 
 pilot-runtime-status:
