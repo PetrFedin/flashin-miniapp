@@ -8,8 +8,36 @@ if [ ! -f .env ]; then
   exit 1
 fi
 
+release_input="${RELEASE:-${1:-}}"
+if [ -z "$release_input" ]; then
+  echo "Usage: RELEASE=deploy/release/builds/flashin_<release>.zip make deploy-prod" >&2
+  echo "The archive and adjacent .sha256 must come from the retained exact-green Release artifact." >&2
+  exit 2
+fi
+
 export COMPOSE_FILE="docker-compose.yml:docker-compose.production.yml"
 export COMPOSE_PROFILES="production,workers,scheduler,search,monitoring"
+
+release_source_dir=""
+cleanup_release_source() {
+  if [ -n "$release_source_dir" ] && [ -d "$release_source_dir" ]; then
+    rm -rf "$release_source_dir"
+  fi
+}
+trap cleanup_release_source EXIT
+
+echo "Verifying retained immutable Release artifact before any runtime mutation..."
+release_archive="$(python3 scripts/deploy_release_gate.py --archive "$release_input" --print-path)"
+python3 scripts/pilot_release_capability.py inspect --archive "$release_archive" >/dev/null
+
+echo "Materializing verified Release artifact as the only Docker build context..."
+release_source_dir="$(mktemp -d "${TMPDIR:-/tmp}/flashin-release.XXXXXX")"
+python3 scripts/release_control.py extract \
+  --archive "$release_archive" \
+  --destination "$release_source_dir" >/dev/null
+cp .env "$release_source_dir/.env"
+chmod 600 "$release_source_dir/.env"
+compose_project="${COMPOSE_PROJECT_NAME:-$(basename "$PWD")}" 
 
 if docker compose ps --status running --services 2>/dev/null | grep -qx backend; then
   if docker compose exec -T backend test -f /app/scripts/pilot_runtime.py; then
@@ -19,7 +47,6 @@ if docker compose ps --status running --services 2>/dev/null | grep -qx backend;
   fi
 fi
 
-release_archive=""
 backup_file=""
 deploy_failure() {
   status=$?
@@ -40,15 +67,23 @@ python3 scripts/readiness_gate.py --phase predeploy
 echo "Rendering root-only Alertmanager configuration..."
 python3 scripts/render_alertmanager_config.py
 
-echo "Creating immutable release archive from clean tracked files..."
-release_archive=$(python3 scripts/release_control.py create --print-path)
-python3 scripts/release_control.py verify --archive "$release_archive" >/dev/null
-echo "Inspecting pilot runtime release capability before build or downtime..."
-python3 scripts/pilot_release_capability.py inspect --archive "$release_archive" >/dev/null
-echo "Verified capability-v2 release archive: $release_archive"
+echo "Building images from verified immutable Release artifact..."
+(
+  unset COMPOSE_FILE
+  cd "$release_source_dir"
+  COMPOSE_PROJECT_NAME="$compose_project" \
+    COMPOSE_PROFILES="$COMPOSE_PROFILES" \
+    docker compose \
+      -f docker-compose.yml \
+      -f docker-compose.production.yml \
+      build
+)
 
-echo "Building images..."
-docker compose build
+# The host checkout remains the control plane for runtime Compose/ops commands.
+# Reverify it after the build so drift cannot silently change those controls.
+python3 scripts/deploy_release_gate.py --archive "$release_archive" >/dev/null
+rm -rf "$release_source_dir"
+release_source_dir=""
 
 echo "Checking Alembic migration graph..."
 alembic_heads="$(docker compose run --rm backend alembic -c backend/alembic.ini heads)"
@@ -223,7 +258,7 @@ docker compose exec -T backend python scripts/container_smoke.py
 
 echo "Promoting successful release pointer..."
 python3 scripts/release_control.py promote --archive "$release_archive" >/dev/null
-echo "Signing the promoted capability-v2 release pointer..."
+echo "Signing the promoted capability-v18 release pointer..."
 python3 scripts/pilot_release_capability.py stamp --slot current --env .env >/dev/null
 trap - ERR
 echo "Deploy completed and release promoted: $release_archive"

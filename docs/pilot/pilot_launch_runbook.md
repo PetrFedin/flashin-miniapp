@@ -5,7 +5,9 @@
 Первый реальный заказ разрешён только для **точного immutable release**, который одновременно:
 
 - прошёл полный CI (`backend`, `frontend`, `admin`, `browser-e2e`, `integrated-e2e`, `docker`) от официального GitHub Actions App;
-- развёрнут на production-подобном pilot host;
+- выпущен guarded GitHub `Release` workflow как retained ZIP + `.sha256` для exact protected-main commit;
+- развёрнут на production-подобном pilot host из этого exact retained artifact, а не из произвольного host checkout;
+- имеет signed `pilot_runtime_guard` capability v18;
 - имеет подписанные provider, live readiness, rollback, lifecycle и repository-governance evidence;
 - имеет действующий подписанный admission с пятью именованными владельцами;
 - связан с отдельным pilot runtime state;
@@ -78,23 +80,44 @@ make readiness-gate
 
 Все три шага должны завершиться GO до deploy. Provider preflight fail-closed проверяет production HTTPS URLs, точный YooKassa callback `${API_PUBLIC_URL}/api/webhooks/yookassa`, точный return URL `${MINI_APP_URL}/payment-result`, Telegram token wiring, YooKassa credentials, MoySklad credentials/organization/agent/store IDs, outbound enablement, scheduler и pilot runtime guard. Никакие значения из `.env.production.example` не являются реальными секретами. В production `.env` должны находиться только не-секретные GitHub governance settings; строка `PILOT_GITHUB_TOKEN` там запрещена.
 
-## 3. Создать и развернуть два immutable release
+## 3. Получить и развернуть два exact immutable release
 
-Нужны различающиеся `current` и `previous`, чтобы rollback был доказуемым.
+Нужны различающиеся `current` и `previous`, чтобы rollback был доказуемым. Production pilot release **не создаётся на host через `make release-create`**. Он должен быть получен из guarded GitHub `Release` workflow после protected-main push CI.
 
-```bash
-make release-create
-make release-verify FILE=deploy/release/builds/flashin_<release>.zip
-make deploy-prod
+Для каждого release скачайте без изменения байтов ZIP и соседний checksum в retained directory:
 
-# После следующего проверенного release/deploy должен появиться previous.
-make release-create
-make release-verify FILE=deploy/release/builds/flashin_<next-release>.zip
-make deploy-prod
-make release-status
+```text
+deploy/release/builds/flashin_<release>.zip
+deploy/release/builds/flashin_<release>.zip.sha256
 ```
 
-Не допускается использовать архив, созданный из другого commit, или вручную менять release pointer.
+Проверка и deploy старшего rollback release:
+
+```bash
+make release-verify FILE=deploy/release/builds/flashin_<older>.zip
+python3 scripts/deploy_release_gate.py \
+  --archive deploy/release/builds/flashin_<older>.zip
+python3 scripts/pilot_release_capability.py inspect \
+  --archive deploy/release/builds/flashin_<older>.zip
+make deploy-prod RELEASE=deploy/release/builds/flashin_<older>.zip
+```
+
+Затем exact pilot release:
+
+```bash
+make release-verify FILE=deploy/release/builds/flashin_<pilot>.zip
+python3 scripts/deploy_release_gate.py \
+  --archive deploy/release/builds/flashin_<pilot>.zip
+python3 scripts/pilot_release_capability.py inspect \
+  --archive deploy/release/builds/flashin_<pilot>.zip
+make deploy-prod RELEASE=deploy/release/builds/flashin_<pilot>.zip
+make release-status
+python3 scripts/pilot_release_capability.py verify --slot both --env .env
+```
+
+`deploy_release_gate.py` fail-closed требует: artifact под `deploy/release/builds/`, соседний `.sha256`, manifest commit = checkout `HEAD`, полностью чистый tracked/non-ignored-untracked checkout, exact tracked file-set, совпадающие SHA-256 и Git-semantic executable bits. Production images собираются из временной распаковки verified ZIP, а не из host source tree. Gate и capability inspection выполняются до остановки pilot runtime. Bare `make deploy-prod` намеренно запрещён.
+
+Не допускается использовать архив от другого commit, вручную менять release pointer или считать локально перепакованный checkout эквивалентом GitHub Release artifact.
 
 ## 4. Backup и production-like rollback drill
 
@@ -184,7 +207,6 @@ make pilot-lifecycle-status
 Для evidence используйте read-capable governance token; write-права после применения protection здесь не нужны. Токен подаётся только в процесс создания отчёта. Не записывайте его в `.env`, Compose secret или контейнер:
 
 ```bash
-# Предпочтительно: secret-manager запускает одну команду с ephemeral env.
 PILOT_GITHUB_TOKEN="$TOKEN_FROM_OPERATOR_SECRET_MANAGER" \
   make pilot-governance-create ARGS='--owner "Exact Technical Owner"'
 unset PILOT_GITHUB_TOKEN
@@ -196,13 +218,20 @@ make pilot-governance-attach
 
 Collector обязан видеть полное поле `bypass_actors`. Скрытое поле, отсутствующий token, неполные checks, недоверенный source, другой head SHA, PR-only run вместо успешного `push` run или иной workflow дают NO-GO. Проверка уже подписанного отчёта токен не требует. Governance tooling fail-closed требует наличие всех шести checks даже при отсутствии `PILOT_GITHUB_REQUIRED_CHECKS` в env.
 
-## 10. Финальная проверка допуска
+## 10. Финальный P01-P20 checklist и admission
+
+Сначала создайте и подпишите exact P01-P20 checklist evidence, затем прикрепите его к финальному launch manifest:
 
 ```bash
+make pilot-checklist-create
+make pilot-checklist-status
+make pilot-checklist-attach
 make pilot-admission-status
 ```
 
-Только `go: true` разрешает инициализацию runtime. Эта команда проверяет baseline evidence, lifecycle, governance, release capability, signatures, checksums, freshness и owner identity.
+`pilot-governance-status` — только промежуточная проверка. **Только `make pilot-admission-status` является финальным GO/NO-GO**, потому что он требует baseline admission, live lifecycle, repository governance и подписанный P01-P20 checklist в одной exact release/configuration lineage.
+
+Только `go: true` разрешает инициализацию/arm runtime.
 
 ## 11. Инициализировать и открыть runtime только allowlist
 
@@ -220,7 +249,7 @@ make pilot-runtime-arm ARGS='\
 make pilot-runtime-status
 ```
 
-Запрещено открывать runtime без явного allowlist, использовать массовый список или повышать лимит выше 20.
+`pilot-runtime-arm` перед мутацией **повторно** запускает final admission verifier. Telegram IDs не передаются в admission verifier. Запрещено открывать runtime без явного allowlist, использовать массовый список или повышать лимит выше 20.
 
 ## 12. Волны первых 20 заказов
 
