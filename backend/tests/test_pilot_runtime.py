@@ -21,6 +21,7 @@ from scripts.pilot_evidence import configuration_fingerprint, sign_payload
 from scripts.pilot_control_audit import build_audit_entry, normalize_mutation
 from scripts.pilot_control_binding import build_admission_binding
 from scripts.pilot_control_chain import state_anchor
+from scripts.pilot_release_contract import CAPABILITY_VERSION
 
 
 def _capability(state: dict, secret: str) -> dict:
@@ -29,7 +30,7 @@ def _capability(state: dict, secret: str) -> dict:
             "schema_version": 1,
             "kind": "release_capability",
             "name": "pilot_runtime_guard",
-            "version": 17,
+            "version": CAPABILITY_VERSION,
             "archive_sha256": state["sha256"],
             "git_commit": state["git_commit"],
             "release_id": state["release_id"],
