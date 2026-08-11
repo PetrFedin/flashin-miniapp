@@ -188,9 +188,9 @@ make real-order-e2e
 make real-order-e2e-status
 ```
 
-`real-order-e2e` требует явный `E2E_VARIANT_ID`, чистую pilot cart, нулевую исходную reservation и один controlled SKU. До checkout он **durably** создаёт `docs/pilot/evidence/real_order_e2e_context.json`, затем продвигает marker по фазам `checkout_intent -> order_created -> payment_created`. Запись выполняется атомарно с `fsync` файла и каталога. Любой существующий marker блокирует новый real-order run.
+`real-order-e2e` требует явный `E2E_VARIANT_ID`, чистую pilot cart, нулевую исходную reservation и один controlled SKU. После всех read-only preconditions runner **атомарно** создаёт `docs/pilot/evidence/real_order_e2e_context.json` через exclusive `O_EXCL` до первой cart mutation. Только процесс, выигравший этот claim, может перейти к side effects; второй параллельный запуск завершается fail-closed. Marker хранится с mode `0600` и продвигается по фазам `preflight_intent -> checkout_intent -> order_created -> payment_created`. Каждый переход записывается атомарно с `fsync` файла и каталога. Любой существующий marker блокирует новый real-order run.
 
-`make real-order-e2e-status` возвращает success только для структурно корректного `payment_created`. Если runner оборвался на `checkout_intent` или `order_created`, **не удаляйте marker и не запускайте runner повторно**. Используйте `docs/pilot/real_provider_e2e_recovery.md`: сначала выясните, был ли принят checkout/создан provider payment, и продолжайте reconciliation для уже существующей попытки.
+`make real-order-e2e-status` возвращает success только для структурно корректного `payment_created`. Если runner оборвался на `preflight_intent`, `checkout_intent` или `order_created`, **не удаляйте marker и не запускайте runner повторно**. Используйте `docs/pilot/real_provider_e2e_recovery.md`: сначала определите, успела ли предыдущая попытка изменить cart, принять checkout или создать provider payment, и продолжайте reconciliation для уже существующего состояния.
 
 После `payment_created` завершите реальный provider/operator lifecycle **того же** `order:<id>`: YooKassa confirmation/callback, fulfillment/delivery, return/refund, MoySklad outbound processing и Telegram delivery. Только затем запускайте read-only terminal verifier:
 
@@ -290,7 +290,7 @@ STOP обязателен при любом из условий:
 
 - критический сценарий `fail`;
 - duplicate order/payment/refund ID;
-- unresolved `checkout_intent`/`order_created` real-E2E context или попытка запустить новый real-order E2E поверх существующего marker;
+- unresolved `preflight_intent`/`checkout_intent`/`order_created` real-E2E context или попытка запустить новый real-order E2E поверх существующего marker;
 - money delta более 0,01 или неверная валюта;
 - отрицательный остаток или неверный inventory delta;
 - duplicate webhook/callback создал повторный финансовый/доменный эффект;
