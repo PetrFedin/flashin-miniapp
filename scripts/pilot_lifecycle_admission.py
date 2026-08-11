@@ -146,7 +146,11 @@ def validate_order_lifecycle_correlation(
                 expected_subject = f"order:{normalized_order_id}"
                 if context_subject != expected_subject:
                     errors.append("real-order E2E context subject_id does not match order_id")
-                if len(unique_subjects) == 1 and context_subject != next(iter(unique_subjects)):
+                if (
+                    context_subject
+                    and unique_subjects
+                    and any(subject != context_subject for subject in unique_subjects)
+                ):
                     errors.append(
                         "real-order E2E context subject_id does not match lifecycle scenario subject_id"
                     )
