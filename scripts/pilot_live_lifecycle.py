@@ -47,6 +47,9 @@ BASE_REQUIRED_SCENARIOS = (
     "yookassa_duplicate_webhook",
     "yookassa_refund",
     "moysklad_live_sync",
+    "moysklad_customerorder_outbound",
+    "moysklad_demand_outbound",
+    "moysklad_salesreturn_outbound",
     "notification_delivery",
 )
 SECRET_ENV_KEYS = (
