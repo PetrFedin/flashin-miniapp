@@ -55,7 +55,7 @@ def test_real_payment_runner_requires_clean_controlled_cart_and_variant():
     assert 'order["items"][0].get("quantity") == 1' in source
 
 
-def test_real_provider_stages_share_sanitized_context_artifact():
+def test_real_provider_stages_share_sanitized_crash_safe_context_artifact():
     creation_source = (
         Path(__file__).resolve().parent / "e2e" / "test_real_order_flow_runner.py"
     ).read_text(encoding="utf-8")
@@ -66,9 +66,17 @@ def test_real_provider_stages_share_sanitized_context_artifact():
     default_context = "docs/pilot/evidence/real_order_e2e_context.json"
     assert default_context in creation_source
     assert default_context in terminal_source
-    assert "assert not CONTEXT_FILE.exists()" in creation_source
+    assert "os.O_EXCL" in creation_source
+    assert "0o600" in creation_source
+    assert '"phase": "preflight_intent"' in creation_source
+    assert '"phase": "checkout_intent"' in creation_source
+    assert '"phase": "order_created"' in creation_source
+    assert '"phase": "payment_created"' in creation_source
+    assert "os.fsync(handle.fileno())" in creation_source
+    assert "os.fsync(directory_fd)" in creation_source
     assert '"kind": "flashin_real_order_e2e_context"' in creation_source
     assert 'context.get("kind") == "flashin_real_order_e2e_context"' in terminal_source
+    assert 'context.get("phase") == "payment_created"' in terminal_source
     assert '"subject_id": f"order:{int(order[\'id\'])}"' in creation_source
     assert 'context.get("subject_id") == f"order:{order_id}"' in terminal_source
     assert '"baseline_stock_qty": baseline_stock_qty' in creation_source
