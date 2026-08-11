@@ -64,13 +64,15 @@ The following scenarios are one end-to-end transaction and **must all use the ex
 - `moysklad_salesreturn_outbound`;
 - `notification_delivery`.
 
-Every one of those eight scenarios must also include exactly one evidence entry whose path is:
+Every one of those eight scenarios must include exactly one evidence entry whose path is:
 
 ```text
 docs/pilot/evidence/real_order_e2e_context.json
 ```
 
 Admission requires all eight references to carry the same SHA-256. It also opens the context artifact and verifies schema/kind, YooKassa provider identity, `subject_id == order:<order_id>` and a zero pre-existing reservation baseline. A signed lifecycle report assembled from different orders therefore cannot be attached to pilot admission.
+
+The shared context proves correlation only. **Each of the eight order-linked scenarios must additionally include at least one separate, scenario-specific evidence artifact that proves the actual provider/operator observation for that scenario.** The shared `real_order_e2e_context.json` can never be the sole evidence used to mark redirect, return, duplicate webhook, refund, MoySklad outbound or Telegram delivery as `PASS`.
 
 `telegram_real_auth`, `moysklad_live_sync` and conditional search/media scenarios may use their own appropriate subject identifiers.
 
@@ -128,7 +130,7 @@ Create `docs/pilot/live_lifecycle_input.json` outside source control or from the
 }
 ```
 
-Repeat the object for every required scenario. The lifecycle builder rejects missing, duplicate and unknown scenario names. Admission then rejects cross-order subjects, missing shared context references or different shared-context checksums across the eight order-linked scenarios.
+Repeat the object for every required scenario. The lifecycle builder rejects missing, duplicate and unknown scenario names. Admission then rejects cross-order subjects, missing shared context references, different shared-context checksums across the eight order-linked scenarios, or any order-linked scenario that lacks its own scenario-specific evidence artifact.
 
 For the three outbound MoySklad scenarios, provider evidence must carry the sanitized local order/fulfillment/return identifier plus the corresponding MoySklad entity ID or href. The operator must verify one-to-one creation/reconciliation and the expected inventory delta before marking the scenario `PASS`.
 
@@ -142,6 +144,8 @@ Each scenario must contain:
 - a named `owner` equal to one of the signed admission owner names;
 - one to ten non-empty, regular evidence files;
 - bounded notes that describe the observation without secrets.
+
+For every order-linked scenario, the evidence set must contain both the exact shared context entry and at least one non-context artifact specific to the scenario being claimed.
 
 The report records a portable repository-relative path and SHA-256 for each file. Any later file modification invalidates admission. The same path must resolve on the host and inside the backend container.
 
@@ -167,13 +171,13 @@ Create and sign the lifecycle report:
 make pilot-lifecycle-create ARGS='--input docs/pilot/live_lifecycle_input.json'
 ```
 
-Attach the report to the current baseline admission and re-sign it. This step enforces the shared controlled-order correlation contract:
+Attach the report to the current baseline admission and re-sign it. This step enforces the shared controlled-order correlation contract and the scenario-specific evidence requirement:
 
 ```bash
 make pilot-lifecycle-attach
 ```
 
-Verify baseline admission, lifecycle attachment, owners, release/config binding, controlled-order correlation, freshness and every evidence checksum:
+Verify baseline admission, lifecycle attachment, owners, release/config binding, controlled-order correlation, scenario-specific evidence, freshness and every evidence checksum:
 
 ```bash
 make pilot-lifecycle-status
@@ -214,6 +218,7 @@ Pilot arm remains blocked when any of the following is true:
 - a required scenario is missing, duplicated, unknown or not PASS;
 - order-linked scenarios do not share one controlled `order:<id>` subject;
 - any order-linked scenario omits the shared real-order context artifact or references a different context SHA-256;
+- any order-linked scenario uses the shared context as its only evidence and lacks a separate scenario-specific artifact;
 - the shared context artifact has the wrong schema/kind/provider, mismatched order/subject, or a non-zero pre-existing reservation;
 - any required MoySklad sync, `customerorder`, `demand` or `salesreturn` observation is missing;
 - Meilisearch/media evidence is omitted while the corresponding production feature is enabled;
