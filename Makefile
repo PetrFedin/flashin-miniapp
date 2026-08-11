@@ -1,4 +1,4 @@
-.PHONY: help init build up down logs migrate health workers search monitoring backup restore test preflight clean deploy-prod rollback rollback-drill rollback-drill-status verify-backup seed-admin validate-env openapi release-notes diagnostics setup-wizard check-integrations provider-probes readiness pilot-sheet readiness-gate pilot-gate pilot-live-verify telegram-launch-check telegram-launch-configure telegram-real-auth loadtest performance-budget security-audit media-jobs loadtest-catalog loadtest-webhooks real-e2e real-order-e2e real-lifecycle-e2e grafana-dashboards simple-start launch-local launch-production connected-audit simplicity-score env-todo pilot-runner pilot-init pilot-record pilot-status pilot-final pilot-admit pilot-admission-status pilot-lifecycle-create pilot-lifecycle-attach pilot-lifecycle-status pilot-governance-create pilot-governance-attach pilot-governance-status pilot-checklist-create pilot-checklist-status pilot-checklist-attach pilot-runtime-arm pilot-runtime-status pilot-runtime-stop release-create release-verify release-status release-pack release-freeze pilot-evidence package-audit test-all transaction-integrity
+.PHONY: help init build up down logs migrate health workers search monitoring backup restore test preflight clean deploy-prod rollback rollback-drill rollback-drill-status verify-backup seed-admin validate-env openapi release-notes diagnostics setup-wizard check-integrations provider-probes readiness pilot-sheet readiness-gate pilot-gate pilot-live-verify telegram-launch-check telegram-launch-configure telegram-real-auth loadtest performance-budget security-audit media-jobs loadtest-catalog loadtest-webhooks real-e2e real-order-e2e real-order-e2e-status real-lifecycle-e2e grafana-dashboards simple-start launch-local launch-production connected-audit simplicity-score env-todo pilot-runner pilot-init pilot-record pilot-status pilot-final pilot-admit pilot-admission-status pilot-lifecycle-create pilot-lifecycle-attach pilot-lifecycle-status pilot-governance-create pilot-governance-attach pilot-governance-status pilot-checklist-create pilot-checklist-status pilot-checklist-attach pilot-runtime-arm pilot-runtime-status pilot-runtime-stop release-create release-verify release-status release-pack release-freeze pilot-evidence package-audit test-all transaction-integrity
 
 help:
 	@echo "FLASHIN commands:"
@@ -20,7 +20,8 @@ help:
 	@echo "  make telegram-launch-check - verify Telegram Bot identity/default Mini App menu"
 	@echo "  make telegram-launch-configure ARGS='...' - converge Telegram menu only with explicit operator acknowledgement"
 	@echo "  make telegram-real-auth ARGS='...' - prove deployed real Telegram initData auth with explicit provisioning acknowledgement"
-	@echo "  make real-order-e2e        - run guarded deployed order/payment/fulfillment E2E"
+	@echo "  make real-order-e2e        - run guarded deployed order/payment E2E"
+	@echo "  make real-order-e2e-status - inspect crash-safe real-order context/recovery state"
 	@echo "  make real-lifecycle-e2e    - run guarded deployed terminal refund/lifecycle E2E"
 	@echo "  make rollback-drill        - execute rollback and record signed drill evidence"
 	@echo "  make pilot-admit           - create signed human/business pilot admission"
@@ -195,6 +196,9 @@ real-e2e:
 
 real-order-e2e:
 	RUN_REAL_E2E=1 python -m pytest -q backend/tests/e2e/test_real_order_flow_runner.py
+
+real-order-e2e-status:
+	python3 scripts/real_e2e_context_status.py $(ARGS)
 
 real-lifecycle-e2e:
 	RUN_REAL_LIFECYCLE_E2E=1 python -m pytest -q backend/tests/e2e/test_order_payment_refund_flow.py
