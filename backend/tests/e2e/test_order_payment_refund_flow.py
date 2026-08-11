@@ -153,7 +153,7 @@ def test_completed_real_refund_lifecycle_is_consistent():
     )
 
     notifications_response = requests.get(
-        f"{API}/api/admin/notifications",
+        f"{API}/api/admin/notification-delivery?status=sent&limit=200",
         headers=headers(ADMIN),
         timeout=20,
     )
