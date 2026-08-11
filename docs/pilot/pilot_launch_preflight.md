@@ -31,12 +31,13 @@ The report evaluates these stages in a fixed order:
 1. `release_pointer` — current release pointer resolves to a valid immutable archive.
 2. `repository_provenance` — the release SHA is current protected `main` and has exact successful `push` CI.
 3. `release_checkout` — the deployed checkout is clean and byte-bound to the retained release archive.
-4. `baseline_admission` — the signed baseline pilot admission remains valid for the current/previous release pair and evidence windows.
-5. `real_order_context` — controlled YooKassa order context is either ready to be created or is durably at `payment_created`; any interrupted provisional phase blocks continuation.
-6. `live_lifecycle_evidence` — the signed same-order lifecycle attachment is valid.
-7. `repository_governance_evidence` — the signed governance attachment is valid for the exact release.
-8. `launch_checklist` — the signed P01-P20 checklist attachment is valid.
-9. `final_admission` — the complete admission chain passes the same validator used by runtime arm.
+4. `runtime_configuration` — deployed `.env` is production and keeps checkout fail-closed with `PILOT_RUNTIME_ENFORCED=true` and exactly 20 pilot orders.
+5. `baseline_admission` — the signed baseline pilot admission remains valid for the current/previous release pair and evidence windows.
+6. `real_order_context` — controlled YooKassa order context is either ready to be created or is durably at `payment_created`; any interrupted provisional phase blocks continuation.
+7. `live_lifecycle_evidence` — the signed same-order lifecycle attachment is valid.
+8. `repository_governance_evidence` — the signed governance attachment is valid for the exact release.
+9. `launch_checklist` — the signed P01-P20 checklist attachment is valid.
+10. `final_admission` — the complete admission chain passes the same validator used by runtime arm.
 
 The first stage that is not `complete` becomes the top-level `phase`, and its `next_action` is the only recommended continuation.
 
@@ -83,4 +84,4 @@ When the report returns:
 
 run the runtime arm only with the explicit controlled Telegram allowlist required by the pilot runbook.
 
-`make pilot-runtime-arm` executes the read-only launch preflight first, then re-verifies final admission, then calls the host runtime arm. The host `pilot_runtime.py arm` independently runs the launch preflight again before any Docker/database arm mutation. This second fresh check prevents bypass by invoking the Python command directly and narrows the race window if GitHub governance or exact-main provenance changes between operator checks and the actual arm transition.
+`make pilot-runtime-arm` executes the read-only launch preflight first, then re-verifies final admission, then calls the host runtime arm. The host `pilot_runtime.py arm` independently runs the launch preflight again before any Docker/database arm mutation. This second fresh check prevents bypass by invoking the Python command directly and narrows the race window if GitHub governance, exact-main provenance, or runtime configuration changes between operator checks and the actual arm transition.
