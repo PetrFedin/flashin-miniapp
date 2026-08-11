@@ -6,6 +6,8 @@ def test_terminal_real_lifecycle_requires_one_delivered_refund_notification():
         Path(__file__).resolve().parent / "e2e" / "test_order_payment_refund_flow.py"
     ).read_text(encoding="utf-8")
 
+    assert "/api/admin/notification-delivery?status=sent&limit=200" in source
+    assert "/api/admin/notifications" not in source
     assert "assert len(refund_notifications) == 1" in source
     assert 'refund_notification.get("status") == "sent"' in source
     assert 'refund_notification.get("sent_at")' in source
