@@ -24,6 +24,19 @@ def _write_context(path: Path, *, phase: str, **overrides) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def test_preflight_intent_is_exclusive_fail_closed_recovery_state(tmp_path):
+    path = tmp_path / "context.json"
+    _write_context(path, phase="preflight_intent")
+
+    report = inspect_context(path)
+
+    assert not report["ok"]
+    assert report["phase"] == "preflight_intent"
+    assert report["requires_investigation"] is True
+    assert "exclusive real-payment slot was claimed" in report["recovery_action"]
+    assert "Do not rerun real-order E2E" in report["recovery_action"]
+
+
 def test_checkout_intent_is_fail_closed_and_requires_investigation(tmp_path):
     path = tmp_path / "context.json"
     _write_context(path, phase="checkout_intent")
