@@ -81,4 +81,6 @@ When the report returns:
 }
 ```
 
-run the runtime arm only with the explicit controlled Telegram allowlist required by the pilot runbook. `pilot-runtime-arm` re-verifies final admission again immediately before mutating runtime state.
+run the runtime arm only with the explicit controlled Telegram allowlist required by the pilot runbook.
+
+`make pilot-runtime-arm` executes the read-only launch preflight first, then re-verifies final admission, then calls the host runtime arm. The host `pilot_runtime.py arm` independently runs the launch preflight again before any Docker/database arm mutation. This second fresh check prevents bypass by invoking the Python command directly and narrows the race window if GitHub governance or exact-main provenance changes between operator checks and the actual arm transition.
