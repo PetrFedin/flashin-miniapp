@@ -104,6 +104,26 @@ def test_any_required_job_failure_blocks_production_deploy():
     assert "Required CI job docker is not successful" in errors
 
 
+def test_repository_trust_anchor_cannot_be_redirected():
+    report = deploy_gate.verify_deploy_repository_provenance(
+        SHA,
+        repository="attacker/example",
+    )
+
+    assert not report["ok"]
+    assert any("must be PetrFedin/flashin-miniapp" in error for error in report["errors"])
+
+
+def test_github_api_trust_anchor_cannot_be_redirected():
+    report = deploy_gate.verify_deploy_repository_provenance(
+        SHA,
+        api_base="https://github-api.attacker.example",
+    )
+
+    assert not report["ok"]
+    assert any("must be https://api.github.com" in error for error in report["errors"])
+
+
 def test_cli_cannot_print_deploy_path_before_repository_provenance_passes(
     monkeypatch,
     tmp_path,
@@ -145,15 +165,18 @@ def test_cli_cannot_print_deploy_path_before_repository_provenance_passes(
         [
             "--archive",
             str(archive),
-            "--repository",
-            "PetrFedin/flashin-miniapp",
             "--print-path",
         ]
     )
 
     assert exit_code == 0
     assert calls == [
-        (SHA, "PetrFedin/flashin-miniapp", "https://api.github.com", "")
+        (
+            SHA,
+            "PetrFedin/flashin-miniapp",
+            "https://api.github.com",
+            "",
+        )
     ]
     assert capsys.readouterr().out.strip() == str(archive)
 
