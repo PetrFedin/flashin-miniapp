@@ -92,9 +92,14 @@ def test_completed_real_refund_lifecycle_is_consistent():
         for row in matching_returns
         if row.get("status") == "approved" and row.get("provider_refund_id")
     ]
-    assert completed_returns, "Expected one approved provider-backed return for the pilot order"
+    assert len(completed_returns) == 1, (
+        f"Expected exactly one approved provider-backed full refund for order {order_id}, "
+        f"found {len(completed_returns)}"
+    )
     return_request = completed_returns[0]
     return_id = int(return_request["id"])
+    assert float(return_request.get("refundable_balance", -1)) == 0.0, return_request
+    assert abs(float(return_request.get("refunded_total", 0)) - float(order["total_amount"])) < 0.01
 
     tasks_response = requests.get(
         f"{API}/api/fulfillment/tasks",
