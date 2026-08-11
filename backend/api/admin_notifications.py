@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db, utcnow_naive
 from ..models import Notification
-from ..notification_models import NotificationDeliveryState
+from ..notification_models import NotificationDeliveryState, NotificationEventKey
 from ..security import get_current_admin
 from ..services.audit import log_admin_action
 from ..services.notification_delivery import reset_notification_delivery
@@ -13,7 +13,11 @@ from ..services.rbac import require_permission
 router = APIRouter(prefix="/admin/notification-delivery", tags=["admin-notifications"])
 
 
-def _serialize(notification: Notification, state: NotificationDeliveryState | None) -> dict:
+def _serialize(
+    notification: Notification,
+    state: NotificationDeliveryState | None,
+    event: NotificationEventKey | None = None,
+) -> dict:
     return {
         "id": notification.id,
         "telegram_id": notification.telegram_id,
@@ -25,6 +29,7 @@ def _serialize(notification: Notification, state: NotificationDeliveryState | No
         "attempts": state.attempts if state else 0,
         "next_attempt_at": state.next_attempt_at if state else None,
         "last_error": state.last_error if state else "",
+        "event_key": event.event_key if event else "",
     }
 
 
@@ -37,10 +42,14 @@ def list_notification_delivery(
 ):
     require_permission(db, admin, "notifications.read")
     query = (
-        db.query(Notification, NotificationDeliveryState)
+        db.query(Notification, NotificationDeliveryState, NotificationEventKey)
         .outerjoin(
             NotificationDeliveryState,
             NotificationDeliveryState.notification_id == Notification.id,
+        )
+        .outerjoin(
+            NotificationEventKey,
+            NotificationEventKey.notification_id == Notification.id,
         )
     )
     if status:
@@ -54,7 +63,7 @@ def list_notification_delivery(
         .limit(limit)
         .all()
     )
-    return [_serialize(notification, state) for notification, state in rows]
+    return [_serialize(notification, state, event) for notification, state, event in rows]
 
 
 @router.post("/failed/requeue")
