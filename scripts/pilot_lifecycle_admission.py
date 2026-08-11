@@ -27,6 +27,18 @@ DEFAULT_MANIFEST = ROOT / "docs/pilot/pilot_admission_manifest.json"
 DEFAULT_REPORT = ROOT / "docs/pilot/live_lifecycle_report.json"
 ACKNOWLEDGEMENT_KEY = "live_lifecycle_completed"
 EVIDENCE_KEY = "live_lifecycle_report"
+ORDER_CORRELATED_SCENARIOS = frozenset(
+    {
+        "yookassa_payment_redirect",
+        "yookassa_payment_return",
+        "yookassa_duplicate_webhook",
+        "yookassa_refund",
+        "moysklad_customerorder_outbound",
+        "moysklad_demand_outbound",
+        "moysklad_salesreturn_outbound",
+        "notification_delivery",
+    }
+)
 
 
 def _portable_report_path(root: Path, report_path: Path) -> str:
@@ -50,6 +62,30 @@ def _resolve_report_path(root: Path, raw: object) -> Path:
     if path.exists():
         return path
     return (root / "docs/pilot" / path.name).absolute()
+
+
+def validate_order_lifecycle_correlation(report: Mapping[str, Any]) -> list[str]:
+    """Require order-linked provider evidence to describe one controlled order."""
+
+    scenarios = report.get("scenarios")
+    if not isinstance(scenarios, list):
+        return []
+    subjects: dict[str, str] = {}
+    for scenario in scenarios:
+        if not isinstance(scenario, Mapping):
+            continue
+        name = str(scenario.get("name", "")).strip()
+        if name not in ORDER_CORRELATED_SCENARIOS:
+            continue
+        subject_id = str(scenario.get("subject_id", "")).strip()
+        if subject_id:
+            subjects[name] = subject_id
+
+    if len(set(subjects.values())) <= 1:
+        return []
+    return [
+        "order-linked live lifecycle scenarios must share one controlled-order subject_id"
+    ]
 
 
 def _evidence_entry(
@@ -114,6 +150,7 @@ def validate_attached_lifecycle(
                 now=now,
             )
         )
+    errors.extend(validate_order_lifecycle_correlation(report))
 
     approvals = manifest.get("approvals")
     approved_names = (
@@ -177,6 +214,7 @@ def attach_lifecycle_report(
         env=env,
         expected_release=release,
     )
+    lifecycle_errors.extend(validate_order_lifecycle_correlation(report))
     if lifecycle_errors:
         raise ValueError(
             "Live lifecycle evidence is invalid: " + "; ".join(lifecycle_errors)
