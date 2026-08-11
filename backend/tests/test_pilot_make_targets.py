@@ -74,6 +74,19 @@ def test_final_admission_targets_require_p01_p20_checklist():
     assert "pilot_governance_admission.py verify" not in final_status
 
 
+def test_launch_preflight_target_is_read_only_orchestrator():
+    recipe = _recipe("pilot-launch-preflight")
+    assert recipe == "python3 scripts/pilot_launch_preflight.py $(ARGS)"
+    for unsafe in (
+        "pilot_runtime.py arm",
+        "provider-probes",
+        "real-order-e2e",
+        "real-lifecycle-e2e",
+        "deploy_production.sh",
+    ):
+        assert unsafe not in recipe
+
+
 def test_runtime_arm_reverifies_final_admission_before_mutation():
     recipe = _recipe("pilot-runtime-arm")
     final_gate = "python3 scripts/pilot_launch_admission.py verify"
