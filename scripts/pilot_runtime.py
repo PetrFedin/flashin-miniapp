@@ -117,6 +117,21 @@ def _host_arm(args: argparse.Namespace) -> int:
     from pilot_admission import verify_default_admission
     from pilot_control_binding import build_admission_binding, require_admission_binding
     from pilot_evidence import require_signing_secret, verify_payload_signature
+    from pilot_launch_preflight import run_preflight
+
+    launch_preflight = run_preflight(root=ROOT)
+    if launch_preflight.get("go") is not True:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "errors": ["Pilot launch preflight is not GO"],
+                    "preflight": launch_preflight,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 1
 
     admission_errors = verify_default_admission(ROOT)
     if admission_errors:
