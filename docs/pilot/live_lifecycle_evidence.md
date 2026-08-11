@@ -34,6 +34,9 @@ Always required:
 - `yookassa_duplicate_webhook` — the same provider event is delivered twice without duplicate financial effects;
 - `yookassa_refund` — a sandbox refund reaches the expected terminal/review state and reconciles;
 - `moysklad_live_sync` — controlled real products/variants/stocks synchronize without unresolved identity conflicts;
+- `moysklad_customerorder_outbound` — the paid controlled order creates or reconciles exactly one expected `customerorder` in MoySklad;
+- `moysklad_demand_outbound` — the controlled fulfillment path creates or reconciles exactly one expected `demand` and the stock delta matches the local inventory ledger;
+- `moysklad_salesreturn_outbound` — the controlled return/refund path creates or reconciles exactly one expected `salesreturn` and the reverse stock delta matches the local inventory ledger;
 - `notification_delivery` — the expected Telegram notification is delivered for the controlled subject.
 
 Conditionally required:
@@ -69,6 +72,8 @@ Create `docs/pilot/live_lifecycle_input.json` outside source control or from the
 ```
 
 Repeat the object for every required scenario. The script rejects missing, duplicate and unknown scenario names.
+
+For the three outbound MoySklad scenarios, evidence must carry the sanitized local order/fulfillment/return identifier plus the corresponding MoySklad entity ID or href. The operator must verify one-to-one creation/reconciliation and the expected inventory delta before marking the scenario `PASS`.
 
 ## Evidence rules
 
@@ -140,6 +145,7 @@ Pilot arm remains blocked when any of the following is true:
 - report signature, release or configuration fingerprint does not match;
 - report or scenario timestamps are stale or in the future;
 - a required scenario is missing, duplicated, unknown or not PASS;
+- any required MoySklad sync, `customerorder`, `demand` or `salesreturn` observation is missing;
 - Meilisearch/media evidence is omitted while the corresponding production feature is enabled;
 - a scenario owner is not one of the signed admission owners;
 - an evidence file is missing, empty, oversized, modified or contains configured secrets/raw Telegram initData;
