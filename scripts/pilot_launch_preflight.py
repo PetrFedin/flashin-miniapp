@@ -62,6 +62,18 @@ def _stage(
     return payload
 
 
+def _redaction_env(
+    root: Path,
+    file_env: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    env = dict(file_env if file_env is not None else read_env(root / ".env"))
+    for key in ("FLASHIN_GITHUB_TOKEN", "GITHUB_TOKEN"):
+        value = os.getenv(key, "").strip()
+        if value:
+            env[key] = value
+    return env
+
+
 def _sensitive_values(env: Mapping[str, str]) -> tuple[str, ...]:
     markers = ("TOKEN", "SECRET", "PASSWORD", "API_KEY", "ACCESS_KEY")
     values = {
@@ -83,6 +95,10 @@ def _sanitize_text(value: object, secrets: Sequence[str]) -> str:
 
 def _sanitize_report(report: dict[str, Any], env: Mapping[str, str]) -> dict[str, Any]:
     secrets = _sensitive_values(env)
+    if isinstance(report.get("errors"), list):
+        report["errors"] = [
+            _sanitize_text(item, secrets) for item in report.get("errors", [])
+        ]
     for stage in report.get("stages", []):
         if not isinstance(stage, dict):
             continue
@@ -132,7 +148,9 @@ def run_preflight(
     """Return a fail-closed launch-stage report without mutating pilot state."""
 
     root = root.resolve()
-    manifest_path = (manifest_path or (root / "docs/pilot/pilot_admission_manifest.json")).resolve()
+    manifest_path = (
+        manifest_path or (root / "docs/pilot/pilot_admission_manifest.json")
+    ).resolve()
     release_pointer = (
         release_pointer or (root / "deploy/release/runtime/current_release.json")
     ).resolve()
@@ -140,6 +158,7 @@ def run_preflight(
         context_path or (root / "docs/pilot/evidence/real_order_e2e_context.json")
     ).resolve()
     env = read_env(root / ".env")
+    redaction_env = _redaction_env(root, env)
     stages: list[dict[str, Any]] = []
 
     current_release: Mapping[str, Any] | None = None
@@ -172,7 +191,9 @@ def run_preflight(
             _stage(
                 "repository_provenance",
                 _BLOCKED,
-                errors=["current verified release is required before GitHub provenance can be evaluated"],
+                errors=[
+                    "current verified release is required before GitHub provenance can be evaluated"
+                ],
                 next_action="complete protected-main promotion and rerun make pilot-launch-preflight",
             )
         )
@@ -256,7 +277,9 @@ def run_preflight(
                         else "deploy the exact verified current release, then rerun make pilot-launch-preflight"
                     ),
                     details={
-                        "git_commit": str(release_report.get("git_commit") or release_sha),
+                        "git_commit": str(
+                            release_report.get("git_commit") or release_sha
+                        ),
                         "archive_verified": release_report.get("ok") is True,
                     },
                 )
@@ -285,34 +308,50 @@ def run_preflight(
         )
     )
 
+    context_exists = context_path.is_file()
     context = inspect_context(context_path)
-    context_state = str(context.get("state") or "invalid")
+    context_phase = str(context.get("phase") or "").strip()
     context_details = {
         key: value
         for key, value in context.items()
-        if key in {"state", "phase", "order_id", "variant_id", "provider", "provider_payment_id"}
+        if key
+        in {
+            "phase",
+            "order_id",
+            "variant_id",
+            "provider",
+            "provider_payment_id",
+            "requires_investigation",
+        }
         and value is not None
     }
-    if context_state == "ready_for_terminal_verification":
-        context_status = _COMPLETE
-        context_errors: list[str] = []
-        context_action = ""
-    elif context_state == "missing":
+    if not context_exists and context.get("requires_investigation") is False:
         context_status = _READY
-        context_errors = []
+        context_errors: list[str] = []
         context_action = "run the controlled deployed payment flow with make real-order-e2e"
-    elif context_state == "blocked_recovery":
+    elif context.get("ok") is True and context_phase == "payment_created":
+        context_status = _COMPLETE
+        context_errors = []
+        context_action = ""
+    elif context.get("requires_investigation") is True:
         context_status = _BLOCKED
-        context_errors = [
-            "an interrupted controlled real-order run must be reconciled before any retry"
-        ]
-        context_action = "make real-order-e2e-status and follow docs/pilot/real_provider_e2e_recovery.md"
+        context_errors = [str(item) for item in context.get("errors", [])]
+        if not context_errors:
+            context_errors = [
+                "an interrupted controlled real-order run must be reconciled before any retry"
+            ]
+        context_action = (
+            "make real-order-e2e-status and follow "
+            "docs/pilot/real_provider_e2e_recovery.md"
+        )
     else:
         context_status = _BLOCKED
         context_errors = [str(item) for item in context.get("errors", [])] or [
             "real-order E2E context is invalid"
         ]
-        context_action = "make real-order-e2e-status and reconcile the private context before continuing"
+        context_action = (
+            "make real-order-e2e-status and reconcile the private context before continuing"
+        )
     stages.append(
         _stage(
             "real_order_context",
@@ -391,9 +430,7 @@ def run_preflight(
             "final_admission",
             _COMPLETE if not final_errors else _BLOCKED,
             errors=final_errors,
-            next_action=(
-                "" if not final_errors else "make pilot-admission-status"
-            ),
+            next_action=("" if not final_errors else "make pilot-admission-status"),
         )
     )
 
@@ -406,16 +443,23 @@ def run_preflight(
         "schema_version": SCHEMA_VERSION,
         "kind": "flashin_pilot_launch_preflight",
         "go": all_complete,
-        "meaning": "ready_for_pilot_runtime_arm" if all_complete else "not_ready_for_pilot_runtime_arm",
+        "meaning": (
+            "ready_for_pilot_runtime_arm"
+            if all_complete
+            else "not_ready_for_pilot_runtime_arm"
+        ),
         "phase": first_incomplete.get("name") if first_incomplete else "runtime_arm",
         "stages": stages,
         "next_action": (
-            str(first_incomplete.get("next_action") or "resolve the first incomplete launch stage")
+            str(
+                first_incomplete.get("next_action")
+                or "resolve the first incomplete launch stage"
+            )
             if first_incomplete
             else "make pilot-runtime-arm"
         ),
     }
-    return _sanitize_report(report, env)
+    return _sanitize_report(report, redaction_env)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -453,6 +497,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             "next_action": "resolve preflight validation error",
             "errors": [str(exc)],
         }
+        try:
+            report = _sanitize_report(report, _redaction_env(args.root.resolve()))
+        except (OSError, ValueError):
+            pass
     print(json.dumps(report, ensure_ascii=False))
     return 0 if report.get("go") is True else 1
 
