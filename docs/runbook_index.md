@@ -3,6 +3,7 @@
 ## Pilot launch
 
 - `docs/pilot/pilot_launch_runbook.md`
+- `docs/pilot/pilot_launch_preflight.md`
 - `docs/pilot/final_admission_operator.md`
 - `docs/pilot/provider_evidence_and_admission.md`
 - `docs/pilot/pilot_runtime_guard.md`
