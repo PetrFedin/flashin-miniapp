@@ -3,10 +3,11 @@
 Run only against an explicitly configured pilot/test stack with an allowlisted
 customer and an explicitly selected controlled product variant. This runner
 creates a real order and a real YooKassa payment attempt, then writes a sanitized
-context artifact used by the terminal lifecycle verifier. A provisional context
-is persisted before checkout so a process crash cannot silently permit a second
-real payment run. Provider-driven settlement/refund evidence is never fabricated
-by this test.
+context artifact used by the terminal lifecycle verifier. It atomically claims
+the private context before the first cart mutation, preventing concurrent real
+payment runs, and persists a provisional context before checkout so a process
+crash cannot silently permit a second payment attempt. Provider-driven
+settlement/refund evidence is never fabricated by this test.
 
 RUN_REAL_E2E=1 API_BASE=https://api.example.test CUSTOMER_TOKEN=... ADMIN_TOKEN=... \
   E2E_VARIANT_ID=456 pytest -q backend/tests/e2e/test_real_order_flow_runner.py
@@ -48,23 +49,60 @@ def _required_int(name: str) -> int:
     return int(raw)
 
 
+def _serialize_context(payload: dict[str, object]) -> str:
+    return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+
+
+def _fsync_context_directory() -> None:
+    directory_fd = os.open(str(CONTEXT_FILE.parent), os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def _claim_context(payload: dict[str, object]) -> None:
+    """Atomically claim the real-E2E slot before the first external mutation."""
+
+    CONTEXT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(
+            str(CONTEXT_FILE),
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+    except FileExistsError:
+        raise AssertionError(
+            f"Real E2E context already exists at {CONTEXT_FILE}. "
+            "Finish/archive or explicitly investigate the previous controlled lifecycle before "
+            "creating another real payment. Provisional phases are intentionally fail-closed."
+        ) from None
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(_serialize_context(payload))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(CONTEXT_FILE, 0o600)
+        _fsync_context_directory()
+    except Exception:
+        # Keep a successfully created marker fail-closed. If writing the marker
+        # itself did not complete, the next operator must inspect/remove it.
+        raise
+
+
 def _write_context(payload: dict[str, object]) -> None:
     """Durably replace the lifecycle marker before/after external side effects."""
 
     CONTEXT_FILE.parent.mkdir(parents=True, exist_ok=True)
     temporary = CONTEXT_FILE.with_name(f".{CONTEXT_FILE.name}.{uuid.uuid4().hex}.tmp")
-    serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     try:
         with temporary.open("w", encoding="utf-8") as handle:
-            handle.write(serialized)
+            handle.write(_serialize_context(payload))
             handle.flush()
             os.fsync(handle.fileno())
+        os.chmod(temporary, 0o600)
         temporary.replace(CONTEXT_FILE)
-        directory_fd = os.open(str(CONTEXT_FILE.parent), os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        _fsync_context_directory()
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -72,11 +110,6 @@ def _write_context(payload: dict[str, object]) -> None:
 def test_real_cart_checkout_and_yookassa_payment_creation():
     assert CUSTOMER, "CUSTOMER_TOKEN required"
     assert ADMIN, "ADMIN_TOKEN required"
-    assert not CONTEXT_FILE.exists(), (
-        f"Real E2E context already exists at {CONTEXT_FILE}. "
-        "Finish/archive or explicitly investigate the previous controlled lifecycle before "
-        "creating another real payment. Provisional phases are intentionally fail-closed."
-    )
     variant_id = _required_int("E2E_VARIANT_ID")
 
     products_response = requests.get(f"{API}/api/products", timeout=20)
@@ -138,18 +171,6 @@ def test_real_cart_checkout_and_yookassa_payment_creation():
         "Controlled pilot customer cart must not reserve loyalty points before the real payment E2E"
     )
 
-    cart = requests.post(
-        f"{API}/api/cart/items",
-        json={"product_id": product["id"], "variant_id": variant["id"], "quantity": 1},
-        headers=headers(CUSTOMER),
-        timeout=20,
-    )
-    assert cart.status_code in (200, 201), cart.text
-    controlled_cart = cart.json()
-    assert len(controlled_cart.get("items", [])) == 1, controlled_cart
-    assert controlled_cart["items"][0].get("variant_id") == variant_id, controlled_cart
-    assert controlled_cart["items"][0].get("quantity") == 1, controlled_cart
-
     context_created_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     idempotency_key = f"real-e2e:{uuid.uuid4().hex}"
     context_base = {
@@ -165,6 +186,27 @@ def test_real_cart_checkout_and_yookassa_payment_creation():
         "provider": "yookassa",
         "checkout_idempotency_key": idempotency_key,
     }
+
+    # This O_EXCL claim is the concurrency boundary. Only one operator/process
+    # can proceed from read-only preconditions into cart/order/payment mutations.
+    _claim_context(
+        {
+            **context_base,
+            "phase": "preflight_intent",
+        }
+    )
+
+    cart = requests.post(
+        f"{API}/api/cart/items",
+        json={"product_id": product["id"], "variant_id": variant["id"], "quantity": 1},
+        headers=headers(CUSTOMER),
+        timeout=20,
+    )
+    assert cart.status_code in (200, 201), cart.text
+    controlled_cart = cart.json()
+    assert len(controlled_cart.get("items", [])) == 1, controlled_cart
+    assert controlled_cart["items"][0].get("variant_id") == variant_id, controlled_cart
+    assert controlled_cart["items"][0].get("quantity") == 1, controlled_cart
 
     # Persist an intent before checkout. If the process or network dies after the
     # server accepts checkout, this marker survives and blocks a fresh real-payment
