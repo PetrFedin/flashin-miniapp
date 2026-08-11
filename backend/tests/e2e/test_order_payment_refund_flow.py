@@ -47,6 +47,17 @@ def _positive_context_int(context: dict[str, object], key: str) -> int:
     return value
 
 
+def _nonnegative_context_int(context: dict[str, object], key: str) -> int:
+    raw = context.get(key)
+    assert not isinstance(raw, bool), f"context {key} must be a non-negative integer"
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise AssertionError(f"context {key} must be a non-negative integer") from None
+    assert value >= 0, f"context {key} must be a non-negative integer"
+    return value
+
+
 def _load_context() -> dict[str, object]:
     assert CONTEXT_FILE.is_file(), f"Real E2E context file is missing: {CONTEXT_FILE}"
     try:
@@ -96,8 +107,8 @@ def test_completed_real_refund_lifecycle_is_consistent():
     order_id = _positive_context_int(context, "order_id")
     variant_id = _positive_context_int(context, "variant_id")
     expected_stock = _positive_context_int(context, "baseline_stock_qty")
-    assert int(context.get("quantity") or 0) == 1, context
-    assert int(context.get("baseline_reserved_qty") or -1) == 0, context
+    assert _positive_context_int(context, "quantity") == 1, context
+    assert _nonnegative_context_int(context, "baseline_reserved_qty") == 0, context
     assert context.get("subject_id") == f"order:{order_id}", context
 
     order_response = requests.get(
