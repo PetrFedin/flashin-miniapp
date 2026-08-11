@@ -44,10 +44,13 @@ def test_telegram_mutations_require_operator_args():
     assert "--acknowledge-customer-provisioning" not in auth
 
 
-def test_real_e2e_targets_use_guard_flags():
+def test_real_e2e_targets_use_guard_flags_and_recovery_status():
     assert _recipe("real-order-e2e") == (
         "RUN_REAL_E2E=1 python -m pytest -q "
         "backend/tests/e2e/test_real_order_flow_runner.py"
+    )
+    assert _recipe("real-order-e2e-status") == (
+        "python3 scripts/real_e2e_context_status.py $(ARGS)"
     )
     assert _recipe("real-lifecycle-e2e") == (
         "RUN_REAL_LIFECYCLE_E2E=1 python -m pytest -q "
