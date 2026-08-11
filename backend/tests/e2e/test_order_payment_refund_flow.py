@@ -36,6 +36,30 @@ def _required_int(name: str) -> int:
     return int(raw)
 
 
+def _assert_sent_command(
+    commands: list[dict[str, object]],
+    *,
+    command_type: str,
+    aggregate_type: str,
+    aggregate_id: int,
+) -> dict[str, object]:
+    matching = [
+        row
+        for row in commands
+        if row.get("command_type") == command_type
+        and row.get("aggregate_type") == aggregate_type
+        and row.get("aggregate_id") == str(aggregate_id)
+    ]
+    assert len(matching) == 1, (
+        f"Expected exactly one {command_type} command for "
+        f"{aggregate_type} {aggregate_id}, found {len(matching)}"
+    )
+    command = matching[0]
+    assert command.get("status") == "sent", command
+    assert str(command.get("external_id") or "").strip(), command
+    return command
+
+
 def test_completed_real_refund_lifecycle_is_consistent():
     assert CUSTOMER, "CUSTOMER_TOKEN required"
     assert ADMIN, "ADMIN_TOKEN required"
@@ -63,8 +87,14 @@ def test_completed_real_refund_lifecycle_is_consistent():
     assert returns_response.status_code == 200, returns_response.text
     matching_returns = [row for row in returns_response.json() if row.get("order_id") == order_id]
     assert matching_returns, "Expected a return request for the pilot order"
-    assert any(row.get("status") == "approved" for row in matching_returns)
-    assert any(row.get("provider_refund_id") for row in matching_returns)
+    completed_returns = [
+        row
+        for row in matching_returns
+        if row.get("status") == "approved" and row.get("provider_refund_id")
+    ]
+    assert completed_returns, "Expected one approved provider-backed return for the pilot order"
+    return_request = completed_returns[0]
+    return_id = int(return_request["id"])
 
     tasks_response = requests.get(
         f"{API}/api/fulfillment/tasks",
@@ -91,6 +121,36 @@ def test_completed_real_refund_lifecycle_is_consistent():
     assert variants, f"Variant {variant_id} not found"
     assert variants[0].get("stock_qty") == expected_stock
     assert variants[0].get("reserved_qty") == 0
+
+    outbound_response = requests.get(
+        f"{API}/api/moysklad/orders/{order_id}/outbound-evidence",
+        headers=headers(ADMIN),
+        timeout=20,
+    )
+    assert outbound_response.status_code == 200, outbound_response.text
+    outbound = outbound_response.json()
+    assert outbound.get("order_id") == order_id
+    assert return_id in outbound.get("return_ids", [])
+    commands = outbound.get("commands", [])
+    assert isinstance(commands, list)
+    _assert_sent_command(
+        commands,
+        command_type="moysklad.customer_order.create",
+        aggregate_type="order",
+        aggregate_id=order_id,
+    )
+    _assert_sent_command(
+        commands,
+        command_type="moysklad.demand.create",
+        aggregate_type="order",
+        aggregate_id=order_id,
+    )
+    _assert_sent_command(
+        commands,
+        command_type="moysklad.sales_return.create",
+        aggregate_type="return",
+        aggregate_id=return_id,
+    )
 
     notifications_response = requests.get(
         f"{API}/api/admin/notifications",
