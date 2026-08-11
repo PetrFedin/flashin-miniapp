@@ -59,6 +59,10 @@ def _write_context(payload: dict[str, object]) -> None:
 def test_real_cart_checkout_and_yookassa_payment_creation():
     assert CUSTOMER, "CUSTOMER_TOKEN required"
     assert ADMIN, "ADMIN_TOKEN required"
+    assert not CONTEXT_FILE.exists(), (
+        f"Real E2E context already exists at {CONTEXT_FILE}. "
+        "Finish/archive the previous controlled lifecycle before creating another real payment."
+    )
     variant_id = _required_int("E2E_VARIANT_ID")
 
     products_response = requests.get(f"{API}/api/products", timeout=20)
