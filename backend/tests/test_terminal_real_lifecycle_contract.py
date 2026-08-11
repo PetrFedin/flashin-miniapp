@@ -46,9 +46,30 @@ def test_real_payment_runner_requires_clean_controlled_cart_and_variant():
     assert "len(controlled_matches) == 1" in source
     assert 'variant.get("available_qty", 0) > 0' in source
     assert "products[0]" not in source
+    assert 'baseline_reserved_qty == 0' in source
     assert 'baseline_cart.get("items") == []' in source
     assert 'not baseline_cart.get("promo_code")' in source
     assert 'baseline_cart.get("loyalty_points_reserved")' in source
     assert 'len(controlled_cart.get("items", [])) == 1' in source
     assert 'order["items"][0].get("variant_id") == variant_id' in source
     assert 'order["items"][0].get("quantity") == 1' in source
+
+
+def test_real_provider_stages_share_sanitized_context_artifact():
+    creation_source = (
+        Path(__file__).resolve().parent / "e2e" / "test_real_order_flow_runner.py"
+    ).read_text(encoding="utf-8")
+    terminal_source = (
+        Path(__file__).resolve().parent / "e2e" / "test_order_payment_refund_flow.py"
+    ).read_text(encoding="utf-8")
+
+    default_context = "docs/pilot/evidence/real_order_e2e_context.json"
+    assert default_context in creation_source
+    assert default_context in terminal_source
+    assert '"kind": "flashin_real_order_e2e_context"' in creation_source
+    assert 'context.get("kind") == "flashin_real_order_e2e_context"' in terminal_source
+    assert '"subject_id": f"order:{int(order[\'id\'])}"' in creation_source
+    assert 'context.get("subject_id") == f"order:{order_id}"' in terminal_source
+    assert '"baseline_stock_qty": baseline_stock_qty' in creation_source
+    assert '_positive_context_int(context, "baseline_stock_qty")' in terminal_source
+    assert 'str(context.get("api_base") or "").rstrip("/") == API' in terminal_source
