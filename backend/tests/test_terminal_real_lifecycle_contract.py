@@ -16,6 +16,17 @@ def test_terminal_real_lifecycle_requires_one_delivered_refund_notification():
     assert '{"pending", "sent"}' not in source
 
 
+def test_terminal_real_lifecycle_requires_one_full_provider_refund():
+    source = (
+        Path(__file__).resolve().parent / "e2e" / "test_order_payment_refund_flow.py"
+    ).read_text(encoding="utf-8")
+
+    assert "assert len(completed_returns) == 1" in source
+    assert 'return_request.get("refundable_balance", -1)' in source
+    assert 'return_request.get("refunded_total", 0)' in source
+    assert 'float(order["total_amount"])' in source
+
+
 def test_real_payment_runner_requires_explicit_controlled_variant():
     source = (
         Path(__file__).resolve().parent / "e2e" / "test_real_order_flow_runner.py"
