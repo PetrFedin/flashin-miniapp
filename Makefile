@@ -37,7 +37,7 @@ help:
 	@echo "  make pilot-admission-status - verify final lifecycle + governance + P01-P20 admission chain"
 	@echo "  make pilot-launch-preflight - read-only staged check before pilot runtime arm"
 	@echo "  make pilot-runner          - initialize/show admission-gated 20-order control"
-	@echo "  make pilot-runtime-arm     - reverify final admission, then open checkout for allowlisted pilot Telegram IDs"
+	@echo "  make pilot-runtime-arm     - preflight + final admission, then open checkout for allowlisted pilot Telegram IDs"
 	@echo "  make pilot-runtime-status  - verify DB counter, evidence binding and remaining slots"
 	@echo "  make pilot-runtime-stop    - immediately block new pilot checkout"
 	@echo "  make pilot-status          - recalculate current pilot decision"
@@ -275,6 +275,7 @@ pilot-init:
 
 pilot-runtime-arm:
 	@echo "Usage: make pilot-runtime-arm ARGS='--telegram-id 123456789 [--telegram-id ...] [--resume]'"
+	python3 scripts/pilot_launch_preflight.py
 	python3 scripts/pilot_launch_admission.py verify
 	python3 scripts/pilot_runtime.py arm $(ARGS)
 
