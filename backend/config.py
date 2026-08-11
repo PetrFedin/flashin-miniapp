@@ -145,7 +145,13 @@ class Settings(BaseSettings):
         if not 1 <= self.pilot_runtime_max_orders <= 20:
             raise ValueError("PILOT_RUNTIME_MAX_ORDERS must be between 1 and 20")
 
-        if self.app_env.strip().lower() != "production":
+        normalized_app_env = self.app_env.strip().lower()
+        if self.pilot_runtime_enforced and normalized_app_env != "production":
+            raise ValueError(
+                "PILOT_RUNTIME_ENFORCED may only be true when APP_ENV=production"
+            )
+
+        if normalized_app_env != "production":
             return self
 
         errors: list[str] = []
