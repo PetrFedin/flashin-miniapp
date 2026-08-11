@@ -89,6 +89,20 @@ def test_production_requires_fail_closed_pilot_runtime():
     assert "PILOT_RUNTIME_MAX_ORDERS" in str(wrong_limit.value)
 
 
+def test_pilot_runtime_cannot_be_enabled_outside_production():
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(
+            _env_file=None,
+            app_env="staging",
+            telegram_bot_token="test-token",
+            jwt_secret="test-secret",
+            pilot_runtime_enforced=True,
+            pilot_runtime_max_orders=20,
+        )
+
+    assert "may only be true when APP_ENV=production" in str(exc_info.value)
+
+
 def test_production_requires_explicit_https_cors_origins():
     with pytest.raises(ValidationError):
         _safe_production_settings(cors_origins="*")
