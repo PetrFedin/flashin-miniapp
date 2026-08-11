@@ -39,9 +39,15 @@ Before **any pilot runtime mutation**, `scripts/deploy_release_gate.py` requires
 - the manifest `git_commit` exactly equals the production checkout `HEAD`;
 - the production checkout has no modified tracked files and no non-ignored untracked files;
 - the manifest tracked-file set exactly matches the deploy checkout tracked-file set;
-- every deploy-checkout tracked file has the same SHA-256 and Git-semantic executable bit as the artifact.
+- every deploy-checkout tracked file has the same SHA-256 and Git-semantic executable bit as the artifact;
+- the archive commit is still the exact current head of GitHub `PetrFedin/flashin-miniapp` branch `main`;
+- GitHub reports `main` as protected;
+- a completed successful `push` CI run exists for that exact SHA on `main`;
+- all six required jobs in that exact CI run are successful: `backend`, `frontend`, `admin`, `browser-e2e`, `integrated-e2e`, `docker`.
 
-Docker images are then built from a temporary extraction of the **verified ZIP**, not from the host checkout. The host checkout is only the control plane for the production `.env`, release pointers, persistent volumes and operator scripts. The gate is re-run after image build before migrations/runtime operations so control-plane drift fails closed.
+The production trust anchor is intentionally pinned in code to `PetrFedin/flashin-miniapp` and `https://api.github.com`. Repository/API host overrides from deployment environment variables are not accepted. `FLASHIN_GITHUB_TOKEN` or `GITHUB_TOKEN` may be supplied only as an authentication/rate-limit credential for the pinned GitHub API; it does not change the repository or API endpoint being trusted. If GitHub provenance cannot be verified, deployment fails closed before runtime mutation.
+
+Docker images are then built from a temporary extraction of the **verified ZIP**, not from the host checkout. The host checkout is only the control plane for the production `.env`, release pointers, persistent volumes and operator scripts. The full gate, including repository provenance, is re-run after image build before migrations/runtime operations so control-plane drift or a changed GitHub release head fails closed.
 
 `.env` is copied into the temporary extracted directory only so Compose can resolve build arguments and `env_file`; it is mode `0600`, excluded by `.dockerignore`, and the temporary tree is deleted after build.
 
@@ -76,7 +82,7 @@ deploy/release/builds/flashin_<release>.zip.sha256
 
 Do not use `make release-create` as the production promotion path. That command is useful for deterministic local/CI release tests, but production pilot deployment must consume the retained GitHub Release artifact.
 
-### 2. Verify configuration and artifact
+### 2. Verify configuration, artifact and GitHub provenance
 
 ```bash
 make validate-env
@@ -89,7 +95,9 @@ python3 scripts/pilot_release_capability.py inspect \
   --archive deploy/release/builds/flashin_<release>.zip
 ```
 
-Every command must succeed before deployment.
+Every command must succeed before deployment. The deploy gate itself reaches the pinned GitHub API and independently proves protected current `main` plus successful exact-SHA push CI; a locally generated archive with matching bytes is not sufficient.
+
+For a public repository the provenance request can run unauthenticated, but production operators should normally provide a least-privileged read token via `FLASHIN_GITHUB_TOKEN` to avoid public GitHub API rate-limit failures. Never put that token in tracked files or lifecycle evidence.
 
 ### 3. Deploy the exact retained artifact
 
@@ -102,13 +110,13 @@ Bare `make deploy-prod` is intentionally rejected.
 The deployment sequence is:
 
 1. require the retained ZIP and adjacent checksum;
-2. verify artifact/checksum/manifest/commit/file-set/file hashes/executable bits and clean deploy checkout;
+2. verify artifact/checksum/manifest/commit/file-set/file hashes/executable bits, clean deploy checkout, protected current GitHub `main`, exact-SHA successful push CI and all six required jobs;
 3. inspect pilot release capability v18;
 4. extract the verified artifact to an isolated temporary Docker build context;
 5. only then stop an active pilot checkout runtime;
 6. run strict predeploy readiness and render root-only Alertmanager configuration;
 7. build production images from the extracted artifact, not the host source tree;
-8. re-run the artifact/deploy-checkout binding gate;
+8. re-run the complete artifact/check-out/GitHub-provenance binding gate;
 9. check a single Alembic head, start PostgreSQL and run transaction-integrity audit;
 10. create and verify a pre-migration backup when a schema already exists;
 11. apply migrations and verify post-migration transaction/pilot-runtime integrity;
@@ -130,7 +138,7 @@ make release-status
 python3 scripts/pilot_release_capability.py verify --slot both --env .env
 ```
 
-Do not manually edit release pointers.
+Because the normal production deploy path now requires the archive commit to be the current protected `main` head, historical rollback targets are restored through the dedicated rollback path, not by pretending an old archive is a new production deployment. Do not manually edit release pointers.
 
 ## Backup and restore rules
 
@@ -187,14 +195,14 @@ The override does not bypass release capability inspection.
 
 Before admitting pilot customers:
 
-1. Complete two successful artifact-bound deployments from the capability-v18 code line.
+1. Complete two successful artifact-bound deployments from the capability-v18 code line while each candidate is the current protected exact-green `main` release, or establish the previous slot through the approved release/rollback preparation procedure before the final pilot promotion.
 2. Verify both signed pointers with `python3 scripts/pilot_release_capability.py verify --slot both --env .env`.
 3. Confirm `make release-status` shows two different retained archive paths.
 4. Create and verify a fresh database backup.
 5. During a maintenance window, roll back to `previous` with that backup.
 6. Confirm all required services are running and `/health` plus `/ready` are semantically healthy.
 7. Run `make pilot-gate` after rollback.
-8. Redeploy the intended retained pilot artifact with `make deploy-prod RELEASE=...` and run `make pilot-gate` again.
+8. Redeploy the intended retained pilot artifact with `make deploy-prod RELEASE=...` only when it is again the protected exact-green current `main` commit, then run `make pilot-gate` again.
 9. Verify capability v18 for both pointers again.
 10. Record operator, timestamps, release IDs, archive hashes, backup filename, duration, result and corrective action in private signed pilot evidence.
 
@@ -206,6 +214,9 @@ Do not admit pilot users when any of the following is true:
 - the candidate lacks successful protected-main **push** CI and guarded GitHub Release artifact;
 - the deployment ZIP or adjacent `.sha256` is missing or not retained under `deploy/release/builds/`;
 - the artifact manifest commit differs from production checkout `HEAD`;
+- the artifact commit differs from the current protected GitHub `main` head;
+- GitHub provenance cannot be fetched from the pinned `PetrFedin/flashin-miniapp` trust anchor;
+- there is no successful exact-SHA `push` CI on `main` or any of the six required jobs is missing/not successful;
 - the production checkout contains modified tracked files or non-ignored untracked files;
 - tracked file set, hashes or executable bits differ from the retained artifact;
 - deploy would build Docker images from the host source tree instead of the verified artifact extraction;
