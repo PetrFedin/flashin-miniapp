@@ -142,6 +142,10 @@ def validate_order_lifecycle_correlation(
                 errors.append("real-order E2E context schema is invalid")
             if context.get("kind") != "flashin_real_order_e2e_context":
                 errors.append("real-order E2E context kind is invalid")
+            if context.get("phase") != "payment_created":
+                errors.append(
+                    "real-order E2E context is provisional and has not reached payment_created"
+                )
             if context.get("provider") != "yookassa":
                 errors.append("real-order E2E context provider is invalid")
 
