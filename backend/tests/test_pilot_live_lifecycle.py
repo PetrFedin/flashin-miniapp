@@ -14,7 +14,11 @@ from pilot_evidence import (  # noqa: E402
     sha256_file,
     sign_payload,
 )
-from pilot_lifecycle_admission import validate_attached_lifecycle  # noqa: E402
+from pilot_lifecycle_admission import (  # noqa: E402
+    ORDER_CORRELATED_SCENARIOS,
+    validate_attached_lifecycle,
+    validate_order_lifecycle_correlation,
+)
 from pilot_live_lifecycle import (  # noqa: E402
     BASE_REQUIRED_SCENARIOS,
     build_report,
@@ -80,7 +84,11 @@ def _input(root: Path, env, *, owner="Operations", notes="controlled live observ
                 "status": "PASS",
                 "observed_at": "2026-08-06T12:00:00Z",
                 "owner": owner,
-                "subject_id": f"subject-{index}",
+                "subject_id": (
+                    "order:4242"
+                    if name in ORDER_CORRELATED_SCENARIOS
+                    else f"subject-{index}"
+                ),
                 "notes": notes,
                 "evidence": [
                     {
@@ -143,6 +151,7 @@ def test_live_lifecycle_report_requires_exact_deployed_scenarios_and_hashes(tmp_
         max_age_hours=24,
         now=NOW,
     ) == []
+    assert validate_order_lifecycle_correlation(report) == []
     assert all(
         item["path"].startswith("docs/pilot/evidence/")
         for scenario in report["scenarios"]
@@ -159,6 +168,43 @@ def test_live_lifecycle_report_requires_exact_deployed_scenarios_and_hashes(tmp_
         now=NOW,
     )
     assert any("checksum does not match" in error for error in errors)
+
+
+def test_order_linked_scenarios_must_share_one_controlled_subject(tmp_path):
+    env = _env()
+    _write_env(tmp_path, env)
+    report, _ = _report(tmp_path, env)
+    mismatched = json.loads(json.dumps(report))
+    mismatched.pop("signature")
+    refund = next(
+        scenario
+        for scenario in mismatched["scenarios"]
+        if scenario["name"] == "yookassa_refund"
+    )
+    refund["subject_id"] = "order:9999"
+    mismatched = sign_payload(mismatched, SECRET)
+
+    errors = validate_order_lifecycle_correlation(mismatched)
+    assert errors == [
+        "order-linked live lifecycle scenarios must share one controlled-order subject_id"
+    ]
+
+    pilot_dir, _ = _paths(tmp_path)
+    report_path = pilot_dir / "live_lifecycle_report.json"
+    report_path.write_text(json.dumps(mismatched), encoding="utf-8")
+    manifest = _manifest(env, report_path, attached=True)
+    manifest_path = pilot_dir / "pilot_admission_manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    attached_errors = validate_attached_lifecycle(
+        manifest_path,
+        manifest,
+        env=env,
+        root=tmp_path,
+        max_age_hours=24,
+        now=NOW,
+    )
+    assert any("share one controlled-order subject_id" in error for error in attached_errors)
 
 
 def test_conditional_search_and_media_scenarios_are_required(tmp_path):
@@ -189,6 +235,7 @@ def test_conditional_search_and_media_scenarios_are_required(tmp_path):
         max_age_hours=24,
         now=NOW,
     ) == []
+    assert validate_order_lifecycle_correlation(report) == []
 
 
 def test_tampering_staleness_and_raw_init_data_fail_closed(tmp_path):
