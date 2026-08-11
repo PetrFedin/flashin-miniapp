@@ -8,6 +8,8 @@ def test_terminal_real_lifecycle_requires_one_delivered_refund_notification():
 
     assert "/api/admin/notification-delivery?status=sent&limit=200" in source
     assert "/api/admin/notifications" not in source
+    assert 'refund_event_key = f"order:{order_id}:refund:{return_id}:succeeded"' in source
+    assert 'row.get("event_key") == refund_event_key' in source
     assert "assert len(refund_notifications) == 1" in source
     assert 'refund_notification.get("status") == "sent"' in source
     assert 'refund_notification.get("sent_at")' in source
