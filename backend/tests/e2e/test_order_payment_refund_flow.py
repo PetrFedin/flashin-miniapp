@@ -158,14 +158,14 @@ def test_completed_real_refund_lifecycle_is_consistent():
         timeout=20,
     )
     assert notifications_response.status_code == 200, notifications_response.text
+    refund_event_key = f"order:{order_id}:refund:{return_id}:succeeded"
     refund_notifications = [
         row
         for row in notifications_response.json()
-        if f"заказу #{order_id}" in str(row.get("message", "")).lower()
-        and "возвращена" in str(row.get("message", "")).lower()
+        if row.get("event_key") == refund_event_key
     ]
     assert len(refund_notifications) == 1, (
-        f"Expected exactly one refund notification for order {order_id}, "
+        f"Expected exactly one delivered notification for event {refund_event_key}, "
         f"found {len(refund_notifications)}"
     )
     refund_notification = refund_notifications[0]
