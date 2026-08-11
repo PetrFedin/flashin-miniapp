@@ -3,6 +3,7 @@
 The side-effectful real-order runner writes a sanitized context artifact with the
 exact order, controlled SKU and pre-order stock. This verifier consumes that
 artifact so its terminal assertions cannot be pointed at a different order/SKU.
+Only a context that reached the durable ``payment_created`` phase is eligible.
 
 RUN_REAL_LIFECYCLE_E2E=1 \
 API_BASE=https://api.example.test CUSTOMER_TOKEN=... ADMIN_TOKEN=... \
@@ -67,6 +68,9 @@ def _load_context() -> dict[str, object]:
     assert isinstance(context, dict), "Real E2E context must be a JSON object"
     assert context.get("schema_version") == 1, context
     assert context.get("kind") == "flashin_real_order_e2e_context", context
+    assert context.get("phase") == "payment_created", (
+        "Real E2E context is provisional; investigate the previous real-order attempt before terminal verification"
+    )
     assert str(context.get("api_base") or "").rstrip("/") == API, (
         "Real E2E context belongs to a different API_BASE"
     )
