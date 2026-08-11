@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Inspect the private real-provider E2E context without exposing credentials.
 
-The side-effectful real-order runner writes the context before checkout and then
-advances it through ``order_created`` to ``payment_created``. This command is an
-operator recovery aid: provisional phases are intentionally non-zero/NO-GO so a
-second real-payment run is never the default response to an interrupted attempt.
+The side-effectful real-order runner atomically claims the context before the
+first cart mutation and then advances it through ``checkout_intent`` and
+``order_created`` to ``payment_created``. This command is an operator recovery
+aid: provisional phases are intentionally non-zero/NO-GO so a second real-payment
+run is never the default response to an interrupted attempt.
 """
 
 from __future__ import annotations
@@ -16,7 +17,9 @@ from typing import Any, Mapping, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONTEXT = ROOT / "docs/pilot/evidence/real_order_e2e_context.json"
-VALID_PHASES = frozenset({"checkout_intent", "order_created", "payment_created"})
+VALID_PHASES = frozenset(
+    {"preflight_intent", "checkout_intent", "order_created", "payment_created"}
+)
 
 
 def _positive_int(payload: Mapping[str, Any], key: str) -> int | None:
@@ -91,8 +94,14 @@ def inspect_context(path: Path) -> dict[str, Any]:
     if phase == "payment_created" and not provider_payment_id:
         errors.append("real E2E context provider_payment_id is missing after payment creation")
 
-    provisional = phase in {"checkout_intent", "order_created"}
-    if phase == "checkout_intent":
+    provisional = phase in {"preflight_intent", "checkout_intent", "order_created"}
+    if phase == "preflight_intent":
+        recovery = (
+            "Do not rerun real-order E2E. The exclusive real-payment slot was claimed before "
+            "cart mutation. Investigate whether the prior process changed the controlled cart or "
+            "advanced to checkout/order creation before archiving this marker."
+        )
+    elif phase == "checkout_intent":
         recovery = (
             "Do not rerun real-order E2E. Investigate whether checkout was accepted using "
             "the pilot customer/order records and the recorded context timestamp/idempotency key."
