@@ -22,7 +22,7 @@ from release_control import MANIFEST_NAME, tracked_files, verify_release
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_GITHUB_REPOSITORY = "PetrFedin/flashin-miniapp"
-_REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+DEFAULT_GITHUB_API_URL = "https://api.github.com"
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -109,18 +109,28 @@ def verify_deploy_repository_provenance(
     expected_sha: str,
     *,
     repository: str = DEFAULT_GITHUB_REPOSITORY,
-    api_base: str = "https://api.github.com",
+    api_base: str = DEFAULT_GITHUB_API_URL,
     token: str = "",
 ) -> dict[str, Any]:
     repository = repository.strip()
     expected_sha = expected_sha.strip().lower()
     api_base = api_base.strip().rstrip("/")
-    if not _REPOSITORY_RE.fullmatch(repository):
-        return {"ok": False, "errors": ["deployment GitHub repository is invalid"]}
+    if repository != DEFAULT_GITHUB_REPOSITORY:
+        return {
+            "ok": False,
+            "errors": [
+                f"deployment GitHub repository must be {DEFAULT_GITHUB_REPOSITORY}"
+            ],
+        }
+    if api_base != DEFAULT_GITHUB_API_URL:
+        return {
+            "ok": False,
+            "errors": [
+                f"deployment GitHub API URL must be {DEFAULT_GITHUB_API_URL}"
+            ],
+        }
     if not _SHA_RE.fullmatch(expected_sha):
         return {"ok": False, "errors": ["deployment release commit SHA is invalid"]}
-    if not api_base.startswith("https://"):
-        return {"ok": False, "errors": ["deployment GitHub API URL must use HTTPS"]}
 
     encoded_sha = urllib.parse.quote(expected_sha, safe="")
     branch = _github_get(f"{api_base}/repos/{repository}/branches/main", token)
@@ -250,8 +260,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--archive", type=Path, required=True)
     parser.add_argument("--root", type=Path, default=ROOT)
-    parser.add_argument("--repository")
-    parser.add_argument("--github-api-url")
     parser.add_argument("--print-path", action="store_true")
     return parser
 
@@ -261,25 +269,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         report = verify_deploy_release(args.root, args.archive)
         if report.get("ok"):
-            repository = (
-                args.repository
-                or os.getenv("FLASHIN_GITHUB_REPOSITORY", "").strip()
-                or os.getenv("GITHUB_REPOSITORY", "").strip()
-                or DEFAULT_GITHUB_REPOSITORY
-            )
-            api_base = (
-                args.github_api_url
-                or os.getenv("GITHUB_API_URL", "").strip()
-                or "https://api.github.com"
-            )
             token = (
                 os.getenv("FLASHIN_GITHUB_TOKEN", "").strip()
                 or os.getenv("GITHUB_TOKEN", "").strip()
             )
             provenance = verify_deploy_repository_provenance(
                 str(report.get("git_commit") or ""),
-                repository=repository,
-                api_base=api_base,
+                repository=DEFAULT_GITHUB_REPOSITORY,
+                api_base=DEFAULT_GITHUB_API_URL,
                 token=token,
             )
             report["repository_provenance"] = provenance
