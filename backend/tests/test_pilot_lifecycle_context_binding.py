@@ -11,7 +11,7 @@ from pilot_lifecycle_admission import (  # noqa: E402
 )
 
 
-def _write_context(root: Path, *, api_base: str) -> None:
+def _write_context(root: Path, *, api_base: str, phase: str = "payment_created") -> None:
     context_path = root / ORDER_CONTEXT_EVIDENCE_PATH
     context_path.parent.mkdir(parents=True, exist_ok=True)
     context_path.write_text(
@@ -19,6 +19,7 @@ def _write_context(root: Path, *, api_base: str) -> None:
             {
                 "schema_version": 1,
                 "kind": "flashin_real_order_e2e_context",
+                "phase": phase,
                 "api_base": api_base,
                 "provider": "yookassa",
                 "subject_id": "order:42",
@@ -40,7 +41,11 @@ def _report() -> dict:
                     {
                         "path": ORDER_CONTEXT_EVIDENCE_PATH,
                         "sha256": "a" * 64,
-                    }
+                    },
+                    {
+                        "path": "docs/pilot/evidence/yookassa-redirect.json",
+                        "sha256": "b" * 64,
+                    },
                 ],
             }
         ]
@@ -69,3 +74,22 @@ def test_real_order_context_accepts_normalized_pilot_api_base(tmp_path):
     )
 
     assert errors == []
+
+
+def test_provisional_real_order_context_cannot_enter_live_admission(tmp_path):
+    _write_context(
+        tmp_path,
+        api_base="https://api.flashin.example",
+        phase="order_created",
+    )
+
+    errors = validate_order_lifecycle_correlation(
+        _report(),
+        root=tmp_path,
+        expected_api_base="https://api.flashin.example",
+    )
+
+    assert (
+        "real-order E2E context is provisional and has not reached payment_created"
+        in errors
+    )
