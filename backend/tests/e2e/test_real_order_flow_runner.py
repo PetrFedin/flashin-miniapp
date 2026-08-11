@@ -2,16 +2,19 @@
 
 Run only against an explicitly configured pilot/test stack with an allowlisted
 customer and an explicitly selected controlled product variant. This runner
-creates a real order and a real YooKassa payment attempt; provider-driven
-settlement/refund evidence is captured by the controlled pilot lifecycle rather
-than fabricated by this test.
+creates a real order and a real YooKassa payment attempt, then writes a sanitized
+context artifact used by the terminal lifecycle verifier. Provider-driven
+settlement/refund evidence is never fabricated by this test.
 
 RUN_REAL_E2E=1 API_BASE=https://api.example.test CUSTOMER_TOKEN=... ADMIN_TOKEN=... \
   E2E_VARIANT_ID=456 pytest -q backend/tests/e2e/test_real_order_flow_runner.py
 """
 
+import json
 import os
 import uuid
+from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 import requests
@@ -21,6 +24,12 @@ pytestmark = pytest.mark.skipif(os.getenv("RUN_REAL_E2E") != "1", reason="set RU
 API = os.getenv("API_BASE", "http://localhost:8000").rstrip("/")
 CUSTOMER = os.getenv("CUSTOMER_TOKEN", "")
 ADMIN = os.getenv("ADMIN_TOKEN", "")
+CONTEXT_FILE = Path(
+    os.getenv(
+        "E2E_CONTEXT_FILE",
+        "docs/pilot/evidence/real_order_e2e_context.json",
+    )
+)
 
 
 def headers(token: str, **extra: str) -> dict[str, str]:
@@ -35,6 +44,16 @@ def _required_int(name: str) -> int:
     raw = str(os.getenv(name, "")).strip()
     assert raw.isdigit() and int(raw) > 0, f"{name} must be a positive integer"
     return int(raw)
+
+
+def _write_context(payload: dict[str, object]) -> None:
+    CONTEXT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    temporary = CONTEXT_FILE.with_name(f".{CONTEXT_FILE.name}.{uuid.uuid4().hex}.tmp")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(CONTEXT_FILE)
 
 
 def test_real_cart_checkout_and_yookassa_payment_creation():
@@ -58,6 +77,30 @@ def test_real_cart_checkout_and_yookassa_payment_creation():
     product, variant = controlled_matches[0]
     assert variant.get("available_qty", 0) > 0, (
         f"Controlled variant {variant_id} must have available stock"
+    )
+
+    inventory_response = requests.get(
+        f"{API}/api/admin/products",
+        headers=headers(ADMIN),
+        timeout=20,
+    )
+    assert inventory_response.status_code == 200, inventory_response.text
+    inventory_matches = [
+        inventory_variant
+        for inventory_product in inventory_response.json()
+        for inventory_variant in inventory_product.get("variants", [])
+        if inventory_variant.get("id") == variant_id
+    ]
+    assert len(inventory_matches) == 1, (
+        f"Expected exactly one admin inventory variant {variant_id}, "
+        f"found {len(inventory_matches)}"
+    )
+    inventory_variant = inventory_matches[0]
+    baseline_stock_qty = int(inventory_variant.get("stock_qty", -1))
+    baseline_reserved_qty = int(inventory_variant.get("reserved_qty", -1))
+    assert baseline_stock_qty > 0, inventory_variant
+    assert baseline_reserved_qty == 0, (
+        "Controlled pilot variant must have zero existing reservations before real E2E"
     )
 
     baseline_cart_response = requests.get(
@@ -111,9 +154,6 @@ def test_real_cart_checkout_and_yookassa_payment_creation():
     assert order["items"][0].get("quantity") == 1, order
     assert abs(float(order["total_amount"]) - float(product["price"])) < 0.01, order
 
-    # The current payment API takes order_id in the body. Older runners used the
-    # removed /api/payments/orders/{id} route and therefore did not exercise the
-    # production contract.
     payment = requests.post(
         f"{API}/api/payments",
         json={"order_id": order["id"]},
@@ -129,8 +169,26 @@ def test_real_cart_checkout_and_yookassa_payment_creation():
     if payment_data["status"] != "succeeded":
         assert payment_data["confirmation_url"], "Pending YooKassa payment must have confirmation URL"
 
-    # This is deliberately read-only after payment creation. The live YooKassa
-    # callback, fulfillment, refund, stock return and Telegram delivery are
-    # provider/operator-driven and must be recorded through pilot lifecycle evidence.
+    _write_context(
+        {
+            "schema_version": 1,
+            "kind": "flashin_real_order_e2e_context",
+            "created_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "api_base": API,
+            "subject_id": f"order:{int(order['id'])}",
+            "order_id": int(order["id"]),
+            "product_id": int(product["id"]),
+            "variant_id": variant_id,
+            "quantity": 1,
+            "baseline_stock_qty": baseline_stock_qty,
+            "baseline_reserved_qty": baseline_reserved_qty,
+            "provider": "yookassa",
+            "provider_payment_id": str(payment_data["provider_payment_id"]),
+        }
+    )
+
+    # Deliberately read-only after payment creation. The live YooKassa callback,
+    # fulfillment, refund, stock return and Telegram delivery are provider/operator
+    # driven and must be recorded through pilot lifecycle evidence.
     tasks = requests.get(f"{API}/api/fulfillment/tasks", headers=headers(ADMIN), timeout=20)
     assert tasks.status_code == 200, tasks.text
