@@ -80,29 +80,27 @@ make readiness-gate
 
 Все три шага должны завершиться GO до deploy. Provider preflight fail-closed проверяет production HTTPS URLs, точный YooKassa callback `${API_PUBLIC_URL}/api/webhooks/yookassa`, точный return URL `${MINI_APP_URL}/payment-result`, Telegram token wiring, YooKassa credentials, MoySklad credentials/organization/agent/store IDs, outbound enablement, scheduler и pilot runtime guard. Никакие значения из `.env.production.example` не являются реальными секретами. В production `.env` должны находиться только не-секретные GitHub governance settings; строка `PILOT_GITHUB_TOKEN` там запрещена.
 
-## 3. Получить и развернуть два exact immutable release
+## 3. Получить exact immutable release и доказуемый rollback slot
 
 Нужны различающиеся `current` и `previous`, чтобы rollback был доказуемым. Production pilot release **не создаётся на host через `make release-create`**. Он должен быть получен из guarded GitHub `Release` workflow после protected-main push CI.
 
-Для каждого release скачайте без изменения байтов ZIP и соседний checksum в retained directory:
+Для release скачайте без изменения байтов ZIP и соседний checksum в retained directory:
 
 ```text
 deploy/release/builds/flashin_<release>.zip
 deploy/release/builds/flashin_<release>.zip.sha256
 ```
 
-Проверка и deploy старшего rollback release:
+Normal production deploy намеренно принимает только архив, чей commit **прямо сейчас** является current protected GitHub `main` head и имеет успешный exact-SHA `push` CI со всеми шестью required jobs. Поэтому старый rollback release нельзя задеплоить через normal `make deploy-prod` уже после того, как `main` ушёл вперёд, просто ради создания `previous` pointer.
 
-```bash
-make release-verify FILE=deploy/release/builds/flashin_<older>.zip
-python3 scripts/deploy_release_gate.py \
-  --archive deploy/release/builds/flashin_<older>.zip
-python3 scripts/pilot_release_capability.py inspect \
-  --archive deploy/release/builds/flashin_<older>.zip
-make deploy-prod RELEASE=deploy/release/builds/flashin_<older>.zip
-```
+`previous` должен быть сформирован одним из безопасных способов:
 
-Затем exact pilot release:
+- он уже остался от предыдущего успешного artifact-bound production deployment, выполненного в тот момент, когда его commit был current protected exact-green `main`; или
+- он был подготовлен в утверждённой release/rollback последовательности **до** финального продвижения нового pilot release.
+
+Если перед финальным pilot deploy нет отдельного проверенного `previous`, это NO-GO. Не обходите gate ручным редактированием pointers.
+
+Проверка и deploy exact pilot release:
 
 ```bash
 make release-verify FILE=deploy/release/builds/flashin_<pilot>.zip
@@ -115,7 +113,9 @@ make release-status
 python3 scripts/pilot_release_capability.py verify --slot both --env .env
 ```
 
-`deploy_release_gate.py` fail-closed требует: artifact под `deploy/release/builds/`, соседний `.sha256`, manifest commit = checkout `HEAD`, полностью чистый tracked/non-ignored-untracked checkout, exact tracked file-set, совпадающие SHA-256 и Git-semantic executable bits. Production images собираются из временной распаковки verified ZIP, а не из host source tree. Gate и capability inspection выполняются до остановки pilot runtime. Bare `make deploy-prod` намеренно запрещён.
+`deploy_release_gate.py` fail-closed требует: artifact под `deploy/release/builds/`, соседний `.sha256`, manifest commit = checkout `HEAD`, полностью чистый tracked/non-ignored-untracked checkout, exact tracked file-set, совпадающие SHA-256 и Git-semantic executable bits. Дополнительно он сам обращается к жёстко закреплённому trust anchor `PetrFedin/flashin-miniapp` через `https://api.github.com`, требует `main protected=true`, archive commit = current `main` head, успешный exact-SHA **push** CI и success всех шести required jobs. Repository/API endpoint нельзя перенаправить env-переменной. Для аутентификации/rate limit допустим только process-injected `FLASHIN_GITHUB_TOKEN`/`GITHUB_TOKEN`; токен не меняет trust anchor.
+
+Production images собираются из временной распаковки verified ZIP, а не из host source tree. Полный gate повторяется после image build и до migrations/runtime operations. Bare `make deploy-prod` намеренно запрещён.
 
 Не допускается использовать архив от другого commit, вручную менять release pointer или считать локально перепакованный checkout эквивалентом GitHub Release artifact.
 
@@ -181,14 +181,24 @@ make pilot-admit ARGS='\
 - Meilisearch indexing, если включён;
 - R2/S3/CDN delivery, если включён.
 
-Guarded runners для deployed pilot environment:
+Сначала запускается только side-effectful controlled order/payment stage:
 
 ```bash
-RUN_REAL_E2E=1 python -m pytest -q backend/tests/e2e/test_real_order_flow_runner.py
-RUN_REAL_LIFECYCLE_E2E=1 python -m pytest -q backend/tests/e2e/test_order_payment_refund_flow.py
+make real-order-e2e
+make real-order-e2e-status
 ```
 
-Первый runner создаёт/проводит реальный order/payment/fulfillment путь; второй является terminal verifier и проверяет финальные order/payment/delivery/return/stock/refund-notification/diagnostics состояния. Не включайте эти флаги в обычный CI.
+`real-order-e2e` требует явный `E2E_VARIANT_ID`, чистую pilot cart, нулевую исходную reservation и один controlled SKU. До checkout он **durably** создаёт `docs/pilot/evidence/real_order_e2e_context.json`, затем продвигает marker по фазам `checkout_intent -> order_created -> payment_created`. Запись выполняется атомарно с `fsync` файла и каталога. Любой существующий marker блокирует новый real-order run.
+
+`make real-order-e2e-status` возвращает success только для структурно корректного `payment_created`. Если runner оборвался на `checkout_intent` или `order_created`, **не удаляйте marker и не запускайте runner повторно**. Используйте `docs/pilot/real_provider_e2e_recovery.md`: сначала выясните, был ли принят checkout/создан provider payment, и продолжайте reconciliation для уже существующей попытки.
+
+После `payment_created` завершите реальный provider/operator lifecycle **того же** `order:<id>`: YooKassa confirmation/callback, fulfillment/delivery, return/refund, MoySklad outbound processing и Telegram delivery. Только затем запускайте read-only terminal verifier:
+
+```bash
+make real-lifecycle-e2e
+```
+
+Terminal verifier и admission оба требуют exact `payment_created` context, тот же order/SKU, полный provider-backed refund, восстановленный baseline stock, `customerorder`/`demand`/`salesreturn` external IDs и ровно одно отправленное refund notification. Они не принимают provisional context.
 
 Сохраните только sanitized evidence под `docs/pilot/evidence`, затем:
 
@@ -197,6 +207,8 @@ make pilot-lifecycle-create ARGS='--input docs/pilot/live_lifecycle_input.json'
 make pilot-lifecycle-attach
 make pilot-lifecycle-status
 ```
+
+Для каждого из восьми order-linked scenarios shared context обязателен ровно один раз **и не может быть единственным доказательством**: дополнительно требуется scenario-specific evidence artifact. Все восемь сценариев должны иметь один `order:<id>`, один context SHA и production `api_base == API_PUBLIC_URL`.
 
 Каждый scenario owner должен дословно совпадать с одним из владельцев signed admission. Ни один обязательный P01-P20 шаг не может оставаться `todo` или `failed` к моменту финального допуска.
 
@@ -278,6 +290,7 @@ STOP обязателен при любом из условий:
 
 - критический сценарий `fail`;
 - duplicate order/payment/refund ID;
+- unresolved `checkout_intent`/`order_created` real-E2E context или попытка запустить новый real-order E2E поверх существующего marker;
 - money delta более 0,01 или неверная валюта;
 - отрицательный остаток или неверный inventory delta;
 - duplicate webhook/callback создал повторный финансовый/доменный эффект;
