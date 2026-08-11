@@ -1,17 +1,17 @@
 """Verify a completed real-provider pilot lifecycle without creating side effects.
 
-This is intentionally separate from the order/payment creation runner. It is a
-read-only verifier for an operator-provided order that has already completed the
-real YooKassa -> fulfillment -> refund -> notification lifecycle.
+The side-effectful real-order runner writes a sanitized context artifact with the
+exact order, controlled SKU and pre-order stock. This verifier consumes that
+artifact so its terminal assertions cannot be pointed at a different order/SKU.
 
 RUN_REAL_LIFECYCLE_E2E=1 \
-API_BASE=https://api.example.test \
-CUSTOMER_TOKEN=... ADMIN_TOKEN=... \
-E2E_ORDER_ID=123 E2E_VARIANT_ID=456 E2E_EXPECTED_STOCK_QTY=2 \
+API_BASE=https://api.example.test CUSTOMER_TOKEN=... ADMIN_TOKEN=... \
 pytest -q backend/tests/e2e/test_order_payment_refund_flow.py
 """
 
+import json
 import os
+from pathlib import Path
 
 import pytest
 import requests
@@ -24,16 +24,45 @@ pytestmark = pytest.mark.skipif(
 API = os.getenv("API_BASE", "http://localhost:8000").rstrip("/")
 CUSTOMER = os.getenv("CUSTOMER_TOKEN", "")
 ADMIN = os.getenv("ADMIN_TOKEN", "")
+CONTEXT_FILE = Path(
+    os.getenv(
+        "E2E_CONTEXT_FILE",
+        "docs/pilot/evidence/real_order_e2e_context.json",
+    )
+)
 
 
 def headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 
-def _required_int(name: str) -> int:
-    raw = str(os.getenv(name, "")).strip()
-    assert raw.isdigit() and int(raw) > 0, f"{name} must be a positive integer"
-    return int(raw)
+def _positive_context_int(context: dict[str, object], key: str) -> int:
+    raw = context.get(key)
+    assert not isinstance(raw, bool), f"context {key} must be a positive integer"
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise AssertionError(f"context {key} must be a positive integer") from None
+    assert value > 0, f"context {key} must be a positive integer"
+    return value
+
+
+def _load_context() -> dict[str, object]:
+    assert CONTEXT_FILE.is_file(), f"Real E2E context file is missing: {CONTEXT_FILE}"
+    try:
+        context = json.loads(CONTEXT_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise AssertionError(f"Real E2E context file is invalid: {exc}") from exc
+    assert isinstance(context, dict), "Real E2E context must be a JSON object"
+    assert context.get("schema_version") == 1, context
+    assert context.get("kind") == "flashin_real_order_e2e_context", context
+    assert str(context.get("api_base") or "").rstrip("/") == API, (
+        "Real E2E context belongs to a different API_BASE"
+    )
+    assert context.get("provider") == "yookassa", context
+    assert str(context.get("provider_payment_id") or "").strip(), context
+    assert str(context.get("subject_id") or "").strip(), context
+    return context
 
 
 def _assert_sent_command(
@@ -63,9 +92,13 @@ def _assert_sent_command(
 def test_completed_real_refund_lifecycle_is_consistent():
     assert CUSTOMER, "CUSTOMER_TOKEN required"
     assert ADMIN, "ADMIN_TOKEN required"
-    order_id = _required_int("E2E_ORDER_ID")
-    variant_id = _required_int("E2E_VARIANT_ID")
-    expected_stock = _required_int("E2E_EXPECTED_STOCK_QTY")
+    context = _load_context()
+    order_id = _positive_context_int(context, "order_id")
+    variant_id = _positive_context_int(context, "variant_id")
+    expected_stock = _positive_context_int(context, "baseline_stock_qty")
+    assert int(context.get("quantity") or 0) == 1, context
+    assert int(context.get("baseline_reserved_qty") or -1) == 0, context
+    assert context.get("subject_id") == f"order:{order_id}", context
 
     order_response = requests.get(
         f"{API}/api/orders/{order_id}",
