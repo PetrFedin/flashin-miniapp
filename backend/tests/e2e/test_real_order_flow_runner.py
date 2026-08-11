@@ -60,6 +60,23 @@ def test_real_cart_checkout_and_yookassa_payment_creation():
         f"Controlled variant {variant_id} must have available stock"
     )
 
+    baseline_cart_response = requests.get(
+        f"{API}/api/cart",
+        headers=headers(CUSTOMER),
+        timeout=20,
+    )
+    assert baseline_cart_response.status_code == 200, baseline_cart_response.text
+    baseline_cart = baseline_cart_response.json()
+    assert baseline_cart.get("items") == [], (
+        "Controlled pilot customer cart must be empty before the real payment E2E"
+    )
+    assert not baseline_cart.get("promo_code"), (
+        "Controlled pilot customer cart must not have a promo before the real payment E2E"
+    )
+    assert int(baseline_cart.get("loyalty_points_reserved") or 0) == 0, (
+        "Controlled pilot customer cart must not reserve loyalty points before the real payment E2E"
+    )
+
     cart = requests.post(
         f"{API}/api/cart/items",
         json={"product_id": product["id"], "variant_id": variant["id"], "quantity": 1},
@@ -67,6 +84,10 @@ def test_real_cart_checkout_and_yookassa_payment_creation():
         timeout=20,
     )
     assert cart.status_code in (200, 201), cart.text
+    controlled_cart = cart.json()
+    assert len(controlled_cart.get("items", [])) == 1, controlled_cart
+    assert controlled_cart["items"][0].get("variant_id") == variant_id, controlled_cart
+    assert controlled_cart["items"][0].get("quantity") == 1, controlled_cart
 
     idempotency_key = f"real-e2e:{uuid.uuid4().hex}"
     checkout = requests.post(
@@ -85,6 +106,10 @@ def test_real_cart_checkout_and_yookassa_payment_creation():
     order = checkout.json()
     assert order["id"] > 0
     assert order["payment_status"] == "pending"
+    assert len(order.get("items", [])) == 1, order
+    assert order["items"][0].get("variant_id") == variant_id, order
+    assert order["items"][0].get("quantity") == 1, order
+    assert abs(float(order["total_amount"]) - float(product["price"])) < 0.01, order
 
     # The current payment API takes order_id in the body. Older runners used the
     # removed /api/payments/orders/{id} route and therefore did not exercise the
