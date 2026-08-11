@@ -165,7 +165,8 @@ def test_completed_real_refund_lifecycle_is_consistent():
         and "возвращена" in str(row.get("message", "")).lower()
     ]
     assert refund_notifications, "Expected refund notification for the pilot order"
-    assert all(row.get("status") in {"pending", "sent"} for row in refund_notifications)
+    assert all(row.get("status") == "sent" for row in refund_notifications)
+    assert all(row.get("sent_at") for row in refund_notifications)
 
     diagnostics_response = requests.get(
         f"{API}/api/diagnostics",
