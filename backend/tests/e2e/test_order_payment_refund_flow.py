@@ -164,9 +164,13 @@ def test_completed_real_refund_lifecycle_is_consistent():
         if f"заказу #{order_id}" in str(row.get("message", "")).lower()
         and "возвращена" in str(row.get("message", "")).lower()
     ]
-    assert refund_notifications, "Expected refund notification for the pilot order"
-    assert all(row.get("status") == "sent" for row in refund_notifications)
-    assert all(row.get("sent_at") for row in refund_notifications)
+    assert len(refund_notifications) == 1, (
+        f"Expected exactly one refund notification for order {order_id}, "
+        f"found {len(refund_notifications)}"
+    )
+    refund_notification = refund_notifications[0]
+    assert refund_notification.get("status") == "sent", refund_notification
+    assert refund_notification.get("sent_at"), refund_notification
 
     diagnostics_response = requests.get(
         f"{API}/api/diagnostics",
