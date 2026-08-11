@@ -7,6 +7,8 @@
 - `docs/pilot/provider_evidence_and_admission.md`
 - `docs/pilot/pilot_runtime_guard.md`
 - `docs/pilot/provider_probe_runbook.md`
+- `docs/pilot/live_lifecycle_evidence.md`
+- `docs/pilot/real_provider_e2e_recovery.md`
 - `docs/pilot/release_and_rollback_runbook.md`
 - `docs/acceptance/pilot_acceptance_signoff.md`
 
