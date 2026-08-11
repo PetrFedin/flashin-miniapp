@@ -69,6 +69,7 @@ def validate_order_lifecycle_correlation(
     report: Mapping[str, Any],
     *,
     root: Path | None = None,
+    expected_api_base: str | None = None,
 ) -> list[str]:
     """Require order-linked provider evidence to describe one controlled order."""
 
@@ -132,6 +133,17 @@ def validate_order_lifecycle_correlation(
                 errors.append("real-order E2E context kind is invalid")
             if context.get("provider") != "yookassa":
                 errors.append("real-order E2E context provider is invalid")
+
+            context_api_base = str(context.get("api_base") or "").strip().rstrip("/")
+            if not context_api_base:
+                errors.append("real-order E2E context api_base is invalid")
+            if expected_api_base is not None:
+                normalized_expected_api_base = str(expected_api_base or "").strip().rstrip("/")
+                if not normalized_expected_api_base:
+                    errors.append("pilot API_PUBLIC_URL is missing for real-order E2E context validation")
+                elif context_api_base != normalized_expected_api_base:
+                    errors.append("real-order E2E context api_base does not match pilot API_PUBLIC_URL")
+
             order_id = context.get("order_id")
             if isinstance(order_id, bool):
                 order_id = None
@@ -226,7 +238,13 @@ def validate_attached_lifecycle(
                 now=now,
             )
         )
-    errors.extend(validate_order_lifecycle_correlation(report, root=root))
+    errors.extend(
+        validate_order_lifecycle_correlation(
+            report,
+            root=root,
+            expected_api_base=env.get("API_PUBLIC_URL"),
+        )
+    )
 
     approvals = manifest.get("approvals")
     approved_names = (
@@ -290,7 +308,13 @@ def attach_lifecycle_report(
         env=env,
         expected_release=release,
     )
-    lifecycle_errors.extend(validate_order_lifecycle_correlation(report, root=root))
+    lifecycle_errors.extend(
+        validate_order_lifecycle_correlation(
+            report,
+            root=root,
+            expected_api_base=env.get("API_PUBLIC_URL"),
+        )
+    )
     if lifecycle_errors:
         raise ValueError(
             "Live lifecycle evidence is invalid: " + "; ".join(lifecycle_errors)
