@@ -3,8 +3,10 @@
 Run only against an explicitly configured pilot/test stack with an allowlisted
 customer and an explicitly selected controlled product variant. This runner
 creates a real order and a real YooKassa payment attempt, then writes a sanitized
-context artifact used by the terminal lifecycle verifier. Provider-driven
-settlement/refund evidence is never fabricated by this test.
+context artifact used by the terminal lifecycle verifier. A provisional context
+is persisted before checkout so a process crash cannot silently permit a second
+real payment run. Provider-driven settlement/refund evidence is never fabricated
+by this test.
 
 RUN_REAL_E2E=1 API_BASE=https://api.example.test CUSTOMER_TOKEN=... ADMIN_TOKEN=... \
   E2E_VARIANT_ID=456 pytest -q backend/tests/e2e/test_real_order_flow_runner.py
@@ -61,7 +63,8 @@ def test_real_cart_checkout_and_yookassa_payment_creation():
     assert ADMIN, "ADMIN_TOKEN required"
     assert not CONTEXT_FILE.exists(), (
         f"Real E2E context already exists at {CONTEXT_FILE}. "
-        "Finish/archive the previous controlled lifecycle before creating another real payment."
+        "Finish/archive or explicitly investigate the previous controlled lifecycle before "
+        "creating another real payment. Provisional phases are intentionally fail-closed."
     )
     variant_id = _required_int("E2E_VARIANT_ID")
 
@@ -136,7 +139,32 @@ def test_real_cart_checkout_and_yookassa_payment_creation():
     assert controlled_cart["items"][0].get("variant_id") == variant_id, controlled_cart
     assert controlled_cart["items"][0].get("quantity") == 1, controlled_cart
 
+    context_created_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     idempotency_key = f"real-e2e:{uuid.uuid4().hex}"
+    context_base = {
+        "schema_version": 1,
+        "kind": "flashin_real_order_e2e_context",
+        "created_at": context_created_at,
+        "api_base": API,
+        "product_id": int(product["id"]),
+        "variant_id": variant_id,
+        "quantity": 1,
+        "baseline_stock_qty": baseline_stock_qty,
+        "baseline_reserved_qty": baseline_reserved_qty,
+        "provider": "yookassa",
+        "checkout_idempotency_key": idempotency_key,
+    }
+
+    # Persist an intent before checkout. If the process or network dies after the
+    # server accepts checkout, this marker survives and blocks a fresh real-payment
+    # run until an operator explicitly investigates the prior attempt.
+    _write_context(
+        {
+            **context_base,
+            "phase": "checkout_intent",
+        }
+    )
+
     checkout = requests.post(
         f"{API}/api/orders/checkout",
         json={
@@ -158,6 +186,14 @@ def test_real_cart_checkout_and_yookassa_payment_creation():
     assert order["items"][0].get("quantity") == 1, order
     assert abs(float(order["total_amount"]) - float(product["price"])) < 0.01, order
 
+    order_context = {
+        **context_base,
+        "phase": "order_created",
+        "subject_id": f"order:{int(order['id'])}",
+        "order_id": int(order["id"]),
+    }
+    _write_context(order_context)
+
     payment = requests.post(
         f"{API}/api/payments",
         json={"order_id": order["id"]},
@@ -175,18 +211,8 @@ def test_real_cart_checkout_and_yookassa_payment_creation():
 
     _write_context(
         {
-            "schema_version": 1,
-            "kind": "flashin_real_order_e2e_context",
-            "created_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-            "api_base": API,
-            "subject_id": f"order:{int(order['id'])}",
-            "order_id": int(order["id"]),
-            "product_id": int(product["id"]),
-            "variant_id": variant_id,
-            "quantity": 1,
-            "baseline_stock_qty": baseline_stock_qty,
-            "baseline_reserved_qty": baseline_reserved_qty,
-            "provider": "yookassa",
+            **order_context,
+            "phase": "payment_created",
             "provider_payment_id": str(payment_data["provider_payment_id"]),
         }
     )
