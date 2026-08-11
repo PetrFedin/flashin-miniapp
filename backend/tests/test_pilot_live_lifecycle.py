@@ -83,6 +83,7 @@ def _input(root: Path, env, *, owner="Operations", notes="controlled live observ
             {
                 "schema_version": 1,
                 "kind": "flashin_real_order_e2e_context",
+                "phase": "payment_created",
                 "created_at": "2026-08-06T12:00:00Z",
                 "api_base": env["API_PUBLIC_URL"],
                 "subject_id": "order:4242",
