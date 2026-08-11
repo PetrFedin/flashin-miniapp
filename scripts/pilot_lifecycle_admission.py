@@ -97,11 +97,22 @@ def validate_order_lifecycle_correlation(
             if isinstance(item, Mapping)
             and str(item.get("path", "")).strip() == ORDER_CONTEXT_EVIDENCE_PATH
         ] if isinstance(evidence, list) else []
+        scenario_specific_entries = [
+            item
+            for item in evidence
+            if isinstance(item, Mapping)
+            and str(item.get("path", "")).strip()
+            and str(item.get("path", "")).strip() != ORDER_CONTEXT_EVIDENCE_PATH
+        ] if isinstance(evidence, list) else []
         if len(context_entries) != 1:
             errors.append(
                 f"order-linked scenario {name} must reference exactly one shared real-order E2E context artifact"
             )
             continue
+        if not scenario_specific_entries:
+            errors.append(
+                f"order-linked scenario {name} must include scenario-specific evidence in addition to the shared real-order E2E context artifact"
+            )
         digest = str(context_entries[0].get("sha256", "")).strip()
         if len(digest) != 64:
             errors.append(
