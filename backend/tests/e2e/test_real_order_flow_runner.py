@@ -49,13 +49,24 @@ def _required_int(name: str) -> int:
 
 
 def _write_context(payload: dict[str, object]) -> None:
+    """Durably replace the lifecycle marker before/after external side effects."""
+
     CONTEXT_FILE.parent.mkdir(parents=True, exist_ok=True)
     temporary = CONTEXT_FILE.with_name(f".{CONTEXT_FILE.name}.{uuid.uuid4().hex}.tmp")
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(CONTEXT_FILE)
+    serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    try:
+        with temporary.open("w", encoding="utf-8") as handle:
+            handle.write(serialized)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(CONTEXT_FILE)
+        directory_fd = os.open(str(CONTEXT_FILE.parent), os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def test_real_cart_checkout_and_yookassa_payment_creation():
