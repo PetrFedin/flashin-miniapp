@@ -1,12 +1,13 @@
 """Guarded real-provider E2E runner.
 
 Run only against an explicitly configured pilot/test stack with an allowlisted
-customer. This runner creates a real order and a real YooKassa payment attempt;
-provider-driven settlement/refund evidence is captured by the controlled pilot
-lifecycle rather than fabricated by this test.
+customer and an explicitly selected controlled product variant. This runner
+creates a real order and a real YooKassa payment attempt; provider-driven
+settlement/refund evidence is captured by the controlled pilot lifecycle rather
+than fabricated by this test.
 
 RUN_REAL_E2E=1 API_BASE=https://api.example.test CUSTOMER_TOKEN=... ADMIN_TOKEN=... \
-  pytest -q backend/tests/e2e/test_real_order_flow_runner.py
+  E2E_VARIANT_ID=456 pytest -q backend/tests/e2e/test_real_order_flow_runner.py
 """
 
 import os
@@ -30,16 +31,34 @@ def headers(token: str, **extra: str) -> dict[str, str]:
     }
 
 
+def _required_int(name: str) -> int:
+    raw = str(os.getenv(name, "")).strip()
+    assert raw.isdigit() and int(raw) > 0, f"{name} must be a positive integer"
+    return int(raw)
+
+
 def test_real_cart_checkout_and_yookassa_payment_creation():
     assert CUSTOMER, "CUSTOMER_TOKEN required"
     assert ADMIN, "ADMIN_TOKEN required"
+    variant_id = _required_int("E2E_VARIANT_ID")
 
     products_response = requests.get(f"{API}/api/products", timeout=20)
     assert products_response.status_code == 200, products_response.text
     products = products_response.json()
-    assert products, "Need at least one active product"
-    product = products[0]
-    variant = next(v for v in product["variants"] if v.get("available_qty", 0) > 0)
+    controlled_matches = [
+        (product, variant)
+        for product in products
+        for variant in product.get("variants", [])
+        if variant.get("id") == variant_id
+    ]
+    assert len(controlled_matches) == 1, (
+        f"Expected exactly one controlled variant {variant_id}, "
+        f"found {len(controlled_matches)}"
+    )
+    product, variant = controlled_matches[0]
+    assert variant.get("available_qty", 0) > 0, (
+        f"Controlled variant {variant_id} must have available stock"
+    )
 
     cart = requests.post(
         f"{API}/api/cart/items",
