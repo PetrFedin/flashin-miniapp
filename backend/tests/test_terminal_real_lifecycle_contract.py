@@ -66,6 +66,7 @@ def test_real_provider_stages_share_sanitized_context_artifact():
     default_context = "docs/pilot/evidence/real_order_e2e_context.json"
     assert default_context in creation_source
     assert default_context in terminal_source
+    assert "assert not CONTEXT_FILE.exists()" in creation_source
     assert '"kind": "flashin_real_order_e2e_context"' in creation_source
     assert 'context.get("kind") == "flashin_real_order_e2e_context"' in terminal_source
     assert '"subject_id": f"order:{int(order[\'id\'])}"' in creation_source
