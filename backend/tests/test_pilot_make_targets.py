@@ -87,11 +87,13 @@ def test_launch_preflight_target_is_read_only_orchestrator():
         assert unsafe not in recipe
 
 
-def test_runtime_arm_reverifies_final_admission_before_mutation():
+def test_runtime_arm_reverifies_preflight_and_final_admission_before_mutation():
     recipe = _recipe("pilot-runtime-arm")
+    preflight = "python3 scripts/pilot_launch_preflight.py"
     final_gate = "python3 scripts/pilot_launch_admission.py verify"
     arm = "python3 scripts/pilot_runtime.py arm $(ARGS)"
+    assert preflight in recipe
     assert final_gate in recipe
     assert arm in recipe
-    assert recipe.index(final_gate) < recipe.index(arm)
+    assert recipe.index(preflight) < recipe.index(final_gate) < recipe.index(arm)
     assert "pilot_launch_admission.py verify $(ARGS)" not in recipe
