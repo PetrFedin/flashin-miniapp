@@ -78,6 +78,10 @@ def test_completed_real_refund_lifecycle_is_consistent():
     assert order["status"] == "refunded"
     assert order["payment_status"] == "refunded"
     assert order["delivery_status"] == "delivered"
+    assert len(order.get("items", [])) == 1, order
+    controlled_item = order["items"][0]
+    assert controlled_item.get("variant_id") == variant_id, controlled_item
+    assert controlled_item.get("quantity") == 1, controlled_item
 
     returns_response = requests.get(
         f"{API}/api/admin/returns",
