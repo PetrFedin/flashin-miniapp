@@ -62,6 +62,26 @@ def _stage(
     return payload
 
 
+def _true(value: object) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _runtime_configuration_errors(env: Mapping[str, str]) -> list[str]:
+    errors: list[str] = []
+    if str(env.get("APP_ENV") or "").strip().lower() != "production":
+        errors.append("APP_ENV must be production for pilot runtime arm")
+    if not _true(env.get("PILOT_RUNTIME_ENFORCED")):
+        errors.append("PILOT_RUNTIME_ENFORCED must be true")
+    try:
+        max_orders = int(str(env.get("PILOT_RUNTIME_MAX_ORDERS") or "").strip())
+    except ValueError:
+        max_orders = 0
+        errors.append("PILOT_RUNTIME_MAX_ORDERS must be an integer")
+    if max_orders != 20:
+        errors.append("PILOT_RUNTIME_MAX_ORDERS must be exactly 20")
+    return list(dict.fromkeys(errors))
+
+
 def _redaction_env(
     root: Path,
     file_env: Mapping[str, str] | None = None,
@@ -293,6 +313,27 @@ def run_preflight(
                     next_action="deploy the exact verified current release, then rerun make pilot-launch-preflight",
                 )
             )
+
+    runtime_configuration_errors = _runtime_configuration_errors(env)
+    stages.append(
+        _stage(
+            "runtime_configuration",
+            _COMPLETE if not runtime_configuration_errors else _BLOCKED,
+            errors=runtime_configuration_errors,
+            next_action=(
+                ""
+                if not runtime_configuration_errors
+                else "set APP_ENV=production, PILOT_RUNTIME_ENFORCED=true and PILOT_RUNTIME_MAX_ORDERS=20 in the deployed .env"
+            ),
+            details={
+                "app_env": str(env.get("APP_ENV") or "").strip(),
+                "pilot_runtime_enforced": _true(env.get("PILOT_RUNTIME_ENFORCED")),
+                "pilot_runtime_max_orders": str(
+                    env.get("PILOT_RUNTIME_MAX_ORDERS") or ""
+                ).strip(),
+            },
+        )
+    )
 
     baseline_errors = verify_admission_path(manifest_path, root)
     stages.append(
