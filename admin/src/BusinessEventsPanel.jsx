@@ -27,6 +27,20 @@ function payloadPreview(event) {
   return JSON.stringify(event.payload || {}, null, 2);
 }
 
+function FulfillmentPanelMount({ onUnauthorized, session }) {
+  if (session) {
+    return <FulfillmentOperationsPanel onUnauthorized={onUnauthorized} session={session} />;
+  }
+  return <FulfillmentOperationsPanel onUnauthorized={onUnauthorized} />;
+}
+
+function ServicePanelMount({ onUnauthorized, session }) {
+  if (session) {
+    return <ServiceOperationsPanel onUnauthorized={onUnauthorized} session={session} />;
+  }
+  return <ServiceOperationsPanel onUnauthorized={onUnauthorized} />;
+}
+
 function BusinessEventsRecoveryPanel({ onUnauthorized, canReplayPermission }) {
   const [summary, setSummary] = useState(null);
   const [events, setEvents] = useState([]);
@@ -317,8 +331,8 @@ export default function BusinessEventsPanel({ onUnauthorized, session }) {
       {canSecurityRead && <PilotOperationsPanel onUnauthorized={onUnauthorized} />}
       {canProductsRead && <CatalogOperationsPanel onUnauthorized={onUnauthorized} session={session} />}
       {canProductsRead && <SupplyChainOperationsPanel onUnauthorized={onUnauthorized} session={session} />}
-      {canOrdersRead && <FulfillmentOperationsPanel onUnauthorized={onUnauthorized} session={session} />}
-      {canService && <ServiceOperationsPanel onUnauthorized={onUnauthorized} session={session} />}
+      {canOrdersRead && <FulfillmentPanelMount onUnauthorized={onUnauthorized} session={session} />}
+      {canService && <ServicePanelMount onUnauthorized={onUnauthorized} session={session} />}
       {canOrdersRead && (
         <BusinessEventsRecoveryPanel
           onUnauthorized={onUnauthorized}
