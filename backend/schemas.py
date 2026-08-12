@@ -1,6 +1,6 @@
 import math
 from datetime import datetime
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, validator
 
 
 class ImageOut(BaseModel):
@@ -470,23 +470,24 @@ class AdminProductUpdate(BaseModel):
     category: str | None = None
     brand: str | None = None
     active: bool | None = None
-    model_config = {"extra": "forbid"}
 
-    @field_validator("title", "brand", "category")
-    @classmethod
-    def validate_required_text(cls, value: str | None, info):
+    class Config:
+        extra = "forbid"
+
+    @validator("title", "brand", "category")
+    def validate_required_text(cls, value: str | None, field):
+        field_name = field.name
         if value is None:
-            raise ValueError(f"{info.field_name} cannot be null")
+            raise ValueError(f"{field_name} cannot be null")
         cleaned = value.strip()
         limits = {"title": 255, "brand": 120, "category": 120}
         if not cleaned:
-            raise ValueError(f"{info.field_name} cannot be blank")
-        if len(cleaned) > limits[info.field_name]:
-            raise ValueError(f"{info.field_name} is too long")
+            raise ValueError(f"{field_name} cannot be blank")
+        if len(cleaned) > limits[field_name]:
+            raise ValueError(f"{field_name} is too long")
         return cleaned
 
-    @field_validator("description")
-    @classmethod
+    @validator("description")
     def validate_description(cls, value: str | None):
         if value is None:
             raise ValueError("description cannot be null")
@@ -495,15 +496,13 @@ class AdminProductUpdate(BaseModel):
             raise ValueError("description is too long")
         return cleaned
 
-    @field_validator("price")
-    @classmethod
+    @validator("price")
     def validate_price(cls, value: float | None):
         if value is None or not math.isfinite(value) or value <= 0:
             raise ValueError("price must be finite and positive")
         return round(value, 2)
 
-    @field_validator("active")
-    @classmethod
+    @validator("active")
     def validate_active(cls, value: bool | None):
         if value is None:
             raise ValueError("active cannot be null")
