@@ -56,7 +56,7 @@
 - slot sequence должен уже входить в `accepted_orders` и не выходить за лимит 20;
 - signed admission/release/pilot-state binding, database evidence и operational safety должны пройти ту же fail-closed runtime-проверку, что и новый checkout.
 
-Проверка выполняется в отдельной DB-транзакции **до внешнего YooKassa create**. Если runtime был остановлен между созданием Order и нажатием оплаты, новый денежный side effect не создаётся.
+Safety-транзакция захватывает `pilot_runtime_state` через row lock **до внешнего YooKassa create и удерживает lock до завершения этого HTTP create**. Поэтому STOP и fresh payment сериализованы без TOCTOU-окна: если STOP получил lock первым, provider create не выполняется; если payment guard получил lock первым, уже авторизованный create завершается до того, как STOP сможет зафиксироваться.
 
 При этом recovery не блокируется:
 
