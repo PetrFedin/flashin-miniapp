@@ -14,10 +14,13 @@ test("Service Operations derives every section from effective permissions", () =
 });
 
 
-test("Service Operations only loads datasets the role can read", () => {
-  assert.match(panelSource, /if \(canSupport\) entries\.push\(\["support", "\/api\/support\/admin\/tickets"\]\)/);
-  assert.match(panelSource, /if \(canPrivacyRead\) entries\.push\(\["privacy", "\/api\/privacy\/admin\/requests"\]\)/);
-  assert.match(panelSource, /if \(canReturnsRead\) entries\.push\(\["returns", "\/api\/admin\/returns"\]\)/);
+test("Service Operations keeps release capability endpoints explicit and only loads permitted datasets", () => {
+  assert.match(panelSource, /support: "\/api\/support\/admin\/tickets"/);
+  assert.match(panelSource, /privacy: "\/api\/privacy\/admin\/requests"/);
+  assert.match(panelSource, /returns: "\/api\/admin\/returns"/);
+  assert.match(panelSource, /if \(canSupport\) entries\.push\(\["support", SERVICE_ENDPOINTS\.support\]\)/);
+  assert.match(panelSource, /if \(canPrivacyRead\) entries\.push\(\["privacy", SERVICE_ENDPOINTS\.privacy\]\)/);
+  assert.match(panelSource, /if \(canReturnsRead\) entries\.push\(\["returns", SERVICE_ENDPOINTS\.returns\]\)/);
 });
 
 
