@@ -87,7 +87,10 @@ jobs:
           backend/tests/test_pilot_circuit_breaker_wiring.py
           backend/tests/test_pilot_money_safety_fail_closed.py
       - name: Run protected pilot operations observability tests
-        run: python -m pytest -q backend/tests/test_pilot_operations_observability.py
+        run: >-
+          python -m pytest -q
+          backend/tests/test_pilot_operations_observability.py
+          backend/tests/test_pilot_readiness_cockpit.py
       - name: Run production pilot environment tests
         run: python -m pytest -q backend/tests/test_validate_env.py backend/tests/test_production_config.py backend/tests/test_production_ingress.py backend/tests/test_readiness.py
       - name: Require one Alembic head
