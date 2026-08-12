@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -9,6 +9,7 @@ from ..models import AdminPasswordReset, AdminTotpSecret, AdminUser
 from ..schemas import TokenOut
 from ..security import (
     create_admin_token,
+    get_current_admin,
     hash_password,
     password_needs_rehash,
     verify_password,
@@ -22,6 +23,7 @@ from ..services.admin_security import (
     upgrade_totp_secret_encryption,
     verify_stored_totp,
 )
+from ..services.rbac import effective_permissions
 
 router = APIRouter(prefix="/admin", tags=["admin-auth"])
 _DUMMY_PASSWORD_HASH = hash_password("not-a-real-admin-password")
@@ -157,7 +159,7 @@ def admin_session_login(
         create_admin_session(db, admin.id, token, ip_address, user_agent)
         log_admin_login(
             db,
-            email,
+            admin.email,
             admin.id,
             True,
             "success",
@@ -171,6 +173,30 @@ def admin_session_login(
     except Exception:
         db.rollback()
         raise
+
+
+@router.get("/session")
+def current_admin_session(
+    response: Response,
+    admin: AdminUser = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """Return only identity and the effective permissions used by RBAC.
+
+    This is deliberately a no-store projection: it contains no token, session
+    hash, TOTP state, IP data or role-configuration internals.
+    """
+
+    permissions = effective_permissions(db, admin)
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return {
+        "id": int(admin.id),
+        "email": str(admin.email),
+        "role": str(admin.role),
+        "all_access": "*" in permissions,
+        "permissions": sorted(permission for permission in permissions if permission != "*"),
+    }
 
 
 @router.post("/password-reset/confirm")
