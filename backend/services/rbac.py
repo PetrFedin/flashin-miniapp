@@ -38,11 +38,24 @@ DEFAULT_PERMISSIONS = {
 }
 
 
-def has_permission(db: Session, admin: AdminUser, permission: str) -> bool:
+def effective_permissions(db: Session, admin: AdminUser) -> set[str]:
+    """Return the exact permission set used by authorization decisions.
+
+    A role with any database-configured rows uses those rows as its complete
+    permission set, matching the historical authorization semantics. Owners
+    remain unrestricted and are represented by the explicit wildcard.
+    """
+
     if admin.role == "owner":
-        return True
+        return {"*"}
     configured = db.query(AdminRolePermission).filter(AdminRolePermission.role == admin.role).all()
-    permissions = {row.permission for row in configured} or DEFAULT_PERMISSIONS.get(admin.role, set())
+    if configured:
+        return {str(row.permission).strip() for row in configured if str(row.permission).strip()}
+    return set(DEFAULT_PERMISSIONS.get(admin.role, set()))
+
+
+def has_permission(db: Session, admin: AdminUser, permission: str) -> bool:
+    permissions = effective_permissions(db, admin)
     return "*" in permissions or permission in permissions
 
 
