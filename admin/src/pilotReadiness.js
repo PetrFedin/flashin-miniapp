@@ -47,6 +47,14 @@ function isSafeInteger(value) {
   return Number.isSafeInteger(value) && value >= 0;
 }
 
+function isSafeIntegerOrNull(value) {
+  return value === null || isSafeInteger(value);
+}
+
+function isBooleanOrNull(value) {
+  return value === null || typeof value === "boolean";
+}
+
 function diagnosticCodeParts(code) {
   if (typeof code !== "string") return null;
   const match = /^diagnostic_(failed|missing|degraded):([a-z_]+)$/.exec(code);
@@ -130,17 +138,16 @@ export function normalizePilotReadiness(payload) {
   const runtimeValid = (
     (runtime.checkout_decision === "GO" || runtime.checkout_decision === "NO-GO")
     && typeof runtime.enforced === "boolean"
-    && typeof runtime.status === "string"
-    && PILOT_STATUSES.has(runtime.status)
-    && isSafeInteger(runtime.accepted_orders)
-    && isSafeInteger(runtime.remaining_orders)
-    && isSafeInteger(runtime.allowlist_count)
-    && typeof runtime.database_integrity_healthy === "boolean"
-    && typeof runtime.artifact_integrity_applicable === "boolean"
-    && typeof runtime.artifact_integrity_healthy === "boolean"
+    && (runtime.status === null || (typeof runtime.status === "string" && PILOT_STATUSES.has(runtime.status)))
+    && isSafeIntegerOrNull(runtime.accepted_orders)
+    && isSafeIntegerOrNull(runtime.remaining_orders)
+    && isSafeIntegerOrNull(runtime.allowlist_count)
+    && isBooleanOrNull(runtime.database_integrity_healthy)
+    && isBooleanOrNull(runtime.artifact_integrity_applicable)
+    && isBooleanOrNull(runtime.artifact_integrity_healthy)
     && typeof runtime.money_attention_required === "boolean"
-    && typeof runtime.operational_safety_applicable === "boolean"
-    && typeof runtime.operational_safety_healthy === "boolean"
+    && isBooleanOrNull(runtime.operational_safety_applicable)
+    && isBooleanOrNull(runtime.operational_safety_healthy)
   );
   const decisionCoherent = decisionValid
     && readyValid
@@ -151,6 +158,7 @@ export function normalizePilotReadiness(payload) {
     && runtime.checkout_decision === "GO"
     && runtime.enforced === true
     && runtime.status === "active"
+    && isSafeInteger(runtime.remaining_orders)
     && runtime.remaining_orders > 0
     && runtime.database_integrity_healthy === true
     && runtime.artifact_integrity_applicable === true
@@ -171,7 +179,7 @@ export function normalizePilotReadiness(payload) {
 
   const blockingCodes = contractValid
     ? blocking.codes
-    : [...new Set([...blocking.codes, "response_contract_invalid"] )];
+    : [...new Set([...blocking.codes, "response_contract_invalid"])];
   const decision = contractValid
     && payload.decision === "GO"
     && payload.ready_for_next_order === true
