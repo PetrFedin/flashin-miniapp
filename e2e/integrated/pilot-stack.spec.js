@@ -65,6 +65,16 @@ async function orderState(request, orderId) {
 
 test("Telegram -> YooKassa webhook -> stock/MoySklad -> fulfillment -> refund -> notification", async ({ page, browser }) => {
   await installTelegram(page);
+
+  const catalogResponse = await page.request.get(`${API_BASE}/api/products`);
+  expect(catalogResponse.ok(), "Integrated catalog API must be reachable before purchase").toBeTruthy();
+  const catalog = await catalogResponse.json();
+  const targetProduct = catalog.find((item) => item.title === "FLASHIN Wool Coat");
+  expect(targetProduct, "FLASHIN Wool Coat must exist in integrated seed data").toBeTruthy();
+  const purchasableVariant = targetProduct.variants.find((item) => item.available_qty > 0);
+  expect(purchasableVariant, "FLASHIN Wool Coat must expose at least one available variant").toBeTruthy();
+  const baselineStockQty = purchasableVariant.stock_qty;
+
   await page.goto("/");
 
   await expect(page.getByRole("heading", { name: "Каталог" })).toBeVisible();
@@ -72,7 +82,7 @@ test("Telegram -> YooKassa webhook -> stock/MoySklad -> fulfillment -> refund ->
   await page.getByText("FLASHIN Wool Coat").first().click();
   await expect(page.getByRole("heading", { name: "FLASHIN Wool Coat" })).toBeVisible();
 
-  await page.getByRole("button", { name: "Добавить размер S в корзину" }).click();
+  await page.getByRole("button", { name: `Добавить размер ${purchasableVariant.size} в корзину` }).click();
   await expect(page.getByText("добавлен в корзину")).toBeVisible();
   await page.getByRole("button", { name: /Корзина · 1/ }).click();
 
@@ -113,8 +123,8 @@ test("Telegram -> YooKassa webhook -> stock/MoySklad -> fulfillment -> refund ->
   expect(state.order.status).toBe("paid");
   expect(state.order.payment_status).toBe("paid");
   expect(state.variants).toHaveLength(1);
-  expect(state.variants[0].sku).toBe("FLASHIN-COAT-001-S");
-  expect(state.variants[0].stock_qty).toBe(1);
+  expect(state.variants[0].sku).toBe(purchasableVariant.sku);
+  expect(state.variants[0].stock_qty).toBe(baselineStockQty - 1);
   expect(state.variants[0].reserved_qty).toBe(0);
   expect(state.inventory_movements.map((item) => item.kind)).toEqual(["reserve", "commit"]);
   expect(state.fulfillment?.status).toBe("new");
@@ -191,7 +201,7 @@ test("Telegram -> YooKassa webhook -> stock/MoySklad -> fulfillment -> refund ->
   expect(state.order.status).toBe("refund_requested");
   expect(state.order.payment_status).toBe("refund_pending");
   expect(state.returns[0].status).toBe("refund_pending");
-  expect(state.variants[0].stock_qty).toBe(1);
+  expect(state.variants[0].stock_qty).toBe(baselineStockQty - 1);
   const refundId = state.returns[0].provider_refund_id;
   expect(refundId).toContain("e2e-refund-");
 
@@ -208,7 +218,7 @@ test("Telegram -> YooKassa webhook -> stock/MoySklad -> fulfillment -> refund ->
   expect(state.order.payment_status).toBe("refunded");
   expect(state.order.delivery_status).toBe("delivered");
   expect(state.returns[0].status).toBe("approved");
-  expect(state.variants[0].stock_qty).toBe(2);
+  expect(state.variants[0].stock_qty).toBe(baselineStockQty);
   expect(state.variants[0].reserved_qty).toBe(0);
 
   const movementKinds = state.inventory_movements.map((item) => item.kind);
