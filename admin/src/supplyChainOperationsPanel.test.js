@@ -6,9 +6,9 @@ const panelSource = readFileSync(new URL("./SupplyChainOperationsPanel.jsx", imp
 const operationsSource = readFileSync(new URL("./BusinessEventsPanel.jsx", import.meta.url), "utf8");
 
 
-test("admin operations workspace mounts Supply Chain cockpit", () => {
+test("admin operations workspace mounts Supply Chain cockpit only with products.read", () => {
   assert.match(operationsSource, /import SupplyChainOperationsPanel from "\.\/SupplyChainOperationsPanel\.jsx"/);
-  assert.match(operationsSource, /<SupplyChainOperationsPanel onUnauthorized=\{onUnauthorized\} \/>/);
+  assert.match(operationsSource, /canProductsRead && <SupplyChainOperationsPanel onUnauthorized=\{onUnauthorized\} session=\{session\} \/>/);
 });
 
 
@@ -20,7 +20,9 @@ test("Supply Chain cockpit reads sanitized status and uses existing protected mu
 });
 
 
-test("MoySklad master-data mutations require explicit operator confirmation", () => {
+test("Supply Chain mutations require products.write and explicit operator confirmation", () => {
+  assert.match(panelSource, /hasAdminPermission\(session, "products\.write"\)/);
+  assert.match(panelSource, /изменение данных МойСклад требует products\.write/);
   const confirmationCalls = panelSource.match(/window\.confirm/g) || [];
   assert.equal(confirmationCalls.length, 2);
   assert.match(panelSource, /может изменить названия, описания, цены, категории и физические остатки/);
