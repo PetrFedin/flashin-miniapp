@@ -80,39 +80,47 @@ def compose_pilot_readiness(
     blocking_codes: list[str] = []
     warning_codes: list[str] = []
 
-    diagnostics = diagnostics if isinstance(diagnostics, Mapping) else {}
-    runtime_status = runtime_status if isinstance(runtime_status, Mapping) else {}
+    diagnostics_available = isinstance(diagnostics, Mapping) and bool(diagnostics)
+    runtime_available = isinstance(runtime_status, Mapping) and bool(runtime_status)
+    diagnostics = diagnostics if diagnostics_available else {}
+    runtime_status = runtime_status if runtime_available else {}
 
-    if not diagnostics:
+    if not diagnostics_available:
         blocking_codes.append("diagnostics_unavailable")
-    for name in _CRITICAL_DIAGNOSTIC_CHECKS:
-        status = _diagnostic_status(diagnostics, name)
-        if status is None:
-            blocking_codes.append(f"diagnostic_missing:{name}")
-        elif status is False:
-            blocking_codes.append(f"diagnostic_failed:{name}")
+    else:
+        for name in _CRITICAL_DIAGNOSTIC_CHECKS:
+            status = _diagnostic_status(diagnostics, name)
+            if status is None:
+                blocking_codes.append(f"diagnostic_missing:{name}")
+            elif status is False:
+                blocking_codes.append(f"diagnostic_failed:{name}")
 
-    for name in _ADVISORY_DIAGNOSTIC_CHECKS:
-        status = _diagnostic_status(diagnostics, name)
-        if status is None:
-            warning_codes.append(f"diagnostic_missing:{name}")
-        elif status is False:
-            warning_codes.append(f"diagnostic_degraded:{name}")
+        for name in _ADVISORY_DIAGNOSTIC_CHECKS:
+            status = _diagnostic_status(diagnostics, name)
+            if status is None:
+                warning_codes.append(f"diagnostic_missing:{name}")
+            elif status is False:
+                warning_codes.append(f"diagnostic_degraded:{name}")
 
-    if not runtime_status:
+    if not runtime_available:
         blocking_codes.append("runtime_status_unavailable")
     elif runtime_status.get("checkout_decision") != "GO":
         blocking_codes.append("runtime_checkout_no_go")
 
     runtime = _runtime_summary(runtime_status)
-    if runtime.get("database_integrity_healthy") is False:
-        blocking_codes.append("runtime_database_integrity_failed")
-    if runtime.get("artifact_integrity_applicable") is True and runtime.get("artifact_integrity_healthy") is not True:
-        blocking_codes.append("runtime_artifact_integrity_failed")
-    if runtime.get("money_attention_required"):
-        blocking_codes.append("runtime_money_attention")
-    if runtime.get("operational_safety_applicable") is True and runtime.get("operational_safety_healthy") is not True:
-        blocking_codes.append("runtime_operational_safety_failed")
+    if runtime_available:
+        if runtime.get("database_integrity_healthy") is not True:
+            blocking_codes.append("runtime_database_integrity_failed")
+        if runtime.get("artifact_integrity_applicable") is not True:
+            blocking_codes.append("runtime_artifact_integrity_unavailable")
+        elif runtime.get("artifact_integrity_healthy") is not True:
+            blocking_codes.append("runtime_artifact_integrity_failed")
+        if runtime.get("money_attention_required"):
+            blocking_codes.append("runtime_money_attention")
+        if runtime.get("operational_safety_applicable") is not True:
+            blocking_codes.append("runtime_operational_safety_unavailable")
+        elif runtime.get("operational_safety_healthy") is not True:
+            blocking_codes.append("runtime_operational_safety_failed")
 
     # Stable ordering makes the payload diff-friendly for incident notes and evidence.
     blocking_codes = sorted(set(blocking_codes))
@@ -120,11 +128,11 @@ def compose_pilot_readiness(
     ready = not blocking_codes and runtime.get("checkout_decision") == "GO"
 
     critical_checks = {
-        name: _diagnostic_status(diagnostics, name)
+        name: _diagnostic_status(diagnostics, name) if diagnostics_available else None
         for name in _CRITICAL_DIAGNOSTIC_CHECKS
     }
     advisory_checks = {
-        name: _diagnostic_status(diagnostics, name)
+        name: _diagnostic_status(diagnostics, name) if diagnostics_available else None
         for name in _ADVISORY_DIAGNOSTIC_CHECKS
     }
 
