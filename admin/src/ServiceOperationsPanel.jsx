@@ -16,6 +16,12 @@ import {
   supportTransitions,
 } from "./serviceOperations.js";
 
+const SERVICE_ENDPOINTS = Object.freeze({
+  support: "/api/support/admin/tickets",
+  privacy: "/api/privacy/admin/requests",
+  returns: "/api/admin/returns",
+});
+
 function money(value, currency = "RUB") {
   return new Intl.NumberFormat("ru-RU", {
     style: "currency",
@@ -93,9 +99,9 @@ export default function ServiceOperationsPanel({ onUnauthorized, session }) {
 
   async function load() {
     const entries = [];
-    if (canSupport) entries.push(["support", "/api/support/admin/tickets"]);
-    if (canPrivacyRead) entries.push(["privacy", "/api/privacy/admin/requests"]);
-    if (canReturnsRead) entries.push(["returns", "/api/admin/returns"]);
+    if (canSupport) entries.push(["support", SERVICE_ENDPOINTS.support]);
+    if (canPrivacyRead) entries.push(["privacy", SERVICE_ENDPOINTS.privacy]);
+    if (canReturnsRead) entries.push(["returns", SERVICE_ENDPOINTS.returns]);
 
     if (!canSupport) setTickets([]);
     if (!canPrivacyRead) setPrivacyRequests([]);
