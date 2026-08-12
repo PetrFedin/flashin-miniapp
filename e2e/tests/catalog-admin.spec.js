@@ -66,6 +66,15 @@ async function mockCatalogAdminApi(page) {
     if (path === "/api/admin/login" && method === "POST") {
       return json({ access_token: "catalog-admin-token" });
     }
+    if (path === "/api/admin/session" && method === "GET") {
+      return json({
+        id: 1,
+        email: "catalog@flashin.test",
+        role: "owner",
+        all_access: true,
+        permissions: [],
+      });
+    }
     if (path === "/api/admin/products" && method === "GET") return json([product]);
     if (path === "/api/moysklad/operations-status" && method === "GET") return json(supplyChain);
     if (path === "/api/admin/products/1" && method === "PATCH") {
