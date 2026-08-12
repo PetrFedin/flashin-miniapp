@@ -180,7 +180,9 @@ export default function PilotOperationsPanel({ onUnauthorized }) {
     );
   }
 
-  const combinedDecision = readiness?.decision === "GO" && status?.decision === "GO"
+  const combinedDecision = !loading
+    && readiness?.decision === "GO"
+    && status?.decision === "GO"
     ? "GO"
     : "NO-GO";
 
