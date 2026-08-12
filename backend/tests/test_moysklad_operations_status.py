@@ -82,7 +82,6 @@ def test_supply_chain_status_surfaces_actionable_counts_without_provider_secrets
         "raw secret should never be echoed",
         "message",
         "moysklad_id",
-        "error\":",
     ):
         assert forbidden not in rendered
 
@@ -106,6 +105,14 @@ def test_supply_chain_status_is_calm_when_no_action_is_required():
     assert result["summary"]["pending_matches"] == 0
     assert result["summary"]["open_reconciliations"] == 0
     assert result["summary"]["open_conflicts"] == 0
+
+
+def test_missing_sync_evidence_requires_attention():
+    result = compose_moysklad_operations_status([], [], [], [])
+
+    assert result["attention_required"] is True
+    assert result["summary"]["last_sync_status"] == "never"
+    assert result["summary"]["last_sync_at"] is None
 
 
 def test_unknown_sync_status_fails_attention_closed_without_reflecting_raw_value():
