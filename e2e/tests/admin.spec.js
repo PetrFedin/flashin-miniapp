@@ -98,11 +98,12 @@ async function mockAdminApi(page) {
     title: "Pilot Jacket",
     slug: "pilot-jacket",
     brand: "FLASHIN",
+    description: "",
     price: 12000,
     currency: "RUB",
     category: "Outerwear",
     active: true,
-    variants: [{ id: 11, size: "M", sku: "FLASH-001-M", stock_qty: 5 }],
+    variants: [{ id: 11, size: "M", color: "", sku: "FLASH-001-M", stock_qty: 5, reserved_qty: 0 }],
   }];
   let orders = [
     {
@@ -170,6 +171,15 @@ async function mockAdminApi(page) {
     });
 
     if (path === "/api/admin/login" && method === "POST") return json({ access_token: "admin-pilot-token" });
+    if (path === "/api/admin/session" && method === "GET") {
+      return json({
+        id: 1,
+        email: "pilot@flashin.test",
+        role: "owner",
+        all_access: true,
+        permissions: [],
+      });
+    }
     if (path === "/api/admin/products" && method === "GET") return json(products);
     if (path === "/api/admin/orders" && method === "GET") return json(orders);
     if (path === "/api/admin/audit-logs" && method === "GET") {
@@ -195,6 +205,7 @@ async function mockAdminApi(page) {
         title: "Imported Pilot Shirt",
         slug: "imported-pilot-shirt",
         brand: "FLASHIN",
+        description: "",
         price: 7000,
         currency: "RUB",
         category: "Shirts",
