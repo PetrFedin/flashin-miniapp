@@ -423,7 +423,6 @@ class CustomerTimelineOut(BaseModel):
     event_type: str
     title: str
     payload: str
-    created_at: datetime
     model_config = {"from_attributes": True}
 
 
