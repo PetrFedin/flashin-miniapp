@@ -20,7 +20,7 @@ test("pilot admin panel is wired to both protected read-only safety endpoints", 
   assert.match(panelSource, /document\.visibilityState !== "hidden"/);
 });
 
-test("pilot admin panel fails closed by clearing stale snapshots on refresh errors", () => {
+test("pilot admin panel fails closed while refreshing and after refresh errors", () => {
   assert.match(panelSource, /const clearSnapshot = useCallback/);
   assert.match(panelSource, /setStatus\(null\)/);
   assert.match(panelSource, /setReadiness\(null\)/);
@@ -28,7 +28,7 @@ test("pilot admin panel fails closed by clearing stale snapshots on refresh erro
   assert.match(panelSource, /Предыдущий статус сброшен в NO-GO/);
   assert.match(
     panelSource,
-    /readiness\?\.decision === "GO" && status\?\.decision === "GO"/,
+    /const combinedDecision = !loading[\s\S]*readiness\?\.decision === "GO"[\s\S]*status\?\.decision === "GO"/,
   );
 });
 
