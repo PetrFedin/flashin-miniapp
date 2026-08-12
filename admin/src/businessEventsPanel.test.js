@@ -9,8 +9,17 @@ const mainSource = readFileSync(new URL("./main.jsx", import.meta.url), "utf8");
 test("admin application mounts the permission-aware BusinessEvent workspace", () => {
   assert.match(mainSource, /import BusinessEventsPanel from "\.\/BusinessEventsPanel\.jsx"/);
   assert.match(mainSource, /<BusinessEventsPanel onUnauthorized=\{logout\} session=\{session\} \/>/);
-  assert.match(panelSource, /canOrdersRead && \(/);
+  assert.match(panelSource, /canOrdersRead && <FulfillmentPanelMount onUnauthorized=\{onUnauthorized\} session=\{session\} \/>/);
+  assert.match(panelSource, /canService && <ServicePanelMount onUnauthorized=\{onUnauthorized\} session=\{session\} \/>/);
   assert.match(panelSource, /canReplayPermission=\{canOrdersWrite\}/);
+});
+
+
+test("release capability mount fallbacks remain real code and fail closed without a session", () => {
+  assert.match(panelSource, /return <FulfillmentOperationsPanel onUnauthorized=\{onUnauthorized\} \/>/);
+  assert.match(panelSource, /return <ServiceOperationsPanel onUnauthorized=\{onUnauthorized\} \/>/);
+  assert.match(panelSource, /<FulfillmentOperationsPanel onUnauthorized=\{onUnauthorized\} session=\{session\} \/>/);
+  assert.match(panelSource, /<ServiceOperationsPanel onUnauthorized=\{onUnauthorized\} session=\{session\} \/>/);
 });
 
 
