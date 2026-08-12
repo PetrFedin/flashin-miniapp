@@ -68,6 +68,7 @@ from .middleware.metrics import (
     metrics_response,
 )
 from .middleware.rate_limit import InMemoryRateLimitMiddleware
+from .middleware.request_id import RequestIdMiddleware
 from .middleware.security_headers import SecurityHeadersMiddleware
 from .seed import bootstrap_admin, seed_products
 
@@ -135,6 +136,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Added last so the correlation id wraps CORS, rate-limit, guard and route responses.
+app.add_middleware(RequestIdMiddleware)
 
 Path(settings.media_local_dir).mkdir(parents=True, exist_ok=True)
 app.mount("/media", StaticFiles(directory=settings.media_local_dir), name="media")
