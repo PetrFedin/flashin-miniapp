@@ -16,14 +16,14 @@ It is intentionally different from `make pilot-launch-preflight` and the signed 
 
 `decision=GO` and `ready_for_next_order=true` are returned only when all of the following are true at the time of the request:
 
-1. Critical service diagnostics are healthy: database, production environment prerequisites, YooKassa configuration, MoySklad configuration, scheduler, notification delivery, webhook outbox and MoySklad synchronization.
+1. Critical service diagnostics are healthy: database connectivity, current Alembic migration state, production environment prerequisites, YooKassa configuration, MoySklad configuration, scheduler, notification delivery, webhook outbox and MoySklad synchronization.
 2. The pilot runtime itself returns `checkout_decision=GO`.
 3. Runtime database integrity is healthy.
 4. Signed runtime/release artifact integrity is applicable and healthy.
 5. There is no payment/refund/reconciliation money-attention condition for pilot orders.
 6. Operational queue safety is applicable and healthy.
 
-A missing evaluation is fail-closed. For example, missing runtime artifact evidence or unavailable operational safety produces `NO-GO`; it is never interpreted as healthy.
+A missing evaluation is fail-closed. For example, missing runtime artifact evidence, unavailable operational safety or migration drift produces `NO-GO`; it is never interpreted as healthy.
 
 ## Advisory signals
 
@@ -37,7 +37,7 @@ If the result is `NO-GO`:
 
 1. Do not accept the next pilot order.
 2. Inspect `/api/ops/pilot-runtime` for runtime integrity, money-attention and operational queue details.
-3. Inspect `/api/diagnostics` for the failing service area.
+3. Inspect `/api/diagnostics` for the failing service area, including database migration state.
 4. For an affected order, use `/api/ops/orders/{order_id}/trace` to correlate durable order/payment/provider-command/fulfillment/notification/SLA state.
 5. If money integrity, artifact integrity or operational safety is compromised, stop the pilot runtime using the documented operator stop procedure rather than bypassing the cockpit.
 6. Resume only after the underlying condition is reconciled and the cockpit returns `GO` again.
