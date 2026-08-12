@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -7,6 +7,7 @@ from ..provider_models import ProviderCommand
 from ..schemas import MoySkladSyncOut
 from ..security import get_current_admin
 from ..services.moysklad import sync_assortment_to_catalog
+from ..services.moysklad_operations import build_moysklad_operations_status
 from ..services.rbac import require_permission
 
 router = APIRouter(prefix="/moysklad", tags=["moysklad"])
@@ -39,6 +40,20 @@ def _serialize_outbound_command(command: ProviderCommand) -> dict[str, object]:
 async def sync_moysklad(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
     require_permission(db, admin, "products.write")
     return await sync_assortment_to_catalog(db, sync_type="manual")
+
+
+@router.get("/operations-status")
+def moysklad_operations_status(
+    response: Response,
+    admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """Sanitized, read-only supply-chain status for catalog operators."""
+
+    require_permission(db, admin, "products.read")
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return build_moysklad_operations_status(db)
 
 
 @router.get("/sync-logs", response_model=list[MoySkladSyncOut])
