@@ -366,7 +366,7 @@ test("Admin operations, fulfillment and BusinessEvent recovery journey", async (
   ));
   await page.getByRole("button", { name: "Сделать снимок остатков" }).click();
   expect((await inventorySnapshot).ok()).toBe(true);
-  await expect(page.getByText("FLASH-001-M")).toBeVisible();
+  await expect(page.getByText("FLASH-001-M", { exact: true }).first()).toBeVisible();
 
   const csvInput = page.locator('input[accept=".csv,text/csv"]');
   await csvInput.setInputFiles({
