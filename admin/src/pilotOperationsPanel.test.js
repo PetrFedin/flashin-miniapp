@@ -11,11 +11,25 @@ const wrapperSource = readFileSync(
   "utf8",
 );
 
-test("pilot admin panel is wired to the protected read-only status endpoint", () => {
+test("pilot admin panel is wired to both protected read-only safety endpoints", () => {
+  assert.match(panelSource, /adminJson\("\/api\/ops\/pilot-readiness"/);
   assert.match(panelSource, /adminJson\("\/api\/ops\/pilot-runtime"/);
+  assert.match(panelSource, /Promise\.all/);
   assert.match(panelSource, /Cache-Control": "no-cache"/);
   assert.match(panelSource, /REFRESH_INTERVAL_MS = 30_000/);
   assert.match(panelSource, /document\.visibilityState !== "hidden"/);
+});
+
+test("pilot admin panel fails closed by clearing stale snapshots on refresh errors", () => {
+  assert.match(panelSource, /const clearSnapshot = useCallback/);
+  assert.match(panelSource, /setStatus\(null\)/);
+  assert.match(panelSource, /setReadiness\(null\)/);
+  assert.match(panelSource, /catch \(error\)[\s\S]*clearSnapshot\(\)/);
+  assert.match(panelSource, /Предыдущий статус сброшен в NO-GO/);
+  assert.match(
+    panelSource,
+    /readiness\?\.decision === "GO" && status\?\.decision === "GO"/,
+  );
 });
 
 test("pilot admin panel contains no runtime or money mutation controls", () => {
