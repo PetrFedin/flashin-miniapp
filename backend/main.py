@@ -135,6 +135,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Request-ID"],
 )
 # Added last so the correlation id wraps CORS, rate-limit, guard and route responses.
 app.add_middleware(RequestIdMiddleware)
