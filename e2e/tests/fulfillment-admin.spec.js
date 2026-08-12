@@ -46,6 +46,15 @@ async function mockFulfillmentApi(page) {
     if (path === "/api/admin/login" && method === "POST") {
       return json({ access_token: "fulfillment-admin-token" });
     }
+    if (path === "/api/admin/session" && method === "GET") {
+      return json({
+        id: 42,
+        email: "fulfillment@flashin.test",
+        role: "warehouse",
+        all_access: false,
+        permissions: ["orders.read", "orders.write"],
+      });
+    }
     if (path === "/api/admin/products" && method === "GET") return json([]);
     if (path === "/api/admin/orders" && method === "GET") return json([state.order]);
     if (path === "/api/admin/audit-logs" && method === "GET") return json([]);
