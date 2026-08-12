@@ -14,6 +14,8 @@ from ..models import (
 
 _SYNC_STATUSES = {"started", "success", "failed"}
 _SYNC_TYPES = {"manual", "scheduled", "startup", "worker"}
+_ROW_STATUSES = {"open", "resolved", "ignored", "fixed", "closed"}
+_RECONCILIATION_ACTIONS = {"report", "adjust", "sync", "ignore"}
 _MATCH_LIMIT = 100
 _RECONCILIATION_LIMIT = 100
 _CONFLICT_LIMIT = 100
@@ -73,8 +75,8 @@ def _reconciliation_row(row: StockReconciliationLog) -> dict[str, object]:
         "external_stock_qty": external,
         "local_reserved_qty": reserved,
         "delta": external - local,
-        "status": _safe_label(row.status, max_length=64),
-        "action": _safe_label(row.action, max_length=64),
+        "status": _safe_enum(row.status, _ROW_STATUSES),
+        "action": _safe_enum(row.action, _RECONCILIATION_ACTIONS),
         "created_at": _iso(row.created_at),
     }
 
@@ -84,7 +86,7 @@ def _conflict_row(row: MoySkladConflict) -> dict[str, object]:
         "id": int(row.id),
         "sku": _safe_label(row.sku),
         "conflict_type": _safe_label(row.conflict_type),
-        "status": _safe_label(row.status, max_length=64),
+        "status": _safe_enum(row.status, _ROW_STATUSES),
         "created_at": _iso(row.created_at),
     }
 
@@ -101,19 +103,27 @@ def compose_moysklad_operations_status(
     safe_conflicts = [_conflict_row(row) for row in conflicts]
 
     pending_matches = [row for row in safe_matches if not row["confirmed"]]
-    open_reconciliations = [row for row in safe_reconciliations if row["status"] == "open"]
-    open_conflicts = [row for row in safe_conflicts if row["status"] == "open"]
+    open_reconciliations = [
+        row for row in safe_reconciliations if row["status"] in {"open", "unknown"}
+    ]
+    open_conflicts = [row for row in safe_conflicts if row["status"] in {"open", "unknown"}]
     latest_sync = safe_sync_logs[0] if safe_sync_logs else None
-    last_sync_failed = bool(latest_sync and latest_sync["status"] in {"failed", "unknown"})
+    last_sync_status = latest_sync["status"] if latest_sync else "never"
+    last_sync_unhealthy = latest_sync is None or last_sync_status != "success"
+    last_sync_at = (
+        latest_sync["finished_at"] or latest_sync["created_at"]
+        if latest_sync
+        else None
+    )
 
     return {
         "schema_version": 1,
         "attention_required": bool(
-            last_sync_failed or pending_matches or open_reconciliations or open_conflicts
+            last_sync_unhealthy or pending_matches or open_reconciliations or open_conflicts
         ),
         "summary": {
-            "last_sync_status": latest_sync["status"] if latest_sync else "never",
-            "last_sync_at": latest_sync["finished_at"] or latest_sync["created_at"] if latest_sync else None,
+            "last_sync_status": last_sync_status,
+            "last_sync_at": last_sync_at,
             "pending_matches": len(pending_matches),
             "open_reconciliations": len(open_reconciliations),
             "open_conflicts": len(open_conflicts),
