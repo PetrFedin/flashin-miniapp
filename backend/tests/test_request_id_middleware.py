@@ -1,5 +1,6 @@
 import asyncio
 import re
+from pathlib import Path
 
 from backend.middleware.request_id import RequestIdMiddleware, normalize_request_id
 
@@ -73,3 +74,12 @@ def test_allowed_request_id_charset_is_bounded_and_header_safe():
     value = "A9._:-request-01"
 
     assert normalize_request_id(value) == value
+
+
+def test_browser_clients_can_read_request_id_through_cors():
+    main_source = (Path(__file__).resolve().parents[1] / "main.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'expose_headers=["X-Request-ID"]' in main_source
+    assert "app.add_middleware(RequestIdMiddleware)" in main_source
