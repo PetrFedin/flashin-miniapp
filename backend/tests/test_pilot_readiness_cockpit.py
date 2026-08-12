@@ -8,6 +8,7 @@ from backend.services.pilot_readiness import compose_pilot_readiness
 def _diagnostics(*, overrides: dict[str, bool] | None = None) -> dict:
     checks = {
         "database": {"ok": True},
+        "migrations": {"ok": True},
         "env": {"ok": True},
         "payments": {"ok": True},
         "moysklad": {"ok": True},
@@ -61,6 +62,17 @@ def test_critical_payment_diagnostic_blocks_next_order():
     assert result["decision"] == "NO-GO"
     assert result["ready_for_next_order"] is False
     assert "diagnostic_failed:payments" in result["blocking_codes"]
+
+
+def test_migration_drift_blocks_next_order():
+    result = compose_pilot_readiness(
+        _diagnostics(overrides={"migrations": False}),
+        _runtime(),
+    )
+
+    assert result["decision"] == "NO-GO"
+    assert result["ready_for_next_order"] is False
+    assert "diagnostic_failed:migrations" in result["blocking_codes"]
 
 
 def test_search_degradation_is_visible_but_advisory():
