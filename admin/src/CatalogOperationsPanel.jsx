@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
+import { hasAdminPermission } from "./adminPermissions.js";
 import { AdminApiError, adminJson } from "./api.js";
 import {
   availableQty,
@@ -26,8 +27,10 @@ function initialProductDraft(product) {
   };
 }
 
-export default function CatalogOperationsPanel({ products, onReload, onUnauthorized }) {
+export default function CatalogOperationsPanel({ products, onReload, onUnauthorized, session }) {
   const ownsProducts = !Array.isArray(products);
+  const canProductWrite = hasAdminPermission(session, "products.write");
+  const canInventoryWrite = hasAdminPermission(session, "inventory.write");
   const [ownedProducts, setOwnedProducts] = useState([]);
   const [productDrafts, setProductDrafts] = useState({});
   const [stockDrafts, setStockDrafts] = useState({});
@@ -118,6 +121,10 @@ export default function CatalogOperationsPanel({ products, onReload, onUnauthori
   }
 
   async function saveProduct(product) {
+    if (!canProductWrite) {
+      setError("Недостаточно прав: изменение карточки требует products.write.");
+      return;
+    }
     const draft = productDraft(product);
     const title = normalizeCatalogText(draft.title, "Название", 255);
     const brand = normalizeCatalogText(draft.brand, "Бренд", 120);
@@ -156,6 +163,10 @@ export default function CatalogOperationsPanel({ products, onReload, onUnauthori
   }
 
   async function toggleProduct(product) {
+    if (!canProductWrite) {
+      setError("Недостаточно прав: публикация товара требует products.write.");
+      return;
+    }
     const nextActive = !product.active;
     if (!nextActive) {
       const confirmed = window.confirm(
@@ -178,6 +189,10 @@ export default function CatalogOperationsPanel({ products, onReload, onUnauthori
   }
 
   async function updateStock(product, variant) {
+    if (!canInventoryWrite) {
+      setError("Недостаточно прав: изменение остатка требует inventory.write.");
+      return;
+    }
     const rawValue = stockDrafts[variant.id] ?? String(variant.stock_qty);
     const validation = normalizeCatalogStock(rawValue, variant.reserved_qty);
     if (validation.error) {
@@ -232,6 +247,8 @@ export default function CatalogOperationsPanel({ products, onReload, onUnauthori
 
       {error && <div className="error" role="alert">{error}<button type="button" onClick={() => setError("")}>×</button></div>}
       {notice && <div className="notice" role="status">{notice}<button type="button" onClick={() => setNotice("")}>×</button></div>}
+      {!canProductWrite && <p className="event-warning">Карточка товара доступна только для чтения: нет products.write.</p>}
+      {!canInventoryWrite && <p className="event-warning">Остатки доступны только для чтения: нет inventory.write.</p>}
 
       {!safeProducts.length && <p>Товары не найдены.</p>}
       <div className="service-grid">
@@ -253,7 +270,7 @@ export default function CatalogOperationsPanel({ products, onReload, onUnauthori
                     aria-label={`Название ${product.sku}`}
                     value={draft.title}
                     maxLength={255}
-                    disabled={productBusy}
+                    disabled={productBusy || !canProductWrite}
                     onChange={(event) => updateProductDraft(product, "title", event.target.value)}
                   />
                 </label>
@@ -263,7 +280,7 @@ export default function CatalogOperationsPanel({ products, onReload, onUnauthori
                     aria-label={`Бренд ${product.sku}`}
                     value={draft.brand}
                     maxLength={120}
-                    disabled={productBusy}
+                    disabled={productBusy || !canProductWrite}
                     onChange={(event) => updateProductDraft(product, "brand", event.target.value)}
                   />
                 </label>
@@ -273,7 +290,7 @@ export default function CatalogOperationsPanel({ products, onReload, onUnauthori
                     aria-label={`Категория ${product.sku}`}
                     value={draft.category}
                     maxLength={120}
-                    disabled={productBusy}
+                    disabled={productBusy || !canProductWrite}
                     onChange={(event) => updateProductDraft(product, "category", event.target.value)}
                   />
                 </label>
@@ -285,7 +302,7 @@ export default function CatalogOperationsPanel({ products, onReload, onUnauthori
                     min="0.01"
                     step="0.01"
                     value={draft.price}
-                    disabled={productBusy}
+                    disabled={productBusy || !canProductWrite}
                     onChange={(event) => updateProductDraft(product, "price", event.target.value)}
                   />
                 </label>
@@ -294,21 +311,25 @@ export default function CatalogOperationsPanel({ products, onReload, onUnauthori
                   <textarea
                     aria-label={`Описание ${product.sku}`}
                     value={draft.description}
-                    disabled={productBusy}
+                    disabled={productBusy || !canProductWrite}
                     onChange={(event) => updateProductDraft(product, "description", event.target.value)}
                   />
                 </label>
-                <button type="button" onClick={() => saveProduct(product)} disabled={productBusy}>
-                  Сохранить товар {product.sku}
-                </button>
-                <button
-                  type="button"
-                  className={product.active ? "danger" : ""}
-                  onClick={() => toggleProduct(product)}
-                  disabled={productBusy}
-                >
-                  {product.active ? `Скрыть товар ${product.sku}` : `Вернуть товар ${product.sku}`}
-                </button>
+                {canProductWrite && (
+                  <>
+                    <button type="button" onClick={() => saveProduct(product)} disabled={productBusy}>
+                      Сохранить товар {product.sku}
+                    </button>
+                    <button
+                      type="button"
+                      className={product.active ? "danger" : ""}
+                      onClick={() => toggleProduct(product)}
+                      disabled={productBusy}
+                    >
+                      {product.active ? `Скрыть товар ${product.sku}` : `Вернуть товар ${product.sku}`}
+                    </button>
+                  </>
+                )}
               </div>
 
               <h4>SKU и остатки</h4>
@@ -334,16 +355,18 @@ export default function CatalogOperationsPanel({ products, onReload, onUnauthori
                           min={variant.reserved_qty || 0}
                           step="1"
                           value={stockDrafts[variant.id] ?? String(variant.stock_qty)}
-                          disabled={variantBusy}
+                          disabled={variantBusy || !canInventoryWrite}
                           onChange={(event) => setStockDrafts((current) => ({
                             ...current,
                             [variant.id]: event.target.value,
                           }))}
                         />
                       </label>
-                      <button type="button" onClick={() => updateStock(product, variant)} disabled={variantBusy}>
-                        Обновить остаток {variant.sku}
-                      </button>
+                      {canInventoryWrite && (
+                        <button type="button" onClick={() => updateStock(product, variant)} disabled={variantBusy}>
+                          Обновить остаток {variant.sku}
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
