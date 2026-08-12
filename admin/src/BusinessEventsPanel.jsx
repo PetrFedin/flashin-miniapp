@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 
+import { hasAdminPermission, hasAnyAdminPermission } from "./adminPermissions.js";
 import { AdminApiError, adminJson } from "./api.js";
 import CatalogOperationsPanel from "./CatalogOperationsPanel.jsx";
 import FulfillmentOperationsPanel from "./FulfillmentOperationsPanel.jsx";
@@ -26,7 +27,7 @@ function payloadPreview(event) {
   return JSON.stringify(event.payload || {}, null, 2);
 }
 
-function BusinessEventsRecoveryPanel({ onUnauthorized }) {
+function BusinessEventsRecoveryPanel({ onUnauthorized, canReplayPermission }) {
   const [summary, setSummary] = useState(null);
   const [events, setEvents] = useState([]);
   const [statusFilter, setStatusFilter] = useState("failed");
@@ -122,7 +123,7 @@ function BusinessEventsRecoveryPanel({ onUnauthorized }) {
 
   async function replaySelectedEvent() {
     const event = selectedEvent;
-    if (!canReplayBusinessEvent(event) || replayLocks.current.has(event.id)) return;
+    if (!canReplayPermission || !canReplayBusinessEvent(event) || replayLocks.current.has(event.id)) return;
 
     let body;
     try {
@@ -258,7 +259,7 @@ function BusinessEventsRecoveryPanel({ onUnauthorized }) {
               <h4>Сохранённый payload</h4>
               <pre className="event-payload">{payloadPreview(selectedEvent)}</pre>
 
-              {canReplayBusinessEvent(selectedEvent) ? (
+              {canReplayPermission && canReplayBusinessEvent(selectedEvent) ? (
                 <div className="event-replay-form">
                   <h4>Вернуть в очередь</h4>
                   <label>
@@ -291,6 +292,8 @@ function BusinessEventsRecoveryPanel({ onUnauthorized }) {
                     {replayingId === selectedEvent.id ? "Возврат в очередь…" : "Подтвердить replay"}
                   </button>
                 </div>
+              ) : canReplayBusinessEvent(selectedEvent) ? (
+                <p>Просмотр доступен, но replay требует permission orders.write.</p>
               ) : (
                 <p>Replay доступен только для terminal-статуса failed.</p>
               )}
@@ -302,15 +305,26 @@ function BusinessEventsRecoveryPanel({ onUnauthorized }) {
   );
 }
 
-export default function BusinessEventsPanel({ onUnauthorized }) {
+export default function BusinessEventsPanel({ onUnauthorized, session }) {
+  const canSecurityRead = hasAdminPermission(session, "security.read");
+  const canProductsRead = hasAdminPermission(session, "products.read");
+  const canOrdersRead = hasAdminPermission(session, "orders.read");
+  const canOrdersWrite = hasAdminPermission(session, "orders.write");
+  const canService = hasAnyAdminPermission(session, ["support.write", "privacy.read", "orders.read"]);
+
   return (
     <>
-      <PilotOperationsPanel onUnauthorized={onUnauthorized} />
-      <CatalogOperationsPanel onUnauthorized={onUnauthorized} />
-      <SupplyChainOperationsPanel onUnauthorized={onUnauthorized} />
-      <FulfillmentOperationsPanel onUnauthorized={onUnauthorized} />
-      <ServiceOperationsPanel onUnauthorized={onUnauthorized} />
-      <BusinessEventsRecoveryPanel onUnauthorized={onUnauthorized} />
+      {canSecurityRead && <PilotOperationsPanel onUnauthorized={onUnauthorized} />}
+      {canProductsRead && <CatalogOperationsPanel onUnauthorized={onUnauthorized} session={session} />}
+      {canProductsRead && <SupplyChainOperationsPanel onUnauthorized={onUnauthorized} session={session} />}
+      {canOrdersRead && <FulfillmentOperationsPanel onUnauthorized={onUnauthorized} session={session} />}
+      {canService && <ServiceOperationsPanel onUnauthorized={onUnauthorized} session={session} />}
+      {canOrdersRead && (
+        <BusinessEventsRecoveryPanel
+          onUnauthorized={onUnauthorized}
+          canReplayPermission={canOrdersWrite}
+        />
+      )}
     </>
   );
 }
