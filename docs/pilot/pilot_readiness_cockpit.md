@@ -12,6 +12,8 @@ It is intentionally different from `make pilot-launch-preflight` and the signed 
 - The response carries the current `request_id` so an operator can correlate the lookup with API/Sentry records.
 - The payload contains only status booleans, bounded counts, runtime state and stable blocking/warning codes. It does not copy provider payloads, credentials, webhook bodies, free-form provider errors, customer Telegram IDs or message bodies.
 
+The Admin `PilotOperationsPanel` reads both `/api/ops/pilot-readiness` and `/api/ops/pilot-runtime` on the same refresh cycle. Its visible decision is `GO` only when both independently normalize to `GO`. If a refresh fails, the previous runtime/readiness snapshots are cleared rather than retained; a stale historical `GO` therefore cannot remain the operator's current decision after connectivity or authorization is lost.
+
 ## GO contract
 
 `decision=GO` and `ready_for_next_order=true` are returned only when all of the following are true at the time of the request:
