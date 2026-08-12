@@ -60,6 +60,7 @@ async function loginAdmin(page) {
   await page.getByRole("button", { name: "Войти" }).click();
   await expect(page.getByRole("button", { name: "Выйти" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Каталог и остатки" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Supply Chain · МойСклад" })).toBeVisible();
 }
 
 async function publicProduct(request) {
