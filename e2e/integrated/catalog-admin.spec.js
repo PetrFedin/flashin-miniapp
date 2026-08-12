@@ -102,7 +102,7 @@ test("Admin catalog mutations are visible to customer surfaces and reversible", 
   await loginAdmin(adminPage);
   const productCard = adminPage.getByRole("article", { name: PRODUCT_TITLE }).first();
   await expect(productCard).toBeVisible();
-  await expect(productCard.getByText(PRODUCT_SKU)).toBeVisible();
+  await expect(productCard.getByText(PRODUCT_SKU, { exact: true })).toBeVisible();
 
   // Master-data mutation crosses the real Admin API and is immediately visible
   // on the public product contract. Restore it before moving to money flows.
