@@ -11,6 +11,7 @@ from sqlalchemy.orm import sessionmaker
 from backend.database import Base, utcnow_naive
 from backend.models import Customer, Order
 from backend.pilot_models import PilotOrderSlot, PilotRuntimeState
+import backend.services.pilot_payment_guard as payment_guard
 import backend.services.pilot_runtime as pilot_runtime
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -160,18 +161,79 @@ def test_disabled_pilot_does_not_restrict_normal_payment(monkeypatch):
     )
 
 
+class _FakeGuardSession:
+    def __init__(self):
+        self.committed = False
+        self.rolled_back = False
+        self.closed = False
+
+    def commit(self):
+        self.committed = True
+
+    def rollback(self):
+        self.rolled_back = True
+
+    def close(self):
+        self.closed = True
+
+
+def test_payment_guard_keeps_transaction_open_until_provider_section_finishes(monkeypatch):
+    fake_db = _FakeGuardSession()
+    settings = SimpleNamespace(pilot_runtime_enforced=True)
+    verified = []
+
+    monkeypatch.setattr(payment_guard, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(
+        payment_guard,
+        "assert_pilot_new_payment_attempt_allowed",
+        lambda db, **kwargs: verified.append((db, kwargs["order_id"])),
+    )
+
+    with payment_guard.pilot_new_payment_attempt_guard(order_id=42, settings=settings):
+        assert verified == [(fake_db, 42)]
+        assert fake_db.committed is False
+        assert fake_db.rolled_back is False
+        assert fake_db.closed is False
+
+    assert fake_db.committed is True
+    assert fake_db.rolled_back is False
+    assert fake_db.closed is True
+
+
+def test_payment_guard_rolls_back_and_preserves_provider_exception(monkeypatch):
+    fake_db = _FakeGuardSession()
+    settings = SimpleNamespace(pilot_runtime_enforced=True)
+
+    monkeypatch.setattr(payment_guard, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(
+        payment_guard,
+        "assert_pilot_new_payment_attempt_allowed",
+        lambda *args, **kwargs: None,
+    )
+
+    provider_error = HTTPException(status_code=502, detail="provider unavailable")
+    with pytest.raises(HTTPException) as raised:
+        with payment_guard.pilot_new_payment_attempt_guard(order_id=42, settings=settings):
+            raise provider_error
+
+    assert raised.value is provider_error
+    assert fake_db.committed is False
+    assert fake_db.rolled_back is True
+    assert fake_db.closed is True
+
+
 def test_provider_create_is_guarded_but_existing_attempt_reconciliation_and_refunds_remain_available():
     service = (ROOT / "backend/services/payments.py").read_text(encoding="utf-8")
     api = (ROOT / "backend/api/payments.py").read_text(encoding="utf-8")
 
     create_start = service.index("async def create_yookassa_payment")
-    guard = service.index("guard_pilot_new_payment_attempt", create_start)
-    provider_post = service.index('"POST",\n        "/payments"', guard)
+    guard = service.index("with pilot_new_payment_attempt_guard", create_start)
+    provider_post = service.index('"POST",\n            "/payments"', guard)
     refund_start = service.index("async def create_yookassa_refund")
     refund_end = service.index("async def fetch_yookassa_refund", refund_start)
 
     assert create_start < guard < provider_post < refund_start
-    assert "guard_pilot_new_payment_attempt" not in service[refund_start:refund_end]
+    assert "pilot_new_payment_attempt_guard" not in service[refund_start:refund_end]
 
     endpoint_start = api.index("async def create_payment")
     reconcile = api.index("_reconcile_existing_payment(order, latest_payment)", endpoint_start)
