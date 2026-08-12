@@ -11,6 +11,7 @@ from ..security import get_current_admin
 from ..services.inventory import snapshot_inventory
 from ..services.order_operations_trace import build_order_operations_trace
 from ..services.pilot_observability import build_pilot_operations_status
+from ..services.pilot_readiness import build_pilot_readiness
 from ..services.rbac import require_permission
 
 router = APIRouter(prefix="/ops", tags=["ops"])
@@ -26,6 +27,23 @@ def pilot_runtime_status(
     response.headers["Cache-Control"] = "no-store, max-age=0"
     response.headers["Pragma"] = "no-cache"
     return build_pilot_operations_status(db, get_settings())
+
+
+@router.get("/pilot-readiness")
+def pilot_readiness_status(
+    request: Request,
+    response: Response,
+    admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """Sanitized, read-only verdict for accepting the next controlled pilot order."""
+
+    require_permission(db, admin, "security.read")
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    readiness = build_pilot_readiness(db, get_settings())
+    readiness["request_id"] = getattr(request.state, "request_id", "")
+    return readiness
 
 
 @router.get("/orders/{order_id}/trace")
