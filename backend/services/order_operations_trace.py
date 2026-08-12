@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from ..business_event_models import BusinessEventRecoveryState
 from ..checkout_models import CheckoutAttempt
+from ..database import utcnow_naive
 from ..models import (
     BusinessEvent,
     FulfillmentTask,
@@ -170,15 +171,30 @@ def build_order_operations_trace(db: Session, order_id: int) -> dict[str, object
         for command in provider_commands
         if command.status in {"pending", "processing", "failed", "review_required"}
     )
+    provider_failures = sum(
+        1
+        for command in provider_commands
+        if command.status in {"failed", "review_required"}
+    )
     failed_notifications = sum(
-        1 for notification, _state, _event in notification_rows if notification.status == "failed"
+        1
+        for notification, _state, _event in notification_rows
+        if notification.status == "failed"
     )
     unresolved_business_events = sum(
         1
         for event in business_events
         if event.status in {"pending", "processing", "failed"}
     )
-    open_sla_events = sum(1 for event in sla_events if event.status == "open")
+    failed_business_events = sum(
+        1 for event in business_events if event.status == "failed"
+    )
+    now = utcnow_naive()
+    overdue_sla_events = sum(
+        1
+        for event in sla_events
+        if event.status == "open" and event.due_at is not None and event.due_at <= now
+    )
 
     return {
         "correlation": {"type": "order_id", "value": str(order_id)},
@@ -239,7 +255,9 @@ def build_order_operations_trace(db: Session, order_id: int) -> dict[str, object
                 "id": int(task.id),
                 "status": str(task.status),
                 "assigned_admin_id": (
-                    int(task.assigned_admin_id) if task.assigned_admin_id is not None else None
+                    int(task.assigned_admin_id)
+                    if task.assigned_admin_id is not None
+                    else None
                 ),
                 "pick_started_at": _iso(task.pick_started_at),
                 "packed_at": _iso(task.packed_at),
@@ -262,7 +280,9 @@ def build_order_operations_trace(db: Session, order_id: int) -> dict[str, object
                     {
                         "failed_at": _iso(recovery_by_event_id[int(event.id)].failed_at),
                         "resolved_at": _iso(recovery_by_event_id[int(event.id)].resolved_at),
-                        "replay_count": int(recovery_by_event_id[int(event.id)].replay_count),
+                        "replay_count": int(
+                            recovery_by_event_id[int(event.id)].replay_count
+                        ),
                         "last_attempt_at": _iso(
                             recovery_by_event_id[int(event.id)].last_attempt_at
                         ),
@@ -300,15 +320,17 @@ def build_order_operations_trace(db: Session, order_id: int) -> dict[str, object
             for event in sla_events
         ],
         "attention": {
-            "provider_commands": actionable_provider_commands,
+            "provider_commands_actionable": actionable_provider_commands,
+            "provider_failures": provider_failures,
             "failed_notifications": failed_notifications,
-            "business_events": unresolved_business_events,
-            "open_sla": open_sla_events,
+            "business_events_unresolved": unresolved_business_events,
+            "business_events_failed": failed_business_events,
+            "overdue_sla": overdue_sla_events,
             "required": bool(
-                actionable_provider_commands
+                provider_failures
                 or failed_notifications
-                or unresolved_business_events
-                or open_sla_events
+                or failed_business_events
+                or overdue_sla_events
             ),
         },
     }
