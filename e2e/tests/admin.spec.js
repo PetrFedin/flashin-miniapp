@@ -31,6 +31,46 @@ const pilotRuntimeStatus = {
   },
 };
 
+const pilotReadinessStatus = {
+  schema_version: 1,
+  decision: "GO",
+  ready_for_next_order: true,
+  blocking_codes: [],
+  warning_codes: [],
+  diagnostics: {
+    critical: {
+      database: true,
+      migrations: true,
+      env: true,
+      payments: true,
+      moysklad: true,
+      scheduler: true,
+      notification_delivery: true,
+      webhook_outbox: true,
+      moysklad_sync: true,
+    },
+    advisory: {
+      media: true,
+      search: true,
+    },
+  },
+  runtime: {
+    checkout_decision: "GO",
+    enforced: true,
+    status: "active",
+    accepted_orders: 3,
+    remaining_orders: 17,
+    allowlist_count: 5,
+    database_integrity_healthy: true,
+    artifact_integrity_applicable: true,
+    artifact_integrity_healthy: true,
+    money_attention_required: false,
+    operational_safety_applicable: true,
+    operational_safety_healthy: true,
+  },
+  request_id: "browser-e2e-request-id",
+};
+
 function failedBusinessEvent() {
   return {
     id: 501,
@@ -185,6 +225,7 @@ async function mockAdminApi(page) {
 
     if (path === "/api/ops/abandoned-carts/queue-notifications" && method === "POST") return json({ queued: 1 });
     if (path === "/api/ops/inventory/snapshot" && method === "POST") return json({ created: true });
+    if (path === "/api/ops/pilot-readiness" && method === "GET") return json(pilotReadinessStatus);
     if (path === "/api/ops/pilot-runtime" && method === "GET") return json(pilotRuntimeStatus);
 
     if (path === "/api/support/admin/tickets" && method === "GET") return json(supportTickets);
