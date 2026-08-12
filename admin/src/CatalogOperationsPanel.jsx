@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import { AdminApiError, adminJson } from "./api.js";
 import {
@@ -27,6 +27,8 @@ function initialProductDraft(product) {
 }
 
 export default function CatalogOperationsPanel({ products, onReload, onUnauthorized }) {
+  const ownsProducts = !Array.isArray(products);
+  const [ownedProducts, setOwnedProducts] = useState([]);
   const [productDrafts, setProductDrafts] = useState({});
   const [stockDrafts, setStockDrafts] = useState({});
   const [busyKeys, setBusyKeys] = useState(() => new Set());
@@ -34,7 +36,7 @@ export default function CatalogOperationsPanel({ products, onReload, onUnauthori
   const [notice, setNotice] = useState("");
   const locks = useRef(new Set());
 
-  const safeProducts = Array.isArray(products) ? products : [];
+  const safeProducts = ownsProducts ? ownedProducts : products;
   const attentionCount = useMemo(() => catalogAttentionCount(safeProducts), [safeProducts]);
 
   function isBusy(key) {
@@ -73,6 +75,18 @@ export default function CatalogOperationsPanel({ products, onReload, onUnauthori
     }
   }
 
+  async function loadCatalog() {
+    const nextProducts = await adminJson("/api/admin/products");
+    setOwnedProducts(Array.isArray(nextProducts) ? nextProducts : []);
+    return nextProducts;
+  }
+
+  useEffect(() => {
+    if (!ownsProducts) return undefined;
+    run("catalog-initial", loadCatalog);
+    return undefined;
+  }, [ownsProducts]);
+
   function productDraft(product) {
     return productDrafts[product.id] || initialProductDraft(product);
   }
@@ -96,7 +110,11 @@ export default function CatalogOperationsPanel({ products, onReload, onUnauthori
   }
 
   async function reload() {
-    if (onReload) await onReload();
+    if (onReload) {
+      await onReload();
+      return;
+    }
+    if (ownsProducts) await loadCatalog();
   }
 
   async function saveProduct(product) {
