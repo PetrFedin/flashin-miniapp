@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 # confusing a degraded merchandising surface with a payment-integrity failure.
 _CRITICAL_DIAGNOSTIC_CHECKS = (
     "database",
+    "migrations",
     "env",
     "payments",
     "moysklad",
