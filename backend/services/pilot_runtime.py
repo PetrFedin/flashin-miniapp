@@ -5,7 +5,7 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, TYPE_CHECKING
+from typing import Any, Callable, Mapping, TYPE_CHECKING
 
 from fastapi import HTTPException
 from sqlalchemy import func
@@ -268,6 +268,74 @@ def _integrity_failure() -> HTTPException:
     )
 
 
+def _payment_blocked() -> HTTPException:
+    return HTTPException(
+        status_code=423,
+        detail={
+            "code": "pilot_payment_attempt_unavailable",
+            "message": "A new payment attempt is temporarily unavailable during the controlled pilot.",
+        },
+    )
+
+
+def _payment_integrity_failure() -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail={
+            "code": "pilot_runtime_integrity_failure",
+            "message": "A new payment attempt is unavailable because pilot runtime integrity could not be verified.",
+        },
+    )
+
+
+def _verify_runtime_safety(
+    db: Session,
+    state: PilotRuntimeState,
+    settings: "Settings",
+    *,
+    env: Mapping[str, str] | None,
+    blocked_error: Callable[[], HTTPException],
+    integrity_error: Callable[[], HTTPException],
+) -> dict[str, Any]:
+    if state.opened_at is None:
+        raise integrity_error()
+
+    current_anchor: dict[str, Any] = {}
+    current_pilot_state: dict[str, Any] = {}
+    file_errors = validate_runtime_files(
+        state,
+        settings,
+        env=env,
+        validated_anchor=current_anchor,
+        validated_pilot_state=current_pilot_state,
+    )
+    if file_errors:
+        if "pilot control decision is STOP" in file_errors:
+            raise blocked_error()
+        raise integrity_error()
+
+    database_errors = validate_pilot_database_evidence(
+        db,
+        current_pilot_state,
+        state,
+        final=False,
+    )
+    if database_errors:
+        raise integrity_error()
+
+    try:
+        operational_safety = build_pilot_operational_safety(
+            db,
+            created_since=state.opened_at,
+        )
+    except ValueError:
+        raise integrity_error()
+    if operational_safety["healthy"] is not True:
+        raise blocked_error()
+
+    return current_anchor
+
+
 def acquire_pilot_checkout(
     db: Session,
     *,
@@ -288,41 +356,15 @@ def acquire_pilot_checkout(
         raise _blocked()
     if state.max_orders != settings.pilot_runtime_max_orders or state.max_orders != 20:
         raise _integrity_failure()
-    if state.opened_at is None:
-        raise _integrity_failure()
 
-    current_anchor: dict[str, Any] = {}
-    current_pilot_state: dict[str, Any] = {}
-    file_errors = validate_runtime_files(
+    current_anchor = _verify_runtime_safety(
+        db,
         state,
         settings,
         env=env,
-        validated_anchor=current_anchor,
-        validated_pilot_state=current_pilot_state,
+        blocked_error=_blocked,
+        integrity_error=_integrity_failure,
     )
-    if file_errors:
-        if "pilot control decision is STOP" in file_errors:
-            raise _blocked()
-        raise _integrity_failure()
-    database_errors = validate_pilot_database_evidence(
-        db,
-        current_pilot_state,
-        state,
-        final=False,
-    )
-    if database_errors:
-        raise _integrity_failure()
-
-    try:
-        operational_safety = build_pilot_operational_safety(
-            db,
-            created_since=state.opened_at,
-        )
-    except ValueError:
-        raise _integrity_failure()
-    if operational_safety["healthy"] is not True:
-        raise _blocked()
-
     state.pilot_state_revision = int(current_anchor["revision"])
     state.pilot_state_sha256 = str(current_anchor["sha256"])
     state.updated_at = utcnow_naive()
@@ -349,6 +391,69 @@ def acquire_pilot_checkout(
         sequence=state.accepted_orders + 1,
         admission_sha256=state.admission_sha256,
     )
+
+
+def assert_pilot_new_payment_attempt_allowed(
+    db: Session,
+    *,
+    order_id: int,
+    settings: "Settings",
+    env: Mapping[str, str] | None = None,
+) -> None:
+    """Fail closed before creating a fresh external payment for a pilot order.
+
+    Existing provider attempts are reconciled before this guard is called by the
+    payment API. That permits safe recovery of an already-created money command
+    after STOP while preventing any new provider payment from being created.
+    """
+
+    if not settings.pilot_runtime_enforced:
+        return
+
+    slot = (
+        db.query(PilotOrderSlot)
+        .filter(PilotOrderSlot.order_id == order_id)
+        .first()
+    )
+    if slot is None:
+        # During an enforced pilot, fresh money commands may only originate from
+        # orders that consumed an admitted pilot slot.
+        raise _payment_blocked()
+
+    state = (
+        db.query(PilotRuntimeState)
+        .filter(PilotRuntimeState.id == 1)
+        .with_for_update()
+        .first()
+    )
+    if state is None:
+        raise _payment_integrity_failure()
+    if state.run_id != slot.run_id or state.admission_sha256 != slot.admission_sha256:
+        raise _payment_integrity_failure()
+    if state.status == "stopped":
+        raise _payment_blocked()
+    if state.status not in {"active", "completed"}:
+        raise _payment_blocked()
+    if state.max_orders != settings.pilot_runtime_max_orders or state.max_orders != 20:
+        raise _payment_integrity_failure()
+    if (
+        slot.sequence < 1
+        or slot.sequence > state.accepted_orders
+        or state.accepted_orders > state.max_orders
+    ):
+        raise _payment_integrity_failure()
+
+    current_anchor = _verify_runtime_safety(
+        db,
+        state,
+        settings,
+        env=env,
+        blocked_error=_payment_blocked,
+        integrity_error=_payment_integrity_failure,
+    )
+    state.pilot_state_revision = int(current_anchor["revision"])
+    state.pilot_state_sha256 = str(current_anchor["sha256"])
+    state.updated_at = utcnow_naive()
 
 
 def record_pilot_order(
