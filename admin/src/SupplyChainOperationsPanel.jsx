@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 
+import { hasAdminPermission } from "./adminPermissions.js";
 import { AdminApiError, adminJson } from "./api.js";
 import {
   normalizeSupplyChainStatus,
@@ -28,7 +29,8 @@ function formatTimestamp(value) {
   return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString("ru-RU");
 }
 
-export default function SupplyChainOperationsPanel({ onUnauthorized }) {
+export default function SupplyChainOperationsPanel({ onUnauthorized, session }) {
+  const canMutate = hasAdminPermission(session, "products.write");
   const [snapshot, setSnapshot] = useState(() => normalizeSupplyChainStatus(null));
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -77,6 +79,10 @@ export default function SupplyChainOperationsPanel({ onUnauthorized }) {
   }, []);
 
   async function runMutation(key, operation) {
+    if (!canMutate) {
+      setError("Недостаточно прав: изменение данных МойСклад требует products.write.");
+      return null;
+    }
     if (mutationLocks.current.has(key)) return null;
     mutationLocks.current.add(key);
     setError("");
@@ -96,6 +102,7 @@ export default function SupplyChainOperationsPanel({ onUnauthorized }) {
   }
 
   async function startSync() {
+    if (!canMutate) return;
     const confirmed = window.confirm(
       "Запустить ручную синхронизацию с МойСклад? Она может изменить названия, описания, цены, категории и физические остатки. Зарезервированный stock не будет уменьшен ниже резерва.",
     );
@@ -115,7 +122,7 @@ export default function SupplyChainOperationsPanel({ onUnauthorized }) {
   }
 
   async function confirmMatch(match) {
-    if (match.confirmed || !match.id) return;
+    if (!canMutate || match.confirmed || !match.id) return;
     const confirmed = window.confirm(
       `Подтвердить сопоставление SKU ${match.localSku || "—"} ↔ ${match.externalSku || "—"}? `
       + "После подтверждения автоматический sync сможет считать это соответствие доверенным.",
@@ -149,13 +156,16 @@ export default function SupplyChainOperationsPanel({ onUnauthorized }) {
         <button type="button" onClick={() => loadStatus()} disabled={loading}>
           {loading ? "Обновление…" : "Обновить Supply Chain"}
         </button>
-        <button type="button" className="danger" onClick={startSync} disabled={syncing}>
-          {syncing ? "Синхронизация…" : "Синхронизировать с МойСклад"}
-        </button>
+        {canMutate && (
+          <button type="button" className="danger" onClick={startSync} disabled={syncing}>
+            {syncing ? "Синхронизация…" : "Синхронизировать с МойСклад"}
+          </button>
+        )}
       </div>
 
       {error && <div className="error" role="alert">{error}<button type="button" onClick={() => setError("")}>×</button></div>}
       {notice && <div className="notice" role="status">{notice}<button type="button" onClick={() => setNotice("")}>×</button></div>}
+      {!canMutate && <p className="event-warning">Supply Chain доступен только для чтения: нет products.write.</p>}
 
       <div className="kpis event-kpis" aria-label="Supply Chain summary">
         <div><span>Последний sync</span><strong>{syncStatusLabel(summary.lastSyncStatus)}</strong><small>{formatTimestamp(summary.lastSyncAt)}</small></div>
@@ -192,7 +202,7 @@ export default function SupplyChainOperationsPanel({ onUnauthorized }) {
                 <span>{match.confirmed ? "Подтверждено" : "Ожидает подтверждения"}</span>
               </div>
               <small>МойСклад SKU: {match.externalSku || "—"} · confidence {(match.confidence * 100).toFixed(0)}%</small>
-              {!match.confirmed && (
+              {canMutate && !match.confirmed && (
                 <button
                   type="button"
                   onClick={() => confirmMatch(match)}
