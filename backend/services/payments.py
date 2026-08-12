@@ -7,7 +7,7 @@ import httpx
 from fastapi import HTTPException
 
 from ..config import get_settings
-from .pilot_payment_guard import guard_pilot_new_payment_attempt
+from .pilot_payment_guard import pilot_new_payment_attempt_guard
 
 _YOOKASSA_API = "https://api.yookassa.ru/v3"
 _TRANSIENT_STATUSES = {429, 500, 502, 503, 504}
@@ -145,8 +145,6 @@ async def create_yookassa_payment(order_id: int, amount: float, currency: str, a
         raise HTTPException(status_code=500, detail="Invalid payment attempt.")
 
     settings = get_settings()
-    guard_pilot_new_payment_attempt(order_id=order_id, settings=settings)
-
     payload = {
         "amount": {"value": f"{normalized_amount:.2f}", "currency": normalized_currency},
         "capture": True,
@@ -157,12 +155,13 @@ async def create_yookassa_payment(order_id: int, amount: float, currency: str, a
         "description": f"FLASHIN order #{order_id}",
         "metadata": {"order_id": str(order_id), "attempt": str(attempt)},
     }
-    data = await _request_yookassa(
-        "POST",
-        "/payments",
-        payload=payload,
-        idempotence_key=_payment_idempotence_key(order_id, attempt),
-    )
+    with pilot_new_payment_attempt_guard(order_id=order_id, settings=settings):
+        data = await _request_yookassa(
+            "POST",
+            "/payments",
+            payload=payload,
+            idempotence_key=_payment_idempotence_key(order_id, attempt),
+        )
     return {
         "provider_payment_id": data["id"],
         "status": data["status"],
