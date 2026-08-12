@@ -1,6 +1,6 @@
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
@@ -9,6 +9,7 @@ from ..models import Cart, Notification, ProductVariant
 from ..schemas import AbandonedCartOut, InventorySnapshotOut
 from ..security import get_current_admin
 from ..services.inventory import snapshot_inventory
+from ..services.order_operations_trace import build_order_operations_trace
 from ..services.pilot_observability import build_pilot_operations_status
 from ..services.rbac import require_permission
 
@@ -25,6 +26,26 @@ def pilot_runtime_status(
     response.headers["Cache-Control"] = "no-store, max-age=0"
     response.headers["Pragma"] = "no-cache"
     return build_pilot_operations_status(db, get_settings())
+
+
+@router.get("/orders/{order_id}/trace")
+def order_operations_trace(
+    order_id: int,
+    request: Request,
+    response: Response,
+    admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """Sanitized, read-only incident trace across the order lifecycle."""
+
+    require_permission(db, admin, "orders.read")
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    trace = build_order_operations_trace(db, order_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    trace["request_id"] = getattr(request.state, "request_id", "")
+    return trace
 
 
 @router.get("/abandoned-carts", response_model=list[AbandonedCartOut])
