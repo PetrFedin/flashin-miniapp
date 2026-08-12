@@ -68,6 +68,7 @@ def order_operations_trace(
 
 @router.get("/abandoned-carts", response_model=list[AbandonedCartOut])
 def abandoned_carts(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    require_permission(db, admin, "customers.read")
     settings = get_settings()
     cutoff = utcnow_naive() - timedelta(minutes=settings.abandoned_cart_minutes)
     carts = (
@@ -90,6 +91,8 @@ def abandoned_carts(admin=Depends(get_current_admin), db: Session = Depends(get_
 
 @router.post("/abandoned-carts/queue-notifications")
 def queue_abandoned_cart_notifications(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    require_permission(db, admin, "customers.read")
+    require_permission(db, admin, "notifications.retry")
     settings = get_settings()
     now = utcnow_naive()
     cutoff = now - timedelta(minutes=settings.abandoned_cart_minutes)
@@ -115,6 +118,7 @@ def queue_abandoned_cart_notifications(admin=Depends(get_current_admin), db: Ses
 
 @router.get("/inventory/low-stock", response_model=list[InventorySnapshotOut])
 def low_stock(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    require_permission(db, admin, "products.read")
     settings = get_settings()
     variants = db.query(ProductVariant).all()
     result = []
@@ -133,6 +137,7 @@ def low_stock(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
 
 @router.post("/inventory/snapshot")
 def inventory_snapshot(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    require_permission(db, admin, "inventory.write")
     count = snapshot_inventory(db, source="admin")
     db.commit()
     return {"ok": True, "snapshotted": count}
