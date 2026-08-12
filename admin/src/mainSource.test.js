@@ -35,3 +35,34 @@ test("unused hidden operations are not loaded by the dashboard", () => {
 test("login form does not expose a preset production email", () => {
   assert.equal(source.includes('useState("admin@flashin.store")'), false);
 });
+
+
+test("authenticated dashboard validates effective permissions before business data", () => {
+  assert.equal(source.includes('adminJson("/api/admin/session")'), true);
+  assert.equal(source.includes("normalizeAdminSession(payload)"), true);
+  assert.equal(source.includes("if (!normalized.valid)"), true);
+  assert.equal(source.includes("await refreshAll(nextSession)"), true);
+  assert.equal(source.includes("Права администратора не подтверждены"), true);
+});
+
+
+test("core and operational datasets are requested only behind their read permissions", () => {
+  assert.equal(source.includes('hasAdminPermission(activeSession, "products.read")'), true);
+  assert.equal(source.includes('hasAdminPermission(activeSession, "orders.read")'), true);
+  assert.equal(source.includes('hasAdminPermission(activeSession, "audit.read")'), true);
+  assert.equal(source.includes('hasAdminPermission(activeSession, "customers.read")'), true);
+});
+
+
+test("sensitive mutations have explicit permission gates", () => {
+  for (const permission of [
+    "products.write",
+    "inventory.write",
+    "orders.write",
+    "promo.write",
+    "media.write",
+    "notifications.retry",
+  ]) {
+    assert.equal(source.includes(`hasAdminPermission(session, "${permission}")`), true, permission);
+  }
+});
