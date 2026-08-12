@@ -26,6 +26,32 @@ async function mockCatalogAdminApi(page) {
     }],
   };
 
+  const supplyChain = {
+    schema_version: 1,
+    attention_required: false,
+    summary: {
+      last_sync_status: "success",
+      last_sync_at: "2026-08-12T18:00:00",
+      pending_matches: 0,
+      open_reconciliations: 0,
+      open_conflicts: 0,
+    },
+    sync_logs: [{
+      id: 91,
+      sync_type: "manual",
+      status: "success",
+      products_seen: 1,
+      products_upserted: 0,
+      variants_upserted: 0,
+      has_error: false,
+      created_at: "2026-08-12T17:59:00",
+      finished_at: "2026-08-12T18:00:00",
+    }],
+    sku_matches: [],
+    reconciliations: [],
+    conflicts: [],
+  };
+
   await page.route("http://localhost:8000/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -41,6 +67,7 @@ async function mockCatalogAdminApi(page) {
       return json({ access_token: "catalog-admin-token" });
     }
     if (path === "/api/admin/products" && method === "GET") return json([product]);
+    if (path === "/api/moysklad/operations-status" && method === "GET") return json(supplyChain);
     if (path === "/api/admin/products/1" && method === "PATCH") {
       product = { ...product, ...request.postDataJSON() };
       return json(product);
@@ -61,8 +88,8 @@ async function mockCatalogAdminApi(page) {
     }
 
     // The real Admin application mounts operational panels together. This
-    // focused browser contract keeps those read-only datasets empty while the
-    // catalog mutation surface is exercised end-to-end through fetch + React.
+    // focused browser contract keeps unrelated read-only datasets empty while
+    // catalog mutations and the Supply Chain projection run through React/fetch.
     if (method === "GET") return json([]);
     return json({ ok: true });
   });
@@ -75,6 +102,8 @@ async function login(page) {
   await page.getByRole("button", { name: "Войти" }).click();
   await expect(page.getByRole("button", { name: "Выйти" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Каталог и остатки" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Supply Chain · МойСклад" })).toBeVisible();
+  await expect(page.getByLabel("Supply Chain summary")).toContainText("Успешно");
 }
 
 test("Admin edits product publication and inventory from the real catalog panel", async ({ page }) => {
