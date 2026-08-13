@@ -70,7 +70,7 @@ const PRIVACY = {
 const FULFILLMENT_TASK = {
   id: 301,
   order_id: ORDER.id,
-  status: "pending",
+  status: "new",
   assigned_admin_id: null,
   comment: "",
 };
@@ -98,7 +98,7 @@ const ROLES = {
     role: "manager",
     all_access: false,
     permissions: [
-      "products.read", "products.write", "orders.read", "orders.write", "promo.write",
+      "products.read", "products.write", "orders.read", "orders.write", "fulfillment.write", "promo.write",
       "support.write", "notifications.read", "notifications.retry", "webhooks.read",
       "webhooks.write", "media.write", "security.read", "privacy.read",
     ],
@@ -108,7 +108,7 @@ const ROLES = {
     email: "warehouse@flashin.test",
     role: "warehouse",
     all_access: false,
-    permissions: ["products.read", "inventory.write", "orders.read", "media.write"],
+    permissions: ["products.read", "inventory.write", "orders.read", "fulfillment.write", "media.write"],
   },
   support: {
     id: 4,
@@ -159,7 +159,6 @@ async function installRoleApi(page, roleName) {
     }
     if (path === "/api/platform/admin/events" && method === "GET") return json([]);
 
-    // Mutation endpoints are not expected in this permission-rendering suite.
     return json({ detail: `Unexpected ${method} ${path}` }, 501);
   });
   return seen;
@@ -196,12 +195,13 @@ test("manager can mutate catalog and orders but cannot mutate stock or privacy",
   await expect(privacy.getByText(/нет privacy\.write/)).toBeVisible();
   await expect(privacy.getByRole("button", { name: "Исполнить privacy-запрос" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Подтвердить refund" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Начать сборку" })).toBeVisible();
 
   expect(seen).not.toContain("GET /api/ops/abandoned-carts");
   expect(seen).not.toContain("GET /api/admin/audit-logs");
 });
 
-test("warehouse mutates stock but sees catalog, Supply Chain and orders as read-only", async ({ page }) => {
+test("warehouse mutates stock and fulfillment but not catalog or financial order state", async ({ page }) => {
   const seen = await installRoleApi(page, "warehouse");
   await loginAs(page, "warehouse");
 
@@ -215,7 +215,9 @@ test("warehouse mutates stock but sees catalog, Supply Chain and orders as read-
   await expect(page.getByRole("heading", { name: "Supply Chain · МойСклад" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Синхронизировать с МойСклад" })).toHaveCount(0);
   await expect(page.getByText(/Supply Chain доступен только для чтения/)).toBeVisible();
-  await expect(page.getByText(/Fulfillment доступен только для чтения/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Начать сборку" })).toBeVisible();
+  await expect(page.getByText(/Fulfillment доступен только для чтения/)).toHaveCount(0);
+  await expect(page.getByText(/Только чтение: нет orders.write/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Подтвердить refund" })).toHaveCount(0);
   await expect(page.getByRole("article", { name: "Обращения клиентов" })).toHaveCount(0);
   await expect(page.getByRole("article", { name: "Privacy-запросы" })).toHaveCount(0);
