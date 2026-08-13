@@ -20,9 +20,13 @@ test("Supply Chain cockpit reads sanitized status and uses existing protected mu
 });
 
 
-test("Supply Chain mutations require products.write and explicit operator confirmation", () => {
+test("manual stock sync requires products.write plus inventory.write", () => {
   assert.match(panelSource, /hasAdminPermission\(session, "products\.write"\)/);
-  assert.match(panelSource, /изменение данных МойСклад требует products\.write/);
+  assert.match(panelSource, /hasAdminPermission\(session, "inventory\.write"\)/);
+  assert.match(panelSource, /canManualSync = canCatalogMutate && canInventoryWrite/);
+  assert.match(panelSource, /products\.write \+ inventory\.write/);
+  assert.match(panelSource, /disabled=\{syncing \|\| !canManualSync\}/);
+  assert.match(panelSource, /изменение сопоставлений МойСклад требует products\.write/);
   const confirmationCalls = panelSource.match(/window\.confirm/g) || [];
   assert.equal(confirmationCalls.length, 2);
   assert.match(panelSource, /может изменить названия, описания, цены, категории и физические остатки/);
