@@ -39,7 +39,12 @@ def _serialize_outbound_command(command: ProviderCommand) -> dict[str, object]:
 @router.post("/sync", response_model=MoySkladSyncOut)
 async def sync_moysklad(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
     require_permission(db, admin, "products.write")
-    return await sync_assortment_to_catalog(db, sync_type="manual")
+    require_permission(db, admin, "inventory.write")
+    return await sync_assortment_to_catalog(
+        db,
+        sync_type="manual",
+        admin_id=admin.id,
+    )
 
 
 @router.get("/operations-status")
