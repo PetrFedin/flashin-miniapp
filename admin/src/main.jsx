@@ -39,7 +39,7 @@ const EMPTY_PRODUCT = {
   category: "Clothing",
   gender: "unisex",
   images: [],
-  variants: [{ size: "M", sku: "", stock_qty: 1, color: "" }],
+  variants: [{ size: "M", sku: "", stock_qty: 0, color: "" }],
 };
 
 function downloadBlob(blob, filename) {
@@ -100,6 +100,8 @@ function App() {
     setToken("");
     setSession(normalizeAdminSession(null));
     setTotpCode("");
+    setProductForm(EMPTY_PRODUCT);
+    setPromocode(EMPTY_PROMO);
     setProducts([]);
     setOrders([]);
     setAuditLogs([]);
@@ -284,7 +286,7 @@ function App() {
   function addVariant() {
     setProductForm((current) => ({
       ...current,
-      variants: [...current.variants, { size: "", sku: "", stock_qty: 1, color: "" }],
+      variants: [...current.variants, { size: "", sku: "", stock_qty: 0, color: "" }],
     }));
   }
 
@@ -314,6 +316,10 @@ function App() {
       setError("У каждого варианта должны быть размер и SKU.");
       return;
     }
+    if (!canInventoryWrite && productForm.variants.some((variant) => Number(variant.stock_qty) !== 0)) {
+      setError("Начальный остаток выше нуля требует inventory.write. Создайте товар с нулевым остатком или передайте остатки warehouse/owner.");
+      return;
+    }
 
     const result = await runAction(
       "create-product",
@@ -327,7 +333,7 @@ function App() {
           variants: productForm.variants.map((variant) => ({
             ...variant,
             sku: variant.sku.trim().toUpperCase(),
-            stock_qty: Number(variant.stock_qty),
+            stock_qty: canInventoryWrite ? Number(variant.stock_qty) : 0,
           })),
         }),
       }),
@@ -340,8 +346,8 @@ function App() {
   }
 
   async function importCsv(file) {
-    if (!canProductsWrite) {
-      setError("Недостаточно прав: импорт каталога требует products.write.");
+    if (!canProductsWrite || !canInventoryWrite) {
+      setError("Недостаточно прав: CSV импорт меняет каталог и остатки, поэтому требует products.write + inventory.write.");
       return;
     }
     const result = await runAction(
@@ -472,10 +478,10 @@ function App() {
       {error && <div className="error" role="alert">{error}<button onClick={() => setError("")}>×</button></div>}
       {notice && <div className="notice" role="status">{notice}<button onClick={() => setNotice("")}>×</button></div>}
 
-      {(canProductsWrite || canOrdersRead) && (
+      {((canProductsWrite && canInventoryWrite) || canOrdersRead) && (
         <section>
           <h2>Импорт и экспорт</h2>
-          {canProductsWrite && (
+          {canProductsWrite && canInventoryWrite && (
             <input
               aria-label="Импорт товаров CSV"
               type="file"
@@ -533,12 +539,23 @@ function App() {
             </>
           )}
           <h3>Размеры</h3>
+          {!canInventoryWrite && (
+            <p className="event-warning">Товар можно создать, но начальный остаток будет 0: изменение stock требует inventory.write.</p>
+          )}
           {productForm.variants.map((variant, index) => (
             <div className="form-grid" key={index}>
               <input placeholder="Размер" value={variant.size} onChange={(event) => updateVariant(index, "size", event.target.value)} />
               <input placeholder="SKU размера" value={variant.sku} onChange={(event) => updateVariant(index, "sku", event.target.value)} />
               <input placeholder="Цвет" value={variant.color} onChange={(event) => updateVariant(index, "color", event.target.value)} />
-              <input type="number" min="0" placeholder="Остаток" value={variant.stock_qty} onChange={(event) => updateVariant(index, "stock_qty", event.target.value)} />
+              <input
+                type="number"
+                min="0"
+                placeholder="Остаток"
+                value={variant.stock_qty}
+                onChange={(event) => updateVariant(index, "stock_qty", event.target.value)}
+                disabled={!canInventoryWrite}
+                title={canInventoryWrite ? "" : "Требуется inventory.write"}
+              />
               <button type="button" onClick={() => removeVariant(index)} disabled={productForm.variants.length === 1}>Удалить размер</button>
             </div>
           ))}
