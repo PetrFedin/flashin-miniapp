@@ -140,6 +140,9 @@ def admin_create_product(
     db: Session = Depends(get_db),
 ):
     require_permission(db, admin, "products.write")
+    initial_stocks = [_stock_quantity(raw_variant.get("stock_qty", 0)) for raw_variant in payload.variants]
+    if any(stock_qty > 0 for stock_qty in initial_stocks):
+        require_permission(db, admin, "inventory.write")
     sku = _clean(payload.sku, "SKU", 120).upper()
     slug = _clean(payload.slug, "Slug", 255).lower()
     title = _clean(payload.title, "Title", 255)
@@ -170,21 +173,29 @@ def admin_create_product(
             cleaned_url = _clean(url, "Image URL", 2048)
             db.add(ProductImage(product_id=product.id, url=cleaned_url, sort_order=index))
 
-        for raw_variant in payload.variants:
+        for index, raw_variant in enumerate(payload.variants):
             variant_sku = _clean(raw_variant.get("sku"), "Variant SKU", 120).upper()
             if variant_sku in variant_skus:
                 raise HTTPException(status_code=409, detail=f"Duplicate variant SKU: {variant_sku}")
             variant_skus.add(variant_sku)
-            db.add(
-                ProductVariant(
-                    product_id=product.id,
-                    size=_clean(raw_variant.get("size"), "Variant size", 32),
-                    color=_clean(raw_variant.get("color", ""), "Variant color", 64, required=False),
-                    sku=variant_sku,
-                    stock_qty=_stock_quantity(raw_variant.get("stock_qty", 0)),
-                    reserved_qty=0,
-                )
+            variant = ProductVariant(
+                product_id=product.id,
+                size=_clean(raw_variant.get("size"), "Variant size", 32),
+                color=_clean(raw_variant.get("color", ""), "Variant color", 64, required=False),
+                sku=variant_sku,
+                stock_qty=0,
+                reserved_qty=0,
             )
+            db.add(variant)
+            db.flush()
+            if initial_stocks[index] > 0:
+                adjust_stock(
+                    db,
+                    variant.id,
+                    initial_stocks[index],
+                    reason="Product creation",
+                    admin_id=admin.id,
+                )
 
         log_admin_action(db, admin, "product.create", "product", product.id, {"sku": sku})
         db.commit()
@@ -386,6 +397,7 @@ async def admin_import_products_csv(
     db: Session = Depends(get_db),
 ):
     require_permission(db, admin, "products.write")
+    require_permission(db, admin, "inventory.write")
     raw = await file.read(_MAX_CSV_BYTES + 1)
     if len(raw) > _MAX_CSV_BYTES:
         raise HTTPException(status_code=413, detail="CSV file is too large")
@@ -446,16 +458,24 @@ async def admin_import_products_csv(
                 .first()
             )
             if not variant:
-                db.add(
-                    ProductVariant(
-                        product_id=product.id,
-                        size=_clean(row.get("size"), f"Size at row {row_number}", 32),
-                        color=_clean(row.get("color", ""), "Color", 64, required=False),
-                        sku=variant_sku,
-                        stock_qty=stock_qty,
-                        reserved_qty=0,
-                    )
+                variant = ProductVariant(
+                    product_id=product.id,
+                    size=_clean(row.get("size"), f"Size at row {row_number}", 32),
+                    color=_clean(row.get("color", ""), "Color", 64, required=False),
+                    sku=variant_sku,
+                    stock_qty=0,
+                    reserved_qty=0,
                 )
+                db.add(variant)
+                db.flush()
+                if stock_qty > 0:
+                    adjust_stock(
+                        db,
+                        variant.id,
+                        stock_qty,
+                        reason="CSV import",
+                        admin_id=admin.id,
+                    )
             else:
                 if variant.product_id != product.id:
                     raise HTTPException(
