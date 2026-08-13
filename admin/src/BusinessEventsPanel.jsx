@@ -4,6 +4,7 @@ import { hasAdminPermission, hasAnyAdminPermission } from "./adminPermissions.js
 import { AdminApiError, adminJson } from "./api.js";
 import CatalogOperationsPanel from "./CatalogOperationsPanel.jsx";
 import FulfillmentOperationsPanel from "./FulfillmentOperationsPanel.jsx";
+import OrderOperationsTracePanel from "./OrderOperationsTracePanel.jsx";
 import PilotOperationsPanel from "./PilotOperationsPanel.jsx";
 import ServiceOperationsPanel from "./ServiceOperationsPanel.jsx";
 import SupplyChainOperationsPanel from "./SupplyChainOperationsPanel.jsx";
@@ -331,6 +332,7 @@ export default function BusinessEventsPanel({ onUnauthorized, session }) {
       {canSecurityRead && <PilotOperationsPanel onUnauthorized={onUnauthorized} />}
       {canProductsRead && <CatalogOperationsPanel onUnauthorized={onUnauthorized} session={session} />}
       {canProductsRead && <SupplyChainOperationsPanel onUnauthorized={onUnauthorized} session={session} />}
+      {canOrdersRead && <OrderOperationsTracePanel onUnauthorized={onUnauthorized} />}
       {canOrdersRead && <FulfillmentPanelMount onUnauthorized={onUnauthorized} session={session} />}
       {canService && <ServicePanelMount onUnauthorized={onUnauthorized} session={session} />}
       {canOrdersRead && (
