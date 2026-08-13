@@ -32,7 +32,7 @@ function slaLabel(event) {
 }
 
 export default function FulfillmentOperationsPanel({ onUnauthorized, session }) {
-  const canWrite = hasAdminPermission(session, "orders.write");
+  const canWrite = hasAdminPermission(session, "fulfillment.write");
   const [tasks, setTasks] = useState([]);
   const [shipments, setShipments] = useState([]);
   const [slaEvents, setSlaEvents] = useState([]);
@@ -129,7 +129,7 @@ export default function FulfillmentOperationsPanel({ onUnauthorized, session }) 
 
   function requireWrite() {
     if (canWrite) return true;
-    setError("Недостаточно прав: изменение fulfillment требует orders.write.");
+    setError("Недостаточно прав: изменение fulfillment требует fulfillment.write.");
     return false;
   }
 
@@ -270,7 +270,7 @@ export default function FulfillmentOperationsPanel({ onUnauthorized, session }) 
 
       {error && <div className="error" role="alert">{error}<button type="button" onClick={() => setError("")}>×</button></div>}
       {notice && <div className="notice" role="status">{notice}<button type="button" onClick={() => setNotice("")}>×</button></div>}
-      {!canWrite && <p className="event-warning">Fulfillment доступен только для чтения: нет orders.write.</p>}
+      {!canWrite && <p className="event-warning">Fulfillment доступен только для чтения: нет fulfillment.write.</p>}
       {sectionErrors.tasks && <p className="error-inline">Задачи: {sectionErrors.tasks}</p>}
       {sectionErrors.shipments && <p className="error-inline">Отгрузки: {sectionErrors.shipments}</p>}
       {sectionErrors.sla && <p className="error-inline">SLA: {sectionErrors.sla}</p>}
