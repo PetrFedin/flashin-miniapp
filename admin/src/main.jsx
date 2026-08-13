@@ -58,6 +58,7 @@ function App() {
   const [session, setSession] = useState(() => normalizeAdminSession(null));
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [totpCode, setTotpCode] = useState("");
   const [products, setProducts] = useState([]);
   const [orders, setOrders] = useState([]);
   const [auditLogs, setAuditLogs] = useState([]);
@@ -98,6 +99,7 @@ function App() {
     setAdminToken("");
     setToken("");
     setSession(normalizeAdminSession(null));
+    setTotpCode("");
     setProducts([]);
     setOrders([]);
     setAuditLogs([]);
@@ -218,9 +220,13 @@ function App() {
       setError("Введите email и пароль администратора.");
       return;
     }
-    const result = await runAction("login", () => loginAdmin(normalizedEmail, password));
+    const result = await runAction(
+      "login",
+      () => loginAdmin(normalizedEmail, password, totpCode),
+    );
     if (result) {
       setPassword("");
+      setTotpCode("");
       setSession(normalizeAdminSession(null));
       setToken(result.access_token);
     }
@@ -418,6 +424,17 @@ function App() {
           placeholder="Пароль"
           type="password"
           autoComplete="current-password"
+        />
+        <input
+          aria-label="Код двухфакторной аутентификации"
+          value={totpCode}
+          onChange={(event) => setTotpCode(event.target.value.replace(/\D/g, "").slice(0, 16))}
+          onKeyDown={(event) => event.key === "Enter" && handleLogin()}
+          placeholder="Код 2FA (если включён)"
+          type="text"
+          inputMode="numeric"
+          autoComplete="one-time-code"
+          maxLength={16}
         />
         <button onClick={handleLogin} disabled={isBusy("login")}>Войти</button>
       </main>

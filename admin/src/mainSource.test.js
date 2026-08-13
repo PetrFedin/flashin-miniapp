@@ -37,6 +37,16 @@ test("login form does not expose a preset production email", () => {
 });
 
 
+test("login form supports optional TOTP without persisting the one-time code", () => {
+  assert.equal(source.includes('const [totpCode, setTotpCode] = useState("")'), true);
+  assert.equal(source.includes("loginAdmin(normalizedEmail, password, totpCode)"), true);
+  assert.equal(source.includes('autoComplete="one-time-code"'), true);
+  assert.equal(source.includes('inputMode="numeric"'), true);
+  assert.equal(source.includes('setTotpCode("")'), true);
+  assert.equal(source.includes("localStorage.setItem(\"totp"), false);
+});
+
+
 test("authenticated dashboard validates effective permissions before business data", () => {
   assert.equal(source.includes('adminJson("/api/admin/session")'), true);
   assert.equal(source.includes("normalizeAdminSession(payload)"), true);
