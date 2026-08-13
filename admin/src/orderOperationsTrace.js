@@ -29,6 +29,7 @@ export function normalizeOrderOperationsTrace(payload) {
       paymentEvents: 0,
       returns: 0,
       providerCommands: 0,
+      inventoryMovements: 0,
       fulfillment: 0,
       businessEvents: 0,
       notifications: 0,
@@ -38,6 +39,7 @@ export function normalizeOrderOperationsTrace(payload) {
       required: true,
       providerCommandsActionable: 0,
       providerFailures: 0,
+      inventoryInvalidRows: 0,
       failedNotifications: 0,
       businessEventsUnresolved: 0,
       businessEventsFailed: 0,
@@ -58,6 +60,7 @@ export function normalizeOrderOperationsTrace(payload) {
   const attention = {
     providerCommandsActionable: nonNegativeInteger(attentionSource?.provider_commands_actionable),
     providerFailures: nonNegativeInteger(attentionSource?.provider_failures),
+    inventoryInvalidRows: nonNegativeInteger(attentionSource?.inventory_invalid_rows),
     failedNotifications: nonNegativeInteger(attentionSource?.failed_notifications),
     businessEventsUnresolved: nonNegativeInteger(attentionSource?.business_events_unresolved),
     businessEventsFailed: nonNegativeInteger(attentionSource?.business_events_failed),
@@ -66,6 +69,7 @@ export function normalizeOrderOperationsTrace(payload) {
   attention.required = attentionSource === null
     || attentionSource.required === true
     || attention.providerFailures > 0
+    || attention.inventoryInvalidRows > 0
     || attention.failedNotifications > 0
     || attention.businessEventsFailed > 0
     || attention.overdueSla > 0;
@@ -86,6 +90,7 @@ export function normalizeOrderOperationsTrace(payload) {
       paymentEvents: listCount(payload.payment_events),
       returns: listCount(payload.returns),
       providerCommands: listCount(payload.provider_commands),
+      inventoryMovements: listCount(payload.inventory),
       fulfillment: listCount(payload.fulfillment),
       businessEvents: listCount(payload.business_events),
       notifications: listCount(payload.notifications),

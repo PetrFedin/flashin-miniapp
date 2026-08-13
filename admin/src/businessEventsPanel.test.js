@@ -32,12 +32,16 @@ test("panel reads summary, list and detail endpoints", () => {
 });
 
 
-test("order incident workspace uses the read-only operations trace endpoint", () => {
+test("order incident workspace exposes safe inventory attention without raw ledger source", () => {
   assert.match(tracePanelSource, /\/api\/ops\/orders\/\$\{numericOrderId\}\/trace/);
   assert.match(tracePanelSource, /orders\.read/);
-  assert.match(tracePanelSource, /Provider payload, idempotency keys, Telegram IDs/);
+  assert.match(tracePanelSource, /Inventory ledger/);
+  assert.match(tracePanelSource, /inventoryMovements/);
+  assert.match(tracePanelSource, /inventoryInvalidRows/);
+  assert.match(tracePanelSource, /inventory source/);
   assert.doesNotMatch(tracePanelSource, /provider_payment_id/);
   assert.doesNotMatch(tracePanelSource, /external_id/);
+  assert.doesNotMatch(tracePanelSource, /\.source/);
 });
 
 

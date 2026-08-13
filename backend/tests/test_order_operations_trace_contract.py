@@ -29,6 +29,7 @@ def test_order_trace_never_reads_secret_or_payload_bearing_fields():
         "last_error",
         "error",
         "confirmation_url",
+        "source",
     }
     assert attributes.isdisjoint(forbidden)
 
@@ -36,6 +37,7 @@ def test_order_trace_never_reads_secret_or_payload_bearing_fields():
 def test_order_trace_keeps_durable_order_correlation_and_all_pilot_spine_sections():
     source = SERVICE.read_text(encoding="utf-8")
 
+    assert '"schema_version": 2' in source
     assert '"correlation": {"type": "order_id"' in source
     for section in (
         '"checkout"',
@@ -43,6 +45,7 @@ def test_order_trace_keeps_durable_order_correlation_and_all_pilot_spine_section
         '"payment_events"',
         '"returns"',
         '"provider_commands"',
+        '"inventory"',
         '"fulfillment"',
         '"business_events"',
         '"notifications"',
@@ -50,6 +53,22 @@ def test_order_trace_keeps_durable_order_correlation_and_all_pilot_spine_section
         '"attention"',
     ):
         assert section in source
+
+
+def test_inventory_trace_is_order_scoped_sanitized_and_fail_closed():
+    source = SERVICE.read_text(encoding="utf-8")
+
+    assert "InventoryMovement.order_id == order_id" in source
+    assert "def _inventory_movement(" in source
+    assert '"variant_id": int(movement.variant_id)' in source
+    assert '"kind": str(movement.kind)' in source
+    assert '"stock_before": int(movement.stock_before)' in source
+    assert '"stock_after": int(movement.stock_after)' in source
+    assert '"reserved_before": int(movement.reserved_before)' in source
+    assert '"reserved_after": int(movement.reserved_after)' in source
+    assert '"inventory_invalid_rows": inventory_invalid_rows' in source
+    assert "or inventory_invalid_rows" in source
+    assert "movement.source" not in source
 
 
 def test_ops_trace_is_read_only_no_store_and_orders_read_protected():
