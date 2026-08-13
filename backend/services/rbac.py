@@ -11,6 +11,7 @@ DEFAULT_PERMISSIONS = {
         "products.write",
         "orders.read",
         "orders.write",
+        "fulfillment.write",
         "promo.write",
         "support.write",
         "notifications.read",
@@ -33,6 +34,7 @@ DEFAULT_PERMISSIONS = {
         "products.read",
         "inventory.write",
         "orders.read",
+        "fulfillment.write",
         "media.write",
     },
 }

@@ -30,7 +30,7 @@ def update_task(
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    require_permission(db, admin, "orders.write")
+    require_permission(db, admin, "fulfillment.write")
     try:
         task = (
             db.query(FulfillmentTask)
@@ -124,7 +124,7 @@ def update_task_item(
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    require_permission(db, admin, "orders.write")
+    require_permission(db, admin, "fulfillment.write")
     normalized_status = status.strip().lower()
     if normalized_status not in {"to_pick", "picked", "issue"}:
         raise HTTPException(status_code=400, detail="Unsupported picklist item status")
