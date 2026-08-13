@@ -52,7 +52,7 @@ async function mockFulfillmentApi(page) {
         email: "fulfillment@flashin.test",
         role: "warehouse",
         all_access: false,
-        permissions: ["orders.read", "orders.write"],
+        permissions: ["orders.read", "fulfillment.write"],
       });
     }
     if (path === "/api/admin/products" && method === "GET") return json([]);

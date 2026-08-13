@@ -46,7 +46,7 @@ def create_order_shipment(
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    require_permission(db, admin, "orders.write")
+    require_permission(db, admin, "fulfillment.write")
     try:
         order = (
             db.query(Order)
@@ -91,7 +91,7 @@ def patch_shipment(
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    require_permission(db, admin, "orders.write")
+    require_permission(db, admin, "fulfillment.write")
     try:
         shipment = (
             db.query(DeliveryShipment)

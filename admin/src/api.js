@@ -105,11 +105,15 @@ export function adminJson(path, options = {}) {
   });
 }
 
-export async function loginAdmin(email, password) {
+export async function loginAdmin(email, password, totpCode = "") {
+  const payload = { email, password };
+  const normalizedTotp = String(totpCode || "").trim();
+  if (normalizedTotp) payload.totp_code = normalizedTotp;
+
   const data = await adminJson("/api/admin/login", {
     method: "POST",
     auth: false,
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify(payload),
   });
   setAdminToken(data.access_token);
   return data;

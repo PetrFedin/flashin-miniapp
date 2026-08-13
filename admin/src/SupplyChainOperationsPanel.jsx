@@ -30,7 +30,9 @@ function formatTimestamp(value) {
 }
 
 export default function SupplyChainOperationsPanel({ onUnauthorized, session }) {
-  const canMutate = hasAdminPermission(session, "products.write");
+  const canCatalogMutate = hasAdminPermission(session, "products.write");
+  const canInventoryWrite = hasAdminPermission(session, "inventory.write");
+  const canManualSync = canCatalogMutate && canInventoryWrite;
   const [snapshot, setSnapshot] = useState(() => normalizeSupplyChainStatus(null));
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -78,9 +80,9 @@ export default function SupplyChainOperationsPanel({ onUnauthorized, session }) 
     };
   }, []);
 
-  async function runMutation(key, operation) {
-    if (!canMutate) {
-      setError("Недостаточно прав: изменение данных МойСклад требует products.write.");
+  async function runCatalogMutation(key, operation) {
+    if (!canCatalogMutate) {
+      setError("Недостаточно прав: изменение сопоставлений МойСклад требует products.write.");
       return null;
     }
     if (mutationLocks.current.has(key)) return null;
@@ -102,14 +104,17 @@ export default function SupplyChainOperationsPanel({ onUnauthorized, session }) 
   }
 
   async function startSync() {
-    if (!canMutate) return;
+    if (!canManualSync) {
+      setError("Ручная синхронизация меняет физические остатки и требует products.write + inventory.write.");
+      return;
+    }
     const confirmed = window.confirm(
       "Запустить ручную синхронизацию с МойСклад? Она может изменить названия, описания, цены, категории и физические остатки. Зарезервированный stock не будет уменьшен ниже резерва.",
     );
     if (!confirmed) return;
 
     setSyncing(true);
-    const result = await runMutation("manual-sync", () => adminJson("/api/moysklad/sync", { method: "POST" }));
+    const result = await runCatalogMutation("manual-sync", () => adminJson("/api/moysklad/sync", { method: "POST" }));
     setSyncing(false);
     if (!result) return;
 
@@ -122,7 +127,7 @@ export default function SupplyChainOperationsPanel({ onUnauthorized, session }) 
   }
 
   async function confirmMatch(match) {
-    if (!canMutate || match.confirmed || !match.id) return;
+    if (!canCatalogMutate || match.confirmed || !match.id) return;
     const confirmed = window.confirm(
       `Подтвердить сопоставление SKU ${match.localSku || "—"} ↔ ${match.externalSku || "—"}? `
       + "После подтверждения автоматический sync сможет считать это соответствие доверенным.",
@@ -130,7 +135,7 @@ export default function SupplyChainOperationsPanel({ onUnauthorized, session }) 
     if (!confirmed) return;
 
     setConfirmingId(match.id);
-    const result = await runMutation(
+    const result = await runCatalogMutation(
       `confirm-match-${match.id}`,
       () => adminJson(`/api/moysklad-deep-mapping/sku-matches/${match.id}/confirm`, { method: "POST" }),
     );
@@ -156,8 +161,14 @@ export default function SupplyChainOperationsPanel({ onUnauthorized, session }) 
         <button type="button" onClick={() => loadStatus()} disabled={loading}>
           {loading ? "Обновление…" : "Обновить Supply Chain"}
         </button>
-        {canMutate && (
-          <button type="button" className="danger" onClick={startSync} disabled={syncing}>
+        {canCatalogMutate && (
+          <button
+            type="button"
+            className="danger"
+            onClick={startSync}
+            disabled={syncing || !canManualSync}
+            title={canManualSync ? "" : "Требуется inventory.write"}
+          >
             {syncing ? "Синхронизация…" : "Синхронизировать с МойСклад"}
           </button>
         )}
@@ -165,7 +176,10 @@ export default function SupplyChainOperationsPanel({ onUnauthorized, session }) 
 
       {error && <div className="error" role="alert">{error}<button type="button" onClick={() => setError("")}>×</button></div>}
       {notice && <div className="notice" role="status">{notice}<button type="button" onClick={() => setNotice("")}>×</button></div>}
-      {!canMutate && <p className="event-warning">Supply Chain доступен только для чтения: нет products.write.</p>}
+      {!canCatalogMutate && <p className="event-warning">Supply Chain доступен только для чтения: нет products.write.</p>}
+      {canCatalogMutate && !canInventoryWrite && (
+        <p className="event-warning">Сопоставления SKU доступны, но ручной sync отключён: нет inventory.write для изменения физических остатков.</p>
+      )}
 
       <div className="kpis event-kpis" aria-label="Supply Chain summary">
         <div><span>Последний sync</span><strong>{syncStatusLabel(summary.lastSyncStatus)}</strong><small>{formatTimestamp(summary.lastSyncAt)}</small></div>
@@ -202,7 +216,7 @@ export default function SupplyChainOperationsPanel({ onUnauthorized, session }) 
                 <span>{match.confirmed ? "Подтверждено" : "Ожидает подтверждения"}</span>
               </div>
               <small>МойСклад SKU: {match.externalSku || "—"} · confidence {(match.confidence * 100).toFixed(0)}%</small>
-              {canMutate && !match.confirmed && (
+              {canCatalogMutate && !match.confirmed && (
                 <button
                   type="button"
                   onClick={() => confirmMatch(match)}
