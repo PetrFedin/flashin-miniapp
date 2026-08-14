@@ -17,7 +17,7 @@ export default defineConfig({
   projects: [
     {
       name: "storefront-mobile",
-      testMatch: /storefront\.spec\.js/,
+      testMatch: /(?:storefront|.*-storefront)\.spec\.js/,
       use: {
         ...devices["iPhone 13"],
         browserName: "chromium",
@@ -26,7 +26,7 @@ export default defineConfig({
     },
     {
       name: "admin-desktop",
-      testMatch: /admin\.spec\.js/,
+      testMatch: /(?:admin|admin-.*|.*-admin)\.spec\.js/,
       use: {
         ...devices["Desktop Chrome"],
         baseURL: "http://127.0.0.1:5174",

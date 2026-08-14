@@ -316,26 +316,29 @@ test("Admin critical pilot operator journey", async ({ page }) => {
   const productsSection = page.locator("section").filter({
     has: page.getByRole("heading", { name: "Товары" }),
   });
+  const createProductSection = page.locator("section").filter({
+    has: page.getByRole("heading", { name: "Создать товар", exact: true }),
+  });
   await expect(productsSection.getByText("Pilot Jacket", { exact: true })).toBeVisible();
 
   await page.getByPlaceholder("CODE").fill("PILOT10");
   await page.getByRole("button", { name: "Создать" }).first().click();
   await expect(page.getByRole("status")).toContainText("Промокод создан");
 
-  await page.getByPlaceholder("SKU", { exact: true }).fill("FLASH-002");
-  await page.getByPlaceholder("Название").fill("Pilot Trousers");
-  await page.getByPlaceholder("slug").fill("pilot-trousers");
-  await page.getByPlaceholder("Цена").fill("9000");
-  await page.getByPlaceholder("Размер", { exact: true }).fill("M");
-  await page.getByPlaceholder("SKU размера").fill("FLASH-002-M");
-  await page.getByRole("button", { name: /Создать товар/i }).click();
+  await createProductSection.getByPlaceholder("SKU", { exact: true }).fill("FLASH-002");
+  await createProductSection.getByPlaceholder("Название", { exact: true }).fill("Pilot Trousers");
+  await createProductSection.getByPlaceholder("slug", { exact: true }).fill("pilot-trousers");
+  await createProductSection.getByPlaceholder("Цена", { exact: true }).fill("9000");
+  await createProductSection.getByPlaceholder("Размер", { exact: true }).fill("M");
+  await createProductSection.getByPlaceholder("SKU размера", { exact: true }).fill("FLASH-002-M");
+  await createProductSection.getByRole("button", { name: /Создать товар/i }).click();
   await expect(productsSection.getByText("Pilot Trousers", { exact: true })).toBeVisible();
 
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Отменить до оплаты" }).click();
   await expect(page.getByText("Отменён")).toBeVisible();
 
-  await page.getByRole("button", { name: "Обновить", exact: true }).click();
+  await page.locator("main > header").getByRole("button", { name: "Обновить", exact: true }).click();
   await expect(page.getByRole("status")).toContainText("Данные обновлены");
 
   await page.getByRole("button", { name: "Выйти" }).click();

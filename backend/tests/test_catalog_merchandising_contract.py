@@ -1,0 +1,117 @@
+import ast
+from pathlib import Path
+
+from backend.catalog_models import (
+    ProductExternalAvailability,
+    ProductFeedback,
+    ProductMerchandising,
+    ProductVideo,
+    ShowroomAppointment,
+)
+
+ROOT = Path(__file__).resolve().parents[1]
+API = ROOT / "api" / "catalog_merchandising.py"
+MAIN = ROOT / "main.py"
+RBAC = ROOT / "services" / "rbac.py"
+MIGRATION = ROOT / "alembic" / "versions" / "0028_catalog_merchandising.py"
+
+
+def test_catalog_tables_are_registered_with_expected_constraints():
+    assert ProductMerchandising.__tablename__ == "product_merchandising"
+    assert ProductVideo.__tablename__ == "product_videos"
+    assert ProductExternalAvailability.__tablename__ == "product_external_availability"
+    assert ProductFeedback.__tablename__ == "product_feedback"
+    assert ShowroomAppointment.__tablename__ == "showroom_appointments"
+
+    feedback_constraints = {item.name for item in ProductFeedback.__table__.constraints}
+    assert "uq_product_feedback_customer" in feedback_constraints
+    assert "ck_product_feedback_rating" in feedback_constraints
+    showroom_constraints = {item.name for item in ShowroomAppointment.__table__.constraints}
+    assert "ck_showroom_appointments_status" in showroom_constraints
+    assert any(column.unique for column in ShowroomAppointment.__table__.columns if column.name == "active_slot_key")
+
+
+def test_catalog_api_has_public_admin_feedback_and_showroom_boundaries():
+    source = API.read_text(encoding="utf-8")
+    for route in (
+        '@router.get("/products")',
+        '@router.get("/products/{product_id}")',
+        '@router.post("/products/{product_id}/feedback")',
+        '@router.post("/showroom/appointments")',
+        '@router.get("/admin/products")',
+        '@router.post("/admin/products")',
+        '@router.put("/admin/products/{product_id}")',
+        '@router.put("/admin/products/{product_id}/recommendations")',
+        '@router.patch("/admin/feedback/{feedback_id}")',
+        '@router.get("/admin/showroom/appointments")',
+        '@router.patch("/admin/showroom/appointments/{appointment_id}")',
+    ):
+        assert route in source
+    assert 'require_permission(db, admin, "products.write")' in source
+    assert 'require_permission(db, admin, "showroom.read")' in source
+    assert 'require_permission(db, admin, "showroom.write")' in source
+    assert 'has_permission(db, admin, "inventory.write")' in source
+    assert 'db.query(InventoryMovement.id)' in source
+    assert 'transaction history and cannot be deleted' in source
+
+
+def test_catalog_public_serializer_does_not_expose_customer_identity_or_moysklad_ids():
+    tree = ast.parse(API.read_text(encoding="utf-8"))
+    public_feedback = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "product_feedback"
+    )
+    public_source = ast.get_source_segment(API.read_text(encoding="utf-8"), public_feedback) or ""
+    assert "customer_id" not in public_source
+    assert "telegram_id" not in public_source
+
+    source = API.read_text(encoding="utf-8")
+    assert 'if admin else {}' in source
+    assert 'result["moysklad_id"] = product.moysklad_id' in source
+
+
+def test_catalog_filters_sorting_share_and_safe_media_contract_are_present():
+    source = API.read_text(encoding="utf-8")
+    for token in (
+        "material",
+        "season",
+        "availability_status",
+        "badge",
+        "size",
+        "color",
+        "min_price",
+        "max_price",
+        '"price_asc"',
+        '"price_desc"',
+        '"rating_desc"',
+        '"grid_rank"',
+        '"telegram_share_url"',
+        'parsed.scheme not in {"http", "https"}',
+    ):
+        assert token in source
+
+
+def test_runtime_and_alembic_register_catalog_models_and_single_revision_chain():
+    main_source = MAIN.read_text(encoding="utf-8")
+    assert "catalog_models as _catalog_models" in main_source
+    assert "catalog_merchandising_router" in main_source
+    migration_source = MIGRATION.read_text(encoding="utf-8")
+    assert 'revision = "0028_catalog_merchandising"' in migration_source
+    assert 'down_revision = "0027_pilot_worker_heartbeats"' in migration_source
+
+
+def test_default_roles_separate_showroom_customer_work_from_warehouse():
+    source = RBAC.read_text(encoding="utf-8")
+    assert '"showroom.read"' in source
+    assert '"showroom.write"' in source
+    tree = ast.parse(source)
+    assignment = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "DEFAULT_PERMISSIONS" for target in node.targets)
+    )
+    values = ast.literal_eval(assignment.value)
+    assert {"showroom.read", "showroom.write"}.issubset(values["manager"])
+    assert {"showroom.read", "showroom.write"}.issubset(values["support"])
+    assert "showroom.read" not in values["warehouse"]
+    assert "showroom.write" not in values["warehouse"]

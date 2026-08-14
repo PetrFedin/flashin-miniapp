@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 
 import { hasAdminPermission, hasAnyAdminPermission } from "./adminPermissions.js";
 import { AdminApiError, adminJson } from "./api.js";
+import CatalogCommercePanel from "./CatalogCommercePanel.jsx";
 import CatalogOperationsPanel from "./CatalogOperationsPanel.jsx";
 import FulfillmentOperationsPanel from "./FulfillmentOperationsPanel.jsx";
 import OrderOperationsTracePanel from "./OrderOperationsTracePanel.jsx";
@@ -330,6 +331,7 @@ export default function BusinessEventsPanel({ onUnauthorized, session }) {
   return (
     <>
       {canSecurityRead && <PilotOperationsPanel onUnauthorized={onUnauthorized} />}
+      {canProductsRead && <CatalogCommercePanel onUnauthorized={onUnauthorized} session={session} />}
       {canProductsRead && <CatalogOperationsPanel onUnauthorized={onUnauthorized} session={session} />}
       {canProductsRead && <SupplyChainOperationsPanel onUnauthorized={onUnauthorized} session={session} />}
       {canOrdersRead && <OrderOperationsTracePanel onUnauthorized={onUnauthorized} />}

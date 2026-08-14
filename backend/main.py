@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
+from . import catalog_models as _catalog_models  # noqa: F401
 from . import checkout_models as _checkout_models  # noqa: F401
 from . import model_constraints as _model_constraints  # noqa: F401
 from . import notification_models as _notification_models  # noqa: F401
@@ -23,6 +24,7 @@ from .api.business_analytics import router as business_analytics_router
 from .api.campaigns import router as campaigns_router
 from .api.cart import router as cart_router
 from .api.cart_items import router as cart_items_router
+from .api.catalog_merchandising import router as catalog_merchandising_router
 from .api.crm import router as crm_router
 from .api.currency import router as currency_router
 from .api.delivery import router as delivery_router
@@ -117,7 +119,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(
-    title="FLASHIN Mini App Backend v53",
+    title="FLASHIN Mini App Backend v54",
     docs_url=None if is_production else "/docs",
     redoc_url=None if is_production else "/redoc",
     openapi_url=None if is_production else "/openapi.json",
@@ -147,6 +149,7 @@ app.include_router(health_router)
 app.include_router(currency_router, prefix="/currency")
 app.include_router(auth_router, prefix="/api")
 app.include_router(products_router, prefix="/api")
+app.include_router(catalog_merchandising_router, prefix="/api")
 app.include_router(cart_router, prefix="/api")
 app.include_router(cart_items_router, prefix="/api")
 app.include_router(order_cancellation_router, prefix="/api")
@@ -203,4 +206,4 @@ if settings.metrics_enabled:
 
 @app.get("/", include_in_schema=not is_production)
 def root():
-    return {"message": "FLASHIN Mini App API v53", "env": settings.app_env}
+    return {"message": "FLASHIN Mini App API v54", "env": settings.app_env}
