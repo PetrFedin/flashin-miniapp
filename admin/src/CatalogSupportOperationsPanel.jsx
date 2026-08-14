@@ -8,9 +8,13 @@ export default function CatalogSupportOperationsPanel({ onUnauthorized, session 
   const canShowroomWrite = hasAdminPermission(session, "showroom.write");
   const canProductsRead = hasAdminPermission(session, "products.read");
   const canProductsWrite = hasAdminPermission(session, "products.write");
+  const canDemandRead = hasAdminPermission(session, "demand.read");
+  const canDemandWrite = hasAdminPermission(session, "demand.write");
   const [appointments, setAppointments] = useState([]);
   const [feedback, setFeedback] = useState([]);
+  const [demandRequests, setDemandRequests] = useState([]);
   const [feedbackStatus, setFeedbackStatus] = useState("published");
+  const [demandStatus, setDemandStatus] = useState("requested");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -30,17 +34,21 @@ export default function CatalogSupportOperationsPanel({ onUnauthorized, session 
     setLoading(true);
     setError("");
     try {
-      const [nextAppointments, nextFeedback] = await Promise.all([
+      const [nextAppointments, nextFeedback, nextDemand] = await Promise.all([
         canShowroomRead
           ? adminJson("/api/catalog/admin/showroom/appointments")
           : Promise.resolve([]),
         canProductsRead
           ? adminJson(`/api/catalog/admin/feedback?status=${encodeURIComponent(feedbackStatus)}&limit=200`)
           : Promise.resolve([]),
+        canDemandRead
+          ? adminJson(`/api/catalog/admin/demand-requests?status=${encodeURIComponent(demandStatus)}&limit=200`)
+          : Promise.resolve([]),
       ]);
       if (sequence.current !== requestId) return;
       setAppointments(Array.isArray(nextAppointments) ? nextAppointments : []);
       setFeedback(Array.isArray(nextFeedback) ? nextFeedback : []);
+      setDemandRequests(Array.isArray(nextDemand) ? nextDemand : []);
     } catch (actionError) {
       if (sequence.current === requestId) handleFailure(actionError);
     } finally {
@@ -51,7 +59,7 @@ export default function CatalogSupportOperationsPanel({ onUnauthorized, session 
   useEffect(() => {
     loadQueues();
     return () => { sequence.current += 1; };
-  }, [canShowroomRead, canProductsRead, feedbackStatus]);
+  }, [canShowroomRead, canProductsRead, canDemandRead, feedbackStatus, demandStatus]);
 
   async function updateAppointment(appointment, status) {
     if (!canShowroomWrite) return;
@@ -85,20 +93,73 @@ export default function CatalogSupportOperationsPanel({ onUnauthorized, session 
     }
   }
 
-  if (!canShowroomRead && !canProductsRead) return null;
+  async function updateDemand(item, status) {
+    if (!canDemandWrite) return;
+    setError("");
+    try {
+      await adminJson(`/api/catalog/admin/demand-requests/${item.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status, admin_note: item.admin_note || "" }),
+        dedupeKey: `catalog-demand:${item.id}:${status}`,
+      });
+      setNotice(`Заявка #${item.id}: ${status}.`);
+      await loadQueues();
+    } catch (actionError) {
+      handleFailure(actionError);
+    }
+  }
+
+  if (!canShowroomRead && !canProductsRead && !canDemandRead) return null;
 
   return (
     <section className="catalog-support-operations" aria-labelledby="catalog-support-title">
       <div className="section-heading">
         <div>
-          <h2 id="catalog-support-title">Showroom и обратная связь</h2>
-          <p>Отдельная операторская очередь: support работает с визитами без доступа к редактированию товара; merchandising-команда модерирует отзывы.</p>
+          <h2 id="catalog-support-title">Showroom, спрос и обратная связь</h2>
+          <p>Операторские очереди без финансовых полномочий: визиты, preorder/made-to-order спрос и модерация отзывов.</p>
         </div>
         <button type="button" onClick={loadQueues} disabled={loading}>{loading ? "Обновление…" : "Обновить"}</button>
       </div>
 
       {error && <div className="error" role="alert">{error}<button type="button" onClick={() => setError("")}>×</button></div>}
       {notice && <div className="notice" role="status">{notice}<button type="button" onClick={() => setNotice("")}>×</button></div>}
+
+      {canDemandRead && (
+        <article className="service-card" aria-label="Preorder and made-to-order demand queue">
+          <div className="service-item-heading">
+            <h3>Предзаказ / под заказ</h3>
+            <select aria-label="Статус заявок спроса" value={demandStatus} onChange={(event) => setDemandStatus(event.target.value)}>
+              <option value="requested">Новые</option>
+              <option value="contacted">Связались</option>
+              <option value="confirmed">Подтверждены</option>
+              <option value="cancelled">Отменены</option>
+            </select>
+          </div>
+          {!demandRequests.length && <p>Заявок в выбранном статусе нет.</p>}
+          <div className="table">
+            {demandRequests.map((item) => (
+              <div className="row" key={item.id}>
+                <b>#{item.id} · {item.request_type === "preorder" ? "Предзаказ" : "Под заказ"}</b>
+                <span>Product #{item.product_id} · {item.product_title || item.product_sku}</span>
+                <span>Customer #{item.customer_id}</span>
+                <span>{item.requested_size || "размер не указан"}{item.requested_color ? ` · ${item.requested_color}` : ""}</span>
+                <span>{item.quantity} шт.</span>
+                {item.notes && <span>{item.notes}</span>}
+                <span>{item.status}</span>
+                {canDemandWrite && item.status === "requested" && (
+                  <button type="button" onClick={() => updateDemand(item, "contacted")}>Связались</button>
+                )}
+                {canDemandWrite && item.status === "contacted" && (
+                  <button type="button" onClick={() => updateDemand(item, "confirmed")}>Подтвердить заявку</button>
+                )}
+                {canDemandWrite && item.status !== "cancelled" && (
+                  <button type="button" onClick={() => updateDemand(item, "cancelled")}>Отменить заявку</button>
+                )}
+              </div>
+            ))}
+          </div>
+        </article>
+      )}
 
       {canShowroomRead && (
         <article className="service-card" aria-label="Showroom appointments queue">
