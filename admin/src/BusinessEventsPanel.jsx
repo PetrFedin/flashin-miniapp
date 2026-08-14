@@ -4,6 +4,7 @@ import { hasAdminPermission, hasAnyAdminPermission } from "./adminPermissions.js
 import { AdminApiError, adminJson } from "./api.js";
 import CatalogCommercePanel from "./CatalogCommercePanel.jsx";
 import CatalogOperationsPanel from "./CatalogOperationsPanel.jsx";
+import CatalogSupportOperationsPanel from "./CatalogSupportOperationsPanel.jsx";
 import FulfillmentOperationsPanel from "./FulfillmentOperationsPanel.jsx";
 import OrderOperationsTracePanel from "./OrderOperationsTracePanel.jsx";
 import PilotOperationsPanel from "./PilotOperationsPanel.jsx";
@@ -324,6 +325,7 @@ function BusinessEventsRecoveryPanel({ onUnauthorized, canReplayPermission }) {
 export default function BusinessEventsPanel({ onUnauthorized, session }) {
   const canSecurityRead = hasAdminPermission(session, "security.read");
   const canProductsRead = hasAdminPermission(session, "products.read");
+  const canShowroomRead = hasAdminPermission(session, "showroom.read");
   const canOrdersRead = hasAdminPermission(session, "orders.read");
   const canOrdersWrite = hasAdminPermission(session, "orders.write");
   const canService = hasAnyAdminPermission(session, ["support.write", "privacy.read", "orders.read"]);
@@ -331,6 +333,7 @@ export default function BusinessEventsPanel({ onUnauthorized, session }) {
   return (
     <>
       {canSecurityRead && <PilotOperationsPanel onUnauthorized={onUnauthorized} />}
+      {(canProductsRead || canShowroomRead) && <CatalogSupportOperationsPanel onUnauthorized={onUnauthorized} session={session} />}
       {canProductsRead && <CatalogCommercePanel onUnauthorized={onUnauthorized} session={session} />}
       {canProductsRead && <CatalogOperationsPanel onUnauthorized={onUnauthorized} session={session} />}
       {canProductsRead && <SupplyChainOperationsPanel onUnauthorized={onUnauthorized} session={session} />}

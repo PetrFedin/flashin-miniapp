@@ -12,14 +12,31 @@ function money(value, currency = "RUB") {
   }).format(Number(value || 0));
 }
 
+function positiveProductId(value) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function productIdFromStartParam(value) {
+  const match = String(value || "").trim().match(/^product_(\d+)$/);
+  return match ? positiveProductId(match[1]) : null;
+}
+
 function sharedProductId() {
-  const value = Number(new URLSearchParams(window.location.search).get("product"));
-  return Number.isInteger(value) && value > 0 ? value : null;
+  const params = new URLSearchParams(window.location.search);
+  const directId = positiveProductId(params.get("product"));
+  if (directId) return directId;
+
+  const urlStartId = productIdFromStartParam(params.get("tgWebAppStartParam"));
+  if (urlStartId) return urlStartId;
+
+  const telegramStartParam = window.Telegram?.WebApp?.initDataUnsafe?.start_param;
+  return productIdFromStartParam(telegramStartParam);
 }
 
 export default function SharedProductLanding() {
   const { initData, initialized } = useTelegram();
-  const productId = useMemo(() => sharedProductId(), []);
+  const productId = useMemo(() => sharedProductId(), [initialized]);
   const [product, setProduct] = useState(null);
   const [variantId, setVariantId] = useState(null);
   const [loading, setLoading] = useState(Boolean(productId));
@@ -42,6 +59,7 @@ export default function SharedProductLanding() {
     if (!productId || !initialized) return;
     let cancelled = false;
     setLoading(true);
+    setError("");
     (async () => {
       try {
         await ensureAuth();
@@ -63,6 +81,7 @@ export default function SharedProductLanding() {
   function closeLanding() {
     const url = new URL(window.location.href);
     url.searchParams.delete("product");
+    url.searchParams.delete("tgWebAppStartParam");
     window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
     window.location.reload();
   }
