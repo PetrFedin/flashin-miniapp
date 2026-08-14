@@ -28,7 +28,6 @@ export default function OrderOperationsTracePanel({ onUnauthorized }) {
       setError("Введите положительный ID заказа.");
       return;
     }
-
     setLoading(true);
     setError("");
     setTrace(null);
@@ -63,7 +62,7 @@ export default function OrderOperationsTracePanel({ onUnauthorized }) {
       <div className="section-title-row">
         <div>
           <h2 id="order-operations-trace-title">Диагностика сделки</h2>
-          <p>Единый read-only trace заказа: деньги, возвраты, провайдеры, fulfillment, события, уведомления и SLA.</p>
+          <p>Единый read-only trace заказа: деньги, inventory ledger, провайдеры, fulfillment, события, уведомления и SLA.</p>
         </div>
         {trace && (
           <span className={`attention-badge ${trace.attention.required ? "attention" : "ok"}`}>
@@ -112,6 +111,14 @@ export default function OrderOperationsTracePanel({ onUnauthorized }) {
             </article>
 
             <article className="service-card">
+              <div className="service-item-heading"><h3>Inventory ledger</h3></div>
+              <dl className="pilot-metrics-list">
+                <div><dt>Movements</dt><dd>{trace.counts.inventoryMovements}</dd></div>
+                <div><dt>Нарушения инвариантов</dt><dd>{trace.attention.inventoryInvalidRows}</dd></div>
+              </dl>
+            </article>
+
+            <article className="service-card">
               <div className="service-item-heading"><h3>Провайдеры</h3></div>
               <dl className="pilot-metrics-list">
                 <div><dt>Команд всего</dt><dd>{trace.counts.providerCommands}</dd></div>
@@ -142,7 +149,7 @@ export default function OrderOperationsTracePanel({ onUnauthorized }) {
           </div>
 
           <p className="event-warning">
-            Trace намеренно показывает только безопасные статусы и счётчики. Provider payload, idempotency keys, Telegram IDs и тексты уведомлений в Admin UI не выводятся.
+            Trace показывает только безопасные статусы, счётчики и stock-инварианты. Provider payload, inventory source, idempotency keys, Telegram IDs и тексты уведомлений в Admin UI не выводятся.
           </p>
         </>
       )}
