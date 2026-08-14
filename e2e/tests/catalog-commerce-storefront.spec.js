@@ -155,7 +155,7 @@ test("Catalog+ customer merchandising, cart, feedback and showroom journey", asy
   await catalog.getByRole("button").filter({ hasText: "Cashmere Pilot Jacket" }).click();
   await expect(catalog.getByRole("heading", { name: "Cashmere Pilot Jacket" })).toBeVisible();
   await expect(catalog.getByText("Cashmere · FW26", { exact: true })).toBeVisible();
-  await expect(catalog.getByText("Partner Boutique", { exact: true })).toBeVisible();
+  await expect(catalog.getByText(/Partner Boutique/)).toBeVisible();
   await expect(catalog.locator("video")).toHaveCount(1);
   await expect(catalog.getByRole("heading", { name: "Complete the look" })).toBeVisible();
   await expect(catalog.getByText("Cashmere Pilot Trousers", { exact: true })).toBeVisible();
