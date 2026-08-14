@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -21,6 +21,10 @@ class ProductDemandRequest(Base):
             "quantity >= 1 AND quantity <= 10",
             name="ck_product_demand_request_quantity",
         ),
+        UniqueConstraint(
+            "active_request_key",
+            name="uq_product_demand_active_request",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -40,9 +44,7 @@ class ProductDemandRequest(Base):
     notes: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(32), default="requested", index=True)
     admin_note: Mapped[str] = mapped_column(Text, default="")
-    active_request_key: Mapped[str | None] = mapped_column(
-        String(255), nullable=True, unique=True, index=True
-    )
+    active_request_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
