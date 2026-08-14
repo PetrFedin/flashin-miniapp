@@ -1,11 +1,51 @@
 from __future__ import annotations
 
 from datetime import datetime
+from urllib.parse import unquote, urlsplit
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, event
 from sqlalchemy.orm import Mapped, mapped_column
 
+from .config import get_settings
 from .database import Base, utcnow_naive
+from .models import ProductImage
+
+
+def managed_storage_key_from_url(url: str, public_base_url: str) -> str:
+    """Return a safe managed object key only for URLs under our media base."""
+
+    raw_url = str(url or "").strip()
+    raw_base = str(public_base_url or "").strip().rstrip("/")
+    if not raw_url or not raw_base:
+        return ""
+    url_parts = urlsplit(raw_url)
+    base_parts = urlsplit(raw_base)
+    if (
+        url_parts.scheme not in {"http", "https"}
+        or base_parts.scheme not in {"http", "https"}
+        or url_parts.scheme.lower() != base_parts.scheme.lower()
+        or url_parts.netloc.lower() != base_parts.netloc.lower()
+    ):
+        return ""
+    base_path = base_parts.path.rstrip("/") + "/"
+    if not url_parts.path.startswith(base_path):
+        return ""
+    key = unquote(url_parts.path[len(base_path):]).lstrip("/")
+    parts = key.split("/")
+    if not key or any(part in {"", ".", ".."} for part in parts):
+        return ""
+    return key
+
+
+@event.listens_for(ProductImage, "before_insert")
+@event.listens_for(ProductImage, "before_update")
+def _restore_managed_product_image_storage_key(_mapper, _connection, target: ProductImage) -> None:
+    if str(target.storage_key or "").strip():
+        return
+    target.storage_key = managed_storage_key_from_url(
+        target.url,
+        get_settings().media_public_base_url,
+    )
 
 
 class ProductMerchandising(Base):
