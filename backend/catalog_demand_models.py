@@ -1,6 +1,15 @@
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base, utcnow_naive
@@ -25,24 +34,29 @@ class ProductDemandRequest(Base):
             "active_request_key",
             name="uq_product_demand_active_request",
         ),
+        Index("ix_product_demand_customer", "customer_id"),
+        Index("ix_product_demand_product", "product_id"),
+        Index("ix_product_demand_variant", "variant_id"),
+        Index("ix_product_demand_type", "request_type"),
+        Index("ix_product_demand_status", "status"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     customer_id: Mapped[int] = mapped_column(
-        ForeignKey("customers.id", ondelete="CASCADE"), index=True
+        ForeignKey("customers.id", ondelete="CASCADE")
     )
     product_id: Mapped[int] = mapped_column(
-        ForeignKey("products.id", ondelete="CASCADE"), index=True
+        ForeignKey("products.id", ondelete="CASCADE")
     )
     variant_id: Mapped[int | None] = mapped_column(
-        ForeignKey("product_variants.id", ondelete="SET NULL"), nullable=True, index=True
+        ForeignKey("product_variants.id", ondelete="SET NULL"), nullable=True
     )
-    request_type: Mapped[str] = mapped_column(String(32), index=True)
+    request_type: Mapped[str] = mapped_column(String(32))
     quantity: Mapped[int] = mapped_column(Integer, default=1)
     requested_size: Mapped[str] = mapped_column(String(32), default="")
     requested_color: Mapped[str] = mapped_column(String(64), default="")
     notes: Mapped[str] = mapped_column(Text, default="")
-    status: Mapped[str] = mapped_column(String(32), default="requested", index=True)
+    status: Mapped[str] = mapped_column(String(32), default="requested")
     admin_note: Mapped[str] = mapped_column(Text, default="")
     active_request_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
