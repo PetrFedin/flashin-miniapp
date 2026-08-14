@@ -1,6 +1,6 @@
 # FLASHIN rich catalog pilot operations
 
-This runbook defines the pilot boundary for the enriched product-card, showroom and sharing capabilities.
+This runbook defines the pilot boundary for the enriched product-card, showroom, demand-request and sharing capabilities.
 
 ## Product card authority
 
@@ -24,17 +24,31 @@ Physical stock remains guarded by `inventory.write` and must pass the inventory 
 
 `in_stock`, `preorder`, `made_to_order` and `out_of_stock` are client-visible merchandising states.
 
-For the controlled pilot, normal checkout is intentionally restricted to a variant with positive **local available quantity**. External availability, `preorder`, or `made_to_order` must never be used to bypass the existing reservation/payment inventory guard.
+Normal checkout remains restricted to a variant with positive **local available quantity**. External availability, `preorder`, or `made_to_order` never bypass the existing reservation/payment inventory guard.
 
-Until a dedicated paid-preorder transaction model exists, zero-local-stock items may be:
+For zero-local-stock products configured as `preorder` or `made_to_order`, the Mini App exposes a separate durable demand-request lane. That lane:
 
-- saved to wishlist;
-- shared;
-- linked to an external source;
-- booked for a showroom fitting when enabled;
-- reviewed/rated where applicable.
+- requires an authenticated customer;
+- requires the request type to match the configured merchandising status;
+- refuses creation when local available stock is positive;
+- is idempotent for the same active customer/product/variant/type combination;
+- stores requested size, color, quantity and customer notes;
+- creates no `Order`, `Payment` or `InventoryMovement` and reserves no stock;
+- lets the customer list and cancel their own requests;
+- lets authorized operators move requests through `requested -> contacted -> confirmed`, or cancel them.
 
-They must not be charged through the normal local-stock checkout solely because a merchandising status says `preorder` or `made_to_order`.
+A confirmed demand request is still not a paid order and must not be represented as a guaranteed stock reservation, delivery date or completed sale.
+
+## Demand operator permissions
+
+The dedicated permissions are `demand.read` and `demand.write`.
+
+- default manager: read/write;
+- default support: read/write;
+- default warehouse: neither;
+- owner: wildcard access.
+
+These permissions are intentionally separate from `orders.write`, `fulfillment.write` and `inventory.write`. Custom `admin_role_permissions` rows replace role defaults completely and therefore must explicitly include demand permissions when the role needs this queue.
 
 ## Pricing and sale metadata
 
@@ -85,11 +99,13 @@ The Mini App accepts both Telegram start parameters and the web fallback `?produ
 
 Before authorizing pilot use of the rich catalog:
 
-1. Alembic is at the exact repository head and the catalog migration applied successfully.
+1. Alembic is at the exact repository head and all catalog migrations apply successfully.
 2. Full backend, frontend, Admin, browser E2E, integrated E2E and Docker/rollback CI pass on one exact commit.
 3. Admin can create a controlled product, edit merchandising, stock and external availability under RBAC, and the same data appears in the Mini App.
 4. Mini App filter/sort, wishlist, local-stock cart, feedback and showroom booking work through real FastAPI/PostgreSQL.
-5. A support-only operator can manage showroom appointments without product/inventory access.
-6. Feedback moderation hides/publishes records without surfacing customer identity fields.
-7. Telegram product sharing opens the exact product through `startapp` using the real configured bot username.
-8. Real provider and protected-main launch gates remain independently required; rich-catalog CI does not authorize real-money pilot launch by itself.
+5. A zero-stock preorder/made-to-order product creates only a demand request; real-stack E2E verifies cart/order/inventory remain unchanged.
+6. Manager/support can operate demand requests without receiving warehouse or payment/refund authority.
+7. A support-only operator can manage showroom appointments without product/inventory access.
+8. Feedback moderation hides/publishes records without surfacing customer identity fields.
+9. Telegram product sharing opens the exact product through `startapp` using the real configured bot username.
+10. Real provider and protected-main launch gates remain independently required; catalog CI does not authorize real-money pilot launch by itself.
