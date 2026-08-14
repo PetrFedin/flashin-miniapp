@@ -18,7 +18,7 @@ function positiveProductId(value) {
 }
 
 function productIdFromStartParam(value) {
-  const match = String(value || "").trim().match(/^product_(\d+)$/);
+  const match = String(value || "").trim().match(/^product_([1-9][0-9]*)$/);
   return match ? positiveProductId(match[1]) : null;
 }
 
