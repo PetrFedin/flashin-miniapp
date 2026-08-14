@@ -17,7 +17,7 @@ export default defineConfig({
   projects: [
     {
       name: "storefront-mobile",
-      testMatch: /(?:storefront|catalog-commerce-storefront)\.spec\.js/,
+      testMatch: /(?:storefront|catalog-commerce-storefront|catalog-deeplink-storefront)\.spec\.js/,
       use: {
         ...devices["iPhone 13"],
         browserName: "chromium",
