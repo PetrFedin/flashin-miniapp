@@ -6,7 +6,8 @@ const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "admin@test.local";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "test-password";
 const API_BASE = "http://127.0.0.1:8000";
 const ADMIN_URL = "http://127.0.0.1:5174";
-const PRODUCT_SKU = "FLASHIN-COAT-001";
+const PRODUCT_SKU = "E2E-RICH-CATALOG-001";
+const PRODUCT_TITLE = "Integrated Rich Catalog Coat";
 const MATERIAL = "Integrated Cashmere";
 const SEASON = "FW26-E2E";
 
@@ -70,23 +71,36 @@ function futureSlotInput() {
   return `${slot.getFullYear()}-${pad(slot.getMonth() + 1)}-${pad(slot.getDate())}T${pad(slot.getHours())}:${pad(slot.getMinutes())}`;
 }
 
+async function createControlledProduct(catalogPanel) {
+  await catalogPanel.getByRole("button", { name: "Новая карточка" }).click();
+  await catalogPanel.getByLabel("SKU карточки", { exact: true }).fill(PRODUCT_SKU);
+  await catalogPanel.getByLabel("Название карточки", { exact: true }).fill(PRODUCT_TITLE);
+  await catalogPanel.getByLabel("Slug карточки", { exact: true }).fill("integrated-rich-catalog-coat");
+  await catalogPanel.getByLabel("Категория карточки", { exact: true }).fill("Outerwear");
+  await catalogPanel.getByLabel("Цена карточки", { exact: true }).fill("28000");
+  await catalogPanel.getByPlaceholder("Размер", { exact: true }).fill("M");
+  await catalogPanel.getByPlaceholder("Цвет", { exact: true }).fill("Black");
+  await catalogPanel.getByPlaceholder("SKU варианта", { exact: true }).fill(`${PRODUCT_SKU}-M`);
+  await catalogPanel.getByPlaceholder("Stock", { exact: true }).fill("2");
+  await catalogPanel.getByRole("button", { name: "Создать карточку" }).click();
+  await expect(catalogPanel.getByRole("status")).toContainText("Карточка #");
+}
+
 test("Rich catalog changes cross real Admin, PostgreSQL and Mini App customer flows", async ({ page, browser }) => {
   await installTelegram(page);
-
-  const baselineResponse = await page.request.get(`${API_BASE}/api/catalog/products`);
-  expect(baselineResponse.ok()).toBeTruthy();
-  const baselineProducts = await baselineResponse.json();
-  const baseline = baselineProducts.find((item) => item.sku === PRODUCT_SKU);
-  expect(baseline, `${PRODUCT_SKU} must exist in seeded catalog`).toBeTruthy();
-  expect(baseline.variants.some((variant) => Number(variant.available_qty) > 0)).toBeTruthy();
 
   const adminContext = await browser.newContext({ ...devices["Desktop Chrome"] });
   const adminPage = await adminContext.newPage();
   await loginAdmin(adminPage);
   const catalogPanel = adminPage.locator("section.catalog-commerce");
-  const productButton = catalogPanel.getByRole("button", { name: new RegExp(`#${baseline.id} ·`) });
-  await expect(productButton).toBeVisible();
-  await productButton.click();
+  await createControlledProduct(catalogPanel);
+
+  const createdResponse = await page.request.get(`${API_BASE}/api/catalog/products?q=${encodeURIComponent(PRODUCT_SKU)}`);
+  expect(createdResponse.ok()).toBeTruthy();
+  const createdRows = await createdResponse.json();
+  const baseline = createdRows.find((item) => item.sku === PRODUCT_SKU);
+  expect(baseline, `${PRODUCT_SKU} must be created by the real Admin flow`).toBeTruthy();
+  expect(baseline.variants.some((variant) => Number(variant.available_qty) > 0)).toBeTruthy();
 
   await catalogPanel.getByLabel("Материал карточки", { exact: true }).fill(MATERIAL);
   await catalogPanel.getByLabel("Сезон карточки", { exact: true }).fill(SEASON);
@@ -117,9 +131,9 @@ test("Rich catalog changes cross real Admin, PostgreSQL and Mini App customer fl
   await catalog.getByPlaceholder("Материал").fill(MATERIAL);
   await catalog.getByPlaceholder("Сезон").fill(SEASON);
   await catalog.getByRole("button", { name: "Применить фильтры" }).click();
-  await expect(catalog.getByText(baseline.title, { exact: true })).toBeVisible();
-  await catalog.getByRole("button").filter({ hasText: baseline.title }).click();
-  await expect(catalog.getByRole("heading", { name: baseline.title })).toBeVisible();
+  await expect(catalog.getByText(PRODUCT_TITLE, { exact: true })).toBeVisible();
+  await catalog.getByRole("button").filter({ hasText: PRODUCT_TITLE }).click();
+  await expect(catalog.getByRole("heading", { name: PRODUCT_TITLE })).toBeVisible();
   await expect(catalog.getByText(`${MATERIAL} · ${SEASON}`, { exact: true })).toBeVisible();
   await expect(catalog.getByText("Integrated Partner", { exact: true })).toBeVisible();
 
