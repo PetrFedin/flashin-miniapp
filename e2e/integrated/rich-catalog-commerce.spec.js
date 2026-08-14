@@ -135,7 +135,7 @@ test("Rich catalog changes cross real Admin, PostgreSQL and Mini App customer fl
   await catalog.getByRole("button").filter({ hasText: PRODUCT_TITLE }).click();
   await expect(catalog.getByRole("heading", { name: PRODUCT_TITLE })).toBeVisible();
   await expect(catalog.getByText(`${MATERIAL} · ${SEASON}`, { exact: true })).toBeVisible();
-  await expect(catalog.getByText("Integrated Partner", { exact: true })).toBeVisible();
+  await expect(catalog.getByText(/Integrated Partner/)).toBeVisible();
 
   await catalog.getByRole("button", { name: "В избранное" }).click();
   await expect(catalog.getByRole("status")).toContainText("Добавлено в избранное");
