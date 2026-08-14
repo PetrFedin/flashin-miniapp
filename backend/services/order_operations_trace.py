@@ -9,6 +9,7 @@ from ..database import utcnow_naive
 from ..models import (
     BusinessEvent,
     FulfillmentTask,
+    InventoryMovement,
     Notification,
     Order,
     Payment,
@@ -39,13 +40,39 @@ def _provider_command(command: ProviderCommand) -> dict[str, object]:
     }
 
 
+def _inventory_movement(movement: InventoryMovement) -> dict[str, object]:
+    return {
+        "id": int(movement.id),
+        "variant_id": int(movement.variant_id),
+        "kind": str(movement.kind),
+        "quantity": int(movement.quantity),
+        "stock_before": int(movement.stock_before),
+        "stock_after": int(movement.stock_after),
+        "reserved_before": int(movement.reserved_before),
+        "reserved_after": int(movement.reserved_after),
+        "created_at": _iso(movement.created_at),
+    }
+
+
+def _inventory_movement_invalid(movement: InventoryMovement) -> bool:
+    return bool(
+        int(movement.quantity) <= 0
+        or int(movement.stock_before) < 0
+        or int(movement.stock_after) < 0
+        or int(movement.reserved_before) < 0
+        or int(movement.reserved_after) < 0
+        or int(movement.reserved_before) > int(movement.stock_before)
+        or int(movement.reserved_after) > int(movement.stock_after)
+    )
+
+
 def build_order_operations_trace(db: Session, order_id: int) -> dict[str, object] | None:
     """Build a read-only, non-secret incident trace for one order.
 
-    ``order_id`` is the durable correlation key across asynchronous provider and
-    fulfillment work. The trace intentionally excludes raw provider payloads,
-    idempotency keys, request fingerprints, notification bodies, Telegram ids,
-    free-form error text and other credentials/PII-bearing fields.
+    ``order_id`` is the durable correlation key across asynchronous provider,
+    inventory and fulfillment work. The trace intentionally excludes raw
+    provider payloads, idempotency keys, request fingerprints, notification
+    bodies, Telegram ids, free-form error text and other credentials/PII fields.
     """
 
     order = db.query(Order).filter(Order.id == order_id).first()
@@ -102,6 +129,13 @@ def build_order_operations_trace(db: Session, order_id: int) -> dict[str, object
         db.query(ProviderCommand)
         .filter(provider_filter)
         .order_by(ProviderCommand.created_at.asc(), ProviderCommand.id.asc())
+        .all()
+    )
+
+    inventory_movements = (
+        db.query(InventoryMovement)
+        .filter(InventoryMovement.order_id == order_id)
+        .order_by(InventoryMovement.created_at.asc(), InventoryMovement.id.asc())
         .all()
     )
 
@@ -176,6 +210,9 @@ def build_order_operations_trace(db: Session, order_id: int) -> dict[str, object
         for command in provider_commands
         if command.status in {"failed", "review_required"}
     )
+    inventory_invalid_rows = sum(
+        1 for movement in inventory_movements if _inventory_movement_invalid(movement)
+    )
     failed_notifications = sum(
         1
         for notification, _state, _event in notification_rows
@@ -197,6 +234,7 @@ def build_order_operations_trace(db: Session, order_id: int) -> dict[str, object
     )
 
     return {
+        "schema_version": 2,
         "correlation": {"type": "order_id", "value": str(order_id)},
         "order": {
             "id": int(order.id),
@@ -250,6 +288,9 @@ def build_order_operations_trace(db: Session, order_id: int) -> dict[str, object
             for item in returns
         ],
         "provider_commands": [_provider_command(command) for command in provider_commands],
+        "inventory": [
+            _inventory_movement(movement) for movement in inventory_movements
+        ],
         "fulfillment": [
             {
                 "id": int(task.id),
@@ -322,12 +363,14 @@ def build_order_operations_trace(db: Session, order_id: int) -> dict[str, object
         "attention": {
             "provider_commands_actionable": actionable_provider_commands,
             "provider_failures": provider_failures,
+            "inventory_invalid_rows": inventory_invalid_rows,
             "failed_notifications": failed_notifications,
             "business_events_unresolved": unresolved_business_events,
             "business_events_failed": failed_business_events,
             "overdue_sla": overdue_sla_events,
             "required": bool(
                 provider_failures
+                or inventory_invalid_rows
                 or failed_notifications
                 or failed_business_events
                 or overdue_sla_events

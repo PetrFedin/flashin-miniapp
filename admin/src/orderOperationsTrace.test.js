@@ -13,7 +13,7 @@ test("order operations trace fails closed on missing or malformed payload", () =
 });
 
 
-test("order operations trace normalizes only bounded operational summary fields", () => {
+test("order operations trace normalizes bounded money, inventory and operations counts", () => {
   const normalized = normalizeOrderOperationsTrace({
     request_id: "req-123",
     order: {
@@ -28,6 +28,10 @@ test("order operations trace normalizes only bounded operational summary fields"
     payment_events: [{ id: 2 }, { id: 3 }],
     returns: [],
     provider_commands: [{ id: 4 }],
+    inventory: [
+      { id: 10, kind: "reserve", source: "private-source" },
+      { id: 11, kind: "commit", source: "private-source" },
+    ],
     fulfillment: [{ id: 5 }],
     business_events: [{ id: 6 }],
     notifications: [{ id: 7 }],
@@ -36,6 +40,7 @@ test("order operations trace normalizes only bounded operational summary fields"
       required: false,
       provider_commands_actionable: 1,
       provider_failures: 0,
+      inventory_invalid_rows: 0,
       failed_notifications: 0,
       business_events_unresolved: 1,
       business_events_failed: 0,
@@ -57,6 +62,7 @@ test("order operations trace normalizes only bounded operational summary fields"
     paymentEvents: 2,
     returns: 0,
     providerCommands: 1,
+    inventoryMovements: 2,
     fulfillment: 1,
     businessEvents: 1,
     notifications: 1,
@@ -64,25 +70,28 @@ test("order operations trace normalizes only bounded operational summary fields"
   });
   assert.equal(normalized.attention.required, false);
   assert.equal(normalized.attention.providerCommandsActionable, 1);
+  assert.equal(Object.hasOwn(normalized, "inventory"), false);
 });
 
 
-test("failure counters force attention even if a stale backend flag says false", () => {
+test("inventory integrity and failure counters force attention despite stale backend flag", () => {
   const normalized = normalizeOrderOperationsTrace({
     order: { id: 9 },
     attention: {
       required: false,
       provider_failures: 1,
-      failed_notifications: 2,
-      business_events_failed: 3,
-      overdue_sla: 4,
+      inventory_invalid_rows: 2,
+      failed_notifications: 3,
+      business_events_failed: 4,
+      overdue_sla: 5,
     },
   });
 
   assert.equal(normalized.valid, true);
   assert.equal(normalized.attention.required, true);
   assert.equal(normalized.attention.providerFailures, 1);
-  assert.equal(normalized.attention.failedNotifications, 2);
-  assert.equal(normalized.attention.businessEventsFailed, 3);
-  assert.equal(normalized.attention.overdueSla, 4);
+  assert.equal(normalized.attention.inventoryInvalidRows, 2);
+  assert.equal(normalized.attention.failedNotifications, 3);
+  assert.equal(normalized.attention.businessEventsFailed, 4);
+  assert.equal(normalized.attention.overdueSla, 5);
 });
