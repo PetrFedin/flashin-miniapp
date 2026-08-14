@@ -149,8 +149,8 @@ test("Catalog+ customer merchandising, cart, feedback and showroom journey", asy
   await catalog.locator('select:has(option[value="price_desc"])').selectOption("price_desc");
   await catalog.getByRole("button", { name: "Применить фильтры" }).click();
   await expect(catalog.getByText("Cashmere Pilot Jacket", { exact: true })).toBeVisible();
-  await expect(catalog.getByText("Бестселлер", { exact: true })).toBeVisible();
-  await expect(catalog.getByText("Эксклюзив", { exact: true })).toBeVisible();
+  await expect(catalog.locator(".catalog-plus-badge").filter({ hasText: "Бестселлер" })).toBeVisible();
+  await expect(catalog.locator(".catalog-plus-badge").filter({ hasText: "Эксклюзив" })).toBeVisible();
 
   await catalog.getByRole("button").filter({ hasText: "Cashmere Pilot Jacket" }).click();
   await expect(catalog.getByRole("heading", { name: "Cashmere Pilot Jacket" })).toBeVisible();
