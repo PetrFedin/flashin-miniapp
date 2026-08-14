@@ -73,3 +73,31 @@ export function createShowroomAppointment(productId, startsAt, notes = "") {
 export function listMyShowroomAppointments() {
   return catalogRequest("/api/catalog/showroom/appointments/me", { method: "GET" });
 }
+
+export function createDemandRequest(product, variantId, quantity = 1, notes = "") {
+  const requestType = product?.merchandising?.configured_availability_status
+    || product?.merchandising?.availability_status;
+  const variant = (product?.variants || []).find((item) => Number(item.id) === Number(variantId));
+  return catalogRequest("/api/catalog/demand-requests", {
+    method: "POST",
+    body: JSON.stringify({
+      product_id: Number(product.id),
+      variant_id: variantId ? Number(variantId) : null,
+      request_type: requestType,
+      quantity: Number(quantity || 1),
+      requested_size: variant?.size || "",
+      requested_color: variant?.color || "",
+      notes: String(notes || "").trim(),
+    }),
+  });
+}
+
+export function listMyDemandRequests() {
+  return catalogRequest("/api/catalog/demand-requests/me", { method: "GET" });
+}
+
+export function cancelDemandRequest(requestId) {
+  return catalogRequest(`/api/catalog/demand-requests/${Number(requestId)}/cancel`, {
+    method: "PATCH",
+  });
+}
