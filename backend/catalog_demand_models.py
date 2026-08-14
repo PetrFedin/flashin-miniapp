@@ -3,7 +3,7 @@ from datetime import datetime
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from .database import Base
+from .database import Base, utcnow_naive
 
 
 class ProductDemandRequest(Base):
@@ -45,7 +45,7 @@ class ProductDemandRequest(Base):
     status: Mapped[str] = mapped_column(String(32), default="requested", index=True)
     admin_note: Mapped[str] = mapped_column(Text, default="")
     active_request_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime, default=utcnow_naive, onupdate=utcnow_naive
     )
