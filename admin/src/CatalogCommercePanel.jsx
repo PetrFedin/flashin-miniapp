@@ -164,7 +164,7 @@ function payloadFromForm(form, canInventoryWrite) {
       moysklad_id: item.moysklad_id.trim(),
       stock_qty: canInventoryWrite ? Number(item.stock_qty || 0) : Number(item.stock_qty || 0),
     })),
-    remove_variant_ids: form.remove_variant_ids,
+    ...(form.id ? { remove_variant_ids: form.remove_variant_ids } : {}),
   };
 }
 

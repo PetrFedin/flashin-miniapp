@@ -24,7 +24,10 @@ from .api.business_analytics import router as business_analytics_router
 from .api.campaigns import router as campaigns_router
 from .api.cart import router as cart_router
 from .api.cart_items import router as cart_items_router
+from .api.catalog_admin_operations import router as catalog_admin_operations_router
 from .api.catalog_merchandising import router as catalog_merchandising_router
+from .api.catalog_sharing import router as catalog_sharing_router
+from .api.catalog_showroom import router as catalog_showroom_router
 from .api.crm import router as crm_router
 from .api.currency import router as currency_router
 from .api.delivery import router as delivery_router
@@ -73,6 +76,7 @@ from .middleware.rate_limit import InMemoryRateLimitMiddleware
 from .middleware.request_id import RequestIdMiddleware
 from .middleware.security_headers import SecurityHeadersMiddleware
 from .seed import bootstrap_admin, seed_products
+from .services.telegram_product_links import telegram_bot_username
 
 settings = get_settings()
 is_production = settings.app_env.strip().lower() == "production"
@@ -91,6 +95,24 @@ admin_router.routes[:] = [
     )
 ]
 
+# The original rich-catalog module carried the first showroom implementation.
+# Route these exact operations through the stricter UTC/fixed-slot boundary.
+_REPLACED_CATALOG_SHOWROOM_ROUTES = {
+    ("/catalog/showroom/appointments", "POST"),
+    ("/catalog/showroom/appointments/me", "GET"),
+    ("/catalog/admin/showroom/appointments", "GET"),
+    ("/catalog/admin/showroom/appointments/{appointment_id}", "PATCH"),
+}
+catalog_merchandising_router.routes[:] = [
+    route
+    for route in catalog_merchandising_router.routes
+    if not any(
+        getattr(route, "path", "") == path
+        and method in getattr(route, "methods", set())
+        for path, method in _REPLACED_CATALOG_SHOWROOM_ROUTES
+    )
+]
+
 if settings.sentry_dsn:
     sentry_sdk.init(
         dsn=settings.sentry_dsn,
@@ -101,6 +123,8 @@ if settings.sentry_dsn:
 
 
 def initialize_application() -> None:
+    if is_production and not telegram_bot_username():
+        raise RuntimeError("TELEGRAM_BOT_USERNAME must be configured in production")
     if settings.use_create_all:
         Base.metadata.create_all(bind=engine)
     db = SessionLocal()
@@ -150,6 +174,9 @@ app.include_router(currency_router, prefix="/currency")
 app.include_router(auth_router, prefix="/api")
 app.include_router(products_router, prefix="/api")
 app.include_router(catalog_merchandising_router, prefix="/api")
+app.include_router(catalog_showroom_router, prefix="/api")
+app.include_router(catalog_sharing_router, prefix="/api")
+app.include_router(catalog_admin_operations_router, prefix="/api")
 app.include_router(cart_router, prefix="/api")
 app.include_router(cart_items_router, prefix="/api")
 app.include_router(order_cancellation_router, prefix="/api")
