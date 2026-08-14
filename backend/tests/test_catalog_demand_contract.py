@@ -48,15 +48,31 @@ def test_demand_rbac_is_available_to_manager_and_support_but_not_warehouse():
     assert "demand.write" not in DEFAULT_PERMISSIONS["warehouse"]
 
 
-def test_active_request_uniqueness_is_named_and_nullable():
+def test_active_request_uniqueness_and_indexes_match_migration_names():
     table = ProductDemandRequest.__table__
     constraints = {constraint.name for constraint in table.constraints if constraint.name}
+    indexes = {index.name for index in table.indexes}
     assert "uq_product_demand_active_request" in constraints
     assert table.c.active_request_key.nullable is True
+    assert indexes == {
+        "ix_product_demand_customer",
+        "ix_product_demand_product",
+        "ix_product_demand_variant",
+        "ix_product_demand_type",
+        "ix_product_demand_status",
+    }
 
 
-def test_migration_0029_is_linear_from_catalog_merchandising():
+def test_migration_0029_is_linear_from_catalog_merchandising_and_matches_indexes():
     migration = Path("backend/alembic/versions/0029_catalog_demand_requests.py").read_text(encoding="utf-8")
     assert 'revision = "0029_catalog_demand_requests"' in migration
     assert 'down_revision = "0028_catalog_merchandising"' in migration
     assert 'name="uq_product_demand_active_request"' in migration
+    for name in (
+        "ix_product_demand_customer",
+        "ix_product_demand_product",
+        "ix_product_demand_variant",
+        "ix_product_demand_type",
+        "ix_product_demand_status",
+    ):
+        assert name in migration
