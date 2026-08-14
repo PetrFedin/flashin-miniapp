@@ -76,6 +76,7 @@ from .middleware.rate_limit import InMemoryRateLimitMiddleware
 from .middleware.request_id import RequestIdMiddleware
 from .middleware.security_headers import SecurityHeadersMiddleware
 from .seed import bootstrap_admin, seed_products
+from .services.telegram_product_links import telegram_bot_username
 
 settings = get_settings()
 is_production = settings.app_env.strip().lower() == "production"
@@ -122,6 +123,8 @@ if settings.sentry_dsn:
 
 
 def initialize_application() -> None:
+    if is_production and not telegram_bot_username():
+        raise RuntimeError("TELEGRAM_BOT_USERNAME must be configured in production")
     if settings.use_create_all:
         Base.metadata.create_all(bind=engine)
     db = SessionLocal()
