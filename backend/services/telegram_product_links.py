@@ -5,12 +5,24 @@ import re
 from urllib.parse import quote
 
 _USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{5,32}$")
+_PLACEHOLDER_USERNAMES = {
+    "change_me",
+    "change-me",
+    "replace_with_bot_username",
+    "replace-with-bot-username",
+    "your_bot",
+    "your_bot_username",
+}
 
 
 def telegram_bot_username(env: dict[str, str] | None = None) -> str:
     source = env if env is not None else os.environ
     username = str(source.get("TELEGRAM_BOT_USERNAME") or "").strip().lstrip("@")
-    return username if _USERNAME_RE.fullmatch(username) else ""
+    if not _USERNAME_RE.fullmatch(username):
+        return ""
+    if username.lower() in _PLACEHOLDER_USERNAMES:
+        return ""
+    return username
 
 
 def product_share_links(
