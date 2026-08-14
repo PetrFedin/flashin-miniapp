@@ -91,7 +91,7 @@ test("showroom operator manages visits without product catalog access", async ({
   await login(page, "showroom@flashin.test");
 
   const operations = page.locator("section.catalog-support-operations");
-  await expect(operations.getByRole("heading", { name: "Showroom и обратная связь" })).toBeVisible();
+  await expect(operations.getByRole("heading", { name: "Showroom, спрос и обратная связь" })).toBeVisible();
   await expect(operations.getByRole("heading", { name: "Записи на примерку" })).toBeVisible();
   await expect(operations.getByText("Product #41", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Каталог и merchandising" })).toHaveCount(0);
