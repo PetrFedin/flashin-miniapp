@@ -147,9 +147,8 @@ test("Admin fully edits merchandising card and showroom request", async ({ page 
   await catalogPanel.getByRole("button", { name: "Добавить видео" }).click();
   await catalogPanel.getByLabel("Видео URL 2", { exact: true }).fill("https://cdn.flashin.test/detail-41.mp4");
   await catalogPanel.getByRole("button", { name: "Добавить внешний ресурс" }).click();
-  const externalRows = catalogPanel.locator(".form-grid").filter({ has: catalogPanel.getByPlaceholder("Ресурс / магазин") });
-  await externalRows.last().getByPlaceholder("Ресурс / магазин").fill("Marketplace Partner");
-  await externalRows.last().getByPlaceholder("https://...").fill("https://market.example/41");
+  await catalogPanel.getByPlaceholder("Ресурс / магазин").last().fill("Marketplace Partner");
+  await catalogPanel.getByPlaceholder("https://...").last().fill("https://market.example/41");
 
   await catalogPanel.getByLabel("ID связанных карточек", { exact: true }).fill("42, 43");
   await catalogPanel.getByRole("button", { name: "Сохранить карточку" }).click();
