@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
+from . import catalog_demand_models as _catalog_demand_models  # noqa: F401
 from . import catalog_models as _catalog_models  # noqa: F401
 from . import checkout_models as _checkout_models  # noqa: F401
 from . import model_constraints as _model_constraints  # noqa: F401
@@ -25,6 +26,7 @@ from .api.campaigns import router as campaigns_router
 from .api.cart import router as cart_router
 from .api.cart_items import router as cart_items_router
 from .api.catalog_admin_operations import router as catalog_admin_operations_router
+from .api.catalog_demand import router as catalog_demand_router
 from .api.catalog_merchandising import router as catalog_merchandising_router
 from .api.catalog_sharing import router as catalog_sharing_router
 from .api.catalog_showroom import router as catalog_showroom_router
@@ -174,6 +176,7 @@ app.include_router(currency_router, prefix="/currency")
 app.include_router(auth_router, prefix="/api")
 app.include_router(products_router, prefix="/api")
 app.include_router(catalog_merchandising_router, prefix="/api")
+app.include_router(catalog_demand_router, prefix="/api")
 app.include_router(catalog_showroom_router, prefix="/api")
 app.include_router(catalog_sharing_router, prefix="/api")
 app.include_router(catalog_admin_operations_router, prefix="/api")
