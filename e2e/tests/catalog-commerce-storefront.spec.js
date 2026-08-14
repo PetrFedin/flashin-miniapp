@@ -141,37 +141,38 @@ test("Catalog+ customer merchandising, cart, feedback and showroom journey", asy
   await page.goto("/");
 
   await page.getByRole("button", { name: "Открыть каталог с фильтрами" }).click();
-  await expect(page.getByRole("heading", { name: "Расширенный каталог" })).toBeVisible();
+  const catalog = page.getByRole("dialog", { name: "Расширенный каталог FLASHIN" });
+  await expect(catalog.getByRole("heading", { name: "Расширенный каталог" })).toBeVisible();
 
-  await page.getByPlaceholder("Материал").fill("Cashmere");
-  await page.getByPlaceholder("Сезон").fill("FW26");
-  await page.getByRole("combobox").filter({ has: page.locator('option[value="price_desc"]') }).selectOption("price_desc");
-  await page.getByRole("button", { name: "Применить фильтры" }).click();
-  await expect(page.getByText("Cashmere Pilot Jacket")).toBeVisible();
-  await expect(page.getByText("Бестселлер")).toBeVisible();
-  await expect(page.getByText("Эксклюзив")).toBeVisible();
+  await catalog.getByPlaceholder("Материал").fill("Cashmere");
+  await catalog.getByPlaceholder("Сезон").fill("FW26");
+  await catalog.getByRole("combobox").filter({ has: catalog.locator('option[value="price_desc"]') }).selectOption("price_desc");
+  await catalog.getByRole("button", { name: "Применить фильтры" }).click();
+  await expect(catalog.getByText("Cashmere Pilot Jacket", { exact: true })).toBeVisible();
+  await expect(catalog.getByText("Бестселлер", { exact: true })).toBeVisible();
+  await expect(catalog.getByText("Эксклюзив", { exact: true })).toBeVisible();
 
-  await page.getByRole("button").filter({ hasText: "Cashmere Pilot Jacket" }).click();
-  await expect(page.getByRole("heading", { name: "Cashmere Pilot Jacket" })).toBeVisible();
-  await expect(page.getByText("Cashmere · FW26")).toBeVisible();
-  await expect(page.getByText("Partner Boutique")).toBeVisible();
-  await expect(page.locator("video")).toHaveCount(1);
-  await expect(page.getByRole("heading", { name: "Complete the look" })).toBeVisible();
-  await expect(page.getByText("Cashmere Pilot Trousers")).toBeVisible();
+  await catalog.getByRole("button").filter({ hasText: "Cashmere Pilot Jacket" }).click();
+  await expect(catalog.getByRole("heading", { name: "Cashmere Pilot Jacket" })).toBeVisible();
+  await expect(catalog.getByText("Cashmere · FW26", { exact: true })).toBeVisible();
+  await expect(catalog.getByText("Partner Boutique", { exact: true })).toBeVisible();
+  await expect(catalog.locator("video")).toHaveCount(1);
+  await expect(catalog.getByRole("heading", { name: "Complete the look" })).toBeVisible();
+  await expect(catalog.getByText("Cashmere Pilot Trousers", { exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "В избранное" }).click();
-  await expect(page.getByRole("status")).toContainText("Добавлено в избранное");
-  await page.getByRole("button", { name: "Добавить в корзину" }).click();
-  await expect(page.getByRole("status")).toContainText("добавлен в корзину");
-  await expect(page.getByText("Корзина · 1")).toBeVisible();
+  await catalog.getByRole("button", { name: "В избранное" }).click();
+  await expect(catalog.getByRole("status")).toContainText("Добавлено в избранное");
+  await catalog.getByRole("button", { name: "Добавить в корзину" }).click();
+  await expect(catalog.getByRole("status")).toContainText("добавлен в корзину");
+  await expect(catalog.getByText("Корзина · 1", { exact: true })).toBeVisible();
 
-  await page.getByLabel("Оценка товара").selectOption("4");
-  await page.getByPlaceholder("Ваш комментарий").fill("Очень хорошая посадка");
-  await page.getByRole("button", { name: "Сохранить оценку" }).click();
-  await expect(page.getByText("Очень хорошая посадка")).toBeVisible();
+  await catalog.getByLabel("Оценка товара").selectOption("4");
+  await catalog.getByPlaceholder("Ваш комментарий").fill("Очень хорошая посадка");
+  await catalog.getByRole("button", { name: "Сохранить оценку" }).click();
+  await expect(catalog.getByText("Очень хорошая посадка", { exact: true })).toBeVisible();
 
-  await page.getByLabel("Дата и время примерки").fill("2026-08-20T12:00");
-  await page.getByPlaceholder("Комментарий к визиту").fill("Примерить с брюками");
-  await page.getByRole("button", { name: "Записаться на примерку" }).click();
-  await expect(page.getByRole("status")).toContainText("Запрос на примерку отправлен");
+  await catalog.getByLabel("Дата и время примерки").fill("2026-08-20T12:00");
+  await catalog.getByPlaceholder("Комментарий к визиту").fill("Примерить с брюками");
+  await catalog.getByRole("button", { name: "Записаться на примерку" }).click();
+  await expect(catalog.getByRole("status")).toContainText("Запрос на примерку отправлен");
 });
