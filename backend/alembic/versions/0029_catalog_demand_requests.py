@@ -55,15 +55,9 @@ def upgrade() -> None:
     op.create_index("ix_product_demand_variant", "product_demand_requests", ["variant_id"])
     op.create_index("ix_product_demand_type", "product_demand_requests", ["request_type"])
     op.create_index("ix_product_demand_status", "product_demand_requests", ["status"])
-    op.create_index(
-        "ix_product_demand_active_key",
-        "product_demand_requests",
-        ["active_request_key"],
-    )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_product_demand_active_key", table_name="product_demand_requests")
     op.drop_index("ix_product_demand_status", table_name="product_demand_requests")
     op.drop_index("ix_product_demand_type", table_name="product_demand_requests")
     op.drop_index("ix_product_demand_variant", table_name="product_demand_requests")
