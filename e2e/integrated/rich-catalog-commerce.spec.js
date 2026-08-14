@@ -95,10 +95,8 @@ test("Rich catalog changes cross real Admin, PostgreSQL and Mini App customer fl
   const exclusiveCheckbox = exclusive.locator("input[type=checkbox]");
   if (!(await exclusiveCheckbox.isChecked())) await exclusive.click();
   await catalogPanel.getByRole("button", { name: "Добавить внешний ресурс" }).click();
-  const externalRows = catalogPanel.locator(".form-grid").filter({ has: catalogPanel.getByPlaceholder("Ресурс / магазин") });
-  const externalRow = externalRows.last();
-  await externalRow.getByPlaceholder("Ресурс / магазин").fill("Integrated Partner");
-  await externalRow.getByPlaceholder("https://...").fill("https://partner.example/integrated-coat");
+  await catalogPanel.getByPlaceholder("Ресурс / магазин").last().fill("Integrated Partner");
+  await catalogPanel.getByPlaceholder("https://...").last().fill("https://partner.example/integrated-coat");
   await catalogPanel.getByRole("button", { name: "Сохранить карточку" }).click();
   await expect(catalogPanel.getByRole("status")).toContainText(`Карточка #${baseline.id} сохранена`);
 
