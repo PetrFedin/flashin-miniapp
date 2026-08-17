@@ -30,6 +30,15 @@ async function mockSharedProduct(page) {
     merchandising: { material: "Cashmere", season: "FW26", badges: ["exclusive"] },
     external_availability: [{ id: 1, source_name: "Partner Boutique", url: "https://partner.example/41" }],
   };
+  const pricing = {
+    product_id: 41,
+    regular_price: 32000,
+    effective_price: 32000,
+    compare_at_price: null,
+    promo_price: null,
+    promo_active: false,
+    sale_ends_at: null,
+  };
   let cartAdded = false;
   let wishlistAdded = false;
 
@@ -46,6 +55,7 @@ async function mockSharedProduct(page) {
     if (path === "/api/cart" && method === "GET") return json({ id: 77, items: [], total_amount: 0, final_amount: 0 });
     if (path === "/api/wishlist" && method === "GET") return json([]);
     if (path === "/api/catalog/products/41" && method === "GET") return json(product);
+    if (path === "/api/catalog/pricing" && method === "GET") return json([pricing]);
     if (path === "/api/cart/items" && method === "POST") {
       cartAdded = true;
       return json({ id: 77, items: [{ id: 1, product_id: 41, variant_id: 4101, quantity: 1 }], total_amount: 32000, final_amount: 32000 });
