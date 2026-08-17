@@ -1,8 +1,8 @@
 .intent-fab {
   position: fixed;
   right: 18px;
-  bottom: 88px;
-  z-index: 45;
+  bottom: 142px;
+  z-index: 81;
   border: 1px solid rgba(17, 17, 17, 0.14);
   border-radius: 999px;
   padding: 11px 16px;
@@ -244,7 +244,7 @@
 
   .intent-fab {
     right: 12px;
-    bottom: 78px;
+    bottom: 136px;
     max-width: calc(100vw - 24px);
   }
 }
