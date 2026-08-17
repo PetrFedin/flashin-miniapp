@@ -42,6 +42,32 @@ def _load_product(db: Session, product_id: int, *, lock: bool = False, active_on
     return product
 
 
+def _admin_queue_row(product: Product, merchandising: ProductMerchandising | None) -> dict[str, object]:
+    base = {
+        "product_id": product.id,
+        "sku": product.sku,
+        "title": product.title,
+        "active": product.active,
+        "regular_price": product.price,
+        "configured_promo_price": merchandising.promo_price if merchandising else None,
+        "sale_starts_at": normalize_utc_naive(merchandising.sale_starts_at if merchandising else None),
+        "sale_ends_at": normalize_utc_naive(merchandising.sale_ends_at if merchandising else None),
+        "configuration_error": None,
+    }
+    try:
+        base.update(quote_product_price(product, merchandising).admin_payload())
+    except HTTPException as exc:
+        base.update(
+            {
+                "effective_price": None,
+                "compare_at_price": None,
+                "promo_active": False,
+                "configuration_error": str(exc.detail),
+            }
+        )
+    return base
+
+
 @router.get("/pricing")
 def public_catalog_pricing(
     product_id: list[int] | None = Query(default=None),
@@ -68,6 +94,21 @@ def public_product_pricing(product_id: int, db: Session = Depends(get_db)):
     return load_product_price_quotes(db, [product])[product.id].public_payload()
 
 
+@router.get("/admin/pricing")
+def admin_pricing_queue(
+    admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    require_permission(db, admin, "products.read")
+    products = db.query(Product).order_by(Product.active.desc(), Product.id.asc()).limit(1000).all()
+    product_ids = [product.id for product in products]
+    merchandising = {
+        row.product_id: row
+        for row in db.query(ProductMerchandising).filter(ProductMerchandising.product_id.in_(product_ids)).all()
+    } if product_ids else {}
+    return [_admin_queue_row(product, merchandising.get(product.id)) for product in products]
+
+
 @router.get("/admin/products/{product_id}/pricing")
 def admin_product_pricing(
     product_id: int,
@@ -81,7 +122,7 @@ def admin_product_pricing(
         .filter(ProductMerchandising.product_id == product.id)
         .first()
     )
-    return quote_product_price(product, merchandising).admin_payload()
+    return _admin_queue_row(product, merchandising)
 
 
 @router.patch("/admin/products/{product_id}/pricing")
@@ -146,4 +187,4 @@ def admin_update_product_pricing(
         .filter(ProductMerchandising.product_id == product.id)
         .first()
     )
-    return quote_product_price(product, merchandising).admin_payload()
+    return _admin_queue_row(product, merchandising)
