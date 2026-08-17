@@ -57,6 +57,24 @@ def test_scheduled_promo_is_half_open_and_uses_regular_price_as_compare_at():
     assert at_start.public_payload()["compare_at_price"] == 1000.0
 
 
+def test_future_promo_configuration_is_private_until_it_is_active():
+    row = merch(
+        promo_price=700.0,
+        starts=datetime(2026, 8, 18, 10, 0, 0),
+        ends=datetime(2026, 8, 19, 10, 0, 0),
+    )
+    quote = quote_product_price(product(), row, now=datetime(2026, 8, 17, 10, 0, 0))
+
+    public = quote.public_payload()
+    admin = quote.admin_payload()
+    assert public["promo_active"] is False
+    assert public["promo_price"] is None
+    assert public["sale_ends_at"] is None
+    assert admin["configured_promo_price"] == 700.0
+    assert admin["sale_starts_at"] == datetime(2026, 8, 18, 10, 0, 0)
+    assert admin["sale_ends_at"] == datetime(2026, 8, 19, 10, 0, 0)
+
+
 def test_promo_without_window_is_active_and_old_price_returns_after_promo_window():
     active = quote_product_price(
         product(price=1000.0, old_price=1200.0),
