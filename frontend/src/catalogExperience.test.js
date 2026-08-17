@@ -43,10 +43,12 @@ test("client product detail keeps cart restricted to real local availability", (
 });
 
 
-test("client detail covers wishlist share feedback showroom videos and recommendations", () => {
+test("client detail covers wishlist canonical Telegram share feedback showroom videos and recommendations", () => {
   for (const token of [
     "addWishlist",
     "removeWishlist",
+    "getProductShare",
+    "mini_app_deep_link",
     "telegram_share_url",
     "submitProductFeedback",
     "createShowroomAppointment",
@@ -56,12 +58,14 @@ test("client detail covers wishlist share feedback showroom videos and recommend
   ]) {
     assert.match(experienceSource, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
+  assert.match(experienceSource, /setSelected\(\{ \.\.\.detail, share \}\)/);
 });
 
 
-test("catalog API uses the authenticated FLASHIN session for customer mutations", () => {
+test("catalog API uses the authenticated FLASHIN session and canonical product share endpoint", () => {
   assert.match(apiSource, /flashin_token/);
   assert.match(apiSource, /Authorization/);
   assert.match(apiSource, /\/api\/catalog\/products/);
+  assert.match(apiSource, /\/api\/catalog\/products\/\$\{Number\(productId\)\}\/share/);
   assert.match(apiSource, /\/api\/catalog\/showroom\/appointments/);
 });

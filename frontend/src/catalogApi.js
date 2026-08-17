@@ -47,6 +47,10 @@ export function getCatalogProduct(productId) {
   return catalogRequest(`/api/catalog/products/${Number(productId)}`, { method: "GET" });
 }
 
+export function getProductShare(productId) {
+  return catalogRequest(`/api/catalog/products/${Number(productId)}/share`, { method: "GET" });
+}
+
 export function listProductFeedback(productId) {
   return catalogRequest(`/api/catalog/products/${Number(productId)}/feedback`, { method: "GET" });
 }

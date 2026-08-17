@@ -52,10 +52,17 @@ const richProduct = {
     merchandising: { availability_status: "preorder", badges: ["new_season"], grid_rank: 20 },
     rating: { average: 4.5, count: 3 },
   }],
+  // Deliberately stale legacy payload. Catalog+ must replace this with /share.
   share: {
     mini_app_url: "https://mini.flashin.store?product=41",
     telegram_share_url: "https://t.me/share/url?url=https%3A%2F%2Fmini.flashin.store%3Fproduct%3D41",
   },
+};
+
+const canonicalShare = {
+  web_url: "https://mini.flashin.store?product=41",
+  mini_app_deep_link: "https://t.me/FlashinPilotBot?startapp=product_41",
+  telegram_share_url: "https://t.me/share/url?url=https%3A%2F%2Ft.me%2FFlashinPilotBot%3Fstartapp%3Dproduct_41&text=Cashmere%20Pilot%20Jacket",
 };
 
 async function installTelegram(page) {
@@ -115,6 +122,7 @@ async function mockCatalogCommerce(page) {
       return json([richProduct]);
     }
     if (path === "/api/catalog/products/41" && method === "GET") return json(richProduct);
+    if (path === "/api/catalog/products/41/share" && method === "GET") return json(canonicalShare);
     if (path === "/api/catalog/products/41/feedback" && method === "GET") return json(feedback);
     if (path === "/api/catalog/products/41/feedback" && method === "POST") {
       const body = request.postDataJSON();
@@ -135,7 +143,7 @@ async function mockCatalogCommerce(page) {
   });
 }
 
-test("Catalog+ customer merchandising, cart, feedback and showroom journey", async ({ page }) => {
+test("Catalog+ customer merchandising, canonical Telegram share, cart, feedback and showroom journey", async ({ page }) => {
   await installTelegram(page);
   await mockCatalogCommerce(page);
   await page.goto("/");
@@ -159,6 +167,8 @@ test("Catalog+ customer merchandising, cart, feedback and showroom journey", asy
   await expect(catalog.locator("video")).toHaveCount(1);
   await expect(catalog.getByRole("heading", { name: "Complete the look" })).toBeVisible();
   await expect(catalog.getByText("Cashmere Pilot Trousers", { exact: true })).toBeVisible();
+  await expect(catalog.getByRole("link", { name: "Открыть в Telegram" })).toHaveAttribute("href", canonicalShare.mini_app_deep_link);
+  await expect(catalog.getByRole("link", { name: "Поделиться в Telegram" })).toHaveAttribute("href", canonicalShare.telegram_share_url);
 
   await catalog.getByRole("button", { name: "В избранное" }).click();
   await expect(catalog.getByRole("status")).toContainText("Добавлено в избранное");
@@ -170,6 +180,7 @@ test("Catalog+ customer merchandising, cart, feedback and showroom journey", asy
   await catalog.getByPlaceholder("Ваш комментарий").fill("Очень хорошая посадка");
   await catalog.getByRole("button", { name: "Сохранить оценку" }).click();
   await expect(catalog.getByText("Очень хорошая посадка", { exact: true })).toBeVisible();
+  await expect(catalog.getByRole("link", { name: "Открыть в Telegram" })).toHaveAttribute("href", canonicalShare.mini_app_deep_link);
 
   await catalog.getByLabel("Дата и время примерки").fill("2026-08-20T12:00");
   await catalog.getByPlaceholder("Комментарий к визиту").fill("Примерить с брюками");
