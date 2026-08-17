@@ -1,4 +1,13 @@
 const TEXT_LIMIT = 80;
+const LIFECYCLE_STATUSES = new Set(["PASS", "PENDING", "REVIEW", "BLOCKED"]);
+const LIFECYCLE_STAGE_KEYS = new Set([
+  "payment",
+  "inventory",
+  "moysklad",
+  "fulfillment",
+  "refunds",
+  "notifications",
+]);
 
 function boundedText(value, fallback = "unknown") {
   const text = String(value ?? "").trim();
@@ -19,6 +28,49 @@ function listCount(value) {
   return Array.isArray(value) ? value.length : 0;
 }
 
+function normalizeLifecycleStatus(value) {
+  const status = String(value ?? "").trim().toUpperCase();
+  return LIFECYCLE_STATUSES.has(status) ? status : "REVIEW";
+}
+
+function normalizeReconciliation(value) {
+  const invalid = {
+    valid: false,
+    overallStatus: "REVIEW",
+    requiresOperatorAction: true,
+    stages: [],
+  };
+  if (!value || typeof value !== "object" || !Array.isArray(value.stages)) return invalid;
+
+  const stages = value.stages
+    .filter((item) => item && typeof item === "object" && LIFECYCLE_STAGE_KEYS.has(String(item.key || "")))
+    .slice(0, LIFECYCLE_STAGE_KEYS.size)
+    .map((item) => ({
+      key: String(item.key),
+      status: normalizeLifecycleStatus(item.status),
+      reason: boundedText(item.reason),
+      nextAction: boundedText(item.next_action, "none"),
+      evidence: Array.isArray(item.evidence)
+        ? item.evidence.slice(0, 6).map((entry) => boundedText(entry, "")) .filter(Boolean)
+        : [],
+    }));
+
+  if (stages.length !== LIFECYCLE_STAGE_KEYS.size) return invalid;
+  const uniqueKeys = new Set(stages.map((item) => item.key));
+  if (uniqueKeys.size !== LIFECYCLE_STAGE_KEYS.size) return invalid;
+
+  const overallStatus = normalizeLifecycleStatus(value.overall_status);
+  const requiresOperatorAction = value.requires_operator_action === true
+    || overallStatus === "REVIEW"
+    || overallStatus === "BLOCKED";
+  return {
+    valid: true,
+    overallStatus,
+    requiresOperatorAction,
+    stages,
+  };
+}
+
 export function normalizeOrderOperationsTrace(payload) {
   const invalid = {
     valid: false,
@@ -35,6 +87,7 @@ export function normalizeOrderOperationsTrace(payload) {
       notifications: 0,
       sla: 0,
     },
+    reconciliation: normalizeReconciliation(null),
     attention: {
       required: true,
       providerCommandsActionable: 0,
@@ -96,6 +149,7 @@ export function normalizeOrderOperationsTrace(payload) {
       notifications: listCount(payload.notifications),
       sla: listCount(payload.sla),
     },
+    reconciliation: normalizeReconciliation(payload.reconciliation),
     attention,
   };
 }
