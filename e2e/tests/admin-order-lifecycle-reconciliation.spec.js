@@ -22,7 +22,7 @@ const ORDER = {
   items: [{ id: 1, title: "Lifecycle Jacket", size: "M", quantity: 1 }],
 };
 
-function lifecycleTrace(overallStatus, moyskladStatus, requiresOperatorAction) {
+function lifecycleTrace(overallStatus, moyskladStatus, requiresOperatorAction, operationalSignals = []) {
   return {
     schema_version: 3,
     request_id: `browser-${overallStatus.toLowerCase()}`,
@@ -49,10 +49,10 @@ function lifecycleTrace(overallStatus, moyskladStatus, requiresOperatorAction) {
       provider_failures: overallStatus === "BLOCKED" ? 1 : 0,
       inventory_invalid_rows: 0,
       failed_notifications: 0,
-      business_events_unresolved: 0,
-      business_events_failed: 0,
+      business_events_unresolved: operationalSignals.length ? 1 : 0,
+      business_events_failed: operationalSignals.some((item) => item.status === "REVIEW") ? 1 : 0,
       overdue_sla: 0,
-      required: overallStatus === "BLOCKED",
+      required: requiresOperatorAction,
     },
     reconciliation: {
       schema_version: 1,
@@ -68,11 +68,22 @@ function lifecycleTrace(overallStatus, moyskladStatus, requiresOperatorAction) {
           next_action: moyskladStatus === "BLOCKED" ? "inspect_moysklad_command_queue" : "wait_for_provider_command",
           evidence: ["provider=moysklad", `command.status=${moyskladStatus === "BLOCKED" ? "failed_or_review" : "pending_or_processing"}`],
         },
-        { key: "fulfillment", status: "PENDING", reason: "fulfillment_in_progress", next_action: "wait_for_fulfillment", evidence: ["fulfillment.tasks=1"] },
+        { key: "fulfillment", status: "PENDING", reason: "fulfillment_in_progress", next_action: "wait_for_fulfillment", evidence: ["fulfillment.status=new"] },
         { key: "refunds", status: "PASS", reason: "no_refund_requested", next_action: "none", evidence: ["returns.count=0"] },
         { key: "notifications", status: "PENDING", reason: "notification_delivery_in_progress", next_action: "wait_for_notification_delivery", evidence: ["notification.status=pending_or_processing"] },
       ],
+      operational_signals: operationalSignals,
     },
+  };
+}
+
+function failedBusinessEventSignal() {
+  return {
+    key: "business_events",
+    status: "REVIEW",
+    reason: "business_event_recovery_required",
+    next_action: "inspect_business_event_recovery",
+    evidence: ["business_events.failed=1"],
   };
 }
 
@@ -112,6 +123,11 @@ async function installApi(page) {
       blocked.order.id = 9003;
       return json(blocked);
     }
+    if (path === "/api/ops/orders/9004/trace" && method === "GET") {
+      const review = lifecycleTrace("REVIEW", "PENDING", true, [failedBusinessEventSignal()]);
+      review.order.id = 9004;
+      return json(review);
+    }
 
     return json({ detail: `Unexpected ${method} ${path}` }, 501);
   });
@@ -126,7 +142,7 @@ async function login(page) {
   await expect(page.getByText(`${SESSION.email} · ${SESSION.role}`, { exact: true })).toBeVisible();
 }
 
-test("operator distinguishes normal PENDING lifecycle from BLOCKED without mutation controls", async ({ page }) => {
+test("operator distinguishes PENDING, recovery REVIEW and BLOCKED without mutation controls", async ({ page }) => {
   const seen = await installApi(page);
   await login(page);
 
@@ -142,6 +158,15 @@ test("operator distinguishes normal PENDING lifecycle from BLOCKED without mutat
   await expect(moysklad.getByText("PENDING", { exact: true })).toBeVisible();
   await expect(moysklad.getByText(/Ждать terminal state очереди провайдера/)).toBeVisible();
 
+  await page.getByLabel("ID заказа для диагностики").fill("9004");
+  await page.getByRole("button", { name: "Открыть trace" }).click();
+  await expect(page.getByText("REVIEW · нужна проверка").first()).toBeVisible();
+  const recoverySignals = page.getByTestId("order-lifecycle-operational-signals");
+  await expect(recoverySignals).toBeVisible();
+  await expect(recoverySignals.getByRole("heading", { name: "BusinessEvent recovery" })).toBeVisible();
+  await expect(recoverySignals.getByText("REVIEW", { exact: true })).toBeVisible();
+  await expect(recoverySignals.getByText(/Открыть BusinessEvent recovery/)).toBeVisible();
+
   await page.getByLabel("ID заказа для диагностики").fill("9003");
   await page.getByRole("button", { name: "Открыть trace" }).click();
   await expect(page.getByText("BLOCKED · дальнейший шаг остановлен").first()).toBeVisible();
@@ -150,6 +175,7 @@ test("operator distinguishes normal PENDING lifecycle from BLOCKED without mutat
   await expect(page.getByText(/Проверить очередь команд МойСклад/)).toBeVisible();
 
   expect(seen).toContain("GET /api/ops/orders/9002/trace");
+  expect(seen).toContain("GET /api/ops/orders/9004/trace");
   expect(seen).toContain("GET /api/ops/orders/9003/trace");
   expect(seen.some((entry) => /^(POST|PUT|PATCH|DELETE) \/api\/ops\/orders\//.test(entry))).toBe(false);
 });
