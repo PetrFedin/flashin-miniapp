@@ -23,6 +23,13 @@ test("catalog intent queue keeps customer PII out of the operator table", () => 
 });
 
 
+test("catalog intent queue can explicitly clear quote and ETA", () => {
+  assert.match(source, /quote_amount: draft\.quote_amount === "" \? null/);
+  assert.match(source, /estimated_ready_at: draft\.estimated_ready_at/);
+  assert.match(source, /: null,/);
+});
+
+
 test("catalog support surface mounts the intent queue for product operators", () => {
   assert.match(mountSource, /CatalogIntentOperationsPanel/);
   assert.match(mountSource, /canProductsRead && \(/);
