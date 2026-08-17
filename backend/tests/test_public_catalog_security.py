@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from backend.api.products import _commerce_card, router
+from backend.services.pricing import quote_product_price
 
 
 def test_public_catalog_router_is_read_only():
@@ -33,7 +34,8 @@ def test_commerce_card_does_not_advertise_unimplemented_purchase_flows():
         images=[],
         variants=[],
     )
+    pricing = quote_product_price(product)
 
-    purchase = _commerce_card(product)["purchase"]
+    purchase = _commerce_card(product, pricing)["purchase"]
     assert purchase["supports_gift_order"] is False
     assert purchase["supports_telegram_stars"] is False
