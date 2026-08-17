@@ -10,6 +10,7 @@ from ..schemas import AbandonedCartOut, InventorySnapshotOut
 from ..security import get_current_admin
 from ..services.inventory import snapshot_inventory
 from ..services.order_lifecycle_moysklad_contract import enforce_moysklad_lifecycle_contract
+from ..services.order_lifecycle_payment_state_contract import enforce_settled_order_payment_state_contract
 from ..services.order_lifecycle_reconciliation import evaluate_order_lifecycle
 from ..services.order_lifecycle_signals import apply_operational_signals
 from ..services.order_operations_trace import build_order_operations_trace
@@ -66,10 +67,11 @@ def order_operations_trace(
     if trace is None:
         raise HTTPException(status_code=404, detail="Order not found")
     trace["schema_version"] = 3
-    reconciliation = enforce_moysklad_lifecycle_contract(
+    reconciliation = enforce_settled_order_payment_state_contract(
         evaluate_order_lifecycle(trace),
         trace,
     )
+    reconciliation = enforce_moysklad_lifecycle_contract(reconciliation, trace)
     trace["reconciliation"] = apply_operational_signals(reconciliation, trace)
     trace["request_id"] = getattr(request.state, "request_id", "")
     return trace
