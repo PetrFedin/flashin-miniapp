@@ -74,9 +74,17 @@ async function createZeroStockPreorder(catalogPanel, runId) {
   await catalogPanel.getByPlaceholder("SKU варианта", { exact: true }).fill(`${sku}-M`);
   await catalogPanel.getByPlaceholder("Stock", { exact: true }).fill("0");
   await catalogPanel.getByRole("button", { name: "Создать карточку" }).click();
-  await expect(catalogPanel.getByRole("status")).toContainText("Карточка #");
 
-  return { sku, title };
+  const detailHeading = catalogPanel.locator(".event-detail").getByRole("heading", { name: /^Карточка #\d+$/ });
+  await expect(detailHeading).toBeVisible();
+  const headingText = (await detailHeading.textContent()) || "";
+  const idMatch = headingText.match(/#(\d+)/);
+  expect(idMatch, `Admin must expose the saved id for ${sku}`).toBeTruthy();
+  const id = Number(idMatch[1]);
+  await expect(catalogPanel.getByRole("status")).toContainText(`Карточка #${id} сохранена`);
+  await expect(catalogPanel.locator(".event-row").filter({ hasText: sku })).toBeVisible();
+
+  return { id, sku, title };
 }
 
 async function customerGet(page, token, path) {
@@ -102,11 +110,10 @@ test("preorder intent crosses real Admin, PostgreSQL and Mini App without creati
   const catalogPanel = adminPage.locator("section.catalog-commerce");
   const productInput = await createZeroStockPreorder(catalogPanel, runId);
 
-  const createdResponse = await page.request.get(`${API_BASE}/api/catalog/products?q=${encodeURIComponent(productInput.sku)}`);
+  const createdResponse = await page.request.get(`${API_BASE}/api/catalog/products/${productInput.id}`);
   expect(createdResponse.ok()).toBeTruthy();
-  const createdRows = await createdResponse.json();
-  const created = createdRows.find((item) => item.sku === productInput.sku);
-  expect(created, `${productInput.sku} must be created by the real Admin flow`).toBeTruthy();
+  const created = await createdResponse.json();
+  expect(created.sku).toBe(productInput.sku);
   expect(created.variants).toHaveLength(1);
   expect(created.variants[0].stock_qty).toBe(0);
   expect(created.variants[0].reserved_qty).toBe(0);
