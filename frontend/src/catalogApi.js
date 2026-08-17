@@ -71,11 +71,14 @@ export async function listCatalogProducts(filters = {}) {
 
 export async function getCatalogProduct(productId) {
   const id = Number(productId);
-  const [product, pricing] = await Promise.all([
-    catalogRequest(`/api/catalog/products/${id}`, { method: "GET" }),
-    catalogRequest(`/api/catalog/products/${id}/pricing`, { method: "GET" }),
-  ]);
-  return applyPricing(product, pricing);
+  const product = await catalogRequest(`/api/catalog/products/${id}`, { method: "GET" });
+  const recommendationIds = (product?.recommendations || []).map((item) => item.id);
+  const pricing = await loadCatalogPricing([id, ...recommendationIds]);
+  const priced = applyPricing(product, pricing.get(id));
+  return {
+    ...priced,
+    recommendations: (product?.recommendations || []).map((item) => applyPricing(item, pricing.get(Number(item.id)))),
+  };
 }
 
 export function getProductShare(productId) {
