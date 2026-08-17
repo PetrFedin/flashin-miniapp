@@ -35,8 +35,9 @@ def test_legacy_products_and_catalog_plus_use_canonical_pricing_source():
     assert "load_product_price_quotes" in products
     assert 'payload["price"] = float(pricing.effective_price)' in products
     assert "/api/catalog/pricing?" in catalog_api
-    assert "/api/catalog/products/${id}/pricing" in catalog_api
     assert "applyPricing" in catalog_api
+    assert "recommendationIds" in catalog_api
+    assert "pricing.get(Number(item.id))" in catalog_api
 
 
 def test_pricing_api_separates_public_and_admin_configuration():
