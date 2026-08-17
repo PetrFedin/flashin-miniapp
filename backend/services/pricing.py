@@ -15,6 +15,21 @@ from ..models import Product
 _MONEY_STEP = Decimal("0.01")
 
 
+def normalize_utc_naive(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def utc_iso(value: datetime | None) -> str | None:
+    normalized = normalize_utc_naive(value)
+    if normalized is None:
+        return None
+    return normalized.isoformat(timespec="seconds") + "Z"
+
+
 @dataclass(frozen=True)
 class ProductPriceQuote:
     product_id: int
@@ -34,7 +49,7 @@ class ProductPriceQuote:
             "compare_at_price": float(self.compare_at_price) if self.compare_at_price is not None else None,
             "promo_price": float(self.promo_price) if self.promo_active and self.promo_price is not None else None,
             "promo_active": self.promo_active,
-            "sale_ends_at": self.sale_ends_at if self.promo_active else None,
+            "sale_ends_at": utc_iso(self.sale_ends_at) if self.promo_active else None,
         }
 
     def admin_payload(self) -> dict[str, object]:
@@ -42,8 +57,8 @@ class ProductPriceQuote:
         payload.update(
             {
                 "configured_promo_price": float(self.promo_price) if self.promo_price is not None else None,
-                "sale_starts_at": self.sale_starts_at,
-                "sale_ends_at": self.sale_ends_at,
+                "sale_starts_at": utc_iso(self.sale_starts_at),
+                "sale_ends_at": utc_iso(self.sale_ends_at),
             }
         )
         return payload
@@ -61,14 +76,6 @@ def _money(value: object, field: str, *, allow_none: bool = False) -> Decimal | 
     return amount
 
 
-def normalize_utc_naive(value: datetime | None) -> datetime | None:
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        return value
-    return value.astimezone(timezone.utc).replace(tzinfo=None)
-
-
 def quote_product_price(
     product: Product,
     merchandising: ProductMerchandising | None = None,
@@ -80,8 +87,10 @@ def quote_product_price(
         raise HTTPException(status_code=409, detail=f"Invalid price for product {product.id}")
 
     old_price = _money(product.old_price, "product old price", allow_none=True)
-    if old_price is not None and old_price <= 0:
+    if old_price is not None and old_price < 0:
         raise HTTPException(status_code=409, detail=f"Invalid old price for product {product.id}")
+    if old_price == 0:
+        old_price = None
 
     promo = _money(
         merchandising.promo_price if merchandising else None,
