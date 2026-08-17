@@ -3,6 +3,87 @@ import React, { useState } from "react";
 import { AdminApiError, adminJson } from "./api.js";
 import { normalizeOrderOperationsTrace } from "./orderOperationsTrace.js";
 
+const STAGE_LABELS = {
+  payment: "Оплата",
+  inventory: "Склад",
+  moysklad: "МойСклад",
+  fulfillment: "Фулфилмент",
+  refunds: "Возвраты",
+  notifications: "Уведомления",
+};
+
+const STATUS_LABELS = {
+  PASS: "PASS · согласовано",
+  PENDING: "PENDING · нормальный прогресс",
+  REVIEW: "REVIEW · нужна проверка",
+  BLOCKED: "BLOCKED · дальнейший шаг остановлен",
+};
+
+const REASON_LABELS = {
+  payment_review_required: "Оплата переведена в ручную проверку.",
+  payment_terminal_failure: "Платёж завершился ошибкой и не подтверждает расчёт.",
+  order_paid_without_settled_payment_record: "Заказ помечен оплаченным без согласованной записи платежа.",
+  settled_payment_amount_mismatch: "Сумма подтверждённого платежа расходится с суммой заказа.",
+  payment_settled: "Подтверждённый платёж согласован с заказом.",
+  cancelled_without_captured_payment: "Заказ отменён без захваченной оплаты.",
+  payment_not_settled_yet: "Оплата ещё не перешла в подтверждённое состояние.",
+  inventory_ledger_invalid: "Inventory ledger нарушает stock/reserve инварианты.",
+  cancelled_order_has_unreversed_commit: "У отменённого заказа остался commit без обратного движения.",
+  cancelled_order_inventory_reconciled: "Складские движения отменённого заказа согласованы.",
+  refunded_order_missing_inventory_return: "Возврат денег завершён, но stock return не подтверждён.",
+  refund_inventory_reconciled: "Возврат товара в inventory ledger согласован.",
+  inventory_commit_recorded: "Продажа зафиксирована commit-движением склада.",
+  fulfilled_order_missing_inventory_commit: "Отгруженный заказ не имеет ожидаемого inventory commit.",
+  inventory_reserved_not_committed_yet: "Товар зарезервирован и ждёт следующего этапа fulfillment.",
+  paid_order_inventory_not_recorded: "После оплаты ещё нет ожидаемого складского движения.",
+  inventory_not_expected_before_payment: "Складская фиксация ожидается после оплаты.",
+  moysklad_command_failed: "Команда МойСклад завершилась ошибкой или review state.",
+  moysklad_command_status_unknown: "Получен неизвестный статус команды МойСклад.",
+  moysklad_command_in_progress: "Команда МойСклад ещё выполняется.",
+  terminal_order_moysklad_not_terminal: "Заказ завершён, а команда МойСклад ещё не завершилась.",
+  moysklad_commands_terminal_success: "Команды МойСклад завершились успешно.",
+  moysklad_not_required_for_unpaid_cancellation: "Для неоплаченной отмены команда МойСклад не требуется.",
+  terminal_order_missing_moysklad_command: "Для завершённого заказа нет ожидаемой команды МойСклад.",
+  moysklad_command_not_terminal_yet: "Команда МойСклад ещё не сформирована или не дошла до terminal state.",
+  fulfillment_not_required_for_cancelled_order: "Для отменённого заказа fulfillment не требуется.",
+  fulfillment_held_for_payment_review: "Fulfillment удерживается до решения payment review.",
+  completed_order_missing_fulfillment_task: "Завершённый заказ не имеет ожидаемой fulfillment-задачи.",
+  fulfillment_completed: "Fulfillment и доставка согласованы как завершённые.",
+  shipment_in_progress: "Отгрузка передана в доставку и ещё не завершена.",
+  fulfillment_task_status_unknown: "Получен неизвестный статус fulfillment-задачи.",
+  fulfillment_sla_overdue: "Fulfillment вышел за допустимый SLA.",
+  fulfillment_in_progress: "Fulfillment выполняется в штатном статусе.",
+  paid_order_fulfillment_not_started: "Оплата подтверждена, fulfillment ещё не стартовал.",
+  fulfillment_not_expected_before_payment: "Fulfillment ожидается после подтверждения оплаты.",
+  no_refund_requested: "Возврат не запрашивался.",
+  refund_reconciliation_required: "Возврат требует ручной reconciliation/retry проверки.",
+  refund_terminal_failure: "Возврат завершился терминальной ошибкой.",
+  refund_in_progress: "Возврат выполняется у провайдера.",
+  refunds_settled: "Возвраты завершены и согласованы.",
+  refund_status_unknown: "Получен неизвестный статус возврата.",
+  notification_delivery_failed: "Доставка уведомления завершилась ошибкой.",
+  notification_delivery_in_progress: "Уведомление находится в очереди доставки.",
+  notifications_delivered: "Уведомления доставлены транспортом.",
+  settled_order_has_no_notification_evidence: "Для подтверждённого/завершённого заказа нет notification evidence.",
+  notification_not_expected_yet: "Уведомление ожидается после следующего бизнес-события.",
+};
+
+const ACTION_LABELS = {
+  none: "Действий не требуется.",
+  wait_for_payment_callback: "Ждать callback/reconciliation оплаты; не повторять списание вручную.",
+  inspect_payment_review: "Открыть payment review и сверить provider settlement перед продолжением.",
+  inspect_inventory_ledger: "Сверить inventory ledger и stock/reserve инварианты.",
+  wait_for_fulfillment: "Продолжить штатный fulfillment в пределах SLA.",
+  wait_for_provider_command: "Ждать terminal state очереди провайдера; не дублировать команду.",
+  inspect_moysklad_command_queue: "Проверить очередь команд МойСклад и связанные recovery-сигналы.",
+  inspect_fulfillment: "Проверить fulfillment task, доставку и SLA.",
+  wait_for_delivery: "Ждать подтверждение доставки в штатном контуре.",
+  inspect_refund_reconciliation: "Проверить refund reconciliation до повторного внешнего действия.",
+  wait_for_refund_settlement: "Ждать terminal state возврата у платёжного провайдера.",
+  inspect_notification_delivery: "Проверить notification delivery/retry state без раскрытия текста сообщения.",
+  wait_for_notification_delivery: "Ждать штатную доставку уведомления.",
+};
+
 function money(value, currency) {
   try {
     return new Intl.NumberFormat("ru-RU", {
@@ -13,6 +94,10 @@ function money(value, currency) {
   } catch {
     return `${Number(value || 0).toFixed(2)} ${currency || "RUB"}`;
   }
+}
+
+function lifecycleBadgeClass(status) {
+  return status === "BLOCKED" || status === "REVIEW" ? "attention" : "ok";
 }
 
 export default function OrderOperationsTracePanel({ onUnauthorized }) {
@@ -62,11 +147,13 @@ export default function OrderOperationsTracePanel({ onUnauthorized }) {
       <div className="section-title-row">
         <div>
           <h2 id="order-operations-trace-title">Диагностика сделки</h2>
-          <p>Единый read-only trace заказа: деньги, inventory ledger, провайдеры, fulfillment, события, уведомления и SLA.</p>
+          <p>Единый read-only trace заказа: lifecycle verdict, деньги, inventory ledger, провайдеры, fulfillment, события, уведомления и SLA.</p>
         </div>
         {trace && (
-          <span className={`attention-badge ${trace.attention.required ? "attention" : "ok"}`}>
-            {trace.attention.required ? "Требует вмешательства" : "Критических сигналов нет"}
+          <span className={`attention-badge ${lifecycleBadgeClass(trace.reconciliation.overallStatus)}`}>
+            {trace.reconciliation.valid
+              ? STATUS_LABELS[trace.reconciliation.overallStatus]
+              : "REVIEW · lifecycle evidence недоступен"}
           </span>
         )}
       </div>
@@ -99,6 +186,44 @@ export default function OrderOperationsTracePanel({ onUnauthorized }) {
             <div><dt>Сумма</dt><dd>{money(trace.order.totalAmount, trace.order.currency)}</dd></div>
             {trace.requestId && <div><dt>Request ID</dt><dd>{trace.requestId}</dd></div>}
           </dl>
+
+          <div className="section-title-row">
+            <div>
+              <h3>Lifecycle reconciliation</h3>
+              <p>PENDING — штатное ожидание и не требует ручного действия. REVIEW/BLOCKED — операторская проверка до следующего рискованного шага.</p>
+            </div>
+            <span className={`attention-badge ${trace.reconciliation.requiresOperatorAction ? "attention" : "ok"}`}>
+              {trace.reconciliation.requiresOperatorAction ? "Нужно действие оператора" : "Ручное действие не требуется"}
+            </span>
+          </div>
+
+          {trace.reconciliation.valid ? (
+            <div className="service-grid" data-testid="order-lifecycle-reconciliation">
+              {trace.reconciliation.stages.map((stage) => (
+                <article className="service-card" key={stage.key} data-stage={stage.key}>
+                  <div className="service-item-heading">
+                    <h3>{STAGE_LABELS[stage.key] || stage.key}</h3>
+                    <span className={`attention-badge ${lifecycleBadgeClass(stage.status)}`}>
+                      {stage.status}
+                    </span>
+                  </div>
+                  <p>{REASON_LABELS[stage.reason] || "Статус требует сверки по безопасному trace-контракту."}</p>
+                  <p><strong>Следующий шаг:</strong> {ACTION_LABELS[stage.nextAction] || "Остановиться и проверить trace до внешнего действия."}</p>
+                  {stage.evidence.length > 0 && (
+                    <dl className="pilot-metrics-list">
+                      {stage.evidence.map((entry, index) => (
+                        <div key={`${stage.key}-${index}`}><dt>Evidence</dt><dd>{entry}</dd></div>
+                      ))}
+                    </dl>
+                  )}
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p className="event-warning" role="alert">
+              Lifecycle evidence отсутствует или неполно. Состояние считается REVIEW; не выполняйте ручные provider/money действия до восстановления trace.
+            </p>
+          )}
 
           <div className="service-grid">
             <article className="service-card">
