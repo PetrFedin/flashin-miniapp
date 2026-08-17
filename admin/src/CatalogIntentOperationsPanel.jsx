@@ -105,10 +105,12 @@ export default function CatalogIntentOperationsPanel({ onUnauthorized, session }
       const payload = {
         status: draft.status,
         admin_note: String(draft.admin_note || "").trim(),
+        quote_amount: draft.quote_amount === "" ? null : Number(draft.quote_amount),
         quote_currency: String(draft.quote_currency || "RUB").trim().toUpperCase(),
+        estimated_ready_at: draft.estimated_ready_at
+          ? new Date(draft.estimated_ready_at).toISOString()
+          : null,
       };
-      if (draft.quote_amount !== "") payload.quote_amount = Number(draft.quote_amount);
-      if (draft.estimated_ready_at) payload.estimated_ready_at = new Date(draft.estimated_ready_at).toISOString();
 
       await adminJson(`/api/catalog/admin/intents/${item.id}`, {
         method: "PATCH",
