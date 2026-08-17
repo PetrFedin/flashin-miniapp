@@ -12,6 +12,10 @@ const STAGE_LABELS = {
   notifications: "Уведомления",
 };
 
+const SIGNAL_LABELS = {
+  business_events: "BusinessEvent recovery",
+};
+
 const STATUS_LABELS = {
   PASS: "PASS · согласовано",
   PENDING: "PENDING · нормальный прогресс",
@@ -47,6 +51,7 @@ const REASON_LABELS = {
   moysklad_command_not_terminal_yet: "Команда МойСклад ещё не сформирована или не дошла до terminal state.",
   fulfillment_not_required_for_cancelled_order: "Для отменённого заказа fulfillment не требуется.",
   fulfillment_held_for_payment_review: "Fulfillment удерживается до решения payment review.",
+  fulfillment_task_blocked: "Fulfillment-задача заблокирована и требует проверки.",
   completed_order_missing_fulfillment_task: "Завершённый заказ не имеет ожидаемой fulfillment-задачи.",
   fulfillment_completed: "Fulfillment и доставка согласованы как завершённые.",
   shipment_in_progress: "Отгрузка передана в доставку и ещё не завершена.",
@@ -66,6 +71,8 @@ const REASON_LABELS = {
   notifications_delivered: "Уведомления доставлены транспортом.",
   settled_order_has_no_notification_evidence: "Для подтверждённого/завершённого заказа нет notification evidence.",
   notification_not_expected_yet: "Уведомление ожидается после следующего бизнес-события.",
+  business_event_recovery_required: "Есть failed BusinessEvent, который требует recovery-проверки.",
+  business_event_processing_in_progress: "BusinessEvent ещё обрабатывается воркером в штатном режиме.",
 };
 
 const ACTION_LABELS = {
@@ -82,6 +89,8 @@ const ACTION_LABELS = {
   wait_for_refund_settlement: "Ждать terminal state возврата у платёжного провайдера.",
   inspect_notification_delivery: "Проверить notification delivery/retry state без раскрытия текста сообщения.",
   wait_for_notification_delivery: "Ждать штатную доставку уведомления.",
+  inspect_business_event_recovery: "Открыть BusinessEvent recovery и проверить replay-safety до внешнего действия.",
+  wait_for_business_event_worker: "Ждать штатную обработку BusinessEvent; не запускать ручной replay.",
 };
 
 function money(value, currency) {
@@ -98,6 +107,28 @@ function money(value, currency) {
 
 function lifecycleBadgeClass(status) {
   return status === "BLOCKED" || status === "REVIEW" ? "attention" : "ok";
+}
+
+function LifecycleEvidence({ item, title }) {
+  return (
+    <article className="service-card" data-stage={item.key}>
+      <div className="service-item-heading">
+        <h3>{title}</h3>
+        <span className={`attention-badge ${lifecycleBadgeClass(item.status)}`}>
+          {item.status}
+        </span>
+      </div>
+      <p>{REASON_LABELS[item.reason] || "Статус требует сверки по безопасному trace-контракту."}</p>
+      <p><strong>Следующий шаг:</strong> {ACTION_LABELS[item.nextAction] || "Остановиться и проверить trace до внешнего действия."}</p>
+      {item.evidence.length > 0 && (
+        <dl className="pilot-metrics-list">
+          {item.evidence.map((entry, index) => (
+            <div key={`${item.key}-${index}`}><dt>Evidence</dt><dd>{entry}</dd></div>
+          ))}
+        </dl>
+      )}
+    </article>
+  );
 }
 
 export default function OrderOperationsTracePanel({ onUnauthorized }) {
@@ -198,27 +229,36 @@ export default function OrderOperationsTracePanel({ onUnauthorized }) {
           </div>
 
           {trace.reconciliation.valid ? (
-            <div className="service-grid" data-testid="order-lifecycle-reconciliation">
-              {trace.reconciliation.stages.map((stage) => (
-                <article className="service-card" key={stage.key} data-stage={stage.key}>
-                  <div className="service-item-heading">
-                    <h3>{STAGE_LABELS[stage.key] || stage.key}</h3>
-                    <span className={`attention-badge ${lifecycleBadgeClass(stage.status)}`}>
-                      {stage.status}
-                    </span>
+            <>
+              <div className="service-grid" data-testid="order-lifecycle-reconciliation">
+                {trace.reconciliation.stages.map((stage) => (
+                  <LifecycleEvidence
+                    key={stage.key}
+                    item={stage}
+                    title={STAGE_LABELS[stage.key] || stage.key}
+                  />
+                ))}
+              </div>
+              {trace.reconciliation.operationalSignals.length > 0 && (
+                <div data-testid="order-lifecycle-operational-signals">
+                  <div className="section-title-row">
+                    <div>
+                      <h3>Сквозные recovery-сигналы</h3>
+                      <p>Worker/recovery state влияет на общий verdict, но не подменяет шесть бизнес-этапов сделки.</p>
+                    </div>
                   </div>
-                  <p>{REASON_LABELS[stage.reason] || "Статус требует сверки по безопасному trace-контракту."}</p>
-                  <p><strong>Следующий шаг:</strong> {ACTION_LABELS[stage.nextAction] || "Остановиться и проверить trace до внешнего действия."}</p>
-                  {stage.evidence.length > 0 && (
-                    <dl className="pilot-metrics-list">
-                      {stage.evidence.map((entry, index) => (
-                        <div key={`${stage.key}-${index}`}><dt>Evidence</dt><dd>{entry}</dd></div>
-                      ))}
-                    </dl>
-                  )}
-                </article>
-              ))}
-            </div>
+                  <div className="service-grid">
+                    {trace.reconciliation.operationalSignals.map((signal) => (
+                      <LifecycleEvidence
+                        key={signal.key}
+                        item={signal}
+                        title={SIGNAL_LABELS[signal.key] || signal.key}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
           ) : (
             <p className="event-warning" role="alert">
               Lifecycle evidence отсутствует или неполно. Состояние считается REVIEW; не выполняйте ручные provider/money действия до восстановления trace.
