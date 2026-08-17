@@ -1,5 +1,6 @@
 const TEXT_LIMIT = 80;
 const LIFECYCLE_STATUSES = new Set(["PASS", "PENDING", "REVIEW", "BLOCKED"]);
+const LIFECYCLE_STATUS_RANK = { PASS: 0, PENDING: 1, REVIEW: 2, BLOCKED: 3 };
 const LIFECYCLE_STAGE_KEYS = new Set([
   "payment",
   "inventory",
@@ -33,6 +34,10 @@ function normalizeLifecycleStatus(value) {
   return LIFECYCLE_STATUSES.has(status) ? status : "REVIEW";
 }
 
+function stricterLifecycleStatus(left, right) {
+  return LIFECYCLE_STATUS_RANK[left] >= LIFECYCLE_STATUS_RANK[right] ? left : right;
+}
+
 function normalizeReconciliation(value) {
   const invalid = {
     valid: false,
@@ -51,7 +56,7 @@ function normalizeReconciliation(value) {
       reason: boundedText(item.reason),
       nextAction: boundedText(item.next_action, "none"),
       evidence: Array.isArray(item.evidence)
-        ? item.evidence.slice(0, 6).map((entry) => boundedText(entry, "")) .filter(Boolean)
+        ? item.evidence.slice(0, 6).map((entry) => boundedText(entry, "")).filter(Boolean)
         : [],
     }));
 
@@ -59,7 +64,12 @@ function normalizeReconciliation(value) {
   const uniqueKeys = new Set(stages.map((item) => item.key));
   if (uniqueKeys.size !== LIFECYCLE_STAGE_KEYS.size) return invalid;
 
-  const overallStatus = normalizeLifecycleStatus(value.overall_status);
+  const suppliedOverall = normalizeLifecycleStatus(value.overall_status);
+  const stageOverall = stages.reduce(
+    (current, item) => stricterLifecycleStatus(current, item.status),
+    "PASS",
+  );
+  const overallStatus = stricterLifecycleStatus(suppliedOverall, stageOverall);
   const requiresOperatorAction = value.requires_operator_action === true
     || overallStatus === "REVIEW"
     || overallStatus === "BLOCKED";
