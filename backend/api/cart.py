@@ -176,7 +176,13 @@ def serialize_cart(
     subtotal = Decimal("0.00")
     for item in cart.items:
         _validate_item(item)
-        price = _money(item.product.price, "product price")
+        if adjustments is not None and adjustments.unit_prices:
+            quoted_price = adjustments.unit_prices.get(int(item.product_id))
+            if quoted_price is None:
+                raise HTTPException(status_code=409, detail=f"Missing reconciled price for cart item {item.id}")
+            price = _money(quoted_price, "product price")
+        else:
+            price = _money(item.product.price, "product price")
         subtotal += price * item.quantity
         items.append(
             CartItemOut(

@@ -62,6 +62,17 @@ test("client detail covers wishlist canonical Telegram share feedback showroom v
 });
 
 
+test("Catalog+ overlays canonical scheduled pricing for products and recommendations", () => {
+  assert.match(apiSource, /function applyPricing/);
+  assert.match(apiSource, /\/api\/catalog\/pricing\?/);
+  assert.match(apiSource, /effective_price/);
+  assert.match(apiSource, /compare_at_price/);
+  assert.match(apiSource, /recommendationIds/);
+  assert.match(apiSource, /pricing\.get\(Number\(item\.id\)\)/);
+  assert.match(apiSource, /index \+= 100/);
+});
+
+
 test("catalog API uses the authenticated FLASHIN session and canonical product share endpoint", () => {
   assert.match(apiSource, /flashin_token/);
   assert.match(apiSource, /Authorization/);

@@ -3,6 +3,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { hasAdminPermission } from "./adminPermissions.js";
 import { AdminApiError, adminJson } from "./api.js";
 import CatalogIntentOperationsPanel from "./CatalogIntentOperationsPanel.jsx";
+import CatalogPricingPanel from "./CatalogPricingPanel.jsx";
 
 export default function CatalogSupportOperationsPanel({ onUnauthorized, session }) {
   const canShowroomRead = hasAdminPermission(session, "showroom.read");
@@ -161,6 +162,9 @@ export default function CatalogSupportOperationsPanel({ onUnauthorized, session 
         )}
       </section>
 
+      {canProductsRead && (
+        <CatalogPricingPanel onUnauthorized={onUnauthorized} session={session} />
+      )}
       {canProductsRead && (
         <CatalogIntentOperationsPanel onUnauthorized={onUnauthorized} session={session} />
       )}

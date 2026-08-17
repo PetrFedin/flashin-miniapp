@@ -65,6 +65,27 @@ const canonicalShare = {
   telegram_share_url: "https://t.me/share/url?url=https%3A%2F%2Ft.me%2FFlashinPilotBot%3Fstartapp%3Dproduct_41&text=Cashmere%20Pilot%20Jacket",
 };
 
+const pricingByProduct = {
+  41: {
+    product_id: 41,
+    regular_price: 32000,
+    effective_price: 28000,
+    compare_at_price: 32000,
+    promo_price: 28000,
+    promo_active: true,
+    sale_ends_at: "2026-08-20T00:00:00",
+  },
+  42: {
+    product_id: 42,
+    regular_price: 24000,
+    effective_price: 22000,
+    compare_at_price: 24000,
+    promo_price: 22000,
+    promo_active: true,
+    sale_ends_at: "2026-08-20T00:00:00",
+  },
+};
+
 async function installTelegram(page) {
   await page.addInitScript(() => {
     window.Telegram = {
@@ -109,11 +130,12 @@ async function mockCatalogCommerce(page) {
       return json({ ok: true });
     }
     if (path === "/api/cart/items" && method === "POST") {
+      const effectivePrice = pricingByProduct[41].effective_price;
       cart = {
         ...cart,
-        items: [{ id: 900, product_id: 41, variant_id: 4101, title: richProduct.title, size: "M", quantity: 1, available_qty: 2, price: richProduct.price }],
-        total_amount: richProduct.price,
-        final_amount: richProduct.price,
+        items: [{ id: 900, product_id: 41, variant_id: 4101, title: richProduct.title, size: "M", quantity: 1, available_qty: 2, price: effectivePrice }],
+        total_amount: effectivePrice,
+        final_amount: effectivePrice,
       };
       return json(cart);
     }
@@ -122,6 +144,10 @@ async function mockCatalogCommerce(page) {
       return json([richProduct]);
     }
     if (path === "/api/catalog/products/41" && method === "GET") return json(richProduct);
+    if (path === "/api/catalog/pricing" && method === "GET") {
+      const ids = url.searchParams.getAll("product_id").map(Number);
+      return json(ids.map((id) => pricingByProduct[id]).filter(Boolean));
+    }
     if (path === "/api/catalog/products/41/share" && method === "GET") return json(canonicalShare);
     if (path === "/api/catalog/products/41/feedback" && method === "GET") return json(feedback);
     if (path === "/api/catalog/products/41/feedback" && method === "POST") {
@@ -143,7 +169,7 @@ async function mockCatalogCommerce(page) {
   });
 }
 
-test("Catalog+ customer merchandising, canonical Telegram share, cart, feedback and showroom journey", async ({ page }) => {
+test("Catalog+ customer merchandising, scheduled price, canonical Telegram share, cart, feedback and showroom journey", async ({ page }) => {
   await installTelegram(page);
   await mockCatalogCommerce(page);
   await page.goto("/");
@@ -157,16 +183,20 @@ test("Catalog+ customer merchandising, canonical Telegram share, cart, feedback 
   await catalog.locator('select:has(option[value="price_desc"])').selectOption("price_desc");
   await catalog.getByRole("button", { name: "Применить фильтры" }).click();
   await expect(catalog.getByText("Cashmere Pilot Jacket", { exact: true })).toBeVisible();
+  await expect(catalog.getByText(/28[\s\u00A0]?000/).first()).toBeVisible();
   await expect(catalog.locator(".catalog-plus-badge").filter({ hasText: "Бестселлер" })).toBeVisible();
   await expect(catalog.locator(".catalog-plus-badge").filter({ hasText: "Эксклюзив" })).toBeVisible();
 
   await catalog.getByRole("button").filter({ hasText: "Cashmere Pilot Jacket" }).click();
   await expect(catalog.getByRole("heading", { name: "Cashmere Pilot Jacket" })).toBeVisible();
+  await expect(catalog.getByText(/28[\s\u00A0]?000/).first()).toBeVisible();
+  await expect(catalog.getByText(/32[\s\u00A0]?000/).first()).toBeVisible();
   await expect(catalog.getByText("Cashmere · FW26", { exact: true })).toBeVisible();
   await expect(catalog.getByText(/Partner Boutique/)).toBeVisible();
   await expect(catalog.locator("video")).toHaveCount(1);
   await expect(catalog.getByRole("heading", { name: "Complete the look" })).toBeVisible();
   await expect(catalog.getByText("Cashmere Pilot Trousers", { exact: true })).toBeVisible();
+  await expect(catalog.getByText(/22[\s\u00A0]?000/).first()).toBeVisible();
   await expect(catalog.getByRole("link", { name: "Открыть в Telegram" })).toHaveAttribute("href", canonicalShare.mini_app_deep_link);
   await expect(catalog.getByRole("link", { name: "Поделиться в Telegram" })).toHaveAttribute("href", canonicalShare.telegram_share_url);
 
@@ -180,6 +210,7 @@ test("Catalog+ customer merchandising, canonical Telegram share, cart, feedback 
   await catalog.getByPlaceholder("Ваш комментарий").fill("Очень хорошая посадка");
   await catalog.getByRole("button", { name: "Сохранить оценку" }).click();
   await expect(catalog.getByText("Очень хорошая посадка", { exact: true })).toBeVisible();
+  await expect(catalog.getByText(/28[\s\u00A0]?000/).first()).toBeVisible();
   await expect(catalog.getByRole("link", { name: "Открыть в Telegram" })).toHaveAttribute("href", canonicalShare.mini_app_deep_link);
 
   await catalog.getByLabel("Дата и время примерки").fill("2026-08-20T12:00");

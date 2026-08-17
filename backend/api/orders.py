@@ -26,6 +26,7 @@ from ..services.checkout_validation import normalize_checkout_input
 from ..services.delivery import calculate_delivery_price
 from ..services.inventory import reserve_variant
 from ..services.pilot_runtime import acquire_pilot_checkout, record_pilot_order
+from ..services.pricing import load_product_price_quotes
 from ..services.promos import calculate_discount
 
 router = APIRouter(prefix="/orders", tags=["orders"])
@@ -309,6 +310,11 @@ def checkout(
         if not cart:
             raise HTTPException(status_code=409, detail="No active cart available for checkout")
         _validate_cart_for_checkout(cart)
+        price_quotes = load_product_price_quotes(
+            db,
+            [item.product for item in cart.items],
+            lock=True,
+        )
 
         attempt = CheckoutAttempt(
             customer_id=customer.id,
@@ -323,7 +329,7 @@ def checkout(
         locked_customer.phone = phone
 
         subtotal = sum(
-            (_money(item.product.price, "product price") * item.quantity for item in cart.items),
+            (price_quotes[int(item.product_id)].effective_price * item.quantity for item in cart.items),
             Decimal("0.00"),
         ).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
         if subtotal <= 0:
@@ -387,6 +393,9 @@ def checkout(
                 source="checkout",
             )
             product = cart_item.product
+            quote = price_quotes.get(int(product.id))
+            if quote is None:
+                raise HTTPException(status_code=409, detail=f"Missing checkout price for product {product.id}")
             db.add(
                 OrderItem(
                     order_id=order.id,
@@ -395,7 +404,7 @@ def checkout(
                     title=product.title,
                     size=variant.size,
                     quantity=cart_item.quantity,
-                    price=float(_money(product.price, "product price")),
+                    price=float(quote.effective_price),
                 )
             )
 

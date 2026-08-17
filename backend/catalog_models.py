@@ -56,6 +56,10 @@ class ProductMerchandising(Base):
             "availability_status IN ('in_stock', 'preorder', 'made_to_order', 'out_of_stock')",
             name="ck_product_merchandising_availability",
         ),
+        CheckConstraint(
+            "promo_price IS NULL OR promo_price > 0",
+            name="ck_product_merchandising_promo_price",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -65,6 +69,7 @@ class ProductMerchandising(Base):
     season: Mapped[str] = mapped_column(String(120), default="")
     badges_json: Mapped[str] = mapped_column(Text, default="[]")
     grid_rank: Mapped[int] = mapped_column(Integer, default=1000, index=True)
+    promo_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     sale_starts_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     sale_ends_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     showroom_fitting_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
