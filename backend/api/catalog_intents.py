@@ -56,6 +56,16 @@ def _utc_naive(value: datetime | None, field: str) -> datetime | None:
     return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
+def _iso_utc(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None or value.utcoffset() is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.isoformat().replace("+00:00", "Z")
+
+
 def _active_key(customer_id: int, product_id: int, variant_id: int | None) -> str:
     return f"{customer_id}:{product_id}:{variant_id or 0}"
 
@@ -74,13 +84,25 @@ def _intent_merchandising(db: Session, product_id: int) -> ProductMerchandising:
     return merch
 
 
+def _inventory_state_valid(variant: ProductVariant) -> bool:
+    return (
+        variant.stock_qty >= 0
+        and variant.reserved_qty >= 0
+        and variant.reserved_qty <= variant.stock_qty
+    )
+
+
+def _intent_variant_eligible(variant: ProductVariant) -> bool:
+    return _inventory_state_valid(variant) and variant.available_qty <= 0
+
+
 def _normal_checkout_available(product: Product, variant_id: int | None) -> bool:
     if variant_id is not None:
         for variant in product.variants:
             if variant.id == variant_id:
-                return variant.available_qty > 0
+                return _inventory_state_valid(variant) and variant.available_qty > 0
         return False
-    return any(variant.available_qty > 0 for variant in product.variants)
+    return any(_inventory_state_valid(variant) and variant.available_qty > 0 for variant in product.variants)
 
 
 def _serialize_intent(
@@ -105,9 +127,9 @@ def _serialize_intent(
         "status": row.status,
         "quote_amount": row.quote_amount,
         "quote_currency": row.quote_currency,
-        "estimated_ready_at": row.estimated_ready_at,
-        "created_at": row.created_at,
-        "updated_at": row.updated_at,
+        "estimated_ready_at": _iso_utc(row.estimated_ready_at),
+        "created_at": _iso_utc(row.created_at),
+        "updated_at": _iso_utc(row.updated_at),
         "payment_allowed": False,
         "normal_checkout_available": bool(product and _normal_checkout_available(product, row.variant_id)),
     }
@@ -171,6 +193,11 @@ def eligible_intent_products(db: Session = Depends(get_db)):
             continue
         images = sorted(product.images, key=lambda image: (image.sort_order, image.id))
         variants = sorted(product.variants, key=lambda item: (item.color or "", item.size or "", item.id))
+        eligible_variant_ids = {
+            variant.id for variant in variants if _intent_variant_eligible(variant)
+        }
+        if variants and not eligible_variant_ids:
+            continue
         result.append(
             {
                 "id": product.id,
@@ -186,7 +213,7 @@ def eligible_intent_products(db: Session = Depends(get_db)):
                         "size": variant.size,
                         "color": variant.color,
                         "available_qty": variant.available_qty,
-                        "intent_eligible": variant.available_qty <= 0,
+                        "intent_eligible": variant.id in eligible_variant_ids,
                     }
                     for variant in variants
                 ],
@@ -224,12 +251,12 @@ def create_product_intent(
         )
         if not variant:
             raise HTTPException(status_code=404, detail="Variant not found for this product")
-        if variant.stock_qty < 0 or variant.reserved_qty < 0 or variant.reserved_qty > variant.stock_qty:
+        if not _inventory_state_valid(variant):
             raise HTTPException(status_code=409, detail="Inventory state is invalid")
         if variant.available_qty > 0:
             raise HTTPException(status_code=409, detail="Selected variant is available for normal cart checkout")
     else:
-        if any(item.available_qty > 0 for item in product.variants):
+        if any(_inventory_state_valid(item) and item.available_qty > 0 for item in product.variants):
             raise HTTPException(
                 status_code=409,
                 detail="Select an unavailable variant or use normal cart checkout for available stock",
@@ -337,6 +364,7 @@ def update_admin_product_intent(
         raise HTTPException(status_code=404, detail="Product intent request not found")
 
     changes: dict[str, object] = {}
+    fields_set = payload.model_fields_set
     if payload.status is not None:
         if payload.status not in _ALLOWED_TRANSITIONS.get(row.status, {row.status}):
             raise HTTPException(
@@ -351,23 +379,28 @@ def update_admin_product_intent(
             if row.status in _ACTIVE_STATUSES
             else None
         )
-    if payload.admin_note is not None:
-        row.admin_note = payload.admin_note.strip()
+    if "admin_note" in fields_set:
+        row.admin_note = (payload.admin_note or "").strip()
         changes["admin_note_changed"] = True
-    if payload.quote_amount is not None:
-        if not math.isfinite(payload.quote_amount):
-            raise HTTPException(status_code=400, detail="quote_amount must be finite")
-        row.quote_amount = round(float(payload.quote_amount), 2)
+    if "quote_amount" in fields_set:
+        if payload.quote_amount is None:
+            row.quote_amount = None
+        else:
+            if not math.isfinite(payload.quote_amount):
+                raise HTTPException(status_code=400, detail="quote_amount must be finite")
+            row.quote_amount = round(float(payload.quote_amount), 2)
         changes["quote_amount"] = row.quote_amount
-    if payload.quote_currency is not None:
+    if "quote_currency" in fields_set:
+        if payload.quote_currency is None:
+            raise HTTPException(status_code=400, detail="quote_currency cannot be null")
         currency = payload.quote_currency.strip().upper()
         if not currency:
             raise HTTPException(status_code=400, detail="quote_currency is required")
         row.quote_currency = currency
         changes["quote_currency"] = currency
-    if payload.estimated_ready_at is not None:
+    if "estimated_ready_at" in fields_set:
         row.estimated_ready_at = _utc_naive(payload.estimated_ready_at, "estimated_ready_at")
-        changes["estimated_ready_at"] = row.estimated_ready_at.isoformat() if row.estimated_ready_at else None
+        changes["estimated_ready_at"] = _iso_utc(row.estimated_ready_at)
 
     row.updated_at = utcnow_naive()
     log_admin_action(
