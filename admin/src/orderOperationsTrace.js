@@ -1,4 +1,15 @@
 const TEXT_LIMIT = 80;
+const LIFECYCLE_STATUSES = new Set(["PASS", "PENDING", "REVIEW", "BLOCKED"]);
+const LIFECYCLE_STATUS_RANK = { PASS: 0, PENDING: 1, REVIEW: 2, BLOCKED: 3 };
+const LIFECYCLE_STAGE_KEYS = new Set([
+  "payment",
+  "inventory",
+  "moysklad",
+  "fulfillment",
+  "refunds",
+  "notifications",
+]);
+const OPERATIONAL_SIGNAL_KEYS = new Set(["business_events"]);
 
 function boundedText(value, fallback = "unknown") {
   const text = String(value ?? "").trim();
@@ -19,6 +30,87 @@ function listCount(value) {
   return Array.isArray(value) ? value.length : 0;
 }
 
+function normalizeLifecycleStatus(value) {
+  const status = String(value ?? "").trim().toUpperCase();
+  return LIFECYCLE_STATUSES.has(status) ? status : "REVIEW";
+}
+
+function stricterLifecycleStatus(left, right) {
+  return LIFECYCLE_STATUS_RANK[left] >= LIFECYCLE_STATUS_RANK[right] ? left : right;
+}
+
+function normalizeEvidence(value) {
+  return Array.isArray(value)
+    ? value.slice(0, 6).map((entry) => boundedText(entry, "")).filter(Boolean)
+    : [];
+}
+
+function normalizeReconciliation(value) {
+  const invalid = {
+    valid: false,
+    overallStatus: "REVIEW",
+    requiresOperatorAction: true,
+    stages: [],
+    operationalSignals: [],
+  };
+  if (!value || typeof value !== "object" || !Array.isArray(value.stages)) return invalid;
+
+  const stages = value.stages
+    .filter((item) => item && typeof item === "object" && LIFECYCLE_STAGE_KEYS.has(String(item.key || "")))
+    .slice(0, LIFECYCLE_STAGE_KEYS.size)
+    .map((item) => ({
+      key: String(item.key),
+      status: normalizeLifecycleStatus(item.status),
+      reason: boundedText(item.reason),
+      nextAction: boundedText(item.next_action, "none"),
+      evidence: normalizeEvidence(item.evidence),
+    }));
+
+  if (stages.length !== LIFECYCLE_STAGE_KEYS.size) return invalid;
+  const uniqueKeys = new Set(stages.map((item) => item.key));
+  if (uniqueKeys.size !== LIFECYCLE_STAGE_KEYS.size) return invalid;
+
+  const rawSignals = value.operational_signals ?? [];
+  if (!Array.isArray(rawSignals) || rawSignals.length > OPERATIONAL_SIGNAL_KEYS.size) return invalid;
+  if (rawSignals.some((item) => (
+    !item
+    || typeof item !== "object"
+    || !OPERATIONAL_SIGNAL_KEYS.has(String(item.key || ""))
+  ))) return invalid;
+
+  const operationalSignals = rawSignals.map((item) => ({
+    key: String(item.key),
+    status: normalizeLifecycleStatus(item.status),
+    reason: boundedText(item.reason),
+    nextAction: boundedText(item.next_action, "none"),
+    evidence: normalizeEvidence(item.evidence),
+  }));
+
+  const suppliedOverall = normalizeLifecycleStatus(value.overall_status);
+  const stageOverall = stages.reduce(
+    (current, item) => stricterLifecycleStatus(current, item.status),
+    "PASS",
+  );
+  const signalOverall = operationalSignals.reduce(
+    (current, item) => stricterLifecycleStatus(current, item.status),
+    "PASS",
+  );
+  const overallStatus = stricterLifecycleStatus(
+    suppliedOverall,
+    stricterLifecycleStatus(stageOverall, signalOverall),
+  );
+  const requiresOperatorAction = value.requires_operator_action === true
+    || overallStatus === "REVIEW"
+    || overallStatus === "BLOCKED";
+  return {
+    valid: true,
+    overallStatus,
+    requiresOperatorAction,
+    stages,
+    operationalSignals,
+  };
+}
+
 export function normalizeOrderOperationsTrace(payload) {
   const invalid = {
     valid: false,
@@ -35,6 +127,7 @@ export function normalizeOrderOperationsTrace(payload) {
       notifications: 0,
       sla: 0,
     },
+    reconciliation: normalizeReconciliation(null),
     attention: {
       required: true,
       providerCommandsActionable: 0,
@@ -96,6 +189,7 @@ export function normalizeOrderOperationsTrace(payload) {
       notifications: listCount(payload.notifications),
       sla: listCount(payload.sla),
     },
+    reconciliation: normalizeReconciliation(payload.reconciliation),
     attention,
   };
 }

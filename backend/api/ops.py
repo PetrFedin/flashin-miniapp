@@ -9,6 +9,9 @@ from ..models import Cart, Notification, ProductVariant
 from ..schemas import AbandonedCartOut, InventorySnapshotOut
 from ..security import get_current_admin
 from ..services.inventory import snapshot_inventory
+from ..services.order_lifecycle_moysklad_contract import enforce_moysklad_lifecycle_contract
+from ..services.order_lifecycle_reconciliation import evaluate_order_lifecycle
+from ..services.order_lifecycle_signals import apply_operational_signals
 from ..services.order_operations_trace import build_order_operations_trace
 from ..services.pilot_observability import build_pilot_operations_status
 from ..services.pilot_readiness import build_pilot_readiness
@@ -54,7 +57,7 @@ def order_operations_trace(
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    """Sanitized, read-only incident trace across the order lifecycle."""
+    """Sanitized, read-only incident trace plus deterministic lifecycle verdicts."""
 
     require_permission(db, admin, "orders.read")
     response.headers["Cache-Control"] = "no-store, max-age=0"
@@ -62,6 +65,12 @@ def order_operations_trace(
     trace = build_order_operations_trace(db, order_id)
     if trace is None:
         raise HTTPException(status_code=404, detail="Order not found")
+    trace["schema_version"] = 3
+    reconciliation = enforce_moysklad_lifecycle_contract(
+        evaluate_order_lifecycle(trace),
+        trace,
+    )
+    trace["reconciliation"] = apply_operational_signals(reconciliation, trace)
     trace["request_id"] = getattr(request.state, "request_id", "")
     return trace
 
