@@ -39,12 +39,43 @@ function catalogQuery(filters = {}) {
   return query ? `?${query}` : "";
 }
 
-export function listCatalogProducts(filters = {}) {
-  return catalogRequest(`/api/catalog/products${catalogQuery(filters)}`, { method: "GET" });
+function applyPricing(product, pricing) {
+  if (!product || !pricing) return product;
+  return {
+    ...product,
+    price: Number(pricing.effective_price),
+    old_price: pricing.compare_at_price == null ? null : Number(pricing.compare_at_price),
+    pricing,
+  };
 }
 
-export function getCatalogProduct(productId) {
-  return catalogRequest(`/api/catalog/products/${Number(productId)}`, { method: "GET" });
+async function loadCatalogPricing(productIds = []) {
+  const ids = [...new Set(productIds.map(Number).filter((value) => Number.isInteger(value) && value > 0))];
+  if (!ids.length) return new Map();
+
+  const batches = [];
+  for (let index = 0; index < ids.length; index += 100) {
+    const params = new URLSearchParams();
+    for (const productId of ids.slice(index, index + 100)) params.append("product_id", String(productId));
+    batches.push(catalogRequest(`/api/catalog/pricing?${params.toString()}`, { method: "GET" }));
+  }
+  const rows = (await Promise.all(batches)).flat();
+  return new Map(rows.map((row) => [Number(row.product_id), row]));
+}
+
+export async function listCatalogProducts(filters = {}) {
+  const products = await catalogRequest(`/api/catalog/products${catalogQuery(filters)}`, { method: "GET" });
+  const pricing = await loadCatalogPricing((products || []).map((product) => product.id));
+  return (products || []).map((product) => applyPricing(product, pricing.get(Number(product.id))));
+}
+
+export async function getCatalogProduct(productId) {
+  const id = Number(productId);
+  const [product, pricing] = await Promise.all([
+    catalogRequest(`/api/catalog/products/${id}`, { method: "GET" }),
+    catalogRequest(`/api/catalog/products/${id}/pricing`, { method: "GET" }),
+  ]);
+  return applyPricing(product, pricing);
 }
 
 export function getProductShare(productId) {
