@@ -1,5 +1,5 @@
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_HALF_UP
 
 from fastapi import HTTPException
@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from ..config import get_settings
 from ..database import utcnow_naive
 from ..models import Cart, CrmProfile, LoyaltyRedemptionHold, PromoCode
+from .pricing import load_product_price_quotes
 from .promos import calculate_discount
 
 
@@ -21,6 +22,7 @@ class CartAdjustmentResult:
     loyalty_points: int
     loyalty_discount: Decimal
     promo_code: str | None
+    unit_prices: dict[int, Decimal] = field(default_factory=dict)
 
     @property
     def final_amount(self) -> Decimal:
@@ -47,16 +49,26 @@ def _finite_non_negative(value: object, field: str) -> Decimal:
     return amount
 
 
-def _cart_subtotal(cart: Cart) -> Decimal:
-    subtotal = Decimal("0.00")
+def _cart_subtotal(db: Session, cart: Cart) -> tuple[Decimal, dict[int, Decimal]]:
+    products = []
     for item in cart.items:
         if not item.product:
             raise HTTPException(status_code=409, detail=f"Cart item {item.id} has no product")
         if isinstance(item.quantity, bool) or not isinstance(item.quantity, int) or item.quantity <= 0:
             raise HTTPException(status_code=409, detail=f"Cart item {item.id} has invalid quantity")
-        price = _finite_non_negative(item.product.price, "product price")
+        products.append(item.product)
+
+    pricing_now = utcnow_naive()
+    quotes = load_product_price_quotes(db, products, now=pricing_now)
+    unit_prices = {product_id: quote.effective_price for product_id, quote in quotes.items()}
+
+    subtotal = Decimal("0.00")
+    for item in cart.items:
+        price = unit_prices.get(int(item.product_id))
+        if price is None:
+            raise HTTPException(status_code=409, detail=f"Missing price for cart item {item.id}")
         subtotal += price * item.quantity
-    return subtotal.quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
+    return subtotal.quantize(_MONEY_STEP, rounding=ROUND_HALF_UP), unit_prices
 
 
 def _release_hold(hold: LoyaltyRedemptionHold | None) -> None:
@@ -231,7 +243,7 @@ def _reconcile_loyalty(
 
 
 def reconcile_cart_adjustments(db: Session, cart: Cart) -> CartAdjustmentResult:
-    subtotal = _cart_subtotal(cart)
+    subtotal, unit_prices = _cart_subtotal(db, cart)
     promo_discount, promo_code = _reconcile_promo(db, cart, subtotal)
     loyalty_points, loyalty_discount = _reconcile_loyalty(
         db,
@@ -245,6 +257,7 @@ def reconcile_cart_adjustments(db: Session, cart: Cart) -> CartAdjustmentResult:
         loyalty_points=loyalty_points,
         loyalty_discount=loyalty_discount,
         promo_code=promo_code,
+        unit_prices=unit_prices,
     )
 
 
@@ -262,6 +275,7 @@ def apply_loyalty_request(db: Session, cart: Cart, points: object) -> CartAdjust
             loyalty_points=0,
             loyalty_discount=Decimal("0.00"),
             promo_code=baseline.promo_code,
+            unit_prices=baseline.unit_prices,
         )
 
     profile = (
@@ -322,4 +336,5 @@ def apply_loyalty_request(db: Session, cart: Cart, points: object) -> CartAdjust
         loyalty_points=requested_points,
         loyalty_discount=loyalty_discount,
         promo_code=baseline.promo_code,
+        unit_prices=baseline.unit_prices,
     )
