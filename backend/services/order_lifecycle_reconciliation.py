@@ -19,6 +19,7 @@ _PROVIDER_FAILED = {"failed", "dead", "review_required"}
 _RETURN_SUCCESS = {"approved", "approved_partial"}
 _RETURN_PENDING = {"requested", "processing", "refund_pending"}
 _RETURN_REVIEW = {"refund_retry_required", "refund_review_required"}
+_FULFILLMENT_PROGRESS = {"new", "picking", "packed", "ready"}
 
 
 def _status(value: Any) -> str:
@@ -216,7 +217,9 @@ def _inventory_stage(trace: dict[str, Any]) -> dict[str, Any]:
             f"inventory.movements={len(movements)}",
         )
 
-    if payment_status in _PAID_LIKE or order_status in {"paid", "confirmed", "processing", "shipped", "completed"}:
+    if payment_status in _PAID_LIKE or order_status in {
+        "paid", "confirmed", "processing", "assembling", "ready", "shipped", "completed"
+    }:
         if "commit" in kinds:
             return _stage(
                 "inventory",
@@ -286,12 +289,12 @@ def _moysklad_stage(trace: dict[str, Any]) -> dict[str, Any]:
             "provider=moysklad",
         )
     if any(status in _PROVIDER_PENDING for status in statuses):
-        status = REVIEW if order_status in _TERMINAL_ORDER and _has_overdue_sla(trace) else PENDING
+        terminal = order_status in _TERMINAL_ORDER or payment_status == "refunded"
         return _stage(
             "moysklad",
-            status,
-            "moysklad_command_in_progress" if status == PENDING else "terminal_order_moysklad_not_terminal",
-            "wait_for_provider_command" if status == PENDING else "inspect_moysklad_command_queue",
+            REVIEW if terminal else PENDING,
+            "terminal_order_moysklad_not_terminal" if terminal else "moysklad_command_in_progress",
+            "inspect_moysklad_command_queue" if terminal else "wait_for_provider_command",
             "provider=moysklad",
             "command.status=pending_or_processing",
         )
@@ -350,6 +353,22 @@ def _fulfillment_stage(trace: dict[str, Any]) -> dict[str, Any]:
             "inspect_payment_review",
             f"order.payment_status={payment_status}",
         )
+    if "blocked" in task_statuses:
+        return _stage(
+            "fulfillment",
+            REVIEW,
+            "fulfillment_task_blocked",
+            "inspect_fulfillment",
+            "fulfillment.status=blocked",
+        )
+    if any(status not in _FULFILLMENT_PROGRESS for status in task_statuses):
+        return _stage(
+            "fulfillment",
+            REVIEW,
+            "fulfillment_task_status_unknown",
+            "inspect_fulfillment",
+            f"fulfillment.tasks={len(tasks)}",
+        )
     if order_status == "completed" or delivery_status == "delivered":
         if not tasks:
             return _stage(
@@ -375,14 +394,6 @@ def _fulfillment_stage(trace: dict[str, Any]) -> dict[str, Any]:
             f"order.delivery_status={delivery_status or order_status}",
         )
     if tasks:
-        if any(status not in {"pick_pending", "picking", "packed"} for status in task_statuses):
-            return _stage(
-                "fulfillment",
-                REVIEW,
-                "fulfillment_task_status_unknown",
-                "inspect_fulfillment",
-                f"fulfillment.tasks={len(tasks)}",
-            )
         if _has_overdue_sla(trace):
             return _stage(
                 "fulfillment",
@@ -396,9 +407,11 @@ def _fulfillment_stage(trace: dict[str, Any]) -> dict[str, Any]:
             PENDING,
             "fulfillment_in_progress",
             "wait_for_fulfillment",
-            f"fulfillment.tasks={len(tasks)}",
+            f"fulfillment.status={task_statuses[-1] if task_statuses else 'missing'}",
         )
-    if payment_status in _PAID_LIKE or order_status in {"paid", "confirmed", "processing"}:
+    if payment_status in _PAID_LIKE or order_status in {
+        "paid", "confirmed", "processing", "assembling", "ready"
+    }:
         return _stage(
             "fulfillment",
             REVIEW if _has_overdue_sla(trace) else PENDING,
