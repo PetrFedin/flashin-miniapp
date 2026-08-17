@@ -9,6 +9,7 @@ const LIFECYCLE_STAGE_KEYS = new Set([
   "refunds",
   "notifications",
 ]);
+const OPERATIONAL_SIGNAL_KEYS = new Set(["business_events"]);
 
 function boundedText(value, fallback = "unknown") {
   const text = String(value ?? "").trim();
@@ -38,12 +39,19 @@ function stricterLifecycleStatus(left, right) {
   return LIFECYCLE_STATUS_RANK[left] >= LIFECYCLE_STATUS_RANK[right] ? left : right;
 }
 
+function normalizeEvidence(value) {
+  return Array.isArray(value)
+    ? value.slice(0, 6).map((entry) => boundedText(entry, "")).filter(Boolean)
+    : [];
+}
+
 function normalizeReconciliation(value) {
   const invalid = {
     valid: false,
     overallStatus: "REVIEW",
     requiresOperatorAction: true,
     stages: [],
+    operationalSignals: [],
   };
   if (!value || typeof value !== "object" || !Array.isArray(value.stages)) return invalid;
 
@@ -55,21 +63,42 @@ function normalizeReconciliation(value) {
       status: normalizeLifecycleStatus(item.status),
       reason: boundedText(item.reason),
       nextAction: boundedText(item.next_action, "none"),
-      evidence: Array.isArray(item.evidence)
-        ? item.evidence.slice(0, 6).map((entry) => boundedText(entry, "")).filter(Boolean)
-        : [],
+      evidence: normalizeEvidence(item.evidence),
     }));
 
   if (stages.length !== LIFECYCLE_STAGE_KEYS.size) return invalid;
   const uniqueKeys = new Set(stages.map((item) => item.key));
   if (uniqueKeys.size !== LIFECYCLE_STAGE_KEYS.size) return invalid;
 
+  const rawSignals = value.operational_signals ?? [];
+  if (!Array.isArray(rawSignals) || rawSignals.length > OPERATIONAL_SIGNAL_KEYS.size) return invalid;
+  if (rawSignals.some((item) => (
+    !item
+    || typeof item !== "object"
+    || !OPERATIONAL_SIGNAL_KEYS.has(String(item.key || ""))
+  ))) return invalid;
+
+  const operationalSignals = rawSignals.map((item) => ({
+    key: String(item.key),
+    status: normalizeLifecycleStatus(item.status),
+    reason: boundedText(item.reason),
+    nextAction: boundedText(item.next_action, "none"),
+    evidence: normalizeEvidence(item.evidence),
+  }));
+
   const suppliedOverall = normalizeLifecycleStatus(value.overall_status);
   const stageOverall = stages.reduce(
     (current, item) => stricterLifecycleStatus(current, item.status),
     "PASS",
   );
-  const overallStatus = stricterLifecycleStatus(suppliedOverall, stageOverall);
+  const signalOverall = operationalSignals.reduce(
+    (current, item) => stricterLifecycleStatus(current, item.status),
+    "PASS",
+  );
+  const overallStatus = stricterLifecycleStatus(
+    suppliedOverall,
+    stricterLifecycleStatus(stageOverall, signalOverall),
+  );
   const requiresOperatorAction = value.requires_operator_action === true
     || overallStatus === "REVIEW"
     || overallStatus === "BLOCKED";
@@ -78,6 +107,7 @@ function normalizeReconciliation(value) {
     overallStatus,
     requiresOperatorAction,
     stages,
+    operationalSignals,
   };
 }
 
