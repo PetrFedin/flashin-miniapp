@@ -41,11 +41,15 @@ function catalogQuery(filters = {}) {
 
 function applyPricing(product, pricing) {
   if (!product || !pricing) return product;
+  const merchandising = product.merchandising || {};
+  const badges = [...(merchandising.badges || [])];
+  if (pricing.promo_active && !badges.includes("sale")) badges.push("sale");
   return {
     ...product,
     price: Number(pricing.effective_price),
     old_price: pricing.compare_at_price == null ? null : Number(pricing.compare_at_price),
     pricing,
+    merchandising: { ...merchandising, badges },
   };
 }
 
@@ -63,10 +67,29 @@ async function loadCatalogPricing(productIds = []) {
   return new Map(rows.map((row) => [Number(row.product_id), row]));
 }
 
+function finitePriceFilter(value) {
+  if (value === "" || value === null || value === undefined) return null;
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : null;
+}
+
 export async function listCatalogProducts(filters = {}) {
-  const products = await catalogRequest(`/api/catalog/products${catalogQuery(filters)}`, { method: "GET" });
+  const backendFilters = { ...filters };
+  delete backendFilters.min_price;
+  delete backendFilters.max_price;
+  if (["price_asc", "price_desc"].includes(backendFilters.sort)) backendFilters.sort = "grid";
+
+  const products = await catalogRequest(`/api/catalog/products${catalogQuery(backendFilters)}`, { method: "GET" });
   const pricing = await loadCatalogPricing((products || []).map((product) => product.id));
-  return (products || []).map((product) => applyPricing(product, pricing.get(Number(product.id))));
+  let priced = (products || []).map((product) => applyPricing(product, pricing.get(Number(product.id))));
+
+  const minPrice = finitePriceFilter(filters.min_price);
+  const maxPrice = finitePriceFilter(filters.max_price);
+  if (minPrice != null) priced = priced.filter((product) => Number(product.price) >= minPrice);
+  if (maxPrice != null) priced = priced.filter((product) => Number(product.price) <= maxPrice);
+  if (filters.sort === "price_asc") priced.sort((left, right) => Number(left.price) - Number(right.price) || Number(left.id) - Number(right.id));
+  if (filters.sort === "price_desc") priced.sort((left, right) => Number(right.price) - Number(left.price) || Number(left.id) - Number(right.id));
+  return priced;
 }
 
 export async function getCatalogProduct(productId) {
