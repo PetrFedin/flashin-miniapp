@@ -55,6 +55,7 @@ def test_scheduled_promo_is_half_open_and_uses_regular_price_as_compare_at():
     assert at_end.effective_price == at_end.regular_price
     assert at_end.promo_active is False
     assert at_start.public_payload()["compare_at_price"] == 1000.0
+    assert at_start.public_payload()["sale_ends_at"] == "2026-08-17T12:00:00Z"
 
 
 def test_future_promo_configuration_is_private_until_it_is_active():
@@ -71,8 +72,8 @@ def test_future_promo_configuration_is_private_until_it_is_active():
     assert public["promo_price"] is None
     assert public["sale_ends_at"] is None
     assert admin["configured_promo_price"] == 700.0
-    assert admin["sale_starts_at"] == datetime(2026, 8, 18, 10, 0, 0)
-    assert admin["sale_ends_at"] == datetime(2026, 8, 19, 10, 0, 0)
+    assert admin["sale_starts_at"] == "2026-08-18T10:00:00Z"
+    assert admin["sale_ends_at"] == "2026-08-19T10:00:00Z"
 
 
 def test_promo_without_window_is_active_and_old_price_returns_after_promo_window():
@@ -98,6 +99,16 @@ def test_promo_without_window_is_active_and_old_price_returns_after_promo_window
     assert float(future.compare_at_price) == 1200.0
 
 
+def test_zero_old_price_is_treated_as_no_compare_at_price():
+    quote = quote_product_price(
+        product(price=1000.0, old_price=0.0),
+        None,
+        now=datetime(2026, 8, 17, 10, 0, 0),
+    )
+    assert quote.effective_price == quote.regular_price
+    assert quote.compare_at_price is None
+
+
 def test_timezone_aware_window_is_normalized_to_utc():
     moscow = timezone(timedelta(hours=3))
     row = merch(
@@ -114,6 +125,8 @@ def test_timezone_aware_window_is_normalized_to_utc():
     assert quote.promo_active is True
     assert quote.sale_starts_at == datetime(2026, 8, 17, 10, 0)
     assert quote.sale_ends_at == datetime(2026, 8, 17, 11, 0)
+    assert quote.admin_payload()["sale_starts_at"] == "2026-08-17T10:00:00Z"
+    assert quote.admin_payload()["sale_ends_at"] == "2026-08-17T11:00:00Z"
 
 
 @pytest.mark.parametrize("promo_price", [0, -1, 1000, 1001])
