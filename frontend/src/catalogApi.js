@@ -73,3 +73,25 @@ export function createShowroomAppointment(productId, startsAt, notes = "") {
 export function listMyShowroomAppointments() {
   return catalogRequest("/api/catalog/showroom/appointments/me", { method: "GET" });
 }
+
+export function listIntentEligibleProducts() {
+  return catalogRequest("/api/catalog/intents/eligible-products", { method: "GET" });
+}
+
+export function createProductIntent(payload) {
+  return catalogRequest("/api/catalog/intents", {
+    method: "POST",
+    body: JSON.stringify({
+      product_id: Number(payload.product_id),
+      variant_id: payload.variant_id ? Number(payload.variant_id) : null,
+      quantity: Number(payload.quantity || 1),
+      requested_size: String(payload.requested_size || "").trim(),
+      requested_color: String(payload.requested_color || "").trim(),
+      notes: String(payload.notes || "").trim(),
+    }),
+  });
+}
+
+export function listMyProductIntents() {
+  return catalogRequest("/api/catalog/intents/me", { method: "GET" });
+}

@@ -1,0 +1,250 @@
+.intent-fab {
+  position: fixed;
+  right: 18px;
+  bottom: 88px;
+  z-index: 45;
+  border: 1px solid rgba(17, 17, 17, 0.14);
+  border-radius: 999px;
+  padding: 11px 16px;
+  background: rgba(250, 248, 243, 0.96);
+  color: #171717;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.13);
+  font: inherit;
+  font-weight: 700;
+  backdrop-filter: blur(12px);
+}
+
+.intent-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 14px;
+  background: rgba(14, 14, 14, 0.48);
+  backdrop-filter: blur(8px);
+}
+
+.intent-panel {
+  width: min(980px, 100%);
+  max-height: 92vh;
+  overflow: auto;
+  border-radius: 28px 28px 18px 18px;
+  padding: 22px;
+  background: #f8f6f0;
+  color: #171717;
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.28);
+}
+
+.intent-heading,
+.intent-history-heading,
+.intent-product-preview,
+.intent-request > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.intent-heading {
+  align-items: flex-start;
+  margin-bottom: 18px;
+}
+
+.intent-heading h2,
+.intent-form h3,
+.intent-history h3 {
+  margin: 0;
+}
+
+.intent-heading p {
+  max-width: 650px;
+  margin: 7px 0 0;
+  color: #67645e;
+}
+
+.intent-kicker {
+  display: block;
+  margin-bottom: 7px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+}
+
+.intent-close {
+  min-width: 40px;
+  min-height: 40px;
+  border: 0;
+  border-radius: 50%;
+  background: #e9e5db;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.intent-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(280px, 0.9fr);
+  gap: 18px;
+}
+
+.intent-form,
+.intent-history {
+  border: 1px solid #dfdbd1;
+  border-radius: 20px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.intent-form {
+  display: grid;
+  gap: 13px;
+}
+
+.intent-form label {
+  display: grid;
+  gap: 6px;
+  color: #59564f;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.intent-form input,
+.intent-form select,
+.intent-form textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #d7d2c7;
+  border-radius: 12px;
+  padding: 11px 12px;
+  background: #fff;
+  color: #171717;
+  font: inherit;
+}
+
+.intent-form textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+
+.intent-form > button,
+.intent-history-heading button {
+  border: 0;
+  border-radius: 12px;
+  padding: 11px 14px;
+  background: #171717;
+  color: #fff;
+  font: inherit;
+  font-weight: 750;
+}
+
+.intent-form > button:disabled {
+  opacity: 0.55;
+}
+
+.intent-two-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.intent-product-preview {
+  justify-content: flex-start;
+  border-radius: 16px;
+  padding: 10px;
+  background: #efebe2;
+}
+
+.intent-product-preview img {
+  width: 68px;
+  height: 84px;
+  border-radius: 10px;
+  object-fit: cover;
+  background: #ddd8ce;
+}
+
+.intent-product-preview div {
+  display: grid;
+  gap: 5px;
+}
+
+.intent-product-preview span {
+  color: #6e6a62;
+  font-size: 12px;
+}
+
+.intent-history {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.intent-history-heading button {
+  padding: 8px 10px;
+  background: #e7e2d8;
+  color: #171717;
+}
+
+.intent-request {
+  display: grid;
+  gap: 7px;
+  border-top: 1px solid #e2ddd3;
+  padding-top: 12px;
+}
+
+.intent-request:first-of-type {
+  border-top: 0;
+}
+
+.intent-request p {
+  margin: 0;
+  color: #5f5b54;
+  font-size: 13px;
+}
+
+.intent-request span,
+.intent-request small {
+  color: #757169;
+  font-size: 11px;
+}
+
+.intent-ready-note {
+  border-radius: 10px;
+  padding: 9px;
+  background: #ece9df;
+  color: #222 !important;
+}
+
+.intent-error,
+.intent-notice {
+  margin: 0 0 14px;
+  border-radius: 12px;
+  padding: 11px 13px;
+}
+
+.intent-error {
+  background: #f4dddd;
+  color: #7a2121;
+}
+
+.intent-notice {
+  background: #e2ece1;
+  color: #244b27;
+}
+
+@media (max-width: 720px) {
+  .intent-panel {
+    padding: 17px;
+  }
+
+  .intent-layout,
+  .intent-two-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .intent-fab {
+    right: 12px;
+    bottom: 78px;
+    max-width: calc(100vw - 24px);
+  }
+}
