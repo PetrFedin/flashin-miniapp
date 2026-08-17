@@ -59,7 +59,7 @@ async function loginAdmin(page) {
 }
 
 async function createZeroStockPreorder(catalogPanel, runId) {
-  const sku = `E2E-INTENT-${runId}`;
+  const sku = `E2E-INTENT-${runId}`.toUpperCase();
   const title = `Integrated Preorder Coat ${runId}`;
   const slug = `integrated-preorder-coat-${runId.toLowerCase()}`;
 
