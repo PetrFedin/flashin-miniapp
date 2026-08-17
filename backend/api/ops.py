@@ -10,6 +10,7 @@ from ..schemas import AbandonedCartOut, InventorySnapshotOut
 from ..security import get_current_admin
 from ..services.inventory import snapshot_inventory
 from ..services.order_lifecycle_reconciliation import evaluate_order_lifecycle
+from ..services.order_lifecycle_signals import apply_operational_signals
 from ..services.order_operations_trace import build_order_operations_trace
 from ..services.pilot_observability import build_pilot_operations_status
 from ..services.pilot_readiness import build_pilot_readiness
@@ -64,7 +65,10 @@ def order_operations_trace(
     if trace is None:
         raise HTTPException(status_code=404, detail="Order not found")
     trace["schema_version"] = 3
-    trace["reconciliation"] = evaluate_order_lifecycle(trace)
+    trace["reconciliation"] = apply_operational_signals(
+        evaluate_order_lifecycle(trace),
+        trace,
+    )
     trace["request_id"] = getattr(request.state, "request_id", "")
     return trace
 
