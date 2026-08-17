@@ -78,6 +78,39 @@ def settled_trace():
     )
 
 
+def active_paid_trace(*, fulfillment_status="new"):
+    return trace(
+        order={
+            "id": 42,
+            "customer_id": 7,
+            "status": "paid",
+            "payment_status": "paid",
+            "delivery_status": "pending",
+            "total_amount": 1000.0,
+        },
+        payments=[{"status": "succeeded", "amount": 1000.0}],
+        provider_commands=[
+            {
+                "provider": "moysklad",
+                "command_type": "moysklad.customer_order.create",
+                "status": "sent",
+            }
+        ],
+        inventory=[
+            {
+                "kind": "commit",
+                "quantity": 1,
+                "stock_before": 5,
+                "stock_after": 4,
+                "reserved_before": 1,
+                "reserved_after": 0,
+            }
+        ],
+        fulfillment=[{"status": fulfillment_status}],
+        notifications=[{"status": "sent"}],
+    )
+
+
 def test_fresh_order_is_pending_without_operator_action():
     result = evaluate_order_lifecycle(trace())
 
@@ -209,7 +242,7 @@ def test_pending_provider_command_is_normal_progress_without_operator_action():
                 "reserved_after": 1,
             }
         ],
-        fulfillment=[{"status": "pick_pending"}],
+        fulfillment=[{"status": "new"}],
         notifications=[{"status": "pending"}],
     )
 
@@ -218,6 +251,24 @@ def test_pending_provider_command_is_normal_progress_without_operator_action():
     assert result["overall_status"] == "PENDING"
     assert result["requires_operator_action"] is False
     assert stage(result, "moysklad")["status"] == "PENDING"
+    assert stage(result, "fulfillment")["status"] == "PENDING"
+
+
+def test_production_fulfillment_new_is_normal_pending_progress():
+    result = evaluate_order_lifecycle(active_paid_trace(fulfillment_status="new"))
+
+    assert result["overall_status"] == "PENDING"
+    assert result["requires_operator_action"] is False
+    assert stage(result, "fulfillment")["reason"] == "fulfillment_in_progress"
+
+
+def test_production_fulfillment_blocked_requires_review():
+    result = evaluate_order_lifecycle(active_paid_trace(fulfillment_status="blocked"))
+
+    assert result["overall_status"] == "REVIEW"
+    assert result["requires_operator_action"] is True
+    assert stage(result, "fulfillment")["reason"] == "fulfillment_task_blocked"
+    assert stage(result, "fulfillment")["next_action"] == "inspect_fulfillment"
 
 
 def test_unpaid_cancelled_order_passes_when_cancellation_notification_is_delivered():
