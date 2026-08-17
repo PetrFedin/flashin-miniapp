@@ -220,7 +220,26 @@ def test_pending_provider_command_is_normal_progress_without_operator_action():
     assert stage(result, "moysklad")["status"] == "PENDING"
 
 
-def test_unpaid_cancelled_order_is_reconciled_without_provider_side_effects():
+def test_unpaid_cancelled_order_passes_when_cancellation_notification_is_delivered():
+    payload = trace(
+        order={
+            "id": 42,
+            "status": "cancelled",
+            "payment_status": "cancelled",
+            "delivery_status": "cancelled",
+            "total_amount": 1000.0,
+        },
+        payments=[{"status": "canceled", "amount": 1000.0}],
+        notifications=[{"status": "sent"}],
+    )
+
+    result = evaluate_order_lifecycle(payload)
+
+    assert result["overall_status"] == "PASS"
+    assert result["requires_operator_action"] is False
+
+
+def test_cancelled_order_without_notification_evidence_requires_review():
     payload = trace(
         order={
             "id": 42,
@@ -234,8 +253,9 @@ def test_unpaid_cancelled_order_is_reconciled_without_provider_side_effects():
 
     result = evaluate_order_lifecycle(payload)
 
-    assert result["overall_status"] == "PASS"
-    assert result["requires_operator_action"] is False
+    assert result["overall_status"] == "REVIEW"
+    assert result["requires_operator_action"] is True
+    assert stage(result, "notifications")["reason"] == "settled_order_has_no_notification_evidence"
 
 
 def test_sensitive_trace_extras_are_not_reflected_in_reconciliation_output():
