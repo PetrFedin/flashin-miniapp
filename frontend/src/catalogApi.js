@@ -40,7 +40,8 @@ function catalogQuery(filters = {}) {
 }
 
 function applyPricing(product, pricing) {
-  if (!product || !pricing) return product;
+  if (!product) return product;
+  if (!pricing) throw new Error(`Pricing unavailable for product ${product.id}`);
   const merchandising = product.merchandising || {};
   const badges = [...(merchandising.badges || [])];
   if (pricing.promo_active && !badges.includes("sale")) badges.push("sale");
