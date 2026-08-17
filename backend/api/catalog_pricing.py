@@ -16,6 +16,7 @@ from ..services.pricing import (
     load_product_price_quotes,
     normalize_utc_naive,
     quote_product_price,
+    utc_iso,
 )
 from ..services.rbac import require_permission
 
@@ -50,8 +51,8 @@ def _admin_queue_row(product: Product, merchandising: ProductMerchandising | Non
         "active": product.active,
         "regular_price": product.price,
         "configured_promo_price": merchandising.promo_price if merchandising else None,
-        "sale_starts_at": normalize_utc_naive(merchandising.sale_starts_at if merchandising else None),
-        "sale_ends_at": normalize_utc_naive(merchandising.sale_ends_at if merchandising else None),
+        "sale_starts_at": utc_iso(merchandising.sale_starts_at if merchandising else None),
+        "sale_ends_at": utc_iso(merchandising.sale_ends_at if merchandising else None),
         "configuration_error": None,
     }
     try:
