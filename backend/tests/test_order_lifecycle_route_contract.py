@@ -10,7 +10,7 @@ def test_order_trace_route_composes_lifecycle_contracts_read_only(monkeypatch):
     calls = []
     raw_trace = {
         "schema_version": 2,
-        "order": {"id": 42, "status": "paid", "payment_status": "paid", "delivery_status": "pending"},
+        "order": {"id": 42, "status": "refund_requested", "payment_status": "refund_pending", "delivery_status": "pending"},
         "provider_commands": [],
         "attention": {"business_events_unresolved": 1, "business_events_failed": 0},
     }
@@ -20,7 +20,8 @@ def test_order_trace_route_composes_lifecycle_contracts_read_only(monkeypatch):
         "requires_operator_action": False,
         "stages": [{"key": "moysklad", "status": "PENDING"}],
     }
-    contracted = {**evaluated, "contracted": True}
+    settled = {**evaluated, "settled": True}
+    contracted = {**settled, "contracted": True}
     signaled = {**contracted, "operational_signals": [{"key": "business_events", "status": "PENDING"}]}
 
     monkeypatch.setattr(ops, "require_permission", lambda db, admin, permission: permissions.append(permission))
@@ -29,6 +30,11 @@ def test_order_trace_route_composes_lifecycle_contracts_read_only(monkeypatch):
         ops,
         "evaluate_order_lifecycle",
         lambda trace: calls.append(("evaluate", trace["schema_version"])) or dict(evaluated),
+    )
+    monkeypatch.setattr(
+        ops,
+        "enforce_settled_order_payment_state_contract",
+        lambda reconciliation, trace: calls.append(("settlement", trace["order"]["payment_status"])) or dict(settled),
     )
     monkeypatch.setattr(
         ops,
@@ -51,7 +57,12 @@ def test_order_trace_route_composes_lifecycle_contracts_read_only(monkeypatch):
     )
 
     assert permissions == ["orders.read"]
-    assert calls == [("evaluate", 3), ("moysklad", 42), ("signals", 1)]
+    assert calls == [
+        ("evaluate", 3),
+        ("settlement", "refund_pending"),
+        ("moysklad", 42),
+        ("signals", 1),
+    ]
     assert result["schema_version"] == 3
     assert result["request_id"] == "request-lifecycle-42"
     assert result["reconciliation"] == signaled
