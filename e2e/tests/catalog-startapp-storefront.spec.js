@@ -33,6 +33,15 @@ async function mockApi(page) {
     merchandising: { material: "Cashmere", season: "FW26", badges: ["exclusive"] },
     external_availability: [],
   };
+  const pricing = {
+    product_id: 41,
+    regular_price: 32000,
+    effective_price: 32000,
+    compare_at_price: null,
+    promo_price: null,
+    promo_active: false,
+    sale_ends_at: null,
+  };
 
   await page.route("http://localhost:8000/**", async (route) => {
     const request = route.request();
@@ -45,6 +54,7 @@ async function mockApi(page) {
     });
     if (path === "/api/auth/telegram" && method === "POST") return json({ access_token: "startapp-token" });
     if (path === "/api/catalog/products/41" && method === "GET") return json(product);
+    if (path === "/api/catalog/pricing" && method === "GET") return json([pricing]);
     if (path === "/api/products" && method === "GET") return json([product]);
     if (path === "/api/looks" && method === "GET") return json([]);
     if (path === "/api/cart" && method === "GET") return json({ id: 1, items: [], total_amount: 0, final_amount: 0 });
