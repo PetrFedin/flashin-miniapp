@@ -49,6 +49,15 @@ function reconciledPayload() {
         { key: "refunds", status: "PASS", reason: "no_refund_requested", next_action: "none", evidence: ["returns.count=0"] },
         { key: "notifications", status: "PENDING", reason: "notification_delivery_in_progress", next_action: "wait_for_notification_delivery", evidence: ["notification.status=pending"] },
       ],
+      operational_signals: [
+        {
+          key: "business_events",
+          status: "PENDING",
+          reason: "business_event_processing_in_progress",
+          next_action: "wait_for_business_event_worker",
+          evidence: ["business_events.unresolved=1"],
+        },
+      ],
     },
   };
 }
@@ -162,6 +171,8 @@ test("normalizer keeps lifecycle PENDING separate from operator attention", () =
   assert.equal(normalized.reconciliation.stages.length, 6);
   assert.equal(normalized.reconciliation.stages[2].key, "moysklad");
   assert.equal(normalized.reconciliation.stages[2].nextAction, "wait_for_provider_command");
+  assert.equal(normalized.reconciliation.operationalSignals.length, 1);
+  assert.equal(normalized.reconciliation.operationalSignals[0].status, "PENDING");
   assert.equal(normalized.attention.providerCommandsActionable, 1);
   assert.equal(normalized.attention.required, false);
 });
@@ -184,16 +195,54 @@ test("missing or partial reconciliation fails closed as REVIEW", () => {
 });
 
 
-test("unknown backend lifecycle status fails closed to REVIEW", () => {
+test("unknown stage cannot hide behind backend PENDING overall", () => {
   const unknown = reconciledPayload();
-  unknown.reconciliation.overall_status = "MAYBE";
+  unknown.reconciliation.overall_status = "PENDING";
   unknown.reconciliation.stages[0].status = "MAYBE";
 
   const normalized = normalizeOrderOperationsTrace(unknown);
 
+  assert.equal(normalized.reconciliation.valid, true);
   assert.equal(normalized.reconciliation.overallStatus, "REVIEW");
   assert.equal(normalized.reconciliation.requiresOperatorAction, true);
   assert.equal(normalized.reconciliation.stages[0].status, "REVIEW");
+});
+
+
+test("failed BusinessEvent operational signal escalates overall to REVIEW", () => {
+  const failed = reconciledPayload();
+  failed.reconciliation.overall_status = "PENDING";
+  failed.reconciliation.operational_signals = [
+    {
+      key: "business_events",
+      status: "REVIEW",
+      reason: "business_event_recovery_required",
+      next_action: "inspect_business_event_recovery",
+      evidence: ["business_events.failed=1"],
+    },
+  ];
+
+  const normalized = normalizeOrderOperationsTrace(failed);
+
+  assert.equal(normalized.reconciliation.valid, true);
+  assert.equal(normalized.reconciliation.overallStatus, "REVIEW");
+  assert.equal(normalized.reconciliation.requiresOperatorAction, true);
+  assert.equal(normalized.reconciliation.operationalSignals[0].key, "business_events");
+  assert.equal(normalized.reconciliation.operationalSignals[0].nextAction, "inspect_business_event_recovery");
+});
+
+
+test("unknown operational signal fails the lifecycle evidence closed", () => {
+  const unknown = reconciledPayload();
+  unknown.reconciliation.operational_signals = [
+    { key: "future-secret-signal", status: "PASS", reason: "unknown", next_action: "none" },
+  ];
+
+  const normalized = normalizeOrderOperationsTrace(unknown);
+
+  assert.equal(normalized.reconciliation.valid, false);
+  assert.equal(normalized.reconciliation.overallStatus, "REVIEW");
+  assert.equal(normalized.reconciliation.requiresOperatorAction, true);
 });
 
 
@@ -203,6 +252,9 @@ test("operator lifecycle panel remains read-only and distinguishes PENDING from 
   assert.match(panelSource, /REVIEW · нужна проверка/);
   assert.match(panelSource, /BLOCKED · дальнейший шаг остановлен/);
   assert.match(panelSource, /data-testid="order-lifecycle-reconciliation"/);
+  assert.match(panelSource, /data-testid="order-lifecycle-operational-signals"/);
+  assert.match(panelSource, /BusinessEvent recovery/);
+  assert.match(panelSource, /fulfillment_task_blocked/);
   assert.match(panelSource, /\/api\/ops\/orders\/\$\{numericOrderId\}\/trace/);
   assert.doesNotMatch(panelSource, /method:\s*"(?:POST|PUT|PATCH|DELETE)"/);
   assert.doesNotMatch(panelSource, /payload_json/);
