@@ -28,14 +28,25 @@ class ProductPriceQuote:
 
     def public_payload(self) -> dict[str, object]:
         return {
+            "product_id": self.product_id,
             "regular_price": float(self.regular_price),
             "effective_price": float(self.effective_price),
             "compare_at_price": float(self.compare_at_price) if self.compare_at_price is not None else None,
-            "promo_price": float(self.promo_price) if self.promo_price is not None else None,
+            "promo_price": float(self.promo_price) if self.promo_active and self.promo_price is not None else None,
             "promo_active": self.promo_active,
-            "sale_starts_at": self.sale_starts_at,
-            "sale_ends_at": self.sale_ends_at,
+            "sale_ends_at": self.sale_ends_at if self.promo_active else None,
         }
+
+    def admin_payload(self) -> dict[str, object]:
+        payload = self.public_payload()
+        payload.update(
+            {
+                "configured_promo_price": float(self.promo_price) if self.promo_price is not None else None,
+                "sale_starts_at": self.sale_starts_at,
+                "sale_ends_at": self.sale_ends_at,
+            }
+        )
+        return payload
 
 
 def _money(value: object, field: str, *, allow_none: bool = False) -> Decimal | None:
@@ -50,7 +61,7 @@ def _money(value: object, field: str, *, allow_none: bool = False) -> Decimal | 
     return amount
 
 
-def _utc_naive(value: datetime | None) -> datetime | None:
+def normalize_utc_naive(value: datetime | None) -> datetime | None:
     if value is None:
         return None
     if value.tzinfo is None:
@@ -83,15 +94,15 @@ def quote_product_price(
             detail=f"Promo price must be lower than regular price for product {product.id}",
         )
 
-    starts_at = _utc_naive(merchandising.sale_starts_at if merchandising else None)
-    ends_at = _utc_naive(merchandising.sale_ends_at if merchandising else None)
+    starts_at = normalize_utc_naive(merchandising.sale_starts_at if merchandising else None)
+    ends_at = normalize_utc_naive(merchandising.sale_ends_at if merchandising else None)
     if starts_at and ends_at and starts_at >= ends_at:
         raise HTTPException(
             status_code=409,
             detail=f"Invalid sale window for product {product.id}",
         )
 
-    pricing_now = _utc_naive(now) or utcnow_naive()
+    pricing_now = normalize_utc_naive(now) or utcnow_naive()
     promo_active = bool(
         promo is not None
         and (starts_at is None or pricing_now >= starts_at)
@@ -154,7 +165,7 @@ def load_product_price_quotes(
         merch_query = merch_query.with_for_update()
     merch = {int(row.product_id): row for row in merch_query.all()}
 
-    pricing_now = _utc_naive(now) or utcnow_naive()
+    pricing_now = normalize_utc_naive(now) or utcnow_naive()
     return {
         product_id: quote_product_price(
             supplied[product_id],
