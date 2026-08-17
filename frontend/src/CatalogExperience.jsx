@@ -11,6 +11,7 @@ import {
 import {
   createShowroomAppointment,
   getCatalogProduct,
+  getProductShare,
   listCatalogProducts,
   listMyShowroomAppointments,
   listProductFeedback,
@@ -154,11 +155,12 @@ export default function CatalogExperience() {
     setError("");
     try {
       await ensureAuth();
-      const [detail, rows] = await Promise.all([
+      const [detail, rows, share] = await Promise.all([
         getCatalogProduct(product.id),
         listProductFeedback(product.id),
+        getProductShare(product.id),
       ]);
-      setSelected(detail);
+      setSelected({ ...detail, share });
       setSelectedVariantId(detail.variants?.find((item) => item.available_qty > 0)?.id || detail.variants?.[0]?.id || null);
       setFeedback(rows || []);
       setFeedbackForm({ rating: 5, comment: "" });
@@ -218,7 +220,7 @@ export default function CatalogExperience() {
       await submitProductFeedback(selected.id, feedbackForm.rating, feedbackForm.comment);
       setFeedback(await listProductFeedback(selected.id));
       const refreshed = await getCatalogProduct(selected.id);
-      setSelected(refreshed);
+      setSelected((current) => ({ ...refreshed, share: current?.share || {} }));
       setFeedbackForm({ rating: 5, comment: "" });
       setNotice("Оценка сохранена.");
     } catch (actionError) {
@@ -383,7 +385,8 @@ export default function CatalogExperience() {
             <div className="actions horizontal">
               {selectedVariant?.available_qty > 0 && <button type="button" className="primary" onClick={addSelectedToCart} disabled={busy === "cart"}>Добавить в корзину</button>}
               <button type="button" className="secondary" onClick={toggleFavorite} disabled={busy === "wishlist"}>{isFavorite ? "Убрать из избранного" : "В избранное"}</button>
-              {selected.share?.telegram_share_url && <a className="secondary button-link" href={selected.share.telegram_share_url} target="_blank" rel="noreferrer">Отправить в Telegram</a>}
+              {selected.share?.mini_app_deep_link && <a className="secondary button-link" href={selected.share.mini_app_deep_link} target="_blank" rel="noreferrer">Открыть в Telegram</a>}
+              {selected.share?.telegram_share_url && <a className="secondary button-link" href={selected.share.telegram_share_url} target="_blank" rel="noreferrer">Поделиться в Telegram</a>}
             </div>
 
             {!!selected.external_availability?.length && (
