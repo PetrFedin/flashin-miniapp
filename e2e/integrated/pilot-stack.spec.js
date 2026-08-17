@@ -243,5 +243,26 @@ test("Telegram -> YooKassa webhook -> stock/MoySklad -> fulfillment -> refund ->
   await adminPage.getByRole("button", { name: "Обновить сервис" }).click();
   await expect(returnsQueue.getByText("Возвращён полностью", { exact: true })).toBeVisible();
 
+  const adminToken = await adminPage.evaluate(() => localStorage.getItem("admin_token"));
+  expect(adminToken, "Integrated admin login must persist its bearer token").toBeTruthy();
+  const traceResponse = await adminPage.request.get(
+    `${API_BASE}/api/ops/orders/${order.id}/trace`,
+    { headers: { Authorization: `Bearer ${adminToken}` } },
+  );
+  expect(traceResponse.ok(), "Read-only order lifecycle trace must be available on the real stack").toBeTruthy();
+  const trace = await traceResponse.json();
+  expect(trace.schema_version).toBe(3);
+  expect(["PASS", "PENDING", "REVIEW", "BLOCKED"]).toContain(trace.reconciliation.overall_status);
+  expect(typeof trace.reconciliation.requires_operator_action).toBe("boolean");
+  expect(trace.reconciliation.stages.map((item) => item.key)).toEqual([
+    "payment",
+    "inventory",
+    "moysklad",
+    "fulfillment",
+    "refunds",
+    "notifications",
+  ]);
+  expect(trace.reconciliation.stages.every((item) => ["PASS", "PENDING", "REVIEW", "BLOCKED"].includes(item.status))).toBe(true);
+
   await adminContext.close();
 });
