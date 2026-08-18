@@ -52,8 +52,8 @@ def _order_fixture(db, *, status: str = "pending", quantity: int = 1, sku: str =
             order_id=order.id,
             product_id=product.id,
             variant_id=variant.id,
-            sku=variant.sku,
             title=product.title,
+            size=variant.size,
             quantity=quantity,
             price=1000,
         )
