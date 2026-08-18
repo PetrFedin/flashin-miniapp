@@ -27,6 +27,7 @@ function stoppedPayload(reason) {
     },
     database_integrity: { healthy: true, codes: [] },
     artifact_integrity: { applicable: true, healthy: true, codes: [] },
+    continuation: { applicable: false, ready: null, next_sequence: null },
     money_attention: {
       payment_review_orders: 1,
       refund_attention_orders: 0,
