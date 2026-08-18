@@ -295,7 +295,7 @@ def test_next_checkout_waits_for_signed_previous_scenario_without_stopping_runti
 
     runtime = db.get(PilotRuntimeState, 1)
     assert runtime.status == "active"
-    assert runtime.stop_reason is None
+    assert not runtime.stop_reason
     assert runtime.accepted_orders == 1
 
     payload = json.loads(pilot_path.read_text(encoding="utf-8"))
@@ -333,7 +333,7 @@ def test_current_slot_payment_guard_does_not_wait_for_scenario_pass(tmp_path):
     )
     runtime = db.get(PilotRuntimeState, 1)
     assert runtime.status == "active"
-    assert runtime.stop_reason is None
+    assert not runtime.stop_reason
 
 
 def test_non_allowlisted_customer_and_stop_decision_are_blocked(tmp_path):
