@@ -6,11 +6,11 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Mapping, TYPE_CHECKING
 
-from sqlalchemy import func, or_
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from ..models import Order, PaymentReconciliation, ReturnRequest
 from ..pilot_models import PilotOrderSlot, PilotRuntimeState
+from .pilot_money_safety import build_pilot_money_safety
 from .pilot_operational_safety import (
     DEFAULT_OPERATIONAL_QUEUE_GRACE_MINUTES,
     build_pilot_operational_safety,
@@ -21,8 +21,6 @@ if TYPE_CHECKING:
     from ..config import Settings
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
-_PAYMENT_REVIEW_STATUSES = {"paid_review_required", "payment_review_required"}
-_REFUND_ATTENTION_STATUSES = {"refund_retry_required", "refund_review_required"}
 _SAFE_AUTO_STOP_REASONS = (
     "provider_payment_amount_invalid",
     "provider_payment_amount_or_currency_mismatch",
@@ -35,11 +33,18 @@ _SAFE_AUTO_STOP_REASONS = (
     "payment_review:paid_after_cancel",
     "payment_review:canceled_after_settlement",
     "payment_review:provider_cancel_conflict",
+    "payment_review_required",
     "payment_reconciliation_mismatch",
     "refund_retry_required",
     "refund_review_required",
     "refund_finalization_integrity_failure",
     "refund_finalization_integrity_conflict",
+    "runtime_artifact_integrity_failure",
+    "pilot_control_decision_stop",
+    "pilot_database_integrity_failure",
+    "operational_safety_failure",
+    "pilot_money_safety_evaluation_failure",
+    "pilot_runtime_configuration_mismatch",
     "pilot_slot_runtime_mismatch",
 )
 
@@ -123,53 +128,13 @@ def _artifact_error_codes(errors: list[str]) -> list[str]:
     return codes
 
 
-def _money_attention(db: Session, order_ids: list[int]) -> dict[str, int | bool]:
-    if not order_ids:
-        return {
-            "payment_review_orders": 0,
-            "refund_attention_orders": 0,
-            "reconciliation_mismatches": 0,
-            "attention_required": False,
-        }
-
-    payment_review_orders = (
-        db.query(func.count(func.distinct(Order.id)))
-        .filter(
-            Order.id.in_(order_ids),
-            or_(
-                Order.status == "payment_review_required",
-                Order.payment_status.in_(_PAYMENT_REVIEW_STATUSES),
-            ),
-        )
-        .scalar()
-        or 0
-    )
-    refund_attention_orders = (
-        db.query(func.count(func.distinct(ReturnRequest.order_id)))
-        .filter(
-            ReturnRequest.order_id.in_(order_ids),
-            ReturnRequest.status.in_(_REFUND_ATTENTION_STATUSES),
-        )
-        .scalar()
-        or 0
-    )
-    reconciliation_mismatches = (
-        db.query(func.count(PaymentReconciliation.id))
-        .filter(
-            PaymentReconciliation.order_id.in_(order_ids),
-            PaymentReconciliation.status == "mismatch",
-            PaymentReconciliation.resolved_at.is_(None),
-        )
-        .scalar()
-        or 0
-    )
+def _money_attention(db: Session, order_ids: list[int]) -> dict[str, Any]:
+    verdict = build_pilot_money_safety(db, order_ids)
     return {
-        "payment_review_orders": int(payment_review_orders),
-        "refund_attention_orders": int(refund_attention_orders),
-        "reconciliation_mismatches": int(reconciliation_mismatches),
-        "attention_required": bool(
-            payment_review_orders or refund_attention_orders or reconciliation_mismatches
-        ),
+        "payment_review_orders": int(verdict["payment_review_orders"]),
+        "refund_attention_orders": int(verdict["refund_attention_orders"]),
+        "reconciliation_mismatches": int(verdict["reconciliation_mismatches"]),
+        "attention_required": bool(verdict["attention_required"]),
     }
 
 
