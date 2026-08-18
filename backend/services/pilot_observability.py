@@ -129,7 +129,13 @@ def _artifact_error_codes(errors: list[str]) -> list[str]:
 
 
 def _money_attention(db: Session, order_ids: list[int]) -> dict[str, Any]:
-    return build_pilot_money_safety(db, order_ids)
+    verdict = build_pilot_money_safety(db, order_ids)
+    return {
+        "payment_review_orders": int(verdict["payment_review_orders"]),
+        "refund_attention_orders": int(verdict["refund_attention_orders"]),
+        "reconciliation_mismatches": int(verdict["reconciliation_mismatches"]),
+        "attention_required": bool(verdict["attention_required"]),
+    }
 
 
 def _not_applicable_operational_safety(*, healthy: bool | None = None) -> dict[str, Any]:
