@@ -13,7 +13,7 @@ from backend.main import app
 from backend.models import Customer, Order, PaymentReconciliation, ReturnRequest
 from backend.pilot_models import PilotOrderSlot, PilotRuntimeState
 from backend.provider_models import ProviderCommand
-from backend.services import pilot_observability
+from backend.services import pilot_observability, pilot_operational_safety
 
 
 def _database():
@@ -106,6 +106,17 @@ def _mock_verified_runtime(
             raise database_exception
         return list(database_errors or [])
 
+    def fake_inventory_safety(_db, order_ids):
+        return {
+            "healthy": True,
+            "blocking_codes": [],
+            "pilot_orders": len(order_ids),
+            "pilot_variants": 0,
+            "open_reconciliation_variants": 0,
+            "chain_failures": 0,
+            "stop_reason": None,
+        }
+
     monkeypatch.setattr(
         pilot_observability,
         "validate_runtime_files",
@@ -115,6 +126,11 @@ def _mock_verified_runtime(
         pilot_observability,
         "validate_pilot_database_evidence",
         fake_database_evidence,
+    )
+    monkeypatch.setattr(
+        pilot_operational_safety,
+        "build_pilot_inventory_safety",
+        fake_inventory_safety,
     )
 
 
