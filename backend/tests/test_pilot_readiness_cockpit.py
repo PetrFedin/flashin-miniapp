@@ -36,6 +36,7 @@ def _runtime(**overrides) -> dict:
         },
         "database_integrity": {"healthy": True},
         "artifact_integrity": {"applicable": True, "healthy": True},
+        "continuation": {"applicable": True, "ready": True, "next_sequence": 4},
         "money_attention": {"attention_required": False},
         "operational_safety": {"applicable": True, "healthy": True},
     }
@@ -51,6 +52,23 @@ def test_all_critical_signals_green_allows_next_order():
     assert result["blocking_codes"] == []
     assert result["warning_codes"] == []
     assert result["runtime"]["remaining_orders"] == 17
+    assert result["runtime"]["continuation_ready"] is True
+    assert result["runtime"]["next_sequence"] == 4
+
+
+def test_pending_previous_scenario_is_explicit_next_order_blocker():
+    result = compose_pilot_readiness(
+        _diagnostics(),
+        _runtime(
+            checkout_decision="NO-GO",
+            continuation={"applicable": True, "ready": False, "next_sequence": 4},
+        ),
+    )
+
+    assert result["decision"] == "NO-GO"
+    assert result["ready_for_next_order"] is False
+    assert "runtime_checkout_no_go" in result["blocking_codes"]
+    assert "runtime_previous_scenario_pending" in result["blocking_codes"]
 
 
 def test_critical_payment_diagnostic_blocks_next_order():
@@ -112,6 +130,7 @@ def test_missing_snapshots_fail_closed_without_raw_error_details():
 def test_missing_runtime_integrity_evidence_fails_closed():
     runtime = _runtime(
         artifact_integrity={"applicable": False, "healthy": None},
+        continuation={"applicable": True, "ready": None, "next_sequence": 4},
         operational_safety={"applicable": False, "healthy": None},
     )
     result = compose_pilot_readiness(_diagnostics(), runtime)
@@ -119,6 +138,7 @@ def test_missing_runtime_integrity_evidence_fails_closed():
     assert result["decision"] == "NO-GO"
     assert "runtime_artifact_integrity_unavailable" in result["blocking_codes"]
     assert "runtime_operational_safety_unavailable" in result["blocking_codes"]
+    assert "runtime_previous_scenario_pending" not in result["blocking_codes"]
 
 
 def test_money_attention_is_an_explicit_blocker():
