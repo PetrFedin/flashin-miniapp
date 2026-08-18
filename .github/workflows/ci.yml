@@ -193,7 +193,7 @@ jobs:
         run: npm install --no-audit --no-fund
       - name: Install Chromium
         working-directory: e2e
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install chromium
       - name: Run Mini App and Admin browser journeys
         working-directory: e2e
         run: npm test
@@ -273,7 +273,7 @@ jobs:
           npm install --no-audit --no-fund --prefix admin
       - name: Install Chromium
         working-directory: e2e
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install chromium
       - name: Apply integrated E2E database migrations
         run: alembic -c backend/alembic.ini upgrade head
       - name: Run real internal-stack browser journey

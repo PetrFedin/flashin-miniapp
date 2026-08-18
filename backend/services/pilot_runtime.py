@@ -31,6 +31,7 @@ from ..pilot_models import PilotOrderSlot, PilotRuntimeState
 from .pilot_database_evidence import validate_pilot_database_evidence
 from .pilot_money_safety import build_pilot_money_safety
 from .pilot_operational_safety import build_pilot_operational_safety
+from .pilot_sequence_safety import is_pilot_sequence_continuation_ready
 
 if TYPE_CHECKING:
     from ..config import Settings
@@ -332,6 +333,7 @@ def _verify_runtime_safety(
     env: Mapping[str, str] | None,
     blocked_error: Callable[[], HTTPException],
     integrity_error: Callable[[], HTTPException],
+    require_continuation: bool = False,
 ) -> dict[str, Any]:
     if state.opened_at is None:
         _persist_auto_stop_and_raise(
@@ -424,6 +426,12 @@ def _verify_runtime_safety(
             integrity_error=integrity_error,
         )
 
+    if require_continuation and not is_pilot_sequence_continuation_ready(
+        current_pilot_state,
+        accepted_orders=state.accepted_orders,
+    ):
+        raise blocked_error()
+
     return current_anchor
 
 
@@ -461,6 +469,7 @@ def acquire_pilot_checkout(
         env=env,
         blocked_error=_blocked,
         integrity_error=_integrity_failure,
+        require_continuation=True,
     )
     state.pilot_state_revision = int(current_anchor["revision"])
     state.pilot_state_sha256 = str(current_anchor["sha256"])

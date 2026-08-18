@@ -14,6 +14,7 @@ from backend.pilot_models import PilotOrderSlot, PilotRuntimeState
 from backend.provider_models import ProviderCommand
 from backend.services.pilot_runtime import (
     acquire_pilot_checkout,
+    assert_pilot_new_payment_attempt_allowed,
     record_pilot_order,
     sha256_file,
 )
@@ -89,7 +90,10 @@ def _runtime(tmp_path: Path, *, accepted_orders: int = 0):
         "state_history_sha256": [],
         "created_at": pilot_created_at,
         "decision": "NO-GO",
-        "scenarios": [{} for _ in range(20)],
+        "scenarios": [
+            {"number": number, "result": "todo"}
+            for number in range(1, 21)
+        ],
     }
 
     manifest_path = pilot_docs / "pilot_admission_manifest.json"
@@ -168,10 +172,12 @@ def _runtime(tmp_path: Path, *, accepted_orders: int = 0):
         opened_at=utcnow_naive(),
     )
     session.add(state)
+    pilot_orders: list[Order] = []
     for sequence in range(1, accepted_orders + 1):
         order = Order(customer_id=customer.id, total_amount=100, currency="RUB")
         session.add(order)
         session.flush()
+        pilot_orders.append(order)
         session.add(
             PilotOrderSlot(
                 run_id=state.run_id,
@@ -182,6 +188,22 @@ def _runtime(tmp_path: Path, *, accepted_orders: int = 0):
             )
         )
     session.commit()
+
+    if pilot_orders:
+        current_pilot = json.loads(pilot_path.read_text(encoding="utf-8"))
+        for sequence, order in enumerate(pilot_orders, start=1):
+            current_pilot = _next_signed_state(
+                current_pilot,
+                secret,
+                scenario_number=sequence,
+                result="pass",
+                scenario_changes={
+                    "order_id": str(order.id),
+                    "order_status": str(order.status),
+                },
+            )
+        pilot_path.write_text(json.dumps(current_pilot), encoding="utf-8")
+
     return session, customer, settings, env, pilot_path, manifest_path, previous_path
 
 
@@ -194,6 +216,7 @@ def _next_signed_state(
     decision: str | None = None,
     admission_sha256: str | None = None,
     parent_sha256: str | None = None,
+    scenario_changes: dict | None = None,
 ) -> dict:
     parent = state_anchor(payload)
     child = json.loads(json.dumps(payload))
@@ -201,7 +224,10 @@ def _next_signed_state(
     effective_parent = parent_sha256 or parent["sha256"]
     child["revision"] = parent["revision"] + 1
     child["state_history_sha256"] = [*parent["history"], effective_parent]
-    child["scenarios"][scenario_number - 1]["result"] = result
+    record = child["scenarios"][scenario_number - 1]
+    record["result"] = result
+    for key, value in (scenario_changes or {}).items():
+        record[key] = value
     if decision is not None:
         child["decision"] = decision
     if admission_sha256 is not None:
@@ -247,6 +273,67 @@ def test_allowlisted_checkout_consumes_one_atomic_slot(tmp_path):
     assert state.accepted_orders == 1
     assert state.status == "active"
     assert db.query(PilotOrderSlot).count() == 1
+
+
+def test_next_checkout_waits_for_signed_previous_scenario_without_stopping_runtime(tmp_path):
+    db, customer, settings, env, pilot_path, *_ = _runtime(tmp_path)
+
+    first = acquire_pilot_checkout(db, customer=customer, settings=settings, env=env)
+    order = Order(customer_id=customer.id, total_amount=100, currency="RUB")
+    db.add(order)
+    db.flush()
+    record_pilot_order(db, context=first, order=order, customer=customer)
+    db.commit()
+
+    with pytest.raises(HTTPException) as waiting:
+        acquire_pilot_checkout(db, customer=customer, settings=settings, env=env)
+    assert waiting.value.status_code == 423
+    assert waiting.value.detail == {
+        "code": "pilot_checkout_unavailable",
+        "message": "Checkout is temporarily unavailable during the controlled pilot.",
+    }
+
+    runtime = db.get(PilotRuntimeState, 1)
+    assert runtime.status == "active"
+    assert not runtime.stop_reason
+    assert runtime.accepted_orders == 1
+
+    payload = json.loads(pilot_path.read_text(encoding="utf-8"))
+    passed = _next_signed_state(
+        payload,
+        env["PILOT_EVIDENCE_SIGNING_SECRET"],
+        scenario_number=1,
+        result="pass",
+        scenario_changes={
+            "order_id": str(order.id),
+            "order_status": str(order.status),
+        },
+    )
+    pilot_path.write_text(json.dumps(passed), encoding="utf-8")
+
+    second = acquire_pilot_checkout(db, customer=customer, settings=settings, env=env)
+    assert second.sequence == 2
+
+
+def test_current_slot_payment_guard_does_not_wait_for_scenario_pass(tmp_path):
+    db, customer, settings, env, *_ = _runtime(tmp_path)
+
+    context = acquire_pilot_checkout(db, customer=customer, settings=settings, env=env)
+    order = Order(customer_id=customer.id, total_amount=100, currency="RUB")
+    db.add(order)
+    db.flush()
+    record_pilot_order(db, context=context, order=order, customer=customer)
+    db.commit()
+
+    assert_pilot_new_payment_attempt_allowed(
+        db,
+        order_id=order.id,
+        settings=settings,
+        env=env,
+    )
+    runtime = db.get(PilotRuntimeState, 1)
+    assert runtime.status == "active"
+    assert not runtime.stop_reason
 
 
 def test_non_allowlisted_customer_and_stop_decision_are_blocked(tmp_path):
