@@ -9,6 +9,7 @@ from typing import Any, Callable, Mapping, TYPE_CHECKING
 
 from fastapi import HTTPException
 from sqlalchemy import func
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from scripts.pilot_release_contract import CAPABILITY_VERSION
@@ -26,9 +27,10 @@ from scripts.pilot_evidence import (
 )
 
 from ..database import utcnow_naive
-from .pilot_database_evidence import validate_pilot_database_evidence
-from .pilot_operational_safety import build_pilot_operational_safety
 from ..pilot_models import PilotOrderSlot, PilotRuntimeState
+from .pilot_database_evidence import validate_pilot_database_evidence
+from .pilot_money_safety import build_pilot_money_safety
+from .pilot_operational_safety import build_pilot_operational_safety
 
 if TYPE_CHECKING:
     from ..config import Settings
@@ -288,6 +290,40 @@ def _payment_integrity_failure() -> HTTPException:
     )
 
 
+def _persist_auto_stop_and_raise(
+    db: Session,
+    state: PilotRuntimeState,
+    *,
+    reason: str,
+    response_error: Callable[[], HTTPException],
+    integrity_error: Callable[[], HTTPException],
+) -> None:
+    """Persist a bounded circuit-breaker STOP before rejecting new pilot money."""
+
+    if state.status in {"active", "completed"}:
+        now = utcnow_naive()
+        state.status = "stopped"
+        state.stopped_at = now
+        state.stop_reason = f"auto:{reason}"
+        state.updated_at = now
+        try:
+            db.commit()
+        except SQLAlchemyError as exc:
+            db.rollback()
+            raise integrity_error() from exc
+    raise response_error()
+
+
+def _pilot_order_ids(db: Session, state: PilotRuntimeState) -> list[int]:
+    rows = (
+        db.query(PilotOrderSlot.order_id)
+        .filter(PilotOrderSlot.run_id == state.run_id)
+        .order_by(PilotOrderSlot.sequence.asc())
+        .all()
+    )
+    return [int(row[0]) for row in rows if row[0] is not None]
+
+
 def _verify_runtime_safety(
     db: Session,
     state: PilotRuntimeState,
@@ -298,7 +334,13 @@ def _verify_runtime_safety(
     integrity_error: Callable[[], HTTPException],
 ) -> dict[str, Any]:
     if state.opened_at is None:
-        raise integrity_error()
+        _persist_auto_stop_and_raise(
+            db,
+            state,
+            reason="pilot_runtime_configuration_mismatch",
+            response_error=integrity_error,
+            integrity_error=integrity_error,
+        )
 
     current_anchor: dict[str, Any] = {}
     current_pilot_state: dict[str, Any] = {}
@@ -311,8 +353,39 @@ def _verify_runtime_safety(
     )
     if file_errors:
         if "pilot control decision is STOP" in file_errors:
-            raise blocked_error()
-        raise integrity_error()
+            _persist_auto_stop_and_raise(
+                db,
+                state,
+                reason="pilot_control_decision_stop",
+                response_error=blocked_error,
+                integrity_error=integrity_error,
+            )
+        _persist_auto_stop_and_raise(
+            db,
+            state,
+            reason="runtime_artifact_integrity_failure",
+            response_error=integrity_error,
+            integrity_error=integrity_error,
+        )
+
+    try:
+        money_safety = build_pilot_money_safety(db, _pilot_order_ids(db, state))
+    except (SQLAlchemyError, TypeError, ValueError):
+        _persist_auto_stop_and_raise(
+            db,
+            state,
+            reason="pilot_money_safety_evaluation_failure",
+            response_error=integrity_error,
+            integrity_error=integrity_error,
+        )
+    if money_safety["healthy"] is not True:
+        _persist_auto_stop_and_raise(
+            db,
+            state,
+            reason=str(money_safety.get("stop_reason") or "pilot_money_safety_evaluation_failure"),
+            response_error=blocked_error,
+            integrity_error=integrity_error,
+        )
 
     database_errors = validate_pilot_database_evidence(
         db,
@@ -321,7 +394,13 @@ def _verify_runtime_safety(
         final=False,
     )
     if database_errors:
-        raise integrity_error()
+        _persist_auto_stop_and_raise(
+            db,
+            state,
+            reason="pilot_database_integrity_failure",
+            response_error=integrity_error,
+            integrity_error=integrity_error,
+        )
 
     try:
         operational_safety = build_pilot_operational_safety(
@@ -329,9 +408,21 @@ def _verify_runtime_safety(
             created_since=state.opened_at,
         )
     except ValueError:
-        raise integrity_error()
+        _persist_auto_stop_and_raise(
+            db,
+            state,
+            reason="operational_safety_failure",
+            response_error=integrity_error,
+            integrity_error=integrity_error,
+        )
     if operational_safety["healthy"] is not True:
-        raise blocked_error()
+        _persist_auto_stop_and_raise(
+            db,
+            state,
+            reason="operational_safety_failure",
+            response_error=blocked_error,
+            integrity_error=integrity_error,
+        )
 
     return current_anchor
 
@@ -355,7 +446,13 @@ def acquire_pilot_checkout(
     if not state or state.status != "active":
         raise _blocked()
     if state.max_orders != settings.pilot_runtime_max_orders or state.max_orders != 20:
-        raise _integrity_failure()
+        _persist_auto_stop_and_raise(
+            db,
+            state,
+            reason="pilot_runtime_configuration_mismatch",
+            response_error=_integrity_failure,
+            integrity_error=_integrity_failure,
+        )
 
     current_anchor = _verify_runtime_safety(
         db,
@@ -371,7 +468,13 @@ def acquire_pilot_checkout(
 
     allowlist, allowlist_errors = _parse_allowlist(state.allowed_telegram_ids)
     if allowlist_errors:
-        raise _integrity_failure()
+        _persist_auto_stop_and_raise(
+            db,
+            state,
+            reason="pilot_runtime_configuration_mismatch",
+            response_error=_integrity_failure,
+            integrity_error=_integrity_failure,
+        )
     if str(customer.telegram_id).strip() not in allowlist:
         raise _blocked()
 
@@ -382,7 +485,13 @@ def acquire_pilot_checkout(
         or 0
     )
     if slot_count != state.accepted_orders:
-        raise _integrity_failure()
+        _persist_auto_stop_and_raise(
+            db,
+            state,
+            reason="pilot_slot_runtime_mismatch",
+            response_error=_integrity_failure,
+            integrity_error=_integrity_failure,
+        )
     if state.accepted_orders >= state.max_orders:
         raise _blocked()
 
@@ -416,8 +525,6 @@ def assert_pilot_new_payment_attempt_allowed(
         .first()
     )
     if slot is None:
-        # During an enforced pilot, fresh money commands may only originate from
-        # orders that consumed an admitted pilot slot.
         raise _payment_blocked()
 
     state = (
@@ -429,19 +536,37 @@ def assert_pilot_new_payment_attempt_allowed(
     if state is None:
         raise _payment_integrity_failure()
     if state.run_id != slot.run_id or state.admission_sha256 != slot.admission_sha256:
-        raise _payment_integrity_failure()
+        _persist_auto_stop_and_raise(
+            db,
+            state,
+            reason="pilot_slot_runtime_mismatch",
+            response_error=_payment_integrity_failure,
+            integrity_error=_payment_integrity_failure,
+        )
     if state.status == "stopped":
         raise _payment_blocked()
     if state.status not in {"active", "completed"}:
         raise _payment_blocked()
     if state.max_orders != settings.pilot_runtime_max_orders or state.max_orders != 20:
-        raise _payment_integrity_failure()
+        _persist_auto_stop_and_raise(
+            db,
+            state,
+            reason="pilot_runtime_configuration_mismatch",
+            response_error=_payment_integrity_failure,
+            integrity_error=_payment_integrity_failure,
+        )
     if (
         slot.sequence < 1
         or slot.sequence > state.accepted_orders
         or state.accepted_orders > state.max_orders
     ):
-        raise _payment_integrity_failure()
+        _persist_auto_stop_and_raise(
+            db,
+            state,
+            reason="pilot_slot_runtime_mismatch",
+            response_error=_payment_integrity_failure,
+            integrity_error=_payment_integrity_failure,
+        )
 
     current_anchor = _verify_runtime_safety(
         db,
