@@ -71,10 +71,57 @@ def _active_runtime(db, *, accepted_orders: int = 2):
     return state, customer, orders
 
 
+def _mock_verified_runtime(
+    monkeypatch,
+    *,
+    sequence_ready: bool = True,
+    database_errors: list[str] | None = None,
+    database_exception: Exception | None = None,
+):
+    def fake_validate_runtime_files(state, _settings, **kwargs):
+        target = kwargs.get("validated_pilot_state")
+        if target is not None:
+            target.update(
+                {
+                    "scenarios": [
+                        {
+                            "number": number,
+                            "result": (
+                                "pass"
+                                if number <= state.accepted_orders
+                                and (sequence_ready or number < state.accepted_orders)
+                                else "running"
+                                if number == state.accepted_orders and state.accepted_orders > 0
+                                else "todo"
+                            ),
+                        }
+                        for number in range(1, 21)
+                    ]
+                }
+            )
+        return []
+
+    def fake_database_evidence(*_args, **_kwargs):
+        if database_exception is not None:
+            raise database_exception
+        return list(database_errors or [])
+
+    monkeypatch.setattr(
+        pilot_observability,
+        "validate_runtime_files",
+        fake_validate_runtime_files,
+    )
+    monkeypatch.setattr(
+        pilot_observability,
+        "validate_pilot_database_evidence",
+        fake_database_evidence,
+    )
+
+
 def test_healthy_active_runtime_is_go_without_exposing_allowlist_or_raw_run_id(monkeypatch):
     db = _database()
     _state, _customer, _orders = _active_runtime(db)
-    monkeypatch.setattr(pilot_observability, "validate_runtime_files", lambda *_args, **_kwargs: [])
+    _mock_verified_runtime(monkeypatch)
 
     snapshot = pilot_observability.build_pilot_operations_status(db, _settings())
 
@@ -90,6 +137,11 @@ def test_healthy_active_runtime_is_go_without_exposing_allowlist_or_raw_run_id(m
         "healthy": True,
         "codes": [],
     }
+    assert snapshot["continuation"] == {
+        "applicable": True,
+        "ready": True,
+        "next_sequence": 3,
+    }
     assert snapshot["operational_safety"]["applicable"] is True
     assert snapshot["operational_safety"]["healthy"] is True
     assert snapshot["operational_safety"]["blocking_codes"] == []
@@ -100,6 +152,67 @@ def test_healthy_active_runtime_is_go_without_exposing_allowlist_or_raw_run_id(m
     assert "pilot-run-2026" not in serialized
     assert "allowed_telegram_ids" not in serialized
     assert '"run_id"' not in serialized
+
+
+def test_pending_previous_scenario_blocks_only_next_checkout_without_mutating_runtime(monkeypatch):
+    db = _database()
+    state, _customer, _orders = _active_runtime(db, accepted_orders=1)
+    _mock_verified_runtime(monkeypatch, sequence_ready=False)
+    before = (state.status, state.stop_reason, state.accepted_orders, state.updated_at)
+
+    snapshot = pilot_observability.build_pilot_operations_status(db, _settings())
+
+    assert snapshot["checkout_decision"] == "NO-GO"
+    assert snapshot["database_integrity"] == {"healthy": True, "codes": []}
+    assert snapshot["artifact_integrity"]["healthy"] is True
+    assert snapshot["continuation"] == {
+        "applicable": True,
+        "ready": False,
+        "next_sequence": 2,
+    }
+    db.refresh(state)
+    assert (state.status, state.stop_reason, state.accepted_orders, state.updated_at) == before
+
+
+def test_database_evidence_failure_is_bounded_and_private_details_never_escape(monkeypatch):
+    db = _database()
+    _active_runtime(db, accepted_orders=1)
+    _mock_verified_runtime(
+        monkeypatch,
+        database_errors=["#1 private order 741 provider=/srv/private/customer-123456789"],
+    )
+
+    snapshot = pilot_observability.build_pilot_operations_status(db, _settings())
+
+    assert snapshot["checkout_decision"] == "NO-GO"
+    assert snapshot["database_integrity"] == {
+        "healthy": False,
+        "codes": ["pilot_database_evidence_invalid"],
+    }
+    assert snapshot["continuation"] == {
+        "applicable": True,
+        "ready": None,
+        "next_sequence": 2,
+    }
+    serialized = json.dumps(snapshot)
+    assert "741" not in serialized
+    assert "/srv/private" not in serialized
+    assert "123456789" not in serialized
+
+
+def test_database_evidence_exception_is_same_bounded_no_go(monkeypatch):
+    db = _database()
+    _active_runtime(db, accepted_orders=1)
+    _mock_verified_runtime(
+        monkeypatch,
+        database_exception=RuntimeError("private database order 123456789"),
+    )
+
+    snapshot = pilot_observability.build_pilot_operations_status(db, _settings())
+
+    assert snapshot["checkout_decision"] == "NO-GO"
+    assert snapshot["database_integrity"]["codes"] == ["pilot_database_evidence_invalid"]
+    assert "123456789" not in json.dumps(snapshot)
 
 
 def test_money_review_signals_force_no_go_without_order_ids(monkeypatch):
@@ -123,7 +236,7 @@ def test_money_review_signals_force_no_go_without_order_ids(monkeypatch):
         )
     )
     db.commit()
-    monkeypatch.setattr(pilot_observability, "validate_runtime_files", lambda *_args, **_kwargs: [])
+    _mock_verified_runtime(monkeypatch)
 
     snapshot = pilot_observability.build_pilot_operations_status(db, _settings())
 
@@ -156,7 +269,7 @@ def test_current_run_provider_failure_is_no_go_and_redacted(monkeypatch):
         )
     )
     db.commit()
-    monkeypatch.setattr(pilot_observability, "validate_runtime_files", lambda *_args, **_kwargs: [])
+    _mock_verified_runtime(monkeypatch)
 
     snapshot = pilot_observability.build_pilot_operations_status(db, _settings())
 
@@ -186,7 +299,7 @@ def test_historical_provider_failure_before_opened_at_is_ignored(monkeypatch):
         )
     )
     db.commit()
-    monkeypatch.setattr(pilot_observability, "validate_runtime_files", lambda *_args, **_kwargs: [])
+    _mock_verified_runtime(monkeypatch)
 
     snapshot = pilot_observability.build_pilot_operations_status(db, _settings())
 
@@ -202,7 +315,7 @@ def test_database_counter_or_sequence_drift_is_reported(monkeypatch):
     db.delete(slot)
     state.accepted_orders = 2
     db.commit()
-    monkeypatch.setattr(pilot_observability, "validate_runtime_files", lambda *_args, **_kwargs: [])
+    _mock_verified_runtime(monkeypatch)
 
     snapshot = pilot_observability.build_pilot_operations_status(db, _settings())
 
@@ -217,7 +330,7 @@ def test_active_runtime_without_opened_at_is_no_go(monkeypatch):
     state, _customer, _orders = _active_runtime(db)
     state.opened_at = None
     db.commit()
-    monkeypatch.setattr(pilot_observability, "validate_runtime_files", lambda *_args, **_kwargs: [])
+    _mock_verified_runtime(monkeypatch)
 
     snapshot = pilot_observability.build_pilot_operations_status(db, _settings())
 
@@ -230,7 +343,7 @@ def test_active_runtime_without_opened_at_is_no_go(monkeypatch):
 def test_configured_limit_mismatch_is_no_go(monkeypatch):
     db = _database()
     _active_runtime(db)
-    monkeypatch.setattr(pilot_observability, "validate_runtime_files", lambda *_args, **_kwargs: [])
+    _mock_verified_runtime(monkeypatch)
 
     snapshot = pilot_observability.build_pilot_operations_status(
         db,
@@ -264,6 +377,7 @@ def test_artifact_failures_are_reduced_to_safe_machine_codes(monkeypatch):
         "evidence_file_invalid",
         "signing_configuration_invalid",
     ]
+    assert snapshot["continuation"]["ready"] is None
     serialized = json.dumps(snapshot)
     assert "/srv/private" not in serialized
     assert "PILOT_EVIDENCE_SIGNING_SECRET" not in serialized
@@ -275,11 +389,16 @@ def test_stop_reason_is_reduced_to_an_allowlisted_category(monkeypatch):
     state.status = "stopped"
     state.stop_reason = "Call customer 123456789 about secret provider incident"
     db.commit()
-    monkeypatch.setattr(pilot_observability, "validate_runtime_files", lambda *_args, **_kwargs: [])
+    _mock_verified_runtime(monkeypatch)
 
     snapshot = pilot_observability.build_pilot_operations_status(db, _settings())
 
     assert snapshot["runtime"]["stop_reason"] == "operator_stop"
+    assert snapshot["continuation"] == {
+        "applicable": False,
+        "ready": None,
+        "next_sequence": None,
+    }
     serialized = json.dumps(snapshot)
     assert "123456789" not in serialized
     assert "secret provider incident" not in serialized
@@ -317,6 +436,11 @@ def test_missing_runtime_is_no_go_when_enforcement_is_enabled():
     assert snapshot["database_integrity"] == {
         "healthy": False,
         "codes": ["runtime_state_missing"],
+    }
+    assert snapshot["continuation"] == {
+        "applicable": False,
+        "ready": None,
+        "next_sequence": None,
     }
     assert snapshot["operational_safety"] == {
         "applicable": False,
