@@ -47,6 +47,18 @@ def test_paid_order_missing_customer_order_remains_pending_not_green():
     assert "moysklad.customer_order.create" in moysklad_stage(result)["evidence"][0]
 
 
+def test_refund_pending_still_requires_original_customer_order_command():
+    result = enforce_moysklad_lifecycle_contract(
+        reconciliation("PASS"),
+        trace("refund_requested", "refund_pending", "pending", []),
+    )
+
+    assert result["overall_status"] == "PENDING"
+    assert result["requires_operator_action"] is False
+    assert moysklad_stage(result)["status"] == "PENDING"
+    assert "moysklad.customer_order.create" in moysklad_stage(result)["evidence"][0]
+
+
 def test_shipped_order_missing_demand_requires_review():
     result = enforce_moysklad_lifecycle_contract(
         reconciliation("PASS"),

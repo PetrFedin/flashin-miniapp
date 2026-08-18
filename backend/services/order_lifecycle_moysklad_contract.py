@@ -3,6 +3,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from ..order_statuses import SETTLED_ORDER_PAYMENT_STATUSES
+
 
 _STATUS_RANK = {"PASS": 0, "PENDING": 1, "REVIEW": 2, "BLOCKED": 3}
 _CUSTOMER_ORDER = "moysklad.customer_order.create"
@@ -21,8 +23,8 @@ def _required_commands(trace: dict[str, Any]) -> set[str]:
     delivery_status = _status(order.get("delivery_status"))
     required: set[str] = set()
 
-    if payment_status in {"paid", "partially_refunded", "refunded"} or order_status in {
-        "paid", "assembling", "ready", "shipped", "completed", "refund_requested", "refunded"
+    if payment_status in SETTLED_ORDER_PAYMENT_STATUSES or order_status in {
+        "paid", "assembling", "ready", "shipped", "completed", "refund_requested", "partially_refunded", "refunded"
     }:
         required.add(_CUSTOMER_ORDER)
     if order_status in {"shipped", "completed", "refunded"} or delivery_status in {
@@ -64,7 +66,7 @@ def enforce_moysklad_lifecycle_contract(
     reconciliation: dict[str, Any],
     trace: dict[str, Any],
 ) -> dict[str, Any]:
-    """Ensure terminal lifecycle states contain every expected MoySklad command."""
+    """Ensure lifecycle states contain every expected MoySklad command."""
 
     result = deepcopy(reconciliation)
     stages = result.get("stages") if isinstance(result.get("stages"), list) else []
