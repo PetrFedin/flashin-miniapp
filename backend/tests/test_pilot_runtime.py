@@ -9,9 +9,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from backend.database import Base, utcnow_naive
-from backend.models import Customer, Order
+from backend.models import Customer, Order, OrderItem, Product, ProductVariant
 from backend.pilot_models import PilotOrderSlot, PilotRuntimeState
 from backend.provider_models import ProviderCommand
+from backend.services.inventory import reserve_variant
 from backend.services.pilot_runtime import (
     acquire_pilot_checkout,
     assert_pilot_new_payment_attempt_allowed,
@@ -37,6 +38,46 @@ def _capability(state: dict, secret: str) -> dict:
             "release_id": state["release_id"],
         },
         secret,
+    )
+
+
+def _attach_pending_inventory(db, order: Order) -> None:
+    suffix = str(order.id)
+    product = Product(
+        sku=f"pilot-{suffix}",
+        title=f"Pilot Product {suffix}",
+        slug=f"pilot-{suffix}",
+        price=100,
+    )
+    db.add(product)
+    db.flush()
+    variant = ProductVariant(
+        product_id=product.id,
+        size="M",
+        sku=f"pilot-{suffix}-M",
+        stock_qty=10,
+        reserved_qty=0,
+    )
+    db.add(variant)
+    db.flush()
+    db.add(
+        OrderItem(
+            order_id=order.id,
+            product_id=product.id,
+            variant_id=variant.id,
+            title=product.title,
+            size=variant.size,
+            quantity=1,
+            price=100,
+        )
+    )
+    db.flush()
+    reserve_variant(
+        db,
+        variant.id,
+        1,
+        order_id=order.id,
+        source="pilot-runtime-test",
     )
 
 
@@ -177,6 +218,7 @@ def _runtime(tmp_path: Path, *, accepted_orders: int = 0):
         order = Order(customer_id=customer.id, total_amount=100, currency="RUB")
         session.add(order)
         session.flush()
+        _attach_pending_inventory(session, order)
         pilot_orders.append(order)
         session.add(
             PilotOrderSlot(
@@ -266,6 +308,7 @@ def test_allowlisted_checkout_consumes_one_atomic_slot(tmp_path):
     order = Order(customer_id=customer.id, total_amount=100, currency="RUB")
     db.add(order)
     db.flush()
+    _attach_pending_inventory(db, order)
     record_pilot_order(db, context=context, order=order, customer=customer)
     db.commit()
 
@@ -282,6 +325,7 @@ def test_next_checkout_waits_for_signed_previous_scenario_without_stopping_runti
     order = Order(customer_id=customer.id, total_amount=100, currency="RUB")
     db.add(order)
     db.flush()
+    _attach_pending_inventory(db, order)
     record_pilot_order(db, context=first, order=order, customer=customer)
     db.commit()
 
@@ -322,6 +366,7 @@ def test_current_slot_payment_guard_does_not_wait_for_scenario_pass(tmp_path):
     order = Order(customer_id=customer.id, total_amount=100, currency="RUB")
     db.add(order)
     db.flush()
+    _attach_pending_inventory(db, order)
     record_pilot_order(db, context=context, order=order, customer=customer)
     db.commit()
 
@@ -396,6 +441,7 @@ def test_twentieth_order_closes_runtime_without_exceeding_limit(tmp_path):
     order = Order(customer_id=customer.id, total_amount=100, currency="RUB")
     db.add(order)
     db.flush()
+    _attach_pending_inventory(db, order)
     record_pilot_order(db, context=context, order=order, customer=customer)
     db.commit()
 

@@ -10,7 +10,9 @@ from sqlalchemy.orm import Session
 from ..database import utcnow_naive
 from ..models import BusinessEvent, Notification, WebhookOutbox
 from ..notification_models import NotificationDeliveryState
+from ..pilot_models import PilotOrderSlot, PilotRuntimeState
 from ..provider_models import ProviderCommand
+from .pilot_inventory_safety import build_pilot_inventory_safety
 from .pilot_worker_heartbeat import build_required_worker_liveness
 
 DEFAULT_OPERATIONAL_QUEUE_GRACE_MINUTES = 15
@@ -341,6 +343,65 @@ def _notification_queue(
     )
 
 
+def _pilot_inventory_queue(
+    db: Session,
+    *,
+    created_since: datetime | None,
+) -> tuple[dict[str, Any], list[str]]:
+    state = db.get(PilotRuntimeState, 1)
+    if (
+        state is None
+        or not state.run_id
+        or created_since is None
+        or state.opened_at is None
+        or state.opened_at != created_since
+    ):
+        return (
+            {
+                "applicable": False,
+                "healthy": True,
+                "pilot_orders": 0,
+                "pilot_variants": 0,
+                "open_reconciliation_variants": 0,
+                "chain_failures": 0,
+            },
+            [],
+        )
+    order_ids = [
+        int(row[0])
+        for row in (
+            db.query(PilotOrderSlot.order_id)
+            .filter(PilotOrderSlot.run_id == state.run_id)
+            .order_by(PilotOrderSlot.sequence.asc())
+            .all()
+        )
+    ]
+    try:
+        verdict = build_pilot_inventory_safety(db, order_ids)
+    except Exception:
+        return (
+            {
+                "applicable": True,
+                "healthy": False,
+                "pilot_orders": len(order_ids),
+                "pilot_variants": 0,
+                "open_reconciliation_variants": 0,
+                "chain_failures": 0,
+            },
+            ["pilot_inventory_safety_evaluation_failed"],
+        )
+    summary = {
+        "applicable": True,
+        "healthy": verdict["healthy"] is True,
+        "pilot_orders": int(verdict["pilot_orders"]),
+        "pilot_variants": int(verdict["pilot_variants"]),
+        "open_reconciliation_variants": int(verdict["open_reconciliation_variants"]),
+        "chain_failures": int(verdict["chain_failures"]),
+    }
+    blockers = [] if summary["healthy"] else ["pilot_inventory_integrity_failure"]
+    return summary, blockers
+
+
 def build_pilot_operational_safety(
     db: Session,
     *,
@@ -409,6 +470,10 @@ def build_pilot_operational_safety(
         overdue_before=overdue_before,
         created_since=created_since,
     )
+    inventory, inventory_blockers = _pilot_inventory_queue(
+        db,
+        created_since=created_since,
+    )
 
     blocking_codes = list(
         dict.fromkeys(
@@ -417,6 +482,7 @@ def build_pilot_operational_safety(
             + event_blockers
             + webhook_blockers
             + notification_blockers
+            + inventory_blockers
         )
     )
     return {
@@ -430,5 +496,6 @@ def build_pilot_operational_safety(
             "business_events": events,
             "webhook_outbox": webhooks,
             "telegram_notifications": notifications,
+            "pilot_inventory": inventory,
         },
     }
