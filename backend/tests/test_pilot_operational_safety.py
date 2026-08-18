@@ -106,6 +106,14 @@ def test_fresh_pending_current_run_work_is_visible_but_non_blocking():
     assert snapshot["queues"]["business_events"]["counts"]["pending"] == 1
     assert snapshot["queues"]["webhook_outbox"]["counts"]["pending"] == 1
     assert snapshot["queues"]["telegram_notifications"]["counts"]["pending"] == 1
+    assert snapshot["queues"]["pilot_inventory"] == {
+        "applicable": False,
+        "healthy": True,
+        "pilot_orders": 0,
+        "pilot_variants": 0,
+        "open_reconciliation_variants": 0,
+        "chain_failures": 0,
+    }
 
 
 def test_historical_failures_before_runtime_window_are_ignored():
@@ -127,8 +135,14 @@ def test_historical_failures_before_runtime_window_are_ignored():
 
     assert snapshot["healthy"] is True
     assert snapshot["blocking_codes"] == []
-    for queue in snapshot["queues"].values():
-        assert sum(queue["counts"].values()) == 0
+    for name in (
+        "moysklad_commands",
+        "business_events",
+        "webhook_outbox",
+        "telegram_notifications",
+    ):
+        assert sum(snapshot["queues"][name]["counts"].values()) == 0
+    assert snapshot["queues"]["pilot_inventory"]["applicable"] is False
 
 
 def test_current_run_terminal_failures_block_all_durable_delivery_spines_and_are_redacted():
@@ -215,8 +229,6 @@ def test_expired_processing_leases_block_provider_webhook_and_notification_deliv
         created_at=created_at,
         next_attempt_at=now - timedelta(seconds=1),
     )
-    # A processing notification without a live delivery-state lease is itself
-    # inconsistent and must fail closed; the outer join deliberately detects it.
     _insert_required(
         db,
         Notification,
