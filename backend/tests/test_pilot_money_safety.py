@@ -52,7 +52,7 @@ def test_payment_review_is_a_fail_closed_money_blocker():
 
 
 def test_reconciliation_mismatch_has_deterministic_stop_priority():
-    db = _Session([0, 1, 1, 2])
+    db = _Session([0, 2, 1, 2])
     result = build_pilot_money_safety(db, [7])
     assert result["healthy"] is False
     assert result["refund_attention_orders"] == 2
@@ -65,7 +65,7 @@ def test_reconciliation_mismatch_has_deterministic_stop_priority():
 
 
 def test_money_safety_contract_exposes_only_counts_and_bounded_codes():
-    db = _Session([0, 0, 1, 0])
+    db = _Session([0, 1, 1, 0])
     result = build_pilot_money_safety(db, [9])
     serialized = repr(result)
     assert result["stop_reason"] == "refund_review_required"
