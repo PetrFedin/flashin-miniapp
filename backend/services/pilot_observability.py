@@ -10,12 +10,14 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..pilot_models import PilotOrderSlot, PilotRuntimeState
+from .pilot_database_evidence import validate_pilot_database_evidence
 from .pilot_money_safety import build_pilot_money_safety
 from .pilot_operational_safety import (
     DEFAULT_OPERATIONAL_QUEUE_GRACE_MINUTES,
     build_pilot_operational_safety,
 )
 from .pilot_runtime import validate_runtime_files
+from .pilot_sequence_safety import is_pilot_sequence_continuation_ready
 
 if TYPE_CHECKING:
     from ..config import Settings
@@ -149,6 +151,14 @@ def _not_applicable_operational_safety(*, healthy: bool | None = None) -> dict[s
     }
 
 
+def _not_applicable_continuation() -> dict[str, Any]:
+    return {
+        "applicable": False,
+        "ready": None,
+        "next_sequence": None,
+    }
+
+
 def build_pilot_operations_status(
     db: Session,
     settings: "Settings",
@@ -201,6 +211,7 @@ def build_pilot_operations_status(
                 "healthy": None,
                 "codes": [],
             },
+            "continuation": _not_applicable_continuation(),
             "money_attention": _money_attention(db, []),
             "operational_safety": _not_applicable_operational_safety(),
         }
@@ -261,19 +272,38 @@ def build_pilot_operations_status(
         database_codes.append("completed_before_limit")
     if state.status == "stopped" and not str(state.stop_reason or "").strip():
         database_codes.append("stopped_without_reason")
-    database_codes = list(dict.fromkeys(database_codes))
 
     artifact_applicable = bool(state.admission_sha256 and state.release_sha256)
     artifact_codes: list[str] = []
     artifact_healthy: bool | None = None
+    validated_pilot_state: dict[str, Any] = {}
     if artifact_applicable:
         try:
-            artifact_errors = validate_runtime_files(state, settings, env=env)
+            artifact_errors = validate_runtime_files(
+                state,
+                settings,
+                env=env,
+                validated_pilot_state=validated_pilot_state,
+            )
         except Exception:
             artifact_errors = ["runtime validator failed"]
         artifact_codes = _artifact_error_codes(artifact_errors)
         artifact_healthy = not artifact_codes
 
+    if artifact_healthy is True:
+        try:
+            database_evidence_errors = validate_pilot_database_evidence(
+                db,
+                validated_pilot_state,
+                state,
+                final=False,
+            )
+        except Exception:
+            database_evidence_errors = ["pilot database evidence evaluation failed"]
+        if database_evidence_errors:
+            database_codes.append("pilot_database_evidence_invalid")
+
+    database_codes = list(dict.fromkeys(database_codes))
     money_attention = _money_attention(db, order_ids)
     if state.opened_at is None:
         operational_safety = _not_applicable_operational_safety(
@@ -300,12 +330,26 @@ def build_pilot_operations_status(
 
     remaining_orders = max(int(state.max_orders) - int(state.accepted_orders), 0)
     database_healthy = not database_codes
+    continuation_applicable = state.status == "active" and remaining_orders > 0
+    continuation_ready: bool | None = None
+    if continuation_applicable and artifact_healthy is True and database_healthy:
+        continuation_ready = is_pilot_sequence_continuation_ready(
+            validated_pilot_state,
+            accepted_orders=int(state.accepted_orders),
+        )
+    continuation = {
+        "applicable": continuation_applicable,
+        "ready": continuation_ready,
+        "next_sequence": int(state.accepted_orders) + 1 if continuation_applicable else None,
+    }
+
     integrity_healthy = database_healthy and artifact_healthy is True
     checkout_ready = bool(
         enforced
         and state.status == "active"
         and remaining_orders > 0
         and integrity_healthy
+        and continuation_ready is True
         and not money_attention["attention_required"]
         and operational_safety["healthy"] is True
     )
@@ -340,6 +384,7 @@ def build_pilot_operations_status(
             "healthy": artifact_healthy,
             "codes": artifact_codes,
         },
+        "continuation": continuation,
         "money_attention": money_attention,
         "operational_safety": operational_safety,
     }
