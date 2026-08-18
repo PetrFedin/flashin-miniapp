@@ -76,11 +76,11 @@ def build_pilot_money_safety(
         or 0
     )
 
-    refund_retry_orders = int(
+    refund_attention_orders = int(
         db.query(func.count(func.distinct(ReturnRequest.order_id)))
         .filter(
             ReturnRequest.order_id.in_(ids),
-            ReturnRequest.status == "refund_retry_required",
+            ReturnRequest.status.in_(_REFUND_ATTENTION_STATUSES),
         )
         .scalar()
         or 0
@@ -94,7 +94,6 @@ def build_pilot_money_safety(
         .scalar()
         or 0
     )
-    refund_attention_orders = refund_retry_orders + refund_review_orders
 
     reconciliation_mismatches = int(
         db.query(func.count(PaymentReconciliation.id))
@@ -122,7 +121,7 @@ def build_pilot_money_safety(
         stop_reason = "payment_reconciliation_mismatch"
     elif refund_review_orders:
         stop_reason = "refund_review_required"
-    elif refund_retry_orders:
+    elif refund_attention_orders:
         stop_reason = "refund_retry_required"
 
     attention_required = bool(blocking_codes)
