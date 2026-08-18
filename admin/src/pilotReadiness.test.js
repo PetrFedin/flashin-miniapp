@@ -37,6 +37,9 @@ function runtime() {
     database_integrity_healthy: true,
     artifact_integrity_applicable: true,
     artifact_integrity_healthy: true,
+    continuation_applicable: true,
+    continuation_ready: true,
+    next_sequence: 4,
     money_attention_required: false,
     operational_safety_applicable: true,
     operational_safety_healthy: true,
@@ -68,6 +71,46 @@ test("healthy cockpit contract remains GO without copying unselected fields", ()
   assert.equal(result.contractValid, true);
   const serialized = JSON.stringify(result);
   assert.doesNotMatch(serialized, /must-not-survive|private-runtime-id|safe-request-id/);
+});
+
+test("pending previous scenario is a valid explicit NO-GO blocker", () => {
+  const payload = healthyPayload();
+  payload.decision = "NO-GO";
+  payload.ready_for_next_order = false;
+  payload.blocking_codes = ["runtime_checkout_no_go", "runtime_previous_scenario_pending"];
+  payload.runtime.checkout_decision = "NO-GO";
+  payload.runtime.continuation_ready = false;
+
+  const result = normalizePilotReadiness(payload);
+
+  assert.equal(result.decision, "NO-GO");
+  assert.equal(result.contractValid, true);
+  assert.ok(result.blockingCodes.includes("runtime_previous_scenario_pending"));
+  assert.equal(
+    pilotReadinessCodeLabel("runtime_previous_scenario_pending"),
+    "Предыдущий пилотный сценарий ещё не подтверждён и не сверён",
+  );
+});
+
+test("incoherent GO with pending sequence is forced to NO-GO", () => {
+  const payload = healthyPayload();
+  payload.runtime.continuation_ready = false;
+
+  const result = normalizePilotReadiness(payload);
+
+  assert.equal(result.decision, "NO-GO");
+  assert.equal(result.contractValid, false);
+  assert.ok(result.blockingCodes.includes("response_contract_invalid"));
+});
+
+test("next sequence must equal accepted orders plus one", () => {
+  const payload = healthyPayload();
+  payload.runtime.next_sequence = 7;
+
+  const result = normalizePilotReadiness(payload);
+
+  assert.equal(result.decision, "NO-GO");
+  assert.equal(result.contractValid, false);
 });
 
 test("migration drift is a valid fail-closed blocker", () => {
@@ -115,6 +158,9 @@ test("explicit unavailable runtime remains a valid NO-GO response", () => {
     database_integrity_healthy: null,
     artifact_integrity_applicable: null,
     artifact_integrity_healthy: null,
+    continuation_applicable: false,
+    continuation_ready: null,
+    next_sequence: null,
     money_attention_required: false,
     operational_safety_applicable: null,
     operational_safety_healthy: null,

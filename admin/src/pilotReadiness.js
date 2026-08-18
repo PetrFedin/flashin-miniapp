@@ -33,6 +33,7 @@ const READINESS_LABELS = Object.freeze({
   runtime_database_integrity_failed: "Нарушена целостность runtime БД",
   runtime_artifact_integrity_unavailable: "Runtime/release evidence недоступен",
   runtime_artifact_integrity_failed: "Runtime/release evidence не прошёл проверку",
+  runtime_previous_scenario_pending: "Предыдущий пилотный сценарий ещё не подтверждён и не сверён",
   runtime_money_attention: "Денежная операция требует проверки",
   runtime_operational_safety_unavailable: "Проверка operational queues недоступна",
   runtime_operational_safety_failed: "Operational queues требуют вмешательства",
@@ -135,6 +136,15 @@ export function normalizePilotReadiness(payload) {
 
   const decisionValid = payload.decision === "GO" || payload.decision === "NO-GO";
   const readyValid = typeof payload.ready_for_next_order === "boolean";
+  const continuationShapeValid = typeof runtime.continuation_applicable === "boolean"
+    && isBooleanOrNull(runtime.continuation_ready)
+    && isSafeIntegerOrNull(runtime.next_sequence)
+    && (runtime.continuation_applicable === true
+      ? (typeof runtime.continuation_ready === "boolean"
+        && isSafeInteger(runtime.next_sequence)
+        && runtime.next_sequence >= 1
+        && runtime.next_sequence <= 20)
+      : (runtime.continuation_ready === null && runtime.next_sequence === null));
   const runtimeValid = (
     (runtime.checkout_decision === "GO" || runtime.checkout_decision === "NO-GO")
     && typeof runtime.enforced === "boolean"
@@ -145,10 +155,14 @@ export function normalizePilotReadiness(payload) {
     && isBooleanOrNull(runtime.database_integrity_healthy)
     && isBooleanOrNull(runtime.artifact_integrity_applicable)
     && isBooleanOrNull(runtime.artifact_integrity_healthy)
+    && continuationShapeValid
     && typeof runtime.money_attention_required === "boolean"
     && isBooleanOrNull(runtime.operational_safety_applicable)
     && isBooleanOrNull(runtime.operational_safety_healthy)
   );
+  const sequenceCoherent = runtime.continuation_applicable !== true
+    || !isSafeInteger(runtime.accepted_orders)
+    || runtime.next_sequence === runtime.accepted_orders + 1;
   const decisionCoherent = decisionValid
     && readyValid
     && ((payload.decision === "GO") === payload.ready_for_next_order);
@@ -163,6 +177,8 @@ export function normalizePilotReadiness(payload) {
     && runtime.database_integrity_healthy === true
     && runtime.artifact_integrity_applicable === true
     && runtime.artifact_integrity_healthy === true
+    && runtime.continuation_applicable === true
+    && runtime.continuation_ready === true
     && runtime.money_attention_required === false
     && runtime.operational_safety_applicable === true
     && runtime.operational_safety_healthy === true
@@ -173,6 +189,7 @@ export function normalizePilotReadiness(payload) {
     && critical.valid
     && advisory.valid
     && runtimeValid
+    && sequenceCoherent
     && decisionCoherent
     && goSignalsConfirmed
   );

@@ -10,9 +10,6 @@ from .pilot_observability import build_pilot_operations_status
 if TYPE_CHECKING:
     from ..config import Settings
 
-# Only failures in the money / order-delivery control plane block the next pilot order.
-# Search and media remain visible as warnings so an operator can investigate without
-# confusing a degraded merchandising surface with a payment-integrity failure.
 _CRITICAL_DIAGNOSTIC_CHECKS = (
     "database",
     "migrations",
@@ -40,22 +37,11 @@ def _diagnostic_status(snapshot: Mapping[str, Any], name: str) -> bool | None:
 
 def _runtime_summary(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     runtime = snapshot.get("runtime") if isinstance(snapshot.get("runtime"), Mapping) else {}
-    database = (
-        snapshot.get("database_integrity")
-        if isinstance(snapshot.get("database_integrity"), Mapping)
-        else {}
-    )
-    artifact = (
-        snapshot.get("artifact_integrity")
-        if isinstance(snapshot.get("artifact_integrity"), Mapping)
-        else {}
-    )
+    database = snapshot.get("database_integrity") if isinstance(snapshot.get("database_integrity"), Mapping) else {}
+    artifact = snapshot.get("artifact_integrity") if isinstance(snapshot.get("artifact_integrity"), Mapping) else {}
+    continuation = snapshot.get("continuation") if isinstance(snapshot.get("continuation"), Mapping) else {}
     money = snapshot.get("money_attention") if isinstance(snapshot.get("money_attention"), Mapping) else {}
-    operational = (
-        snapshot.get("operational_safety")
-        if isinstance(snapshot.get("operational_safety"), Mapping)
-        else {}
-    )
+    operational = snapshot.get("operational_safety") if isinstance(snapshot.get("operational_safety"), Mapping) else {}
     return {
         "checkout_decision": str(snapshot.get("checkout_decision") or "NO-GO"),
         "enforced": bool(snapshot.get("enforced")),
@@ -66,6 +52,9 @@ def _runtime_summary(snapshot: Mapping[str, Any]) -> dict[str, Any]:
         "database_integrity_healthy": database.get("healthy"),
         "artifact_integrity_applicable": artifact.get("applicable"),
         "artifact_integrity_healthy": artifact.get("healthy"),
+        "continuation_applicable": continuation.get("applicable"),
+        "continuation_ready": continuation.get("ready"),
+        "next_sequence": continuation.get("next_sequence"),
         "money_attention_required": bool(money.get("attention_required")),
         "operational_safety_applicable": operational.get("applicable"),
         "operational_safety_healthy": operational.get("healthy"),
@@ -76,8 +65,6 @@ def compose_pilot_readiness(
     diagnostics: Mapping[str, Any] | None,
     runtime_status: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    """Compose one sanitized fail-closed operator verdict from existing read-only snapshots."""
-
     blocking_codes: list[str] = []
     warning_codes: list[str] = []
 
@@ -95,7 +82,6 @@ def compose_pilot_readiness(
                 blocking_codes.append(f"diagnostic_missing:{name}")
             elif status is False:
                 blocking_codes.append(f"diagnostic_failed:{name}")
-
         for name in _ADVISORY_DIAGNOSTIC_CHECKS:
             status = _diagnostic_status(diagnostics, name)
             if status is None:
@@ -116,6 +102,8 @@ def compose_pilot_readiness(
             blocking_codes.append("runtime_artifact_integrity_unavailable")
         elif runtime.get("artifact_integrity_healthy") is not True:
             blocking_codes.append("runtime_artifact_integrity_failed")
+        if runtime.get("continuation_applicable") is True and runtime.get("continuation_ready") is False:
+            blocking_codes.append("runtime_previous_scenario_pending")
         if runtime.get("money_attention_required"):
             blocking_codes.append("runtime_money_attention")
         if runtime.get("operational_safety_applicable") is not True:
@@ -123,7 +111,6 @@ def compose_pilot_readiness(
         elif runtime.get("operational_safety_healthy") is not True:
             blocking_codes.append("runtime_operational_safety_failed")
 
-    # Stable ordering makes the payload diff-friendly for incident notes and evidence.
     blocking_codes = sorted(set(blocking_codes))
     warning_codes = sorted(set(warning_codes))
     ready = not blocking_codes and runtime.get("checkout_decision") == "GO"

@@ -95,6 +95,12 @@ function ReadinessSignals({ readiness }) {
   );
 }
 
+function nextScenarioLabel(continuation) {
+  if (!continuation.applicable || !Number.isSafeInteger(continuation.nextSequence)) return "—";
+  const number = String(continuation.nextSequence).padStart(2, "0");
+  return `P${number} · ${continuation.ready ? "готов" : "ожидает evidence"}`;
+}
+
 export default function PilotOperationsPanel({ onUnauthorized }) {
   const [status, setStatus] = useState(null);
   const [readiness, setReadiness] = useState(null);
@@ -230,6 +236,7 @@ export default function PilotOperationsPanel({ onUnauthorized }) {
 
           <div className="pilot-kpis">
             <article><span>Принято заказов</span><strong>{status.runtime.acceptedOrders} / {status.runtime.maxOrders}</strong></article>
+            <article><span>Следующий сценарий</span><strong>{nextScenarioLabel(status.continuation)}</strong></article>
             <article><span>Осталось слотов</span><strong>{status.runtime.remainingOrders}</strong></article>
             <article><span>Фактические slots</span><strong>{status.runtime.slotCount}</strong></article>
             <article><span>Пользователи allowlist</span><strong>{status.runtime.allowlistCount}</strong></article>
