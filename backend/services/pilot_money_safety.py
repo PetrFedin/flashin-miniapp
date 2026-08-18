@@ -9,7 +9,13 @@ from sqlalchemy.orm import Session
 from ..models import Order, Payment, PaymentReconciliation, ReturnRequest
 
 
-_PAYMENT_REVIEW_STATUSES = (
+_ORDER_PAYMENT_REVIEW_STATUSES = (
+    "paid_review_required",
+    "payment_review_required",
+    "refund_retry_required",
+    "refund_review_required",
+)
+_PAYMENT_RECORD_REVIEW_STATUSES = (
     "paid_review_required",
     "refund_retry_required",
     "refund_review_required",
@@ -62,7 +68,8 @@ def build_pilot_money_safety(
             Order.id.in_(ids),
             or_(
                 Order.status == "payment_review_required",
-                Payment.status.in_(_PAYMENT_REVIEW_STATUSES),
+                Order.payment_status.in_(_ORDER_PAYMENT_REVIEW_STATUSES),
+                Payment.status.in_(_PAYMENT_RECORD_REVIEW_STATUSES),
             ),
         )
         .scalar()
@@ -94,6 +101,7 @@ def build_pilot_money_safety(
         .filter(
             PaymentReconciliation.order_id.in_(ids),
             PaymentReconciliation.status == "mismatch",
+            PaymentReconciliation.resolved_at.is_(None),
         )
         .scalar()
         or 0
