@@ -62,6 +62,18 @@ def _order_fixture(db, *, status: str = "pending", quantity: int = 1, sku: str =
     return order, variant
 
 
+def _reconciliation(variant: ProductVariant, *, external_stock_qty: int, status: str):
+    return StockReconciliationLog(
+        variant_id=variant.id,
+        sku=variant.sku,
+        local_stock_qty=variant.stock_qty,
+        external_stock_qty=external_stock_qty,
+        local_reserved_qty=variant.reserved_qty,
+        action="report",
+        status=status,
+    )
+
+
 def test_empty_pilot_is_healthy_and_identifier_free():
     db = _db()
     verdict = build_pilot_inventory_safety(db, [])
@@ -143,16 +155,7 @@ def test_latest_open_reconciliation_blocks_but_newer_resolved_clears_it():
     db = _db()
     order, variant = _order_fixture(db, sku="reconcile")
     reserve_variant(db, variant.id, 1, order_id=order.id, source="checkout")
-    db.add(
-        StockReconciliationLog(
-            product_id=variant.product_id,
-            variant_id=variant.id,
-            local_stock_qty=10,
-            external_stock_qty=7,
-            source="moysklad",
-            status="open",
-        )
-    )
+    db.add(_reconciliation(variant, external_stock_qty=7, status="open"))
     db.commit()
 
     open_verdict = build_pilot_inventory_safety(db, [order.id])
@@ -160,16 +163,7 @@ def test_latest_open_reconciliation_blocks_but_newer_resolved_clears_it():
     assert open_verdict["open_reconciliation_variants"] == 1
     assert "inventory_reconciliation_open" in open_verdict["blocking_codes"]
 
-    db.add(
-        StockReconciliationLog(
-            product_id=variant.product_id,
-            variant_id=variant.id,
-            local_stock_qty=10,
-            external_stock_qty=10,
-            source="moysklad",
-            status="resolved",
-        )
-    )
+    db.add(_reconciliation(variant, external_stock_qty=10, status="resolved"))
     db.commit()
 
     resolved_verdict = build_pilot_inventory_safety(db, [order.id])
@@ -182,16 +176,7 @@ def test_unrelated_variant_reconciliation_does_not_block_pilot_order():
     order, variant = _order_fixture(db, sku="pilot")
     reserve_variant(db, variant.id, 1, order_id=order.id, source="checkout")
     _other_order, other_variant = _order_fixture(db, sku="other")
-    db.add(
-        StockReconciliationLog(
-            product_id=other_variant.product_id,
-            variant_id=other_variant.id,
-            local_stock_qty=10,
-            external_stock_qty=1,
-            source="moysklad",
-            status="open",
-        )
-    )
+    db.add(_reconciliation(other_variant, external_stock_qty=1, status="open"))
     db.commit()
 
     verdict = build_pilot_inventory_safety(db, [order.id])
