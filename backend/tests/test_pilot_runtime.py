@@ -65,8 +65,8 @@ def _attach_pending_inventory(db, order: Order) -> None:
             order_id=order.id,
             product_id=product.id,
             variant_id=variant.id,
-            sku=variant.sku,
             title=product.title,
+            size=variant.size,
             quantity=1,
             price=100,
         )
