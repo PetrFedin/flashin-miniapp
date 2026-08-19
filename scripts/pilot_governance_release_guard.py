@@ -76,6 +76,8 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
         "Run pilot release, governance and database guard tests",
         "backend/tests/test_pilot_admission_path_binding.py",
         "backend/tests/test_pilot_repository_governance.py",
+        "backend/tests/test_pilot_governance_trust_anchor.py",
+        "backend/tests/test_pilot_governance_admission_trust_anchor.py",
         "backend/tests/test_pilot_governance_visibility.py",
         "backend/tests/test_pilot_governance_classic_fail_closed.py",
         "backend/tests/test_pilot_governance_check_sources.py",
@@ -96,6 +98,11 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
         "test_trusted_governance_configuration_accepts_only_exact_policy",
         "test_report_trust_anchor_rejects_pull_request_run_and_wrong_source",
         "test_report_trust_anchor_rejects_mirrored_repo_or_non_main_branch",
+    ),
+    "backend/tests/test_pilot_governance_admission_trust_anchor.py": (
+        "test_admission_rejects_signed_governance_report_using_weakened_env_anchor",
+        "trusted GitHub Actions app",
+        "trusted check source is invalid",
     ),
     "backend/tests/test_pilot_governance_visibility.py": (
         "test_governance_collection_requires_github_token",
@@ -121,6 +128,7 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
     "backend/tests/test_pilot_governance_release_guard.py": (
         "test_lifecycle_only_archive_cannot_receive_governance_admission",
         "test_exact_release_requires_every_governance_file_and_marker",
+        "test_governance_release_rejects_persisted_operator_token",
         "test_current_release_pointer_must_match_governance_archive",
     ),
     "docs/pilot/repository_governance.md": (
