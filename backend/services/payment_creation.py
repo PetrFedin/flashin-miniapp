@@ -23,6 +23,7 @@ from .outbox import enqueue_webhook
 
 _PROVIDER = "yookassa"
 _REUSABLE_PAYMENT_STATUSES = {"pending", "waiting_for_capture", "succeeded"}
+_REPLACEABLE_PAYMENT_STATUSES = {"canceled"}
 _ELIGIBLE_ORDER_STATUSES = {"created", "payment_created"}
 _ELIGIBLE_PAYMENT_STATUSES = {"pending", "payment_created"}
 _SETTLED_ORDER_PAYMENT_STATUSES = {
@@ -136,13 +137,20 @@ def begin_payment_creation(
             .first()
         )
         if completed_payment:
-            return PaymentCreationClaim(
-                order_id=order.id,
-                amount=order.total_amount,
-                currency=order.currency,
-                existing_payment_id=completed_payment.id,
-            )
-        raise HTTPException(status_code=409, detail="Completed payment attempt requires reconciliation")
+            if completed_payment.status in _REUSABLE_PAYMENT_STATUSES:
+                return PaymentCreationClaim(
+                    order_id=order.id,
+                    amount=order.total_amount,
+                    currency=order.currency,
+                    existing_payment_id=completed_payment.id,
+                )
+            if completed_payment.status not in _REPLACEABLE_PAYMENT_STATUSES:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Completed payment attempt requires reconciliation",
+                )
+        else:
+            raise HTTPException(status_code=409, detail="Completed payment attempt requires reconciliation")
 
     if latest_attempt and latest_attempt.status == REVIEW_REQUIRED_PAYMENT_ATTEMPT_STATUS:
         raise HTTPException(
@@ -265,7 +273,9 @@ def complete_payment_creation_from_provider(
         .filter(
             PaymentCreationAttempt.order_id == order_id,
             PaymentCreationAttempt.provider == _PROVIDER,
-            PaymentCreationAttempt.status.in_(RETRYABLE_PAYMENT_ATTEMPT_STATUSES),
+            PaymentCreationAttempt.status.in_(
+                {*RETRYABLE_PAYMENT_ATTEMPT_STATUSES, REVIEW_REQUIRED_PAYMENT_ATTEMPT_STATUS}
+            ),
         )
         .order_by(PaymentCreationAttempt.attempt_number.desc(), PaymentCreationAttempt.id.desc())
         .with_for_update()
@@ -273,8 +283,14 @@ def complete_payment_creation_from_provider(
     )
     if not attempt:
         return
+    normalized_payment_id = str(provider_payment_id).strip()[:255]
+    if (
+        attempt.status == REVIEW_REQUIRED_PAYMENT_ATTEMPT_STATUS
+        and (not attempt.provider_payment_id or attempt.provider_payment_id != normalized_payment_id)
+    ):
+        return
     attempt.status = COMPLETED_PAYMENT_ATTEMPT_STATUS
-    attempt.provider_payment_id = str(provider_payment_id).strip()[:255]
+    attempt.provider_payment_id = normalized_payment_id
     attempt.lease_expires_at = None
     attempt.last_error = ""
     attempt.updated_at = utcnow_naive()
@@ -399,6 +415,10 @@ def finalize_payment_creation(
             _queue_payment_review(db, order, provider_payment_id, reason)
         else:
             _complete_attempt(attempt, provider_payment_id)
+        return order, payment
+
+    if provider_status == "canceled":
+        _complete_attempt(attempt, provider_payment_id)
         return order, payment
 
     if (
