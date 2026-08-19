@@ -18,7 +18,7 @@ from pilot_governance_policy import (
     report_trust_anchor_errors,
     require_trusted_configuration,
     trusted_workflow_candidates,
-    trusted_workflow_job_errors,
+    trusted_workflow_job_evidence,
 )
 from pilot_operator_security import require_privileged_token_file_isolation
 
@@ -41,6 +41,24 @@ def _trusted_env(env: Mapping[str, str]) -> dict[str, str]:
     normalized.setdefault("PILOT_GITHUB_WORKFLOW_NAME", TRUSTED_WORKFLOW_NAME)
     normalized.setdefault("PILOT_GITHUB_WORKFLOW_PATH", TRUSTED_WORKFLOW_CONFIG_PATH)
     return normalized
+
+
+def _bind_trusted_job_evidence(
+    report: Mapping[str, object],
+    *,
+    jobs: object,
+    env: Mapping[str, str],
+) -> dict[str, object]:
+    unsigned = dict(report)
+    unsigned.pop("signature", None)
+    workflow = unsigned.get("workflow")
+    if not isinstance(workflow, Mapping):
+        raise ValueError("Repository governance workflow evidence is missing")
+    workflow_with_jobs = dict(workflow)
+    workflow_with_jobs["required_jobs"] = trusted_workflow_job_evidence(jobs)
+    unsigned["workflow"] = workflow_with_jobs
+    secret = pilot_repository_governance.require_signing_secret(env)
+    return pilot_repository_governance.sign_payload(unsigned, secret)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -84,9 +102,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             token=token,
         )
         jobs = jobs_payload.get("jobs") if isinstance(jobs_payload, Mapping) else None
-        job_errors = trusted_workflow_job_errors(jobs)
-        if job_errors:
-            return _fail(job_errors)
 
         bounded_snapshot = dict(snapshot)
         bounded_snapshot["workflow_runs"] = candidates
@@ -95,6 +110,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             env=effective_env,
             current_release=current,
             owner=args.owner,
+        )
+        report = _bind_trusted_job_evidence(
+            report,
+            jobs=jobs,
+            env=effective_env,
         )
         trust_errors = report_trust_anchor_errors(report)
         if trust_errors:
