@@ -134,6 +134,15 @@ def trusted_workflow_job_errors(jobs: object) -> list[str]:
     return errors
 
 
+def trusted_workflow_job_evidence(jobs: object) -> dict[str, str]:
+    """Return a bounded signed verdict map after live GitHub job validation."""
+
+    errors = trusted_workflow_job_errors(jobs)
+    if errors:
+        raise ValueError("GitHub trusted workflow jobs are not GO: " + "; ".join(errors))
+    return {name: "success" for name in TRUSTED_REQUIRED_CHECKS}
+
+
 def _string_set(value: object) -> set[str]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         return set()
@@ -192,5 +201,17 @@ def report_trust_anchor_errors(report: Mapping[str, Any]) -> list[str]:
             errors.append("repository governance workflow path is not the trusted CI workflow path")
         if workflow.get("event") != "push":
             errors.append("repository governance workflow must be an exact protected-main push run")
+        required_jobs = workflow.get("required_jobs")
+        if not isinstance(required_jobs, Mapping):
+            errors.append("repository governance trusted workflow job evidence is missing")
+        else:
+            observed_jobs = {str(name) for name in required_jobs.keys()}
+            if observed_jobs != set(TRUSTED_REQUIRED_CHECKS):
+                errors.append("repository governance trusted workflow jobs do not match the immutable pilot gate")
+            for name in TRUSTED_REQUIRED_CHECKS:
+                if required_jobs.get(name) != "success":
+                    errors.append(
+                        f"repository governance trusted workflow job is not successful: {name}"
+                    )
 
     return list(dict.fromkeys(errors))
