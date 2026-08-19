@@ -85,6 +85,61 @@ def upgrade() -> None:
         "payment_creation_attempts",
         ["lease_expires_at"],
     )
+
+    # Preserve the pre-0031 YooKassa idempotency sequence. Before durable attempts,
+    # the provider idempotence key used count(payments for order/provider) + 1.
+    # Backfilling one terminal creation-attempt row per legacy payment guarantees
+    # that the first post-migration attempt cannot reuse an already-issued key.
+    op.execute(
+        sa.text(
+            """
+            INSERT INTO payment_creation_attempts (
+                order_id,
+                provider,
+                attempt_number,
+                status,
+                provider_payment_id,
+                lease_expires_at,
+                last_error,
+                created_at,
+                updated_at
+            )
+            SELECT
+                legacy.order_id,
+                'yookassa',
+                legacy.attempt_number,
+                CASE
+                    WHEN legacy.provider_payment_id = '' THEN 'abandoned'
+                    WHEN legacy.payment_status = 'canceled' THEN 'abandoned'
+                    ELSE 'completed'
+                END,
+                legacy.provider_payment_id,
+                NULL,
+                CASE
+                    WHEN legacy.provider_payment_id = '' THEN 'legacy_missing_provider_payment_id'
+                    WHEN legacy.payment_status = 'canceled' THEN 'legacy_provider_canceled'
+                    ELSE ''
+                END,
+                legacy.created_at,
+                legacy.created_at
+            FROM (
+                SELECT
+                    p.order_id,
+                    COALESCE(trim(p.provider_payment_id), '') AS provider_payment_id,
+                    lower(trim(p.status)) AS payment_status,
+                    p.created_at,
+                    row_number() OVER (
+                        PARTITION BY p.order_id
+                        ORDER BY p.id
+                    ) AS attempt_number
+                FROM payments AS p
+                WHERE lower(trim(p.provider)) = 'yookassa'
+            ) AS legacy
+            ORDER BY legacy.order_id, legacy.attempt_number
+            """
+        )
+    )
+
     op.create_index(
         "uq_payment_creation_attempts_one_open",
         "payment_creation_attempts",
