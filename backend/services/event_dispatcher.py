@@ -137,7 +137,7 @@ def _get_or_create_recovery_state(
     db: Session,
     event_id: int,
 ) -> BusinessEventRecoveryState:
-    recovery = db.get(BusinessEventRecoveryState, event.id) if False else db.get(BusinessEventRecoveryState, event_id)
+    recovery = db.get(BusinessEventRecoveryState, event_id)
     if recovery is None:
         recovery = BusinessEventRecoveryState(business_event_id=event_id)
         db.add(recovery)
