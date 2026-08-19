@@ -4,7 +4,7 @@ import json
 
 from fastapi import HTTPException
 
-_TRANSIENT_PROVIDER_STATUSES = frozenset({429, 500, 502, 503, 504})
+_TRANSIENT_PROVIDER_STATUSES = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 _RETRYABLE_PROVIDER_ERRORS = frozenset({"network_error"})
 _MAX_REASON_LENGTH = 2000
 
