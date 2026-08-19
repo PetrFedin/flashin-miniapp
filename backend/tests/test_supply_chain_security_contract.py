@@ -1,0 +1,88 @@
+from pathlib import Path
+import re
+
+ROOT = Path(__file__).resolve().parents[2]
+WORKFLOWS = ROOT / ".github" / "workflows"
+PINNED_ACTION = re.compile(r"^\s*uses:\s*[^\s@]+@([0-9a-f]{40})(?:\s+#.*)?$", re.MULTILINE)
+ANY_ACTION = re.compile(r"^\s*uses:\s*([^\s#]+)", re.MULTILINE)
+
+CORE_JOBS = (
+    "backend",
+    "frontend",
+    "admin",
+    "browser-e2e",
+    "integrated-e2e",
+    "docker",
+)
+
+
+def _text(path: str) -> str:
+    return (ROOT / path).read_text(encoding="utf-8")
+
+
+def test_all_github_actions_are_pinned_to_immutable_commit_sha():
+    workflow_paths = sorted(WORKFLOWS.glob("*.yml")) + sorted(WORKFLOWS.glob("*.yaml"))
+    assert workflow_paths
+
+    violations: list[str] = []
+    for path in workflow_paths:
+        body = path.read_text(encoding="utf-8")
+        pinned_lines = {match.group(0).strip() for match in PINNED_ACTION.finditer(body)}
+        for match in ANY_ACTION.finditer(body):
+            line = match.group(0).strip()
+            action_ref = match.group(1)
+            if action_ref.startswith("./"):
+                continue
+            if line not in pinned_lines:
+                violations.append(f"{path.relative_to(ROOT)}: {line}")
+
+    assert violations == [], "Floating GitHub Action refs are forbidden: " + "; ".join(violations)
+
+
+def test_core_ci_required_job_names_are_unchanged():
+    ci = _text(".github/workflows/ci.yml")
+    for job in CORE_JOBS:
+        assert re.search(rf"^  {re.escape(job)}:\s*$", ci, re.MULTILINE), job
+
+
+def test_dependabot_covers_all_runtime_dependency_ecosystems():
+    config = _text(".github/dependabot.yml")
+    assert config.count("package-ecosystem: pip") == 2
+    assert config.count("package-ecosystem: npm") == 3
+    assert "package-ecosystem: github-actions" in config
+    assert "package-ecosystem: docker" in config
+    for directory in ("/backend", "/bot", "/frontend", "/admin", "/e2e"):
+        assert f"directory: {directory}" in config
+
+
+def test_security_workflow_has_required_supply_chain_gates():
+    security = _text(".github/workflows/security.yml")
+
+    for job in (
+        "dependency-review",
+        "codeql",
+        "secret-scan",
+        "dependency-vulnerability-scan",
+        "image-security",
+    ):
+        assert re.search(rf"^  {re.escape(job)}:\s*$", security, re.MULTILINE), job
+
+    assert "actions/dependency-review-action@" in security
+    assert "github/codeql-action/init@" in security
+    assert "github/codeql-action/analyze@" in security
+    assert "scanners: secret" in security
+    assert "scanners: vuln" in security
+    assert "severity: HIGH,CRITICAL" in security
+    assert "format: cyclonedx" in security
+    for image in ("backend", "bot", "frontend", "admin"):
+        assert f"- name: {image}" in security
+        assert f"dockerfile: Dockerfile.{image}" in security
+
+
+def test_release_evidence_contains_sbom_and_longer_retention():
+    release = _text(".github/workflows/release.yml")
+    assert "flashin-source-sbom.cdx.json" in release
+    assert "format: cyclonedx" in release
+    assert "retention-days: 90" in release
+    assert "actions/checkout@11d5960a326750d5838078e36cf38b85af677262" in release
+    assert "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" in release
