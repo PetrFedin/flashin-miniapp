@@ -97,7 +97,7 @@ jobs:
 
   image-security:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -110,10 +110,12 @@ jobs:
             dockerfile: Dockerfile.frontend
           - name: admin
             dockerfile: Dockerfile.admin
+          - name: ingress
+            dockerfile: Dockerfile.ingress
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # releases/v4, 2026-07-16
-      - name: Build application image
+      - name: Build runtime image
         run: >-
           docker build
           --file "${{ matrix.dockerfile }}"
@@ -135,7 +137,7 @@ jobs:
           path: sbom-${{ matrix.name }}.cdx.json
           if-no-files-found: error
           retention-days: 30
-      - name: Scan application image for high and critical vulnerabilities
+      - name: Scan runtime image for high and critical vulnerabilities
         uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # trivy-action master pinned; Trivy v0.74.0
         with:
           scan-type: image
