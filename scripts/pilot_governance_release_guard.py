@@ -150,7 +150,7 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
     "docs/pilot/repository_governance.md": (
         "pilot-governance-create",
         "pilot-governance-attach",
-        "backend,frontend,admin,browser-e2e,docker",
+        "backend,frontend,admin,browser-e2e,integrated-e2e,docker",
         "PILOT_GITHUB_ACTIONS_APP_ID=15368",
         "bypass_actors",
     ),
