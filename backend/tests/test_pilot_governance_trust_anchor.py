@@ -67,6 +67,7 @@ def _report(**workflow_overrides):
 
 def test_trusted_governance_configuration_accepts_only_exact_policy():
     require_trusted_configuration(_env())
+    require_trusted_configuration({"APP_ENV": "production"})
 
     weak_overrides = (
         {"PILOT_GITHUB_REPOSITORY": "PetrFedin/other"},
