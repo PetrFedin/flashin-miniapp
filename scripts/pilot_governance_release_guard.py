@@ -38,15 +38,18 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
         "require_trusted_configuration(",
         "trusted_workflow_candidates(",
         "trusted_workflow_job_errors(",
+        "trusted_workflow_job_evidence(",
         "report_trust_anchor_errors(",
         "workflow must be an exact protected-main push run",
+        "trusted workflow job evidence is missing",
     ),
     "scripts/pilot_governance_operator.py": (
         "require_privileged_token_file_isolation(",
         "require_trusted_configuration(",
         "pilot_repository_governance._runtime_env(",
         "trusted_workflow_candidates(",
-        "trusted_workflow_job_errors(",
+        "trusted_workflow_job_evidence(",
+        "_bind_trusted_job_evidence(",
         "/actions/runs/{run_id}/jobs?per_page=100",
     ),
     "scripts/pilot_governance_admission.py": (
@@ -103,6 +106,7 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
         "test_trusted_governance_configuration_accepts_only_exact_policy",
         "test_trusted_workflow_candidates_accept_only_exact_push_run",
         "test_trusted_workflow_jobs_require_all_six_successes",
+        "test_report_trust_anchor_requires_signed_exact_six_job_verdicts",
         "test_report_trust_anchor_rejects_pull_request_run_and_wrong_source",
         "test_report_trust_anchor_rejects_mirrored_repo_or_non_main_branch",
     ),
@@ -110,6 +114,11 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
         "test_admission_rejects_signed_governance_report_using_weakened_env_anchor",
         "trusted GitHub Actions app",
         "trusted check source is invalid",
+    ),
+    "backend/tests/test_pilot_governance_operator_isolation.py": (
+        "test_operator_binds_exact_six_job_verdicts_before_resigning",
+        "required_jobs",
+        "new-signature",
     ),
     "backend/tests/test_pilot_governance_visibility.py": (
         "test_governance_collection_requires_github_token",
@@ -141,7 +150,7 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
     "docs/pilot/repository_governance.md": (
         "pilot-governance-create",
         "pilot-governance-attach",
-        "backend,frontend,admin,browser-e2e,docker",
+        "backend,frontend,admin,browser-e2e,integrated-e2e,docker",
         "PILOT_GITHUB_ACTIONS_APP_ID=15368",
         "bypass_actors",
     ),

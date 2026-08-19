@@ -17,6 +17,7 @@ from pilot_governance_policy import (  # noqa: E402
     report_trust_anchor_errors,
     require_trusted_configuration,
     trusted_workflow_candidates,
+    trusted_workflow_job_evidence,
     trusted_workflow_job_errors,
 )
 
@@ -34,6 +35,10 @@ def _env(**overrides):
     return env
 
 
+def _required_jobs():
+    return {name: "success" for name in TRUSTED_REQUIRED_CHECKS}
+
+
 def _report(**workflow_overrides):
     workflow = {
         "id": 1001,
@@ -43,6 +48,7 @@ def _report(**workflow_overrides):
         "status": "completed",
         "conclusion": "success",
         "head_sha": "a" * 40,
+        "required_jobs": _required_jobs(),
     }
     workflow.update(workflow_overrides)
     return {
@@ -83,6 +89,13 @@ def _workflow_run(**overrides):
     return run
 
 
+def _jobs():
+    return [
+        {"name": name, "status": "completed", "conclusion": "success"}
+        for name in TRUSTED_REQUIRED_CHECKS
+    ]
+
+
 def test_trusted_governance_configuration_accepts_only_exact_policy():
     require_trusted_configuration(_env())
     require_trusted_configuration({"APP_ENV": "production"})
@@ -116,22 +129,39 @@ def test_trusted_workflow_candidates_accept_only_exact_push_run():
 
 
 def test_trusted_workflow_jobs_require_all_six_successes():
-    jobs = [
-        {"name": name, "status": "completed", "conclusion": "success"}
-        for name in TRUSTED_REQUIRED_CHECKS
-    ]
+    jobs = _jobs()
     assert trusted_workflow_job_errors(jobs) == []
+    assert trusted_workflow_job_evidence(jobs) == _required_jobs()
 
     missing = jobs[:-1]
     assert trusted_workflow_job_errors(missing) == [
         "GitHub trusted workflow job is missing: docker"
     ]
+    with pytest.raises(ValueError, match="docker"):
+        trusted_workflow_job_evidence(missing)
 
     failed = [dict(item) for item in jobs]
     failed[0]["conclusion"] = "failure"
     assert trusted_workflow_job_errors(failed) == [
         "GitHub trusted workflow job is not successful: backend"
     ]
+
+
+def test_report_trust_anchor_requires_signed_exact_six_job_verdicts():
+    assert report_trust_anchor_errors(_report()) == []
+
+    missing = _report(required_jobs=None)
+    errors = report_trust_anchor_errors(missing)
+    assert any("workflow job evidence is missing" in error for error in errors)
+
+    incomplete = _report(required_jobs={name: "success" for name in TRUSTED_REQUIRED_CHECKS[:-1]})
+    errors = report_trust_anchor_errors(incomplete)
+    assert any("workflow jobs do not match" in error for error in errors)
+    assert any("docker" in error for error in errors)
+
+    failed = _report(required_jobs={**_required_jobs(), "backend": "failure"})
+    errors = report_trust_anchor_errors(failed)
+    assert any("workflow job is not successful: backend" in error for error in errors)
 
 
 def test_report_trust_anchor_rejects_pull_request_run_and_wrong_source():
