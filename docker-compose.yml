@@ -286,7 +286,9 @@ services:
       - monitoring
 
   caddy:
-    image: caddy:2
+    build:
+      context: .
+      dockerfile: Dockerfile.ingress
     ports:
       - "80:80"
       - "443:443"
