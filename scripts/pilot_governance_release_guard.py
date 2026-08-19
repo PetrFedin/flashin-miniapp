@@ -56,6 +56,7 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
     ),
     "scripts/pilot_governance_release_guard.py": (
         "REQUIRED_FILES",
+        "FORBIDDEN_ASSIGNMENTS",
         "inspect_governance_release(",
         "require_current_governance_release(",
         "Current release is not governance-capable",
@@ -144,11 +145,15 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
         "pilot-governance-status:",
     ),
     ".env.production.example": (
-        "PILOT_GITHUB_TOKEN=",
+        "Never store PILOT_GITHUB_TOKEN in this file",
         "PILOT_GITHUB_REPOSITORY=",
         "PILOT_GITHUB_ACTIONS_APP_ID=15368",
         "PILOT_GITHUB_GOVERNANCE_MAX_AGE_MINUTES=",
     ),
+}
+
+FORBIDDEN_ASSIGNMENTS: dict[str, tuple[str, ...]] = {
+    ".env.production.example": ("PILOT_GITHUB_TOKEN=",),
 }
 
 
@@ -185,6 +190,14 @@ def inspect_governance_release(archive: Path) -> list[str]:
                     if marker not in content:
                         errors.append(
                             f"Governance-capable release marker is missing in {path}: {marker}"
+                        )
+                for forbidden in FORBIDDEN_ASSIGNMENTS.get(path, ()):
+                    if any(
+                        line.strip().startswith(forbidden)
+                        for line in content.splitlines()
+                    ):
+                        errors.append(
+                            f"Governance-capable release contains forbidden assignment in {path}: {forbidden}"
                         )
     except (
         OSError,
