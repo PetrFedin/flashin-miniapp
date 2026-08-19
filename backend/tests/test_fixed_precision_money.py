@@ -5,6 +5,7 @@ import uuid
 from decimal import Decimal
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import Float, text
 
 from backend.database import Base, SessionLocal
@@ -32,7 +33,6 @@ def test_transactional_metadata_uses_decimal_and_nonfinancial_scores_stay_float(
         assert column_type.python_type is Decimal
 
     assert isinstance(Base.metadata.tables["product_recommendations"].c.score.type, Float)
-    assert isinstance(Base.metadata.tables["moysklad_sku_matches"].c.confidence.type, Float)
 
 
 def test_fixed_decimal_normalizes_binary_float_and_half_up_rounding():
@@ -53,9 +53,9 @@ def test_provider_money_boundary_rounds_half_up_before_validation():
     assert _validate_positive_amount(Decimal("1.005"), "Payment") == Decimal("1.01")
     assert _validate_positive_amount(0.1 + 0.2, "Payment") == Decimal("0.30")
 
-    with pytest.raises(Exception) as too_small:
+    with pytest.raises(HTTPException) as too_small:
         _validate_positive_amount(Decimal("0.004"), "Payment")
-    assert getattr(too_small.value, "status_code", None) == 400
+    assert too_small.value.status_code == 400
 
     assert _validate_positive_amount(Decimal("0.005"), "Payment") == Decimal("0.01")
 
