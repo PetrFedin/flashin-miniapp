@@ -44,6 +44,7 @@ class PaymentCreationClaim:
     amount: float
     currency: str
     attempt_id: int | None = None
+    attempt_number: int | None = None
     existing_payment_id: int | None = None
 
     @property
@@ -194,6 +195,7 @@ def begin_payment_creation(
         amount=order.total_amount,
         currency=order.currency,
         attempt_id=attempt.id,
+        attempt_number=attempt.attempt_number,
     )
 
 
@@ -229,6 +231,8 @@ def mark_payment_creation_review_required(
     db: Session,
     attempt_id: int,
     error: str,
+    *,
+    provider_payment_id: str = "",
 ) -> None:
     attempt = (
         db.query(PaymentCreationAttempt)
@@ -244,6 +248,35 @@ def mark_payment_creation_review_required(
     attempt.status = REVIEW_REQUIRED_PAYMENT_ATTEMPT_STATUS
     attempt.lease_expires_at = None
     attempt.last_error = _attempt_error(error, "provider_review_required")
+    if provider_payment_id:
+        attempt.provider_payment_id = str(provider_payment_id).strip()[:255]
+    attempt.updated_at = utcnow_naive()
+
+
+def complete_payment_creation_from_provider(
+    db: Session,
+    order_id: int,
+    provider_payment_id: str,
+) -> None:
+    """Converge an in-flight/retry attempt when a verified provider webhook wins the race."""
+
+    attempt = (
+        db.query(PaymentCreationAttempt)
+        .filter(
+            PaymentCreationAttempt.order_id == order_id,
+            PaymentCreationAttempt.provider == _PROVIDER,
+            PaymentCreationAttempt.status.in_(RETRYABLE_PAYMENT_ATTEMPT_STATUSES),
+        )
+        .order_by(PaymentCreationAttempt.attempt_number.desc(), PaymentCreationAttempt.id.desc())
+        .with_for_update()
+        .first()
+    )
+    if not attempt:
+        return
+    attempt.status = COMPLETED_PAYMENT_ATTEMPT_STATUS
+    attempt.provider_payment_id = str(provider_payment_id).strip()[:255]
+    attempt.lease_expires_at = None
+    attempt.last_error = ""
     attempt.updated_at = utcnow_naive()
 
 
@@ -260,6 +293,26 @@ def _queue_payment_review(db: Session, order: Order, payment_id: str, reason: st
         "payment.review_required",
         payload,
     )
+
+
+def _complete_attempt(attempt: PaymentCreationAttempt, provider_payment_id: str) -> None:
+    attempt.status = COMPLETED_PAYMENT_ATTEMPT_STATUS
+    attempt.provider_payment_id = provider_payment_id
+    attempt.lease_expires_at = None
+    attempt.last_error = ""
+    attempt.updated_at = utcnow_naive()
+
+
+def _review_attempt(
+    attempt: PaymentCreationAttempt,
+    provider_payment_id: str,
+    reason: str,
+) -> None:
+    attempt.status = REVIEW_REQUIRED_PAYMENT_ATTEMPT_STATUS
+    attempt.provider_payment_id = provider_payment_id
+    attempt.lease_expires_at = None
+    attempt.last_error = _attempt_error(reason, "provider_review_required")
+    attempt.updated_at = utcnow_naive()
 
 
 def finalize_payment_creation(
@@ -327,36 +380,41 @@ def finalize_payment_creation(
         )
         db.add(payment)
         db.flush()
-
-    attempt.status = COMPLETED_PAYMENT_ATTEMPT_STATUS
-    attempt.provider_payment_id = provider_payment_id
-    attempt.lease_expires_at = None
-    attempt.last_error = ""
-    attempt.updated_at = utcnow_naive()
+    elif payment.status not in {"succeeded", "canceled"}:
+        payment.status = provider_status
+        payment.confirmation_url = confirmation_url or payment.confirmation_url
 
     if order.payment_status in _SETTLED_ORDER_PAYMENT_STATUSES:
+        _complete_attempt(attempt, provider_payment_id)
         return order, payment
 
     if order.status == "cancelled" or order.payment_status == "cancelled":
         if provider_status != "canceled":
+            reason = "payment_created_after_cancel"
             order.status = "payment_review_required"
             order.payment_status = (
                 "paid_review_required" if provider_status == "succeeded" else "payment_review_required"
             )
-            _queue_payment_review(db, order, provider_payment_id, "payment_created_after_cancel")
+            _review_attempt(attempt, provider_payment_id, reason)
+            _queue_payment_review(db, order, provider_payment_id, reason)
+        else:
+            _complete_attempt(attempt, provider_payment_id)
         return order, payment
 
     if (
         order.status not in _ELIGIBLE_ORDER_STATUSES
         or order.payment_status not in _ELIGIBLE_PAYMENT_STATUSES
     ):
+        reason = "payment_created_after_order_transition"
         order.status = "payment_review_required"
         order.payment_status = (
             "paid_review_required" if provider_status == "succeeded" else "payment_review_required"
         )
-        _queue_payment_review(db, order, provider_payment_id, "payment_created_after_order_transition")
+        _review_attempt(attempt, provider_payment_id, reason)
+        _queue_payment_review(db, order, provider_payment_id, reason)
         return order, payment
 
     order.payment_status = "payment_created"
     order.status = "payment_created"
+    _complete_attempt(attempt, provider_payment_id)
     return order, payment
