@@ -179,7 +179,7 @@ def begin_payment_creation(
         attempt.last_error = ""
         attempt.updated_at = now
     else:
-        last_attempt_number = (
+        durable_attempt_number = (
             db.query(func.max(PaymentCreationAttempt.attempt_number))
             .filter(
                 PaymentCreationAttempt.order_id == order.id,
@@ -188,6 +188,15 @@ def begin_payment_creation(
             .scalar()
             or 0
         )
+        legacy_payment_count = (
+            db.query(func.count(Payment.id))
+            .filter(Payment.order_id == order.id, Payment.provider == _PROVIDER)
+            .scalar()
+            or 0
+        )
+        # The pre-0031 provider idempotence key used payment count + 1. Keep that
+        # sequence as a defensive floor even if historical attempt rows are absent.
+        last_attempt_number = max(int(durable_attempt_number), int(legacy_payment_count))
         attempt = PaymentCreationAttempt(
             order_id=order.id,
             provider=_PROVIDER,
