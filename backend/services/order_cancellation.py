@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 
 from ..database import utcnow_naive
 from ..models import LoyaltyRedemptionHold, Order, Payment, PromoCode
+from ..payment_attempt_models import PaymentCreationAttempt
+from ..payment_attempt_statuses import OPEN_PAYMENT_ATTEMPT_STATUSES
 from .inventory import release_variants
 from .notifications import queue_order_status
 
@@ -73,6 +75,21 @@ def _validate_cancellation_state(
             raise HTTPException(
                 status_code=409,
                 detail="Payment flow already exists; reconcile payment or use refund flow",
+            )
+        payment_attempt_exists = (
+            db.query(PaymentCreationAttempt.id)
+            .filter(
+                PaymentCreationAttempt.order_id == order.id,
+                PaymentCreationAttempt.status.in_(OPEN_PAYMENT_ATTEMPT_STATUSES),
+            )
+            .with_for_update()
+            .first()
+            is not None
+        )
+        if payment_attempt_exists:
+            raise HTTPException(
+                status_code=409,
+                detail="Payment creation is in progress or requires reconciliation before cancellation",
             )
         return
 

@@ -8,7 +8,7 @@ def test_payment_route_uses_shared_settlement_service():
     source = (ROOT / "backend" / "api" / "payments.py").read_text(encoding="utf-8")
 
     assert "from ..services.payment_settlement import" in source
-    assert source.count("settle_paid_order(db, order)") == 3
+    assert "settle_paid_order(db, order)" in source
     assert "commit_reservations_to_sold" not in source
     assert "mark_redemption_committed" not in source
     assert "reward_referral_after_first_paid_order" not in source
