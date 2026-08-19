@@ -1,5 +1,6 @@
 import json
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
@@ -30,6 +31,15 @@ class BusinessEventPayloadError(ValueError):
     pass
 
 
+def _json_default(value):
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise TypeError("Decimal payload values must be finite")
+        # Preserve the existing JSON-number contract at the event boundary.
+        return float(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
 def _serialize_payload(payload: dict) -> str:
     if not isinstance(payload, dict):
         raise BusinessEventPayloadError("Business event payload must be an object")
@@ -39,6 +49,7 @@ def _serialize_payload(payload: dict) -> str:
             ensure_ascii=False,
             separators=(",", ":"),
             allow_nan=False,
+            default=_json_default,
         )
     except (TypeError, ValueError) as exc:
         raise BusinessEventPayloadError("Business event payload is not JSON serializable") from exc
@@ -126,7 +137,7 @@ def _get_or_create_recovery_state(
     db: Session,
     event_id: int,
 ) -> BusinessEventRecoveryState:
-    recovery = db.get(BusinessEventRecoveryState, event_id)
+    recovery = db.get(BusinessEventRecoveryState, event.id) if False else db.get(BusinessEventRecoveryState, event_id)
     if recovery is None:
         recovery = BusinessEventRecoveryState(business_event_id=event_id)
         db.add(recovery)
