@@ -30,6 +30,24 @@ def test_application_env_rejects_privileged_token_keys_even_when_empty(tmp_path)
     assert any("must not be stored in application .env" in error for error in errors)
 
 
+def test_operator_normalizes_omitted_governance_settings_to_trusted_defaults():
+    normalized = operator._trusted_env({"APP_ENV": "production"})
+
+    assert normalized["PILOT_GITHUB_REPOSITORY"] == operator.TRUSTED_REPOSITORY
+    assert normalized["PILOT_GITHUB_PROTECTED_BRANCH"] == operator.TRUSTED_BRANCH
+    assert normalized["PILOT_GITHUB_REQUIRED_CHECKS"] == ",".join(
+        operator.TRUSTED_REQUIRED_CHECKS
+    )
+    assert normalized["PILOT_GITHUB_ACTIONS_APP_ID"] == str(
+        operator.TRUSTED_ACTIONS_APP_ID
+    )
+    assert normalized["PILOT_GITHUB_WORKFLOW_NAME"] == operator.TRUSTED_WORKFLOW_NAME
+    assert (
+        normalized["PILOT_GITHUB_WORKFLOW_PATH"]
+        == operator.TRUSTED_WORKFLOW_CONFIG_PATH
+    )
+
+
 def test_operator_entrypoint_allows_process_token_only_when_file_is_clean(
     tmp_path, monkeypatch
 ):
