@@ -36,6 +36,8 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
         "TRUSTED_ACTIONS_APP_ID",
         "TRUSTED_WORKFLOW_API_PATH",
         "require_trusted_configuration(",
+        "trusted_workflow_candidates(",
+        "trusted_workflow_job_errors(",
         "report_trust_anchor_errors(",
         "workflow must be an exact protected-main push run",
     ),
@@ -43,6 +45,9 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
         "require_privileged_token_file_isolation(",
         "require_trusted_configuration(",
         "pilot_repository_governance._runtime_env(",
+        "trusted_workflow_candidates(",
+        "trusted_workflow_job_errors(",
+        "/actions/runs/{run_id}/jobs?per_page=100",
     ),
     "scripts/pilot_governance_admission.py": (
         "attach_governance_report(",
@@ -96,6 +101,8 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
     ),
     "backend/tests/test_pilot_governance_trust_anchor.py": (
         "test_trusted_governance_configuration_accepts_only_exact_policy",
+        "test_trusted_workflow_candidates_accept_only_exact_push_run",
+        "test_trusted_workflow_jobs_require_all_six_successes",
         "test_report_trust_anchor_rejects_pull_request_run_and_wrong_source",
         "test_report_trust_anchor_rejects_mirrored_repo_or_non_main_branch",
     ),
