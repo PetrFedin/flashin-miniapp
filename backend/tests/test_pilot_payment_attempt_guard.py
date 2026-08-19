@@ -236,6 +236,7 @@ def test_provider_create_is_guarded_but_existing_attempt_reconciliation_and_refu
     assert "pilot_new_payment_attempt_guard" not in service[refund_start:refund_end]
 
     endpoint_start = api.index("async def create_payment")
-    reconcile = api.index("_reconcile_existing_payment(order, latest_payment)", endpoint_start)
+    existing_branch = api.index("if claim.is_existing:", endpoint_start)
+    reconcile = api.index("_reconcile_claimed_existing_payment(db, claim)", existing_branch)
     fresh_create = api.index("create_yookassa_payment(", reconcile)
-    assert reconcile < fresh_create
+    assert endpoint_start < existing_branch < reconcile < fresh_create
