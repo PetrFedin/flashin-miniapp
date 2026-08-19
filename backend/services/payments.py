@@ -1,6 +1,6 @@
 import asyncio
-import math
 import uuid
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from urllib.parse import quote
 
 import httpx
@@ -12,6 +12,7 @@ from .pilot_payment_guard import pilot_new_payment_attempt_guard
 _YOOKASSA_API = "https://api.yookassa.ru/v3"
 _TRANSIENT_STATUSES = {429, 500, 502, 503, 504}
 _MAX_ATTEMPTS = 3
+_MONEY_QUANTUM = Decimal("0.01")
 
 
 def _payment_idempotence_key(order_id: int, attempt: int) -> str:
@@ -22,10 +23,10 @@ def _refund_idempotence_key(
     payment_id: str,
     order_id: int,
     refund_request_id: int,
-    amount: float,
+    amount: Decimal,
     currency: str,
 ) -> str:
-    normalized_amount = f"{amount:.2f}"
+    normalized_amount = format(amount, ".2f")
     return str(
         uuid.uuid5(
             uuid.NAMESPACE_URL,
@@ -37,12 +38,15 @@ def _refund_idempotence_key(
     )
 
 
-def _validate_positive_amount(amount: float, operation: str) -> float:
+def _validate_positive_amount(amount, operation: str) -> Decimal:
     try:
-        normalized = float(amount)
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail=f"{operation} amount must be numeric.")
-    if not math.isfinite(normalized) or normalized <= 0:
+        normalized = amount if isinstance(amount, Decimal) else Decimal(str(amount))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"{operation} amount must be numeric.") from exc
+    if not normalized.is_finite():
+        raise HTTPException(status_code=400, detail=f"{operation} amount must be positive.")
+    normalized = normalized.quantize(_MONEY_QUANTUM, rounding=ROUND_HALF_UP)
+    if normalized <= 0:
         raise HTTPException(status_code=400, detail=f"{operation} amount must be positive.")
     return normalized
 
@@ -138,7 +142,7 @@ async def _request_yookassa(
     )
 
 
-async def create_yookassa_payment(order_id: int, amount: float, currency: str, attempt: int = 1) -> dict:
+async def create_yookassa_payment(order_id: int, amount, currency: str, attempt: int = 1) -> dict:
     normalized_amount = _validate_positive_amount(amount, "Payment")
     normalized_currency = _normalize_currency(currency)
     if attempt < 1:
@@ -146,7 +150,7 @@ async def create_yookassa_payment(order_id: int, amount: float, currency: str, a
 
     settings = get_settings()
     payload = {
-        "amount": {"value": f"{normalized_amount:.2f}", "currency": normalized_currency},
+        "amount": {"value": format(normalized_amount, ".2f"), "currency": normalized_currency},
         "capture": True,
         "confirmation": {
             "type": "redirect",
@@ -178,7 +182,7 @@ async def fetch_yookassa_payment(payment_id: str) -> dict:
 
 async def create_yookassa_refund(
     payment_id: str,
-    amount: float,
+    amount,
     currency: str,
     order_id: int,
     refund_request_id: int,
@@ -193,7 +197,7 @@ async def create_yookassa_refund(
 
     payload = {
         "payment_id": normalized_payment_id,
-        "amount": {"value": f"{normalized_amount:.2f}", "currency": normalized_currency},
+        "amount": {"value": format(normalized_amount, ".2f"), "currency": normalized_currency},
         "description": f"FLASHIN refund #{refund_request_id} for order #{order_id}",
     }
     data = await _request_yookassa(
