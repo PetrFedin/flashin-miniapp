@@ -1,4 +1,3 @@
-import math
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_HALF_UP
 
@@ -13,6 +12,7 @@ from .promos import calculate_discount
 
 
 _MONEY_STEP = Decimal("0.01")
+_POINTS_STEP = Decimal("0.0001")
 
 
 @dataclass(frozen=True)
@@ -32,18 +32,26 @@ class CartAdjustmentResult:
         )
 
 
-def _money(value: object, field: str) -> Decimal:
+def _decimal_number(value: object, field: str) -> Decimal:
     try:
-        amount = Decimal(str(value)).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
-    except (InvalidOperation, TypeError, ValueError):
-        raise HTTPException(status_code=409, detail=f"Invalid {field}")
+        amount = value if isinstance(value, Decimal) else Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=f"Invalid {field}") from exc
     if not amount.is_finite():
         raise HTTPException(status_code=409, detail=f"Invalid {field}")
     return amount
 
 
-def _finite_non_negative(value: object, field: str) -> Decimal:
-    amount = _money(value, field)
+def _money(value: object, field: str) -> Decimal:
+    return _decimal_number(value, field).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
+
+
+def _points(value: object, field: str) -> Decimal:
+    return _decimal_number(value, field).quantize(_POINTS_STEP, rounding=ROUND_HALF_UP)
+
+
+def _finite_non_negative(value: object, field: str, *, points: bool = False) -> Decimal:
+    amount = _points(value, field) if points else _money(value, field)
     if amount < 0:
         raise HTTPException(status_code=409, detail=f"{field.capitalize()} cannot be negative")
     return amount
@@ -106,7 +114,7 @@ def _reconcile_promo(db: Session, cart: Cart, subtotal: Decimal) -> tuple[Decima
         .first()
     )
     try:
-        discount = _money(calculate_discount(promo, float(subtotal)), "promo discount")
+        discount = _money(calculate_discount(promo, subtotal), "promo discount")
         if discount < 0 or discount > subtotal:
             raise HTTPException(status_code=409, detail="Promo discount is invalid")
     except HTTPException:
@@ -120,22 +128,22 @@ def _reconcile_promo(db: Session, cart: Cart, subtotal: Decimal) -> tuple[Decima
 
 def _whole_requested_points(value: object) -> int:
     try:
-        number = float(value or 0)
-    except (TypeError, ValueError):
+        number = _points(value or 0, "loyalty points")
+    except HTTPException:
         return 0
-    if not math.isfinite(number) or number <= 0 or not number.is_integer():
+    if number <= 0 or number != number.to_integral_value():
         return 0
     return int(number)
 
 
 def _strict_requested_points(value: object) -> int:
     try:
-        number = float(value)
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=422, detail="Invalid loyalty points")
-    if not math.isfinite(number) or number < 0:
+        number = _points(value, "loyalty points")
+    except HTTPException as exc:
+        raise HTTPException(status_code=422, detail="Invalid loyalty points") from exc
+    if number < 0:
         raise HTTPException(status_code=422, detail="Loyalty points must be non-negative")
-    if not number.is_integer():
+    if number != number.to_integral_value():
         raise HTTPException(status_code=422, detail="Loyalty points must be whole numbers")
     return int(number)
 
@@ -160,7 +168,7 @@ def _allowed_loyalty_points(
     point_value: Decimal,
     max_percent: Decimal,
 ) -> int:
-    available_points = max(profile_points - other_reserved, Decimal("0.00"))
+    available_points = max(profile_points - other_reserved, Decimal("0.0000"))
     maximum_discount = (subtotal * max_percent / Decimal("100")).quantize(
         _MONEY_STEP,
         rounding=ROUND_HALF_UP,
@@ -181,7 +189,7 @@ def _reconcile_loyalty(
     holds, current_hold = _reserved_holds(db, cart)
     requested_points = _whole_requested_points(cart.loyalty_points_to_redeem)
     if requested_points <= 0:
-        cart.loyalty_points_to_redeem = 0
+        cart.loyalty_points_to_redeem = Decimal("0.0000")
         _release_hold(current_hold)
         return 0, Decimal("0.00")
 
@@ -192,18 +200,18 @@ def _reconcile_loyalty(
         .first()
     )
     if not profile:
-        cart.loyalty_points_to_redeem = 0
+        cart.loyalty_points_to_redeem = Decimal("0.0000")
         _release_hold(current_hold)
         return 0, Decimal("0.00")
 
-    profile_points = _finite_non_negative(profile.loyalty_points, "loyalty balance")
+    profile_points = _finite_non_negative(profile.loyalty_points, "loyalty balance", points=True)
     other_reserved = sum(
         (
-            _finite_non_negative(hold.points, "reserved loyalty points")
+            _finite_non_negative(hold.points, "reserved loyalty points", points=True)
             for hold in holds
             if hold.cart_id != cart.id
         ),
-        Decimal("0.00"),
+        Decimal("0.0000"),
     )
     point_value, max_percent = _loyalty_settings()
     allowed_points = _allowed_loyalty_points(
@@ -217,20 +225,20 @@ def _reconcile_loyalty(
     effective_points = min(requested_points, allowed_points)
 
     if effective_points <= 0:
-        cart.loyalty_points_to_redeem = 0
+        cart.loyalty_points_to_redeem = Decimal("0.0000")
         _release_hold(current_hold)
         return 0, Decimal("0.00")
 
-    cart.loyalty_points_to_redeem = effective_points
+    cart.loyalty_points_to_redeem = Decimal(effective_points).quantize(_POINTS_STEP)
     if current_hold:
-        current_hold.points = effective_points
+        current_hold.points = Decimal(effective_points).quantize(_POINTS_STEP)
         current_hold.released_at = None
     else:
         db.add(
             LoyaltyRedemptionHold(
                 customer_id=cart.customer_id,
                 cart_id=cart.id,
-                points=effective_points,
+                points=Decimal(effective_points).quantize(_POINTS_STEP),
                 status="reserved",
             )
         )
@@ -267,7 +275,7 @@ def apply_loyalty_request(db: Session, cart: Cart, points: object) -> CartAdjust
     holds, current_hold = _reserved_holds(db, cart)
 
     if requested_points == 0:
-        cart.loyalty_points_to_redeem = 0
+        cart.loyalty_points_to_redeem = Decimal("0.0000")
         _release_hold(current_hold)
         return CartAdjustmentResult(
             subtotal=baseline.subtotal,
@@ -287,14 +295,14 @@ def apply_loyalty_request(db: Session, cart: Cart, points: object) -> CartAdjust
     if not profile:
         raise HTTPException(status_code=409, detail="Loyalty profile not found")
 
-    profile_points = _finite_non_negative(profile.loyalty_points, "loyalty balance")
+    profile_points = _finite_non_negative(profile.loyalty_points, "loyalty balance", points=True)
     other_reserved = sum(
         (
-            _finite_non_negative(hold.points, "reserved loyalty points")
+            _finite_non_negative(hold.points, "reserved loyalty points", points=True)
             for hold in holds
             if hold.cart_id != cart.id
         ),
-        Decimal("0.00"),
+        Decimal("0.0000"),
     )
     point_value, max_percent = _loyalty_settings()
     allowed_points = _allowed_loyalty_points(
@@ -311,9 +319,10 @@ def apply_loyalty_request(db: Session, cart: Cart, points: object) -> CartAdjust
             detail=f"No more than {allowed_points} loyalty points can be redeemed for this cart",
         )
 
-    cart.loyalty_points_to_redeem = requested_points
+    normalized_points = Decimal(requested_points).quantize(_POINTS_STEP)
+    cart.loyalty_points_to_redeem = normalized_points
     if current_hold:
-        current_hold.points = requested_points
+        current_hold.points = normalized_points
         current_hold.status = "reserved"
         current_hold.released_at = None
     else:
@@ -321,7 +330,7 @@ def apply_loyalty_request(db: Session, cart: Cart, points: object) -> CartAdjust
             LoyaltyRedemptionHold(
                 customer_id=cart.customer_id,
                 cart_id=cart.id,
-                points=requested_points,
+                points=normalized_points,
                 status="reserved",
             )
         )
