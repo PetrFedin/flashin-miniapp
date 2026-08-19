@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Sequence
 
@@ -18,7 +19,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     # The application .env must remain token-free even while this command runs.
     require_privileged_token_file_isolation(ROOT)
     env = pilot_repository_governance._runtime_env(ROOT)
-    require_trusted_configuration(env)
+    try:
+        require_trusted_configuration(env)
+    except ValueError as exc:
+        print(json.dumps({"go": False, "errors": [str(exc)]}, ensure_ascii=False))
+        return 1
     return pilot_repository_governance.main(argv)
 
 
