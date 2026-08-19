@@ -7,6 +7,7 @@ from being weaker than PostgreSQL production.
 
 from sqlalchemy import CheckConstraint, Index, UniqueConstraint, text
 
+from .money_model_types import apply_money_model_types
 from .models import (
     AdminPasswordReset,
     AdminRolePermission,
@@ -221,4 +222,5 @@ def apply_model_constraints() -> None:
     )
 
 
+apply_money_model_types()
 apply_model_constraints()
