@@ -82,6 +82,58 @@ def require_trusted_configuration(env: Mapping[str, str]) -> None:
         raise ValueError("Repository governance trust anchor mismatch: " + "; ".join(errors))
 
 
+def trusted_workflow_candidates(
+    workflow_runs: object,
+    *,
+    release_commit: str,
+) -> list[Mapping[str, Any]]:
+    """Return only exact trusted protected-main push CI candidates for one release SHA."""
+
+    if not isinstance(workflow_runs, list):
+        return []
+    candidates = [
+        item
+        for item in workflow_runs
+        if isinstance(item, Mapping)
+        and isinstance(item.get("id"), int)
+        and int(item.get("id", 0)) > 0
+        and item.get("name") == TRUSTED_WORKFLOW_NAME
+        and item.get("path") == TRUSTED_WORKFLOW_API_PATH
+        and item.get("event") == "push"
+        and item.get("status") == "completed"
+        and item.get("conclusion") == "success"
+        and item.get("head_sha") == release_commit
+    ]
+    return sorted(
+        candidates,
+        key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""),
+        reverse=True,
+    )
+
+
+def trusted_workflow_job_errors(jobs: object) -> list[str]:
+    """Require all six trusted jobs to complete successfully on the selected push run."""
+
+    if not isinstance(jobs, list):
+        return ["GitHub trusted workflow job evidence is missing"]
+    errors: list[str] = []
+    for name in TRUSTED_REQUIRED_CHECKS:
+        matching = [
+            item
+            for item in jobs
+            if isinstance(item, Mapping) and str(item.get("name", "")).strip() == name
+        ]
+        if not matching:
+            errors.append(f"GitHub trusted workflow job is missing: {name}")
+            continue
+        if not any(
+            item.get("status") == "completed" and item.get("conclusion") == "success"
+            for item in matching
+        ):
+            errors.append(f"GitHub trusted workflow job is not successful: {name}")
+    return errors
+
+
 def _string_set(value: object) -> set[str]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         return set()
