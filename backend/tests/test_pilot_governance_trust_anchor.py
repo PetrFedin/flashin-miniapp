@@ -16,6 +16,8 @@ from pilot_governance_policy import (  # noqa: E402
     TRUSTED_WORKFLOW_NAME,
     report_trust_anchor_errors,
     require_trusted_configuration,
+    trusted_workflow_candidates,
+    trusted_workflow_job_errors,
 )
 
 
@@ -65,6 +67,22 @@ def _report(**workflow_overrides):
     }
 
 
+def _workflow_run(**overrides):
+    run = {
+        "id": 1001,
+        "name": TRUSTED_WORKFLOW_NAME,
+        "path": TRUSTED_WORKFLOW_API_PATH,
+        "event": "push",
+        "status": "completed",
+        "conclusion": "success",
+        "head_sha": "a" * 40,
+        "created_at": "2026-08-19T09:00:00Z",
+        "updated_at": "2026-08-19T09:30:00Z",
+    }
+    run.update(overrides)
+    return run
+
+
 def test_trusted_governance_configuration_accepts_only_exact_policy():
     require_trusted_configuration(_env())
     require_trusted_configuration({"APP_ENV": "production"})
@@ -80,6 +98,40 @@ def test_trusted_governance_configuration_accepts_only_exact_policy():
     for overrides in weak_overrides:
         with pytest.raises(ValueError, match="trust anchor mismatch"):
             require_trusted_configuration(_env(**overrides))
+
+
+def test_trusted_workflow_candidates_accept_only_exact_push_run():
+    runs = [
+        _workflow_run(id=1, event="pull_request", updated_at="2026-08-19T10:00:00Z"),
+        _workflow_run(id=2, path=".github/workflows/weak.yml"),
+        _workflow_run(id=3, head_sha="b" * 40),
+        _workflow_run(id=4, conclusion="failure"),
+        _workflow_run(id=5, updated_at="2026-08-19T11:00:00Z"),
+        _workflow_run(id=6, updated_at="2026-08-19T10:30:00Z"),
+    ]
+
+    candidates = trusted_workflow_candidates(runs, release_commit="a" * 40)
+
+    assert [item["id"] for item in candidates] == [5, 6]
+
+
+def test_trusted_workflow_jobs_require_all_six_successes():
+    jobs = [
+        {"name": name, "status": "completed", "conclusion": "success"}
+        for name in TRUSTED_REQUIRED_CHECKS
+    ]
+    assert trusted_workflow_job_errors(jobs) == []
+
+    missing = jobs[:-1]
+    assert trusted_workflow_job_errors(missing) == [
+        "GitHub trusted workflow job is missing: docker"
+    ]
+
+    failed = [dict(item) for item in jobs]
+    failed[0]["conclusion"] = "failure"
+    assert trusted_workflow_job_errors(failed) == [
+        "GitHub trusted workflow job is not successful: backend"
+    ]
 
 
 def test_report_trust_anchor_rejects_pull_request_run_and_wrong_source():
