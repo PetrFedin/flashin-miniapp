@@ -29,6 +29,21 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
         "GitHub ruleset bypass actors are not visible",
         "GitHub CI has no successful completed run for the current release commit",
     ),
+    "scripts/pilot_governance_policy.py": (
+        "TRUSTED_REPOSITORY",
+        "TRUSTED_BRANCH",
+        "TRUSTED_REQUIRED_CHECKS",
+        "TRUSTED_ACTIONS_APP_ID",
+        "TRUSTED_WORKFLOW_API_PATH",
+        "require_trusted_configuration(",
+        "report_trust_anchor_errors(",
+        "workflow must be an exact protected-main push run",
+    ),
+    "scripts/pilot_governance_operator.py": (
+        "require_privileged_token_file_isolation(",
+        "require_trusted_configuration(",
+        "pilot_repository_governance._runtime_env(",
+    ),
     "scripts/pilot_governance_admission.py": (
         "attach_governance_report(",
         "validate_attached_governance(",
@@ -37,6 +52,7 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
         "Live lifecycle evidence",
         "Repository governance evidence",
         "require_current_governance_release(",
+        "report_trust_anchor_errors(",
     ),
     "scripts/pilot_governance_release_guard.py": (
         "REQUIRED_FILES",
@@ -74,6 +90,11 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
         "test_unprotected_branch_missing_checks_and_bypass_fail_closed",
         "test_governance_attachment_requires_signed_technical_owner",
         "required_status_check_sources",
+    ),
+    "backend/tests/test_pilot_governance_trust_anchor.py": (
+        "test_trusted_governance_configuration_accepts_only_exact_policy",
+        "test_report_trust_anchor_rejects_pull_request_run_and_wrong_source",
+        "test_report_trust_anchor_rejects_mirrored_repo_or_non_main_branch",
     ),
     "backend/tests/test_pilot_governance_visibility.py": (
         "test_governance_collection_requires_github_token",
