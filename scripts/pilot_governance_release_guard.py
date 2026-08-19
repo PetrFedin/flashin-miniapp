@@ -29,6 +29,26 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
         "GitHub ruleset bypass actors are not visible",
         "GitHub CI has no successful completed run for the current release commit",
     ),
+    "scripts/pilot_governance_policy.py": (
+        "TRUSTED_REPOSITORY",
+        "TRUSTED_BRANCH",
+        "TRUSTED_REQUIRED_CHECKS",
+        "TRUSTED_ACTIONS_APP_ID",
+        "TRUSTED_WORKFLOW_API_PATH",
+        "require_trusted_configuration(",
+        "trusted_workflow_candidates(",
+        "trusted_workflow_job_errors(",
+        "report_trust_anchor_errors(",
+        "workflow must be an exact protected-main push run",
+    ),
+    "scripts/pilot_governance_operator.py": (
+        "require_privileged_token_file_isolation(",
+        "require_trusted_configuration(",
+        "pilot_repository_governance._runtime_env(",
+        "trusted_workflow_candidates(",
+        "trusted_workflow_job_errors(",
+        "/actions/runs/{run_id}/jobs?per_page=100",
+    ),
     "scripts/pilot_governance_admission.py": (
         "attach_governance_report(",
         "validate_attached_governance(",
@@ -37,9 +57,11 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
         "Live lifecycle evidence",
         "Repository governance evidence",
         "require_current_governance_release(",
+        "report_trust_anchor_errors(",
     ),
     "scripts/pilot_governance_release_guard.py": (
         "REQUIRED_FILES",
+        "FORBIDDEN_ASSIGNMENTS",
         "inspect_governance_release(",
         "require_current_governance_release(",
         "Current release is not governance-capable",
@@ -59,6 +81,8 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
         "Run pilot release, governance and database guard tests",
         "backend/tests/test_pilot_admission_path_binding.py",
         "backend/tests/test_pilot_repository_governance.py",
+        "backend/tests/test_pilot_governance_trust_anchor.py",
+        "backend/tests/test_pilot_governance_admission_trust_anchor.py",
         "backend/tests/test_pilot_governance_visibility.py",
         "backend/tests/test_pilot_governance_classic_fail_closed.py",
         "backend/tests/test_pilot_governance_check_sources.py",
@@ -74,6 +98,18 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
         "test_unprotected_branch_missing_checks_and_bypass_fail_closed",
         "test_governance_attachment_requires_signed_technical_owner",
         "required_status_check_sources",
+    ),
+    "backend/tests/test_pilot_governance_trust_anchor.py": (
+        "test_trusted_governance_configuration_accepts_only_exact_policy",
+        "test_trusted_workflow_candidates_accept_only_exact_push_run",
+        "test_trusted_workflow_jobs_require_all_six_successes",
+        "test_report_trust_anchor_rejects_pull_request_run_and_wrong_source",
+        "test_report_trust_anchor_rejects_mirrored_repo_or_non_main_branch",
+    ),
+    "backend/tests/test_pilot_governance_admission_trust_anchor.py": (
+        "test_admission_rejects_signed_governance_report_using_weakened_env_anchor",
+        "trusted GitHub Actions app",
+        "trusted check source is invalid",
     ),
     "backend/tests/test_pilot_governance_visibility.py": (
         "test_governance_collection_requires_github_token",
@@ -99,6 +135,7 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
     "backend/tests/test_pilot_governance_release_guard.py": (
         "test_lifecycle_only_archive_cannot_receive_governance_admission",
         "test_exact_release_requires_every_governance_file_and_marker",
+        "test_governance_release_rejects_persisted_operator_token",
         "test_current_release_pointer_must_match_governance_archive",
     ),
     "docs/pilot/repository_governance.md": (
@@ -123,11 +160,15 @@ REQUIRED_FILES: dict[str, tuple[str, ...]] = {
         "pilot-governance-status:",
     ),
     ".env.production.example": (
-        "PILOT_GITHUB_TOKEN=",
+        "Never store PILOT_GITHUB_TOKEN in this file",
         "PILOT_GITHUB_REPOSITORY=",
         "PILOT_GITHUB_ACTIONS_APP_ID=15368",
         "PILOT_GITHUB_GOVERNANCE_MAX_AGE_MINUTES=",
     ),
+}
+
+FORBIDDEN_ASSIGNMENTS: dict[str, tuple[str, ...]] = {
+    ".env.production.example": ("PILOT_GITHUB_TOKEN=",),
 }
 
 
@@ -164,6 +205,14 @@ def inspect_governance_release(archive: Path) -> list[str]:
                     if marker not in content:
                         errors.append(
                             f"Governance-capable release marker is missing in {path}: {marker}"
+                        )
+                for forbidden in FORBIDDEN_ASSIGNMENTS.get(path, ()):
+                    if any(
+                        line.strip().startswith(forbidden)
+                        for line in content.splitlines()
+                    ):
+                        errors.append(
+                            f"Governance-capable release contains forbidden assignment in {path}: {forbidden}"
                         )
     except (
         OSError,
