@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from backend.api import health
 
 
-CURRENT_HEAD = "0031_payment_creation_attempt_integrity"
+CURRENT_HEAD = "0032_fixed_precision_money"
 
 
 class ScalarResult:

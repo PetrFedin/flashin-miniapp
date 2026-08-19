@@ -1,3 +1,5 @@
+from decimal import Decimal, ROUND_HALF_UP
+
 from fastapi import HTTPException
 
 from ..order_statuses import SETTLED_ORDER_PAYMENT_STATUSES
@@ -13,6 +15,8 @@ from .moysklad_outbound import enqueue_moysklad_customer_order
 from .notifications import queue_order_paid
 from .outbox import enqueue_event_for_destinations, enqueue_webhook
 from .timeline import add_timeline_event
+
+_POINTS_STEP = Decimal("0.0001")
 
 
 def _order_item_quantities(order) -> dict[int, int]:
@@ -52,10 +56,14 @@ def settle_paid_order(db, order) -> bool:
             order.loyalty_points_redeemed,
         )
 
+    earned_points = (Decimal(str(order.total_amount)) * Decimal("0.01")).quantize(
+        _POINTS_STEP,
+        rounding=ROUND_HALF_UP,
+    )
     add_points(
         db,
         order.customer_id,
-        round(order.total_amount * 0.01, 2),
+        earned_points,
         "order_paid",
         order.id,
     )

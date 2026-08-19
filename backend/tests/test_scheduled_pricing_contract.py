@@ -18,13 +18,14 @@ def test_cart_reconciliation_and_serialization_share_effective_unit_prices():
     assert "Cart changed during adjustment reconciliation" in cart
 
 
-def test_checkout_locks_pricing_once_and_snapshots_same_price_into_order_items():
+def test_checkout_locks_pricing_once_and_snapshots_same_decimal_price_into_order_items():
     orders = source("backend/api/orders.py")
 
     assert "load_product_price_quotes" in orders
     assert "lock=True" in orders
     assert "price_quotes[int(item.product_id)].effective_price" in orders
-    assert "price=float(quote.effective_price)" in orders
+    assert "price=quote.effective_price" in orders
+    assert "price=float(quote.effective_price)" not in orders
     assert "product.price" not in orders.split("subtotal = sum(", 1)[1].split("promo, discount", 1)[0]
 
 

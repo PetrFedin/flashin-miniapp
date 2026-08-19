@@ -32,17 +32,26 @@ from ..services.promos import calculate_discount
 router = APIRouter(prefix="/orders", tags=["orders"])
 
 _MONEY_STEP = Decimal("0.01")
+_POINTS_STEP = Decimal("0.0001")
 _IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{16,128}$")
 
 
-def _money(value: object, field: str) -> Decimal:
+def _decimal_value(value: object, field: str) -> Decimal:
     try:
-        amount = Decimal(str(value)).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
-    except (InvalidOperation, TypeError, ValueError):
-        raise HTTPException(status_code=409, detail=f"Invalid {field}")
+        amount = value if isinstance(value, Decimal) else Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=f"Invalid {field}") from exc
     if not amount.is_finite():
         raise HTTPException(status_code=409, detail=f"Invalid {field}")
     return amount
+
+
+def _money(value: object, field: str) -> Decimal:
+    return _decimal_value(value, field).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
+
+
+def _points(value: object, field: str) -> Decimal:
+    return _decimal_value(value, field).quantize(_POINTS_STEP, rounding=ROUND_HALF_UP)
 
 
 def _normalize_idempotency_key(value: str | None) -> str:
@@ -191,7 +200,7 @@ def _lock_and_calculate_promo(
         .with_for_update()
         .first()
     )
-    discount = _money(calculate_discount(promo, float(subtotal)), "promo discount")
+    discount = _money(calculate_discount(promo, subtotal), "promo discount")
     if discount < 0 or discount > subtotal:
         raise HTTPException(status_code=409, detail="Promo discount is invalid")
     return promo, discount
@@ -204,11 +213,11 @@ def _lock_and_validate_loyalty(
     subtotal: Decimal,
     promo_discount: Decimal,
 ) -> tuple[Decimal, Decimal, LoyaltyRedemptionHold | None]:
-    requested_points = _money(cart.loyalty_points_to_redeem or 0, "loyalty points")
+    requested_points = _points(cart.loyalty_points_to_redeem or 0, "loyalty points")
     if requested_points < 0:
         raise HTTPException(status_code=409, detail="Loyalty points cannot be negative")
     if requested_points == 0:
-        return Decimal("0.00"), Decimal("0.00"), None
+        return Decimal("0.0000"), Decimal("0.00"), None
 
     profile = (
         db.query(CrmProfile)
@@ -230,10 +239,12 @@ def _lock_and_validate_loyalty(
     )
     current_hold = next((hold for hold in holds if hold.cart_id == cart.id), None)
     other_reserved_points = sum(
-        (_money(hold.points, "reserved loyalty points") for hold in holds if hold.cart_id != cart.id),
-        Decimal("0.00"),
+        (_points(hold.points, "reserved loyalty points") for hold in holds if hold.cart_id != cart.id),
+        Decimal("0.0000"),
     )
-    available_points = _money(profile.loyalty_points, "loyalty balance") - other_reserved_points
+    available_points = (
+        _points(profile.loyalty_points, "loyalty balance") - other_reserved_points
+    ).quantize(_POINTS_STEP, rounding=ROUND_HALF_UP)
     if requested_points > available_points:
         raise HTTPException(status_code=409, detail="Not enough available loyalty points")
 
@@ -241,19 +252,19 @@ def _lock_and_validate_loyalty(
     point_value = _money(settings.loyalty_point_value_rub, "loyalty point value")
     loyalty_discount = (requested_points * point_value).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
     maximum_discount = (
-        subtotal * Decimal(str(settings.loyalty_max_redeem_percent)) / Decimal("100")
+        subtotal * _decimal_value(settings.loyalty_max_redeem_percent, "loyalty redeem percent") / Decimal("100")
     ).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
     payable_before_loyalty = subtotal - promo_discount
     if loyalty_discount > maximum_discount or loyalty_discount > payable_before_loyalty:
         raise HTTPException(status_code=409, detail="Loyalty redemption exceeds the allowed limit")
 
     if current_hold:
-        current_hold.points = float(requested_points)
+        current_hold.points = requested_points
     else:
         current_hold = LoyaltyRedemptionHold(
             customer_id=customer_id,
             cart_id=cart.id,
-            points=float(requested_points),
+            points=requested_points,
             status="reserved",
         )
         db.add(current_hold)
@@ -367,12 +378,12 @@ def checkout(
             address=address,
             comment=comment,
             currency="RUB",
-            discount_amount=float(discount),
-            loyalty_points_redeemed=float(loyalty_points),
-            loyalty_discount_amount=float(loyalty_discount),
+            discount_amount=discount,
+            loyalty_points_redeemed=loyalty_points,
+            loyalty_discount_amount=loyalty_discount,
             referral_code=(cart.referral_code or "").strip().upper()[:64],
-            delivery_price=float(delivery_price),
-            total_amount=float(final_amount),
+            delivery_price=delivery_price,
+            total_amount=final_amount,
         )
         db.add(order)
         db.flush()
@@ -404,7 +415,7 @@ def checkout(
                     title=product.title,
                     size=variant.size,
                     quantity=cart_item.quantity,
-                    price=float(quote.effective_price),
+                    price=quote.effective_price,
                 )
             )
 
