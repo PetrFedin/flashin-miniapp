@@ -20,6 +20,7 @@ from ..payment_attempt_statuses import (
 )
 from .event_dispatcher import emit_event
 from .outbox import enqueue_webhook
+from .pilot_circuit_breaker import stop_pilot_for_order
 
 _PROVIDER = "yookassa"
 _REUSABLE_PAYMENT_STATUSES = {"pending", "waiting_for_capture", "succeeded"}
@@ -297,6 +298,11 @@ def complete_payment_creation_from_provider(
 
 
 def _queue_payment_review(db: Session, order: Order, payment_id: str, reason: str) -> None:
+    stop_pilot_for_order(
+        db,
+        order_id=order.id,
+        reason=f"payment_review:{reason}",
+    )
     payload = {
         "order_id": order.id,
         "provider_payment_id": payment_id,
@@ -313,6 +319,14 @@ def _queue_payment_review(db: Session, order: Order, payment_id: str, reason: st
 
 def _complete_attempt(attempt: PaymentCreationAttempt, provider_payment_id: str) -> None:
     attempt.status = COMPLETED_PAYMENT_ATTEMPT_STATUS
+    attempt.provider_payment_id = provider_payment_id
+    attempt.lease_expires_at = None
+    attempt.last_error = ""
+    attempt.updated_at = utcnow_naive()
+
+
+def _abandon_attempt(attempt: PaymentCreationAttempt, provider_payment_id: str) -> None:
+    attempt.status = ABANDONED_PAYMENT_ATTEMPT_STATUS
     attempt.provider_payment_id = provider_payment_id
     attempt.lease_expires_at = None
     attempt.last_error = ""
@@ -401,7 +415,14 @@ def finalize_payment_creation(
         payment.confirmation_url = confirmation_url or payment.confirmation_url
 
     if order.payment_status in _SETTLED_ORDER_PAYMENT_STATUSES:
-        _complete_attempt(attempt, provider_payment_id)
+        if provider_status == "canceled":
+            reason = "provider_create_canceled_after_settlement"
+            order.status = "payment_review_required"
+            order.payment_status = "paid_review_required"
+            _review_attempt(attempt, provider_payment_id, reason)
+            _queue_payment_review(db, order, provider_payment_id, reason)
+        else:
+            _complete_attempt(attempt, provider_payment_id)
         return order, payment
 
     if order.status == "cancelled" or order.payment_status == "cancelled":
@@ -414,11 +435,11 @@ def finalize_payment_creation(
             _review_attempt(attempt, provider_payment_id, reason)
             _queue_payment_review(db, order, provider_payment_id, reason)
         else:
-            _complete_attempt(attempt, provider_payment_id)
+            _abandon_attempt(attempt, provider_payment_id)
         return order, payment
 
     if provider_status == "canceled":
-        _complete_attempt(attempt, provider_payment_id)
+        _abandon_attempt(attempt, provider_payment_id)
         return order, payment
 
     if (
