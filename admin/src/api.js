@@ -30,11 +30,18 @@ export function setAdminToken(token) {
   else localStorage.removeItem("admin_token");
 }
 
+function staleAdminSessionError() {
+  return new AdminApiError("Административная сессия изменилась. Повторите операцию.");
+}
+
 function assertAdminSessionUnchanged(auth, tokenAtStart) {
   if (!auth) return;
-  if (getAdminToken() !== tokenAtStart) {
-    throw new AdminApiError("Административная сессия изменилась. Повторите операцию.");
-  }
+  if (getAdminToken() !== tokenAtStart) throw staleAdminSessionError();
+}
+
+function clearAdminTokenIfCurrent(tokenAtStart) {
+  if (getAdminToken() !== tokenAtStart) throw staleAdminSessionError();
+  setAdminToken("");
 }
 
 async function errorDetail(response) {
@@ -95,11 +102,10 @@ export async function adminRequest(path, options = {}) {
       headers: authHeaders(auth, headers, tokenAtStart),
     });
     if (!response.ok) {
-      if (response.status === 401 && auth) setAdminToken("");
-      throw new AdminApiError(
-        (await errorDetail(response)) || `HTTP ${response.status}`,
-        response.status,
-      );
+      const detail = await errorDetail(response);
+      if (response.status === 401 && auth) clearAdminTokenIfCurrent(tokenAtStart);
+      else assertAdminSessionUnchanged(auth, tokenAtStart);
+      throw new AdminApiError(detail || `HTTP ${response.status}`, response.status);
     }
 
     assertAdminSessionUnchanged(auth, tokenAtStart);
@@ -151,11 +157,10 @@ export async function downloadAdminFile(path, fallbackFilename) {
     headers: authHeaders(true, {}, tokenAtStart),
   });
   if (!response.ok) {
-    if (response.status === 401) setAdminToken("");
-    throw new AdminApiError(
-      (await errorDetail(response)) || "Не удалось скачать файл",
-      response.status,
-    );
+    const detail = await errorDetail(response);
+    if (response.status === 401) clearAdminTokenIfCurrent(tokenAtStart);
+    else assertAdminSessionUnchanged(true, tokenAtStart);
+    throw new AdminApiError(detail || "Не удалось скачать файл", response.status);
   }
   assertAdminSessionUnchanged(true, tokenAtStart);
   const disposition = response.headers.get("content-disposition") || "";
