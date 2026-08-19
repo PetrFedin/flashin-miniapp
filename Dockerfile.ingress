@@ -1,0 +1,32 @@
+FROM golang:1.26.7-alpine3.24 AS build
+
+ARG CADDY_COMMIT=e2eee6a7fce366321294c9c2a79f3146891dcbdf
+WORKDIR /src
+RUN apk add --no-cache git \
+    && git init \
+    && git remote add origin https://github.com/caddyserver/caddy.git \
+    && git fetch --depth 1 origin "${CADDY_COMMIT}" \
+    && git checkout --detach FETCH_HEAD \
+    && test "$(git rev-parse HEAD)" = "${CADDY_COMMIT}"
+
+# Caddy 2.11.4 is kept at the exact upstream release commit, but its released
+# module graph predates fixes for the vulnerabilities enforced by our Trivy
+# gate. Build the same Caddy source with patched Go/runtime dependencies.
+RUN go get \
+      golang.org/x/net@v0.56.0 \
+      golang.org/x/text@v0.39.0 \
+      google.golang.org/grpc@v1.82.1 \
+    && go mod tidy \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/caddy ./cmd/caddy
+
+FROM alpine:3.24.1
+RUN apk add --no-cache ca-certificates \
+    && mkdir -p /config/caddy /data/caddy /etc/caddy /srv \
+    && chmod 1777 /config/caddy /data/caddy
+COPY --from=build /out/caddy /usr/bin/caddy
+
+ENV XDG_CONFIG_HOME=/config
+ENV XDG_DATA_HOME=/data
+WORKDIR /srv
+EXPOSE 80 443 443/udp 2019
+CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
