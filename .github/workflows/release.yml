@@ -14,9 +14,10 @@ concurrency:
 jobs:
   package:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # releases/v4, 2026-07-16
         with:
           fetch-depth: 1
 
@@ -44,12 +45,24 @@ jobs:
           echo "archive=$archive" >> "$GITHUB_OUTPUT"
           echo "checksum=${archive}.sha256" >> "$GITHUB_OUTPUT"
 
-      - name: Upload immutable release and checksum
-        uses: actions/upload-artifact@v4
+      - name: Generate source CycloneDX SBOM
+        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # Trivy v0.74.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          format: cyclonedx
+          output: flashin-source-sbom.cdx.json
+          exit-code: "0"
+          version: v0.74.0
+
+      - name: Upload immutable release, checksum and SBOM
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # releases/v4
         with:
           name: flashin-immutable-release-${{ github.sha }}
           path: |
             ${{ steps.package.outputs.archive }}
             ${{ steps.package.outputs.checksum }}
+            flashin-source-sbom.cdx.json
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 90
