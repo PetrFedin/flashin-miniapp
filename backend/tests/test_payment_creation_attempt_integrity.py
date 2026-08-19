@@ -4,7 +4,7 @@ import pytest
 from fastapi import HTTPException
 
 from backend.database import SessionLocal
-from backend.models import Customer, Order
+from backend.models import Customer, Order, Payment
 from backend.payment_attempt_models import PaymentCreationAttempt
 from backend.payment_attempt_statuses import (
     ABANDONED_PAYMENT_ATTEMPT_STATUS,
@@ -141,6 +141,26 @@ def test_provider_canceled_abandons_attempt_and_allows_fresh_attempt(db):
     second = begin_payment_creation(db, order.id, customer.id, lease_seconds=30)
     assert second.attempt_id != first.attempt_id
     assert second.attempt_number == first.attempt_number + 1
+
+
+def test_legacy_payment_history_is_a_floor_for_next_idempotency_attempt(db):
+    customer, order = _order(db)
+    db.add(
+        Payment(
+            order_id=order.id,
+            provider="yookassa",
+            provider_payment_id="legacy-canceled-payment",
+            status="canceled",
+            amount=order.total_amount,
+            confirmation_url="",
+        )
+    )
+    db.flush()
+
+    claim = begin_payment_creation(db, order.id, customer.id, lease_seconds=30)
+
+    assert claim.attempt_number == 2
+    assert _attempt(db, claim.attempt_id).attempt_number == 2
 
 
 def test_verified_provider_webhook_converges_retryable_attempt(db):
