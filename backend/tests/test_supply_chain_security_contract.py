@@ -72,9 +72,33 @@ def test_security_workflow_has_required_supply_chain_gates():
     assert "scanners: vuln" in security
     assert "severity: HIGH,CRITICAL" in security
     assert "format: cyclonedx" in security
-    for image in ("backend", "bot", "frontend", "admin"):
+    for image in ("backend", "bot", "frontend", "admin", "ingress"):
         assert f"- name: {image}" in security
         assert f"dockerfile: Dockerfile.{image}" in security
+
+
+def test_static_runtimes_do_not_ship_the_vulnerable_caddy_binary():
+    frontend = _text("Dockerfile.frontend")
+    admin = _text("Dockerfile.admin")
+    for dockerfile in (frontend, admin):
+        assert "FROM alpine:3.24.1" in dockerfile
+        assert "busybox" in dockerfile
+        assert "FROM caddy:" not in dockerfile
+        assert "USER flashin" in dockerfile
+
+
+def test_ingress_builds_exact_caddy_source_with_patched_go_dependencies():
+    ingress = _text("Dockerfile.ingress")
+    compose = _text("docker-compose.yml")
+
+    assert "FROM golang:1.26.7-alpine3.24 AS build" in ingress
+    assert "CADDY_COMMIT=e2eee6a7fce366321294c9c2a79f3146891dcbdf" in ingress
+    assert "golang.org/x/net@v0.56.0" in ingress
+    assert "golang.org/x/text@v0.39.0" in ingress
+    assert "google.golang.org/grpc@v1.82.1" in ingress
+    assert "FROM alpine:3.24.1" in ingress
+    assert "dockerfile: Dockerfile.ingress" in compose
+    assert "image: caddy:2" not in compose
 
 
 def test_release_evidence_contains_sbom_and_longer_retention():
