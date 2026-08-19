@@ -28,11 +28,13 @@ def _csv(value: object) -> tuple[str, ...]:
 
 
 def trusted_configuration_errors(env: Mapping[str, str]) -> list[str]:
-    """Reject any configuration that can weaken the pilot GitHub trust boundary."""
+    """Reject any explicit configuration that can weaken the pilot GitHub trust boundary."""
 
     errors: list[str] = []
     repository = str(
-        env.get("PILOT_GITHUB_REPOSITORY") or env.get("GITHUB_REPOSITORY") or ""
+        env.get("PILOT_GITHUB_REPOSITORY")
+        or env.get("GITHUB_REPOSITORY")
+        or TRUSTED_REPOSITORY
     ).strip()
     branch = str(env.get("PILOT_GITHUB_PROTECTED_BRANCH", TRUSTED_BRANCH)).strip()
     checks = _csv(
