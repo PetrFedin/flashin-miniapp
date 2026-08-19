@@ -44,15 +44,15 @@ def test_operator_entrypoint_allows_process_token_only_when_file_is_clean(
     )
     monkeypatch.setenv("PILOT_GITHUB_TOKEN", "operator-only-token")
 
-    assert operator.main(["create"]) == 17
-    assert seen == [["create"]]
+    assert operator.main(["verify"]) == 17
+    assert seen == [["verify"]]
 
     (tmp_path / ".env").write_text(
         "APP_ENV=production\nPILOT_GITHUB_TOKEN=forbidden\n",
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="must not be stored in application .env"):
-        operator.main(["create"])
+        operator.main(["verify"])
 
 
 def test_admission_and_runtime_reject_process_token_leakage(tmp_path, monkeypatch):
