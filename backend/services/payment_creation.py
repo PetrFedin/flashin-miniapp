@@ -329,7 +329,7 @@ def _abandon_attempt(attempt: PaymentCreationAttempt, provider_payment_id: str) 
     attempt.status = ABANDONED_PAYMENT_ATTEMPT_STATUS
     attempt.provider_payment_id = provider_payment_id
     attempt.lease_expires_at = None
-    attempt.last_error = ""
+    attempt.last_error = "provider_canceled"
     attempt.updated_at = utcnow_naive()
 
 
