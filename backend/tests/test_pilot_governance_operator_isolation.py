@@ -48,6 +48,44 @@ def test_operator_normalizes_omitted_governance_settings_to_trusted_defaults():
     )
 
 
+def test_operator_binds_exact_six_job_verdicts_before_resigning(monkeypatch):
+    report = {
+        "workflow": {"id": 1001, "name": "CI"},
+        "signature": "old-signature",
+    }
+    jobs = [
+        {"name": name, "status": "completed", "conclusion": "success"}
+        for name in operator.TRUSTED_REQUIRED_CHECKS
+    ]
+    seen = {}
+
+    monkeypatch.setattr(
+        operator.pilot_repository_governance,
+        "require_signing_secret",
+        lambda _env: "trusted-secret",
+    )
+
+    def fake_sign(payload, secret):
+        seen["secret"] = secret
+        seen["payload"] = payload
+        return {**payload, "signature": "new-signature"}
+
+    monkeypatch.setattr(operator.pilot_repository_governance, "sign_payload", fake_sign)
+
+    bound = operator._bind_trusted_job_evidence(
+        report,
+        jobs=jobs,
+        env={"PILOT_EVIDENCE_SIGNING_SECRET": "ignored-by-fake"},
+    )
+
+    assert seen["secret"] == "trusted-secret"
+    assert seen["payload"]["workflow"]["required_jobs"] == {
+        name: "success" for name in operator.TRUSTED_REQUIRED_CHECKS
+    }
+    assert "signature" not in seen["payload"]
+    assert bound["signature"] == "new-signature"
+
+
 def test_operator_entrypoint_allows_process_token_only_when_file_is_clean(
     tmp_path, monkeypatch
 ):
