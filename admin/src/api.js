@@ -11,6 +11,7 @@ const REQUEST_TIMEOUT_MS = Number.isFinite(configuredTimeout) && configuredTimeo
   ? Math.min(Math.max(configuredTimeout, 3_000), 120_000)
   : DEFAULT_REQUEST_TIMEOUT_MS;
 const requestCoordinator = createRequestCoordinator();
+const PUBLIC_REQUEST_SCOPE = Symbol("public-admin-request-scope");
 
 export class AdminApiError extends Error {
   constructor(message, status = 0, options = {}) {
@@ -27,6 +28,13 @@ export function getAdminToken() {
 export function setAdminToken(token) {
   if (token) localStorage.setItem("admin_token", token);
   else localStorage.removeItem("admin_token");
+}
+
+function assertAdminSessionUnchanged(auth, tokenAtStart) {
+  if (!auth) return;
+  if (getAdminToken() !== tokenAtStart) {
+    throw new AdminApiError("Административная сессия изменилась. Повторите операцию.");
+  }
 }
 
 async function errorDetail(response) {
@@ -64,9 +72,8 @@ async function fetchWithTimeout(url, options = {}) {
   }
 }
 
-function authHeaders(auth, customHeaders = {}) {
+function authHeaders(auth, customHeaders = {}, token = getAdminToken()) {
   const result = { ...customHeaders };
-  const token = getAdminToken();
   if (auth && token) result.Authorization = `Bearer ${token}`;
   return result;
 }
@@ -78,12 +85,14 @@ export async function adminRequest(path, options = {}) {
     headers = {},
     ...requestOptions
   } = options;
+  const tokenAtStart = auth ? getAdminToken() : "";
   const coordinationKey = dedupeKey ?? mutationRequestKey(path, requestOptions);
+  const coordinationScope = auth ? tokenAtStart : PUBLIC_REQUEST_SCOPE;
 
   return requestCoordinator.run(coordinationKey, async () => {
     const response = await fetchWithTimeout(`${API_BASE}${path}`, {
       ...requestOptions,
-      headers: authHeaders(auth, headers),
+      headers: authHeaders(auth, headers, tokenAtStart),
     });
     if (!response.ok) {
       if (response.status === 401 && auth) setAdminToken("");
@@ -92,10 +101,16 @@ export async function adminRequest(path, options = {}) {
         response.status,
       );
     }
+
+    assertAdminSessionUnchanged(auth, tokenAtStart);
     if (response.status === 204) return null;
     const contentType = response.headers.get("content-type") || "";
-    return contentType.includes("application/json") ? response.json() : response.text();
-  });
+    const payload = contentType.includes("application/json")
+      ? await response.json()
+      : await response.text();
+    assertAdminSessionUnchanged(auth, tokenAtStart);
+    return payload;
+  }, coordinationScope);
 }
 
 export function adminJson(path, options = {}) {
@@ -131,8 +146,9 @@ export async function uploadAdminFile(path, file, field = "file") {
 }
 
 export async function downloadAdminFile(path, fallbackFilename) {
+  const tokenAtStart = getAdminToken();
   const response = await fetchWithTimeout(`${API_BASE}${path}`, {
-    headers: authHeaders(true),
+    headers: authHeaders(true, {}, tokenAtStart),
   });
   if (!response.ok) {
     if (response.status === 401) setAdminToken("");
@@ -141,10 +157,13 @@ export async function downloadAdminFile(path, fallbackFilename) {
       response.status,
     );
   }
+  assertAdminSessionUnchanged(true, tokenAtStart);
   const disposition = response.headers.get("content-disposition") || "";
   const match = disposition.match(/filename="?([^";]+)"?/i);
+  const blob = await response.blob();
+  assertAdminSessionUnchanged(true, tokenAtStart);
   return {
-    blob: await response.blob(),
+    blob,
     filename: match?.[1] || fallbackFilename,
   };
 }
