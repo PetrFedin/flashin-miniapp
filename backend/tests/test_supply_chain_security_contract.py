@@ -3,8 +3,8 @@ import re
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
-PINNED_ACTION = re.compile(r"^\s*uses:\s*[^\s@]+@([0-9a-f]{40})(?:\s+#.*)?$", re.MULTILINE)
 ANY_ACTION = re.compile(r"^\s*uses:\s*([^\s#]+)", re.MULTILINE)
+PINNED_ACTION_REF = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
 
 CORE_JOBS = (
     "backend",
@@ -27,14 +27,12 @@ def test_all_github_actions_are_pinned_to_immutable_commit_sha():
     violations: list[str] = []
     for path in workflow_paths:
         body = path.read_text(encoding="utf-8")
-        pinned_lines = {match.group(0).strip() for match in PINNED_ACTION.finditer(body)}
         for match in ANY_ACTION.finditer(body):
-            line = match.group(0).strip()
             action_ref = match.group(1)
             if action_ref.startswith("./"):
                 continue
-            if line not in pinned_lines:
-                violations.append(f"{path.relative_to(ROOT)}: {line}")
+            if not PINNED_ACTION_REF.fullmatch(action_ref):
+                violations.append(f"{path.relative_to(ROOT)}: {action_ref}")
 
     assert violations == [], "Floating GitHub Action refs are forbidden: " + "; ".join(violations)
 
