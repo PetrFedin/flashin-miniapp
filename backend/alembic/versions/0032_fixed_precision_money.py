@@ -58,7 +58,6 @@ def _to_numeric(table: str, column: str, scale: int) -> None:
         existing_type=sa.Float(),
         type_=sa.Numeric(precision=20, scale=scale, asdecimal=True),
         postgresql_using=f"ROUND({column}::numeric, {scale})",
-        existing_nullable=True,
     )
 
 
@@ -69,7 +68,6 @@ def _to_float(table: str, column: str, scale: int) -> None:
         existing_type=sa.Numeric(precision=20, scale=scale, asdecimal=True),
         type_=sa.Float(),
         postgresql_using=f"{column}::double precision",
-        existing_nullable=True,
     )
 
 
