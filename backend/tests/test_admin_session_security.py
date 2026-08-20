@@ -29,15 +29,11 @@ class FakeDb:
 
 
 def test_only_protected_admin_login_route_is_registered():
-    matching = [
-        route
-        for route in app.routes
-        if getattr(route, "path", None) == "/api/admin/login"
-        and "POST" in getattr(route, "methods", set())
-    ]
-
-    assert len(matching) == 1
-    assert matching[0].endpoint.__name__ == "admin_session_login"
+    path = "/api/admin/login"
+    assert str(app.url_path_for("admin_session_login")) == path
+    operations = app.openapi()["paths"][path]
+    assert "post" in operations
+    assert operations["post"]["operationId"].startswith("admin_session_login")
 
 
 def test_totp_matches_standard_hotp_counter_vector():
