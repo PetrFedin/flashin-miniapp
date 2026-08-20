@@ -51,5 +51,11 @@ api.flashin.store {
         X-Frame-Options "DENY"
         Cache-Control "no-store"
     }
-    reverse_proxy backend:8000
+    reverse_proxy backend:8000 {
+        # The pilot has one public ingress hop. Never relay a client-supplied
+        # forwarding chain to the application: publish exactly the socket peer
+        # Caddy accepted and remove the alternate X-Real-IP input entirely.
+        header_up X-Forwarded-For {remote_host}
+        header_up -X-Real-IP
+    }
 }
