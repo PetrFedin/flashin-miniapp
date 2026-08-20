@@ -38,12 +38,17 @@ def test_production_fastapi_disables_documentation_routes():
         env.pop(key, None)
 
     code = """
+from starlette.routing import NoMatchFound
 from backend.main import app
 assert app.docs_url is None
 assert app.redoc_url is None
 assert app.openapi_url is None
-paths = {route.path for route in app.routes}
-assert '/metrics' not in paths
+try:
+    app.url_path_for('metrics')
+except NoMatchFound:
+    pass
+else:
+    raise AssertionError('/metrics must not be registered when metrics are disabled')
 """
 
     result = subprocess.run(
