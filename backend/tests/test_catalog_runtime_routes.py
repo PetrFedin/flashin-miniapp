@@ -1,12 +1,15 @@
 from backend.main import app
 
 
+_HTTP_METHODS = {"get", "post", "put", "patch", "delete", "options", "head", "trace"}
+
+
 def _routes() -> set[tuple[str, str]]:
     result: set[tuple[str, str]] = set()
-    for route in app.routes:
-        path = getattr(route, "path", "")
-        for method in getattr(route, "methods", set()) or set():
-            result.add((str(path), str(method)))
+    for path, path_item in app.openapi()["paths"].items():
+        for method in path_item:
+            if method.lower() in _HTTP_METHODS:
+                result.add((str(path), str(method).upper()))
     return result
 
 
