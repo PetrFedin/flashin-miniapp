@@ -57,6 +57,10 @@ def _request_identity(request: Request) -> tuple[str, str]:
     )
 
 
+def _production_admin_mfa_required() -> bool:
+    return get_settings().app_env.strip().lower() == "production"
+
+
 def _validate_new_admin_password(password: str, email: str = "") -> None:
     lowered = password.lower()
     if lowered in _COMMON_PASSWORDS:
@@ -129,6 +133,22 @@ def admin_session_login(
             .with_for_update()
             .first()
         )
+        if _production_admin_mfa_required() and (totp is None or not totp.enabled):
+            log_admin_login(
+                db,
+                email,
+                admin.id,
+                False,
+                "mfa_not_enrolled",
+                ip_address,
+                user_agent,
+            )
+            db.commit()
+            raise HTTPException(
+                status_code=403,
+                detail="Admin MFA enrollment is required",
+            )
+
         if totp and totp.enabled:
             try:
                 totp_valid = verify_stored_totp(
