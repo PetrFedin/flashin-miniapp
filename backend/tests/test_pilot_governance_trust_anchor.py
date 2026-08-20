@@ -11,11 +11,17 @@ from pilot_governance_policy import (  # noqa: E402
     TRUSTED_BRANCH,
     TRUSTED_REPOSITORY,
     TRUSTED_REQUIRED_CHECKS,
+    TRUSTED_SECURITY_REQUIRED_JOBS,
+    TRUSTED_SECURITY_WORKFLOW_API_PATH,
+    TRUSTED_SECURITY_WORKFLOW_NAME,
     TRUSTED_WORKFLOW_API_PATH,
     TRUSTED_WORKFLOW_CONFIG_PATH,
     TRUSTED_WORKFLOW_NAME,
     report_trust_anchor_errors,
     require_trusted_configuration,
+    trusted_security_workflow_candidates,
+    trusted_security_workflow_job_evidence,
+    trusted_security_workflow_job_errors,
     trusted_workflow_candidates,
     trusted_workflow_job_evidence,
     trusted_workflow_job_errors,
@@ -37,6 +43,10 @@ def _env(**overrides):
 
 def _required_jobs():
     return {name: "success" for name in TRUSTED_REQUIRED_CHECKS}
+
+
+def _required_security_jobs():
+    return {name: "success" for name in TRUSTED_SECURITY_REQUIRED_JOBS}
 
 
 def _report(**workflow_overrides):
@@ -70,6 +80,16 @@ def _report(**workflow_overrides):
             },
         },
         "workflow": workflow,
+        "security_workflow": {
+            "id": 2001,
+            "name": TRUSTED_SECURITY_WORKFLOW_NAME,
+            "path": TRUSTED_SECURITY_WORKFLOW_API_PATH,
+            "event": "push",
+            "status": "completed",
+            "conclusion": "success",
+            "head_sha": "a" * 40,
+            "required_jobs": _required_security_jobs(),
+        },
     }
 
 
@@ -89,10 +109,33 @@ def _workflow_run(**overrides):
     return run
 
 
+def _security_workflow_run(**overrides):
+    run = {
+        "id": 2001,
+        "name": TRUSTED_SECURITY_WORKFLOW_NAME,
+        "path": TRUSTED_SECURITY_WORKFLOW_API_PATH,
+        "event": "push",
+        "status": "completed",
+        "conclusion": "success",
+        "head_sha": "a" * 40,
+        "created_at": "2026-08-19T09:00:00Z",
+        "updated_at": "2026-08-19T09:30:00Z",
+    }
+    run.update(overrides)
+    return run
+
+
 def _jobs():
     return [
         {"name": name, "status": "completed", "conclusion": "success"}
         for name in TRUSTED_REQUIRED_CHECKS
+    ]
+
+
+def _security_jobs():
+    return [
+        {"name": name, "status": "completed", "conclusion": "success"}
+        for name in TRUSTED_SECURITY_REQUIRED_JOBS
     ]
 
 
@@ -128,6 +171,21 @@ def test_trusted_workflow_candidates_accept_only_exact_push_run():
     assert [item["id"] for item in candidates] == [5, 6]
 
 
+def test_trusted_security_workflow_candidates_accept_only_exact_push_run():
+    runs = [
+        _security_workflow_run(id=1, event="pull_request"),
+        _security_workflow_run(id=2, path=".github/workflows/weak-security.yml"),
+        _security_workflow_run(id=3, head_sha="b" * 40),
+        _security_workflow_run(id=4, conclusion="failure"),
+        _security_workflow_run(id=5, updated_at="2026-08-19T11:00:00Z"),
+        _security_workflow_run(id=6, updated_at="2026-08-19T10:30:00Z"),
+    ]
+
+    candidates = trusted_security_workflow_candidates(runs, release_commit="a" * 40)
+
+    assert [item["id"] for item in candidates] == [5, 6]
+
+
 def test_trusted_workflow_jobs_require_all_six_successes():
     jobs = _jobs()
     assert trusted_workflow_job_errors(jobs) == []
@@ -147,7 +205,27 @@ def test_trusted_workflow_jobs_require_all_six_successes():
     ]
 
 
-def test_report_trust_anchor_requires_signed_exact_six_job_verdicts():
+def test_trusted_security_jobs_require_every_security_gate():
+    jobs = _security_jobs()
+    assert trusted_security_workflow_job_errors(jobs) == []
+    assert trusted_security_workflow_job_evidence(jobs) == _required_security_jobs()
+
+    missing = jobs[:-1]
+    missing_name = TRUSTED_SECURITY_REQUIRED_JOBS[-1]
+    assert trusted_security_workflow_job_errors(missing) == [
+        f"GitHub trusted Security workflow job is missing: {missing_name}"
+    ]
+    with pytest.raises(ValueError, match="ingress"):
+        trusted_security_workflow_job_evidence(missing)
+
+    failed = [dict(item) for item in jobs]
+    failed[0]["conclusion"] = "failure"
+    assert trusted_security_workflow_job_errors(failed) == [
+        "GitHub trusted Security workflow job is not successful: dependency-review"
+    ]
+
+
+def test_report_trust_anchor_requires_signed_exact_ci_and_security_verdicts():
     assert report_trust_anchor_errors(_report()) == []
 
     missing = _report(required_jobs=None)
@@ -163,12 +241,27 @@ def test_report_trust_anchor_requires_signed_exact_six_job_verdicts():
     errors = report_trust_anchor_errors(failed)
     assert any("workflow job is not successful: backend" in error for error in errors)
 
+    no_security = _report()
+    no_security.pop("security_workflow")
+    errors = report_trust_anchor_errors(no_security)
+    assert "repository governance trusted Security workflow evidence is missing" in errors
 
-def test_report_trust_anchor_rejects_pull_request_run_and_wrong_source():
+    security_failed = _report()
+    security_failed["security_workflow"]["required_jobs"]["dependency-review"] = "failure"
+    errors = report_trust_anchor_errors(security_failed)
+    assert any("Security workflow job is not successful: dependency-review" in error for error in errors)
+
+
+def test_report_trust_anchor_rejects_pull_request_runs_and_wrong_source():
     assert report_trust_anchor_errors(_report()) == []
 
     pr_errors = report_trust_anchor_errors(_report(event="pull_request"))
-    assert "repository governance workflow must be an exact protected-main push run" in pr_errors
+    assert "repository governance CI workflow must be an exact protected-main push run" in pr_errors
+
+    security_pr = _report()
+    security_pr["security_workflow"]["event"] = "pull_request"
+    errors = report_trust_anchor_errors(security_pr)
+    assert "repository governance Security workflow must be an exact protected-main push run" in errors
 
     wrong_app = _report()
     wrong_app["policy"]["actions_app_id"] = 1
