@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
+
+trap 'rc=$?; printf "release rollback smoke failed at %s:%s (exit %s)\n" "${BASH_SOURCE[0]}" "$LINENO" "$rc" >&2; exit "$rc"' ERR
 
 ROOT=$(pwd)
 TOKEN=$(python3 -c 'import secrets; print(secrets.token_hex(6))')
