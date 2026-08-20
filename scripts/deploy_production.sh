@@ -141,6 +141,9 @@ docker compose run --rm backend python scripts/check_transaction_integrity.py
 echo "Verifying first-20-order runtime integrity..."
 docker compose run --rm backend python scripts/check_pilot_runtime_integrity.py
 
+echo "Verifying mandatory MFA for every active production administrator..."
+docker compose run --rm backend python scripts/check_admin_mfa.py
+
 if docker compose ps --status running --services 2>/dev/null | grep -qx prometheus; then
   echo "Stopping existing Prometheus before isolated Alertmanager delivery proof..."
   docker compose stop prometheus
