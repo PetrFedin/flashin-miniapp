@@ -30,18 +30,22 @@ def _valid_ip(value: str) -> str | None:
 
 
 def _client_ip(request, *, trust_proxy_headers: bool) -> str:
+    """Resolve the client IP using a fail-closed single-proxy contract.
+
+    Production traffic is isolated behind Caddy. The ingress deliberately
+    overwrites X-Forwarded-For with exactly one address, so the application must
+    not accept arbitrary chains or alternate client-controlled IP headers.
+    """
     direct_ip = _valid_ip(request.client.host if request.client else "") or "unknown"
     if not trust_proxy_headers:
         return direct_ip
 
     forwarded = request.headers.get("x-forwarded-for", "")
-    if forwarded:
-        valid_chain = [ip for raw in forwarded.split(",") if (ip := _valid_ip(raw))]
-        if valid_chain:
-            return valid_chain[-1]
+    parts = [part.strip() for part in forwarded.split(",") if part.strip()]
+    if len(parts) != 1:
+        return direct_ip
 
-    real_ip = _valid_ip(request.headers.get("x-real-ip", ""))
-    return real_ip or direct_ip
+    return _valid_ip(parts[0]) or direct_ip
 
 
 def _route_bucket(path: str) -> str:
@@ -56,10 +60,11 @@ def _route_bucket(path: str) -> str:
 class InMemoryRateLimitMiddleware(BaseHTTPMiddleware):
     """Per-process sliding-window limiter with bounded memory.
 
-    Production traffic is expected to reach the backend only through the
-    isolated reverse proxy. In production, the proxy-provided client IP is
-    therefore used; development keeps direct socket addressing to prevent
-    header spoofing.
+    The controlled pilot intentionally runs one backend instance. Production
+    client identity is accepted only from the isolated Caddy hop and only under
+    the single-value X-Forwarded-For contract enforced at ingress. A future
+    multi-replica deployment still requires a shared application limiter or an
+    external edge/WAF limit; this middleware does not pretend otherwise.
     """
 
     def __init__(self, app):
