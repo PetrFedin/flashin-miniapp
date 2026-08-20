@@ -16,6 +16,7 @@ ORIGINAL_NAME="Rollback Sentinel ${TOKEN}"
 MUTATED_NAME="Mutated Rollback ${TOKEN}"
 PREVIOUS_MARKER="previous-release-${TOKEN}"
 CURRENT_MARKER="current-release-${TOKEN}"
+INGRESS_ROLLBACK_LABEL="org.flashin.rollback-marker"
 
 cleanup() {
   docker compose down -v >/dev/null 2>&1 || true
@@ -55,8 +56,9 @@ git -C "$RELEASE_REPO" config user.email "rollback-smoke@flashin.local"
 git -C "$RELEASE_REPO" config user.name "FLASHIN Rollback Smoke"
 
 printf '%s\n' "$PREVIOUS_MARKER" > "$RELEASE_REPO/$MARKER_FILE"
-git -C "$RELEASE_REPO" add "$MARKER_FILE"
-git -C "$RELEASE_REPO" commit -qm "Add previous rollback marker"
+printf '\nLABEL %s="%s"\n' "$INGRESS_ROLLBACK_LABEL" "$PREVIOUS_MARKER" >> "$RELEASE_REPO/Dockerfile.ingress"
+git -C "$RELEASE_REPO" add "$MARKER_FILE" Dockerfile.ingress
+git -C "$RELEASE_REPO" commit -qm "Add previous rollback markers"
 PREVIOUS_ARCHIVE=$(python3 scripts/release_control.py create \
   --root "$RELEASE_REPO" \
   --output-dir "$ROOT/deploy/release/builds" \
@@ -66,8 +68,9 @@ python3 scripts/release_control.py verify --archive "$PREVIOUS_ARCHIVE" >/dev/nu
 python3 scripts/pilot_release_capability.py inspect --archive "$PREVIOUS_ARCHIVE" >/dev/null
 
 printf '%s\n' "$CURRENT_MARKER" > "$RELEASE_REPO/$MARKER_FILE"
-git -C "$RELEASE_REPO" add "$MARKER_FILE"
-git -C "$RELEASE_REPO" commit -qm "Add current rollback marker"
+sed -i "s/${PREVIOUS_MARKER}/${CURRENT_MARKER}/g" "$RELEASE_REPO/Dockerfile.ingress"
+git -C "$RELEASE_REPO" add "$MARKER_FILE" Dockerfile.ingress
+git -C "$RELEASE_REPO" commit -qm "Add current rollback markers"
 CURRENT_ARCHIVE=$(python3 scripts/release_control.py create \
   --root "$RELEASE_REPO" \
   --output-dir "$ROOT/deploy/release/builds" \
@@ -138,6 +141,18 @@ if [ "$container_marker" != "$PREVIOUS_MARKER" ]; then
   exit 1
 fi
 
+caddy_container=$(docker compose ps -q caddy)
+if [ -z "$caddy_container" ]; then
+  echo "Caddy container is missing after rollback" >&2
+  exit 1
+fi
+caddy_image=$(docker inspect -f '{{.Image}}' "$caddy_container")
+caddy_marker=$(docker image inspect -f '{{ index .Config.Labels "org.flashin.rollback-marker" }}' "$caddy_image")
+if [ "$caddy_marker" != "$PREVIOUS_MARKER" ]; then
+  echo "Ingress image was not rebuilt from the target release: expected '$PREVIOUS_MARKER', got '$caddy_marker'" >&2
+  exit 1
+fi
+
 restored_name=$(docker compose exec -T db sh -ec \
   'exec psql --set ON_ERROR_STOP=on -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAX -c "$1"' \
   sh "SELECT first_name FROM public.customers WHERE telegram_id = '$TELEGRAM_ID';")
@@ -189,6 +204,7 @@ print(json.dumps({
     "services_running": report["checks"]["services_running"],
     "container_smoke": report["checks"]["container_smoke"],
     "runtime_image_rebuilt": True,
+    "ingress_image_rebuilt": True,
     "release_pointer_promoted": True,
     "provider_command_worker_restored": True,
     "monitoring_restored": True,
