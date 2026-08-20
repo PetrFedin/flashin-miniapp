@@ -497,11 +497,22 @@ def test_ops_endpoint_requires_security_read_and_disables_caching(monkeypatch):
     assert forbidden.value.status_code == 403
 
 
+def _walk_routes(routes):
+    for route in routes:
+        nested = getattr(route, "routes", None)
+        if nested is not None:
+            yield from _walk_routes(nested)
+        else:
+            yield route
+
+
 def test_pilot_operations_route_is_registered_once():
     matching = [
         route
-        for route in app.routes
-        if getattr(route, "path", None) == "/api/ops/pilot-runtime"
+        for route in _walk_routes(app.routes)
+        if getattr(route, "name", None) == "pilot_runtime_status"
         and "GET" in getattr(route, "methods", set())
     ]
     assert len(matching) == 1
+    assert str(app.url_path_for("pilot_runtime_status")) == "/api/ops/pilot-runtime"
+    assert "get" in app.openapi()["paths"]["/api/ops/pilot-runtime"]
