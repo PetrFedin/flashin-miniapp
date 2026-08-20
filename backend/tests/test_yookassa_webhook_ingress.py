@@ -3,9 +3,9 @@ from backend.main import app
 
 def _post_paths() -> set[str]:
     return {
-        route.path
-        for route in app.routes
-        if "POST" in getattr(route, "methods", set())
+        path
+        for path, operations in app.openapi()["paths"].items()
+        if "post" in operations
     }
 
 
