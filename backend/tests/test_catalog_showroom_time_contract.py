@@ -1,10 +1,13 @@
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import HTTPException
 
 from backend.api.catalog_showroom import _utc_iso, _utc_naive
 from backend.main import app
+
+
+_HTTP_METHODS = {"get", "post", "put", "patch", "delete", "options", "head", "trace"}
 
 
 def test_showroom_aware_time_is_normalized_to_utc_without_clock_drift():
@@ -31,10 +34,11 @@ def test_runtime_has_exactly_one_route_for_each_showroom_operation():
         ("/api/catalog/admin/showroom/appointments/{appointment_id}", "PATCH"),
     }
     counts = {item: 0 for item in required}
-    for route in app.routes:
-        path = str(getattr(route, "path", ""))
-        for method in getattr(route, "methods", set()) or set():
-            item = (path, str(method))
+    for path, path_item in app.openapi()["paths"].items():
+        for method in path_item:
+            if method.lower() not in _HTTP_METHODS:
+                continue
+            item = (str(path), str(method).upper())
             if item in counts:
                 counts[item] += 1
 
