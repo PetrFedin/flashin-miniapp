@@ -1,23 +1,37 @@
 FROM golang:1.26.7-alpine3.24 AS build
 
-ARG CADDY_COMMIT=e2eee6a7fce366321294c9c2a79f3146891dcbdf
+ARG CADDY_VERSION=2.11.4
 WORKDIR /src
-RUN apk add --no-cache git \
-    && git init \
-    && git remote add origin https://github.com/caddyserver/caddy.git \
-    && git fetch --depth 1 origin "${CADDY_COMMIT}" \
-    && git checkout --detach FETCH_HEAD \
-    && test "$(git rev-parse HEAD)" = "${CADDY_COMMIT}"
+ENV GOSUMDB=sum.golang.org
 
-# Caddy 2.11.4 is kept at the exact upstream release commit, but its released
-# module graph predates fixes for the vulnerabilities enforced by our Trivy
-# gate. Build the same Caddy source with patched Go/runtime dependencies.
-RUN go get \
+# Build a tiny external main module so the Caddy dependency is recorded in
+# Go build metadata as the real release version. Trivy can then validate the
+# patched binary without treating an exact source checkout as a pseudo-version.
+RUN printf '%s\n' \
+      'package main' \
+      '' \
+      'import (' \
+      '    _ "time/tzdata"' \
+      '    caddycmd "github.com/caddyserver/caddy/v2/cmd"' \
+      '    _ "github.com/caddyserver/caddy/v2/modules/standard"' \
+      ')' \
+      '' \
+      'func main() { caddycmd.Main() }' \
+      > main.go \
+    && go mod init flashin-ingress \
+    && go get \
+      "github.com/caddyserver/caddy/v2@v${CADDY_VERSION}" \
       golang.org/x/net@v0.56.0 \
       golang.org/x/text@v0.39.0 \
       google.golang.org/grpc@v1.82.1 \
     && go mod tidy \
-    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/caddy ./cmd/caddy
+    && go mod verify \
+    && go list -m -f '{{.Path}} {{.Version}}' all | grep -Fx "github.com/caddyserver/caddy/v2 v${CADDY_VERSION}" \
+    && go list -m -f '{{.Path}} {{.Version}}' all | grep -Fx 'golang.org/x/net v0.56.0' \
+    && go list -m -f '{{.Path}} {{.Version}}' all | grep -Fx 'golang.org/x/text v0.39.0' \
+    && go list -m -f '{{.Path}} {{.Version}}' all | grep -Fx 'google.golang.org/grpc v1.82.1' \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/caddy . \
+    && go version -m /out/caddy | grep -E "github.com/caddyserver/caddy/v2[[:space:]]+v${CADDY_VERSION}"
 
 FROM alpine:3.24.1
 RUN apk add --no-cache ca-certificates \

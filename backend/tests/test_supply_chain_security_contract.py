@@ -87,18 +87,32 @@ def test_static_runtimes_do_not_ship_the_vulnerable_caddy_binary():
         assert "USER flashin" in dockerfile
 
 
-def test_ingress_builds_exact_caddy_source_with_patched_go_dependencies():
+def test_ingress_builds_versioned_caddy_with_patched_go_dependencies():
     ingress = _text("Dockerfile.ingress")
     compose = _text("docker-compose.yml")
 
     assert "FROM golang:1.26.7-alpine3.24 AS build" in ingress
-    assert "CADDY_COMMIT=e2eee6a7fce366321294c9c2a79f3146891dcbdf" in ingress
+    assert "CADDY_VERSION=2.11.4" in ingress
+    assert "GOSUMDB=sum.golang.org" in ingress
+    assert 'github.com/caddyserver/caddy/v2@v${CADDY_VERSION}' in ingress
     assert "golang.org/x/net@v0.56.0" in ingress
     assert "golang.org/x/text@v0.39.0" in ingress
     assert "google.golang.org/grpc@v1.82.1" in ingress
+    assert "go mod verify" in ingress
+    assert "go version -m /out/caddy" in ingress
     assert "FROM alpine:3.24.1" in ingress
     assert "dockerfile: Dockerfile.ingress" in compose
     assert "image: caddy:2" not in compose
+
+
+def test_bot_runtime_uses_pinned_safe_http_stack():
+    bot_dockerfile = _text("Dockerfile.bot")
+    bot_requirements = _text("bot/requirements.txt")
+
+    assert "COPY bot/requirements.txt /app/bot/requirements.txt" in bot_dockerfile
+    assert "aiogram==3.30.0" in bot_requirements
+    assert "aiohttp==3.14.3" in bot_requirements
+    assert "aiogram==3.17.0" not in bot_dockerfile
 
 
 def test_release_evidence_contains_sbom_and_longer_retention():
