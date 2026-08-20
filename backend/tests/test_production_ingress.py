@@ -61,3 +61,10 @@ else:
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_caddy_publishes_one_authoritative_client_ip_to_backend():
+    caddyfile = (ROOT / "deploy" / "Caddyfile").read_text(encoding="utf-8")
+
+    assert "header_up X-Forwarded-For {remote_host}" in caddyfile
+    assert "header_up -X-Real-IP" in caddyfile
