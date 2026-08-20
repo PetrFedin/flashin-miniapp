@@ -13,6 +13,7 @@ from pilot_governance_policy import (
     TRUSTED_BRANCH,
     TRUSTED_REPOSITORY,
     TRUSTED_REQUIRED_CHECKS,
+    TRUSTED_SECURITY_WORKFLOW_API_PATH,
     TRUSTED_SECURITY_WORKFLOW_CONFIG_PATH,
     TRUSTED_SECURITY_WORKFLOW_NAME,
     TRUSTED_WORKFLOW_CONFIG_PATH,
@@ -89,6 +90,38 @@ def _bind_trusted_security_evidence(
     }
     secret = pilot_repository_governance.require_signing_secret(env)
     return pilot_repository_governance.sign_payload(unsigned, secret)
+
+
+def _render_operator_markdown(report: Mapping[str, object]) -> str:
+    base = pilot_repository_governance.render_markdown(report).rstrip()
+    security = report.get("security_workflow")
+    if not isinstance(security, Mapping):
+        return base + "\n"
+    required_jobs = security.get("required_jobs")
+    job_lines = []
+    if isinstance(required_jobs, Mapping):
+        job_lines = [
+            f"- `{name}`: {required_jobs.get(name)}"
+            for name in sorted(str(item) for item in required_jobs.keys())
+        ]
+    return "\n".join(
+        [
+            base,
+            "",
+            "## Supply-chain Security",
+            "",
+            f"Workflow: `{security.get('name', 'unknown')}` / `{security.get('id', 'unknown')}`",
+            f"Path: `{security.get('path', 'unknown')}`",
+            f"Event: `{security.get('event', 'unknown')}`",
+            f"Head: `{security.get('head_sha', 'unknown')}`",
+            f"Conclusion: `{security.get('conclusion', 'unknown')}`",
+            "",
+            "### Required Security jobs",
+            "",
+            *job_lines,
+            "",
+        ]
+    )
 
 
 def _workflow_jobs(run_id: int, *, token: str) -> object:
@@ -208,7 +241,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         pilot_repository_governance.atomic_write_json(args.report, report)
         pilot_repository_governance.atomic_write_text(
             args.report.with_suffix(".md"),
-            pilot_repository_governance.render_markdown(report),
+            _render_operator_markdown(report),
         )
         print(
             json.dumps(
