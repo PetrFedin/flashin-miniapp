@@ -8,8 +8,10 @@ ENV VITE_API_BASE=$VITE_API_BASE
 RUN npm run build
 
 FROM alpine:3.24.1
-RUN addgroup -S flashin && adduser -S -G flashin flashin
+RUN apk add --no-cache busybox-extras \
+    && addgroup -S flashin \
+    && adduser -S -G flashin flashin
 COPY --from=build --chown=flashin:flashin /app/dist /srv
 USER flashin
 EXPOSE 5173
-CMD ["busybox", "httpd", "-f", "-p", "5173", "-h", "/srv"]
+CMD ["busybox-extras", "httpd", "-f", "-p", "5173", "-h", "/srv"]
