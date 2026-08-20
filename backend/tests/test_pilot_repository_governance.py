@@ -16,6 +16,11 @@ from pilot_control_binding import (  # noqa: E402
 )
 from pilot_evidence import configuration_fingerprint, sha256_file  # noqa: E402
 from pilot_governance_admission import validate_attached_governance  # noqa: E402
+from pilot_governance_policy import (  # noqa: E402
+    TRUSTED_SECURITY_REQUIRED_JOBS,
+    TRUSTED_SECURITY_WORKFLOW_API_PATH,
+    TRUSTED_SECURITY_WORKFLOW_NAME,
+)
 from pilot_repository_governance import (  # noqa: E402
     build_report,
     evaluate_snapshot,
@@ -132,6 +137,21 @@ def _bind_required_job_evidence(report):
     unsigned["workflow"]["required_jobs"] = {
         name: "success" for name in REQUIRED_CHECKS
     }
+    unsigned["security_workflow"] = {
+        "id": 678,
+        "name": TRUSTED_SECURITY_WORKFLOW_NAME,
+        "path": TRUSTED_SECURITY_WORKFLOW_API_PATH,
+        "event": "push",
+        "status": "completed",
+        "conclusion": "success",
+        "head_sha": unsigned["branch"]["head_sha"],
+        "html_url": "https://github.com/PetrFedin/flashin-miniapp/actions/runs/678",
+        "created_at": "2026-08-06T11:31:00Z",
+        "updated_at": "2026-08-06T11:51:00Z",
+        "required_jobs": {
+            name: "success" for name in TRUSTED_SECURITY_REQUIRED_JOBS
+        },
+    }
     return pilot_evidence.sign_payload(unsigned, SECRET)
 
 
@@ -155,6 +175,7 @@ def test_ruleset_governance_report_binds_exact_release_and_successful_ci():
     assert report["branch"]["head_sha"] == RELEASE["git_commit"]
     assert report["workflow"]["conclusion"] == "success"
     assert "required_jobs" not in report["workflow"]
+    assert "security_workflow" not in report
     assert set(report["policy"]["required_checks"]) == set(REQUIRED_CHECKS)
     assert report["policy"]["actions_app_id"] == ACTIONS_APP_ID
     assert all(
@@ -294,6 +315,7 @@ def test_governance_attachment_requires_signed_technical_owner(tmp_path, monkeyp
         now=NOW,
     )
     assert any("workflow job evidence is missing" in error for error in direct_errors)
+    assert any("Security workflow evidence is missing" in error for error in direct_errors)
 
     report = _bind_required_job_evidence(direct_report)
     report_path.write_text(json.dumps(report), encoding="utf-8")
