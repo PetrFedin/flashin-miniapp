@@ -13,10 +13,14 @@ from pilot_governance_policy import (
     TRUSTED_BRANCH,
     TRUSTED_REPOSITORY,
     TRUSTED_REQUIRED_CHECKS,
+    TRUSTED_SECURITY_WORKFLOW_CONFIG_PATH,
+    TRUSTED_SECURITY_WORKFLOW_NAME,
     TRUSTED_WORKFLOW_CONFIG_PATH,
     TRUSTED_WORKFLOW_NAME,
     report_trust_anchor_errors,
     require_trusted_configuration,
+    trusted_security_workflow_candidates,
+    trusted_security_workflow_job_evidence,
     trusted_workflow_candidates,
     trusted_workflow_job_evidence,
 )
@@ -61,6 +65,73 @@ def _bind_trusted_job_evidence(
     return pilot_repository_governance.sign_payload(unsigned, secret)
 
 
+def _bind_trusted_security_evidence(
+    report: Mapping[str, object],
+    *,
+    workflow_run: Mapping[str, object],
+    jobs: object,
+    env: Mapping[str, str],
+) -> dict[str, object]:
+    unsigned = dict(report)
+    unsigned.pop("signature", None)
+    unsigned["security_workflow"] = {
+        "id": workflow_run.get("id"),
+        "name": workflow_run.get("name"),
+        "path": workflow_run.get("path"),
+        "event": workflow_run.get("event"),
+        "status": workflow_run.get("status"),
+        "conclusion": workflow_run.get("conclusion"),
+        "head_sha": workflow_run.get("head_sha"),
+        "html_url": workflow_run.get("html_url"),
+        "created_at": workflow_run.get("created_at"),
+        "updated_at": workflow_run.get("updated_at"),
+        "required_jobs": trusted_security_workflow_job_evidence(jobs),
+    }
+    secret = pilot_repository_governance.require_signing_secret(env)
+    return pilot_repository_governance.sign_payload(unsigned, secret)
+
+
+def _workflow_jobs(run_id: int, *, token: str) -> object:
+    payload = pilot_repository_governance._api_json(
+        f"https://api.github.com/repos/{TRUSTED_REPOSITORY}/actions/runs/{run_id}/jobs?per_page=100",
+        token=token,
+    )
+    return payload.get("jobs") if isinstance(payload, Mapping) else None
+
+
+def _security_workflow_runs(*, token: str) -> object:
+    payload = pilot_repository_governance._api_json(
+        "https://api.github.com/repos/"
+        f"{TRUSTED_REPOSITORY}/actions/workflows/{TRUSTED_SECURITY_WORKFLOW_CONFIG_PATH}/runs"
+        f"?branch={TRUSTED_BRANCH}&status=completed&per_page=100",
+        token=token,
+    )
+    return payload.get("workflow_runs") if isinstance(payload, Mapping) else None
+
+
+def _verify_report(
+    report_path: Path,
+    *,
+    env: Mapping[str, str],
+) -> int:
+    try:
+        current = pilot_repository_governance.load_verified_release_state(
+            ROOT / "deploy/release/runtime/current_release.json"
+        )
+        report = pilot_repository_governance.load_json(report_path)
+        errors = pilot_repository_governance.validate_report(
+            report,
+            env=env,
+            expected_release=current,
+        )
+        errors.extend(report_trust_anchor_errors(report))
+        errors = list(dict.fromkeys(errors))
+        print(json.dumps({"go": not errors, "errors": errors}, ensure_ascii=False))
+        return 0 if not errors else 1
+    except (OSError, ValueError) as exc:
+        return _fail([str(exc)])
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     # This is the only supported process that may receive PILOT_GITHUB_TOKEN.
     # The application .env must remain token-free even while this command runs.
@@ -73,8 +144,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     effective_env = _trusted_env(env)
 
     args = pilot_repository_governance.build_parser().parse_args(argv)
-    if args.command != "create":
-        return pilot_repository_governance.main(argv)
+    if args.command == "verify":
+        return _verify_report(args.report, env=effective_env)
 
     try:
         current = pilot_repository_governance.load_verified_release_state(
@@ -94,14 +165,22 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ["GitHub CI has no trusted successful protected-main push run for the current release commit"]
             )
 
-        selected = candidates[0]
-        run_id = int(selected["id"])
         token = pilot_repository_governance._github_token(effective_env)
-        jobs_payload = pilot_repository_governance._api_json(
-            f"https://api.github.com/repos/{TRUSTED_REPOSITORY}/actions/runs/{run_id}/jobs?per_page=100",
-            token=token,
+        security_candidates = trusted_security_workflow_candidates(
+            _security_workflow_runs(token=token),
+            release_commit=release_commit,
         )
-        jobs = jobs_payload.get("jobs") if isinstance(jobs_payload, Mapping) else None
+        if not security_candidates:
+            return _fail(
+                ["GitHub Security has no trusted successful protected-main push run for the current release commit"]
+            )
+
+        selected = candidates[0]
+        security_selected = security_candidates[0]
+        run_id = int(selected["id"])
+        security_run_id = int(security_selected["id"])
+        jobs = _workflow_jobs(run_id, token=token)
+        security_jobs = _workflow_jobs(security_run_id, token=token)
 
         bounded_snapshot = dict(snapshot)
         bounded_snapshot["workflow_runs"] = candidates
@@ -114,6 +193,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         report = _bind_trusted_job_evidence(
             report,
             jobs=jobs,
+            env=effective_env,
+        )
+        report = _bind_trusted_security_evidence(
+            report,
+            workflow_run=security_selected,
+            jobs=security_jobs,
             env=effective_env,
         )
         trust_errors = report_trust_anchor_errors(report)
@@ -131,6 +216,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "go": True,
                     "report": str(args.report),
                     "workflow_run_id": run_id,
+                    "security_workflow_run_id": security_run_id,
                 },
                 ensure_ascii=False,
             )
