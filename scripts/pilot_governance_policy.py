@@ -19,6 +19,21 @@ TRUSTED_ACTIONS_APP_ID = 15368
 TRUSTED_WORKFLOW_NAME = "CI"
 TRUSTED_WORKFLOW_CONFIG_PATH = "ci.yml"
 TRUSTED_WORKFLOW_API_PATH = ".github/workflows/ci.yml"
+TRUSTED_SECURITY_WORKFLOW_NAME = "Security"
+TRUSTED_SECURITY_WORKFLOW_CONFIG_PATH = "security.yml"
+TRUSTED_SECURITY_WORKFLOW_API_PATH = ".github/workflows/security.yml"
+TRUSTED_SECURITY_REQUIRED_JOBS = (
+    "dependency-review",
+    "codeql (python)",
+    "codeql (javascript-typescript)",
+    "secret-scan",
+    "dependency-vulnerability-scan",
+    "image-security (backend, Dockerfile.backend)",
+    "image-security (bot, Dockerfile.bot)",
+    "image-security (frontend, Dockerfile.frontend)",
+    "image-security (admin, Dockerfile.admin)",
+    "image-security (ingress, Dockerfile.ingress)",
+)
 
 
 def _csv(value: object) -> tuple[str, ...]:
@@ -82,13 +97,13 @@ def require_trusted_configuration(env: Mapping[str, str]) -> None:
         raise ValueError("Repository governance trust anchor mismatch: " + "; ".join(errors))
 
 
-def trusted_workflow_candidates(
+def _trusted_run_candidates(
     workflow_runs: object,
     *,
     release_commit: str,
+    workflow_name: str,
+    workflow_path: str,
 ) -> list[Mapping[str, Any]]:
-    """Return only exact trusted protected-main push CI candidates for one release SHA."""
-
     if not isinstance(workflow_runs, list):
         return []
     candidates = [
@@ -97,8 +112,8 @@ def trusted_workflow_candidates(
         if isinstance(item, Mapping)
         and isinstance(item.get("id"), int)
         and int(item.get("id", 0)) > 0
-        and item.get("name") == TRUSTED_WORKFLOW_NAME
-        and item.get("path") == TRUSTED_WORKFLOW_API_PATH
+        and item.get("name") == workflow_name
+        and item.get("path") == workflow_path
         and item.get("event") == "push"
         and item.get("status") == "completed"
         and item.get("conclusion") == "success"
@@ -111,31 +126,74 @@ def trusted_workflow_candidates(
     )
 
 
-def trusted_workflow_job_errors(jobs: object) -> list[str]:
-    """Require all six trusted jobs to complete successfully on the selected push run."""
+def trusted_workflow_candidates(
+    workflow_runs: object,
+    *,
+    release_commit: str,
+) -> list[Mapping[str, Any]]:
+    """Return only exact trusted protected-main push CI candidates for one release SHA."""
 
+    return _trusted_run_candidates(
+        workflow_runs,
+        release_commit=release_commit,
+        workflow_name=TRUSTED_WORKFLOW_NAME,
+        workflow_path=TRUSTED_WORKFLOW_API_PATH,
+    )
+
+
+def trusted_security_workflow_candidates(
+    workflow_runs: object,
+    *,
+    release_commit: str,
+) -> list[Mapping[str, Any]]:
+    """Return only exact trusted protected-main push Security candidates for one release SHA."""
+
+    return _trusted_run_candidates(
+        workflow_runs,
+        release_commit=release_commit,
+        workflow_name=TRUSTED_SECURITY_WORKFLOW_NAME,
+        workflow_path=TRUSTED_SECURITY_WORKFLOW_API_PATH,
+    )
+
+
+def _workflow_job_errors(
+    jobs: object,
+    *,
+    required_jobs: Sequence[str],
+    prefix: str,
+) -> list[str]:
     if not isinstance(jobs, list):
-        return ["GitHub trusted workflow job evidence is missing"]
+        return [f"{prefix} workflow job evidence is missing"]
     errors: list[str] = []
-    for name in TRUSTED_REQUIRED_CHECKS:
+    for name in required_jobs:
         matching = [
             item
             for item in jobs
             if isinstance(item, Mapping) and str(item.get("name", "")).strip() == name
         ]
         if not matching:
-            errors.append(f"GitHub trusted workflow job is missing: {name}")
+            errors.append(f"{prefix} workflow job is missing: {name}")
             continue
         if not any(
             item.get("status") == "completed" and item.get("conclusion") == "success"
             for item in matching
         ):
-            errors.append(f"GitHub trusted workflow job is not successful: {name}")
+            errors.append(f"{prefix} workflow job is not successful: {name}")
     return errors
 
 
+def trusted_workflow_job_errors(jobs: object) -> list[str]:
+    """Require all six trusted CI jobs to complete successfully on the selected push run."""
+
+    return _workflow_job_errors(
+        jobs,
+        required_jobs=TRUSTED_REQUIRED_CHECKS,
+        prefix="GitHub trusted",
+    )
+
+
 def trusted_workflow_job_evidence(jobs: object) -> dict[str, str]:
-    """Return a bounded signed verdict map after live GitHub job validation."""
+    """Return a bounded signed CI verdict map after live GitHub job validation."""
 
     errors = trusted_workflow_job_errors(jobs)
     if errors:
@@ -143,10 +201,72 @@ def trusted_workflow_job_evidence(jobs: object) -> dict[str, str]:
     return {name: "success" for name in TRUSTED_REQUIRED_CHECKS}
 
 
+def trusted_security_workflow_job_errors(jobs: object) -> list[str]:
+    """Require every immutable Security job to succeed for the selected release push."""
+
+    return _workflow_job_errors(
+        jobs,
+        required_jobs=TRUSTED_SECURITY_REQUIRED_JOBS,
+        prefix="GitHub trusted Security",
+    )
+
+
+def trusted_security_workflow_job_evidence(jobs: object) -> dict[str, str]:
+    """Return a bounded signed Security verdict map after live GitHub job validation."""
+
+    errors = trusted_security_workflow_job_errors(jobs)
+    if errors:
+        raise ValueError("GitHub trusted Security workflow jobs are not GO: " + "; ".join(errors))
+    return {name: "success" for name in TRUSTED_SECURITY_REQUIRED_JOBS}
+
+
 def _string_set(value: object) -> set[str]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         return set()
     return {str(item).strip() for item in value if str(item).strip()}
+
+
+def _signed_workflow_errors(
+    workflow: object,
+    *,
+    expected_name: str,
+    expected_path: str,
+    required_jobs: Sequence[str],
+    label: str,
+    expected_head_sha: object,
+) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(workflow, Mapping):
+        return [f"repository governance trusted {label} workflow evidence is missing"]
+    if workflow.get("name") != expected_name:
+        errors.append(f"repository governance {label} workflow is not trusted")
+    if workflow.get("path") != expected_path:
+        errors.append(f"repository governance {label} workflow path is not trusted")
+    if workflow.get("event") != "push":
+        errors.append(
+            f"repository governance {label} workflow must be an exact protected-main push run"
+        )
+    if workflow.get("status") != "completed" or workflow.get("conclusion") != "success":
+        errors.append(f"repository governance {label} workflow is not successfully completed")
+    if workflow.get("head_sha") != expected_head_sha:
+        errors.append(f"repository governance {label} workflow head is not the protected-main release")
+    if not isinstance(workflow.get("id"), int) or int(workflow.get("id", 0)) <= 0:
+        errors.append(f"repository governance {label} workflow run ID is invalid")
+    job_evidence = workflow.get("required_jobs")
+    if not isinstance(job_evidence, Mapping):
+        errors.append(f"repository governance trusted {label} workflow job evidence is missing")
+        return errors
+    observed_jobs = {str(name) for name in job_evidence.keys()}
+    if observed_jobs != set(required_jobs):
+        errors.append(
+            f"repository governance trusted {label} workflow jobs do not match the immutable pilot gate"
+        )
+    for name in required_jobs:
+        if job_evidence.get(name) != "success":
+            errors.append(
+                f"repository governance trusted {label} workflow job is not successful: {name}"
+            )
+    return errors
 
 
 def report_trust_anchor_errors(report: Mapping[str, Any]) -> list[str]:
@@ -157,6 +277,7 @@ def report_trust_anchor_errors(report: Mapping[str, Any]) -> list[str]:
     branch = report.get("branch")
     policy = report.get("policy")
     workflow = report.get("workflow")
+    security_workflow = report.get("security_workflow")
 
     if not isinstance(repository, Mapping):
         errors.append("repository governance trusted repository evidence is missing")
@@ -168,8 +289,11 @@ def report_trust_anchor_errors(report: Mapping[str, Any]) -> list[str]:
 
     if not isinstance(branch, Mapping):
         errors.append("repository governance trusted branch evidence is missing")
-    elif branch.get("name") != TRUSTED_BRANCH:
-        errors.append("repository governance branch is outside the trusted main branch")
+        expected_head_sha = None
+    else:
+        expected_head_sha = branch.get("head_sha")
+        if branch.get("name") != TRUSTED_BRANCH:
+            errors.append("repository governance branch is outside the trusted main branch")
 
     if not isinstance(policy, Mapping):
         errors.append("repository governance trusted policy evidence is missing")
@@ -192,26 +316,25 @@ def report_trust_anchor_errors(report: Mapping[str, Any]) -> list[str]:
                         f"repository governance trusted check source is invalid: {context}"
                     )
 
-    if not isinstance(workflow, Mapping):
-        errors.append("repository governance trusted workflow evidence is missing")
-    else:
-        if workflow.get("name") != TRUSTED_WORKFLOW_NAME:
-            errors.append("repository governance workflow is not the trusted CI workflow")
-        if workflow.get("path") != TRUSTED_WORKFLOW_API_PATH:
-            errors.append("repository governance workflow path is not the trusted CI workflow path")
-        if workflow.get("event") != "push":
-            errors.append("repository governance workflow must be an exact protected-main push run")
-        required_jobs = workflow.get("required_jobs")
-        if not isinstance(required_jobs, Mapping):
-            errors.append("repository governance trusted workflow job evidence is missing")
-        else:
-            observed_jobs = {str(name) for name in required_jobs.keys()}
-            if observed_jobs != set(TRUSTED_REQUIRED_CHECKS):
-                errors.append("repository governance trusted workflow jobs do not match the immutable pilot gate")
-            for name in TRUSTED_REQUIRED_CHECKS:
-                if required_jobs.get(name) != "success":
-                    errors.append(
-                        f"repository governance trusted workflow job is not successful: {name}"
-                    )
+    errors.extend(
+        _signed_workflow_errors(
+            workflow,
+            expected_name=TRUSTED_WORKFLOW_NAME,
+            expected_path=TRUSTED_WORKFLOW_API_PATH,
+            required_jobs=TRUSTED_REQUIRED_CHECKS,
+            label="CI",
+            expected_head_sha=expected_head_sha,
+        )
+    )
+    errors.extend(
+        _signed_workflow_errors(
+            security_workflow,
+            expected_name=TRUSTED_SECURITY_WORKFLOW_NAME,
+            expected_path=TRUSTED_SECURITY_WORKFLOW_API_PATH,
+            required_jobs=TRUSTED_SECURITY_REQUIRED_JOBS,
+            label="Security",
+            expected_head_sha=expected_head_sha,
+        )
+    )
 
     return list(dict.fromkeys(errors))

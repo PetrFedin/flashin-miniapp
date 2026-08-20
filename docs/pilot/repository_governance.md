@@ -1,6 +1,6 @@
 # FLASHIN repository governance gate
 
-Repository governance is a mandatory pilot input. A green CI run is insufficient when `main` can still be changed by a direct push, force-push, deletion, hidden ruleset bypass, spoofed status source, or an unaudited administrator action after the tested commit was produced.
+Repository governance is a mandatory pilot input. A green core CI run is insufficient when `main` can still be changed by a direct push, force-push, deletion, hidden ruleset bypass, spoofed status source, an unaudited administrator action, or when supply-chain security failed for the release that is about to be admitted.
 
 The governance gate creates a signed, short-lived report bound to:
 
@@ -9,9 +9,11 @@ The governance gate creates a signed, short-lived report bound to:
 - the exact `git_commit` in `deploy/release/runtime/current_release.json`;
 - the exact successful `push` run of `.github/workflows/ci.yml` for that commit;
 - required checks `backend,frontend,admin,browser-e2e,integrated-e2e,docker`;
-- a signed bounded `required_jobs` verdict proving all six trusted jobs completed successfully on that exact run;
-- the official GitHub Actions App ID `15368` as the required source of every check;
-- the exact governance-capable release archive, including the protected CI workflow itself;
+- a signed bounded `required_jobs` verdict proving all six trusted CI jobs completed successfully on that exact run;
+- the exact successful `push` run of `.github/workflows/security.yml` for the same commit;
+- a signed bounded Security verdict proving dependency review, CodeQL, secret scan, dependency vulnerability scan, and every shipped runtime image/SBOM gate completed successfully;
+- the official GitHub Actions App ID `15368` as the required source of every protected-branch core check;
+- the exact governance-capable release archive, including the protected CI and Security workflow capabilities;
 - the production configuration fingerprint;
 - the named technical owner in the signed pilot admission.
 
@@ -27,10 +29,14 @@ Configure a branch ruleset or classic branch protection for `main` with all of t
 6. Branch deletion is explicitly forbidden.
 7. Administrator enforcement is enabled for classic protection, or every active ruleset exposes an empty `bypass_actors` list.
 8. The branch remains the repository default branch.
-9. The successful workflow is the tracked `.github/workflows/ci.yml` capability contained in the exact promoted release.
-10. The selected workflow event is `push`, its head SHA equals the current release commit, and all six trusted jobs are completed with `success` before evidence is signed.
+9. GitHub Dependency Graph is enabled for the repository so Dependency Review can execute. Do not mark dependency review `continue-on-error`, skip it, or replace it with a cosmetic warning.
+10. The selected CI workflow is tracked `.github/workflows/ci.yml`, its event is `push`, its head SHA equals the current release commit, and all six trusted jobs are completed with `success` before evidence is signed.
+11. The selected Security workflow is tracked `.github/workflows/security.yml`, its event is `push`, its head SHA equals the same current release commit, and every immutable Security job is completed with `success` before evidence is signed.
+12. For a push, Dependency Review explicitly compares the previous branch SHA to the new release SHA; a missing/zero previous SHA fails closed instead of silently producing a release verdict without a comparison base.
 
-The evidence command fails closed when any item is absent, when a protection property is omitted, when a required check comes from an untrusted source, when bypass information is hidden, when the remote branch head differs from the promoted release commit, when no successful completed `push` workflow exists for that exact commit, or when any required workflow job is missing/failed/cancelled.
+The evidence command fails closed when any item is absent, when a protection property is omitted, when a required check comes from an untrusted source, when bypass information is hidden, when the remote branch head differs from the promoted release commit, when no successful completed `push` CI workflow exists for that exact commit, when no successful completed `push` Security workflow exists for that exact commit, or when any required CI/Security job is missing, failed or cancelled.
+
+This intentionally means that a disabled Dependency Graph makes pilot admission **NO-GO**: Dependency Review cannot become green, therefore the exact-release Security workflow cannot become trusted governance evidence.
 
 ## Privileged operator token
 
@@ -51,6 +57,8 @@ The immutable trust anchor uses `PILOT_GITHUB_ACTIONS_APP_ID=15368`, the officia
 
 Names in legacy `contexts` remain visible for diagnostics but do not satisfy source binding by themselves. This prevents a user, webhook integration or another GitHub App with repository write access from spoofing a successful `backend`, `frontend`, `admin`, `browser-e2e`, `integrated-e2e`, or `docker` status.
 
+Security workflow identity is a separate immutable trust anchor: the signed report accepts only workflow name `Security`, path `.github/workflows/security.yml`, event `push`, exact current release SHA, completed/success status, and the complete immutable Security job set.
+
 ## Non-secret application configuration
 
 These values are immutable trust anchors. They may be omitted from the production `.env` and will then use the exact trusted defaults. If they are present, they must match exactly:
@@ -67,12 +75,15 @@ PILOT_GITHUB_GOVERNANCE_MAX_AGE_MINUTES=60
 
 Do not add a `PILOT_GITHUB_TOKEN` line to this file, even with an empty placeholder.
 
+The Security workflow name/path and Security required-job set are code-level immutable trust anchors rather than mutable `.env` settings. This prevents a production environment variable from weakening or redirecting the supply-chain gate.
+
 ## Execution order
 
-Governance evidence is created only after the exact immutable release is promoted and its protected-main GitHub Actions `push` workflow has completed successfully.
+Governance evidence is created only after the exact immutable release is promoted and **both** its protected-main GitHub Actions `push` CI workflow and Security workflow have completed successfully.
 
 ```bash
 make release-status
+# Confirm GitHub Dependency Graph is enabled and the exact-main Security run is green.
 # The operator secret manager injects PILOT_GITHUB_TOKEN only for this process.
 PILOT_GITHUB_TOKEN="$TOKEN_FROM_OPERATOR_SECRET_MANAGER" \
   make pilot-governance-create ARGS='--owner "Exact technical owner name"'
@@ -82,7 +93,7 @@ make pilot-governance-status
 
 Avoid copying the raw token into shell history. Prefer the secret manager's process-injection command, an ephemeral environment wrapper, or a short-lived GitHub App installation token. The example above names the environment boundary; it is not a recommendation to paste a token into an interactive command line.
 
-`make pilot-governance-create` intentionally routes through `scripts/pilot_governance_operator.py`. The lower-level `scripts/pilot_repository_governance.py` may build diagnostic/signed structures for tests and verification, but its direct `create` output does **not** contain the operator-bound six-job verdict and therefore is not admissible for pilot admission.
+`make pilot-governance-create` intentionally routes through `scripts/pilot_governance_operator.py`. The lower-level `scripts/pilot_repository_governance.py` may build diagnostic/signed structures for tests and verification, but its direct `create` output does **not** contain the operator-bound six-job CI verdict or the exact-release Security verdict and therefore is not admissible for pilot admission.
 
 The owner must exactly match `technical_owner` in the signed admission. Attach governance only after the live lifecycle report has already been attached:
 
@@ -92,13 +103,13 @@ make pilot-governance-attach
 make pilot-admission-status
 ```
 
-`pilot-admission-status` is the final verifier and checks baseline admission evidence, live lifecycle evidence, repository governance evidence, release capability, signatures, checksums, age windows, owner identity, exact release commit, complete bypass visibility, trusted check sources, exact protected-main push workflow and the signed six-job verdict.
+`pilot-admission-status` is the final verifier and checks baseline admission evidence, live lifecycle evidence, repository governance evidence, release capability, signatures, checksums, age windows, owner identity, exact release commit, complete bypass visibility, trusted check sources, exact protected-main CI push workflow with its signed six-job verdict, and the exact-release Security push workflow with its complete signed Security verdict.
 
 ## Runtime binding
 
-When the controlled pilot is initialized or armed, the runtime state stores the SHA-256 of the governance report in its immutable admission binding. Replacing the report, changing the admission, promoting another release, changing the production configuration, hiding ruleset bypass data, changing a required check source, losing a required job verdict, or allowing the report to expire causes runtime validation to fail closed. A fresh signed admission and a fresh pilot state are then required.
+When the controlled pilot is initialized or armed, the runtime state stores the SHA-256 of the governance report in its immutable admission binding. Replacing the report, changing the admission, promoting another release, changing the production configuration, hiding ruleset bypass data, changing a required check source, losing a required CI/Security job verdict, or allowing the report to expire causes runtime validation to fail closed. A fresh signed admission and a fresh pilot state are then required.
 
-The report contains policy metadata, release identity, workflow ID and bounded job verdicts; it never contains the GitHub token, workflow logs or job payloads. Verification of an already signed report does not require the token.
+The report contains policy metadata, release identity, CI/Security workflow IDs and bounded job verdicts; it never contains the GitHub token, workflow logs or raw job payloads. Verification of an already signed report does not require the token.
 
 ## Evidence handling
 
