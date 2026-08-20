@@ -65,8 +65,8 @@ if [ -n "$BACKUP" ]; then
 fi
 
 # Pilot rollback must not recover the customer-facing API while silently losing
-# provider-command dispatch or the internal alerting plane. Validate the target
-# archive before any downtime so an older/incomplete release fails closed.
+# provider-command dispatch, ingress, or the internal alerting plane. Validate
+# the target archive before any downtime so an older/incomplete release fails closed.
 python3 - "$RELEASE" <<'PY'
 import sys
 import zipfile
@@ -74,6 +74,7 @@ from pathlib import Path
 
 archive = Path(sys.argv[1])
 required = {
+    "Dockerfile.ingress",
     "scripts/render_alertmanager_config.py",
     "scripts/run_provider_command_jobs.py",
     "deploy/monitoring/prometheus.yml",
@@ -182,12 +183,13 @@ fi
 
 # Rebuild from the extracted target release. Without this step Compose could
 # restart images created from the newer deployment and leave runtime code at the
-# wrong version even though files and release pointers were rolled back.
-echo "Building rolled-back application images from the target release..."
+# wrong version even though files and release pointers were rolled back. This
+# includes the custom-built ingress image: edge/runtime versions must roll back together.
+echo "Building rolled-back application and ingress images from the target release..."
 # Immutable v17 compatibility marker retained for older capability inspectors:
 # docker compose build backend frontend admin bot notification_worker scheduler
 docker compose build \
-  backend frontend admin bot notification_worker provider_command_jobs scheduler
+  backend frontend admin bot notification_worker provider_command_jobs scheduler caddy
 
 echo "Starting PostgreSQL for rollback validation..."
 docker compose up -d db

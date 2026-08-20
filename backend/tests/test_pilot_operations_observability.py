@@ -498,10 +498,8 @@ def test_ops_endpoint_requires_security_read_and_disables_caching(monkeypatch):
 
 
 def test_pilot_operations_route_is_registered_once():
-    matching = [
-        route
-        for route in app.routes
-        if getattr(route, "path", None) == "/api/ops/pilot-runtime"
-        and "GET" in getattr(route, "methods", set())
-    ]
-    assert len(matching) == 1
+    path = "/api/ops/pilot-runtime"
+    assert str(app.url_path_for("pilot_runtime_status")) == path
+    operations = app.openapi()["paths"][path]
+    assert "get" in operations
+    assert operations["get"]["operationId"].startswith("pilot_runtime_status")

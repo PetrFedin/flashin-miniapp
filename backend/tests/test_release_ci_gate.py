@@ -1,3 +1,4 @@
+import re
 import sys
 from pathlib import Path
 
@@ -92,7 +93,8 @@ def test_release_workflow_cannot_publish_raw_or_unverified_workspace_zip():
     assert "scripts/release_control.py create" in source
     assert "scripts/release_control.py verify" in source
     assert "scripts/pilot_release_capability.py inspect" in source
-    assert "actions/upload-artifact@v4" in source
+    assert re.search(r"actions/upload-artifact@[0-9a-f]{40}", source)
+    assert "actions/upload-artifact@v4" not in source
     assert "if-no-files-found: error" in source
     assert "zip -r" not in source
     assert "flashin-miniapp-release.zip" not in source
