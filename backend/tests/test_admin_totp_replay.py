@@ -2,7 +2,6 @@ import base64
 import hashlib
 import hmac
 import struct
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -10,6 +9,7 @@ from fastapi import HTTPException
 
 from backend.admin_mfa_models import AdminTotpReplayState
 from backend.api import admin_auth
+from backend.api import admin_security as admin_security_api
 from backend.models import AdminTotpSecret, AdminUser
 from backend.services.admin_security import (
     consume_totp_counter,
@@ -86,6 +86,24 @@ class LoginDb:
             self.replay_state = row
             return
         raise AssertionError(f"Unexpected row add: {type(row)!r}")
+
+    def commit(self):
+        self.commits += 1
+
+    def rollback(self):
+        self.rollbacks += 1
+
+
+class ConfigureDb:
+    def __init__(self, target):
+        self.target = target
+        self.commits = 0
+        self.rollbacks = 0
+
+    def query(self, model):
+        if model is AdminUser:
+            return FakeQuery([self.target])
+        raise AssertionError(f"Unexpected model query: {model}")
 
     def commit(self):
         self.commits += 1
@@ -220,3 +238,72 @@ def test_admin_login_accepts_newer_totp_counter_after_previous_use(monkeypatch):
     assert admin_auth.admin_session_login(payload, request=None, db=db).access_token == "admin-token"
     assert admin_auth.admin_session_login(payload, request=None, db=db).access_token == "admin-token"
     assert db.replay_state.last_used_counter == 124
+
+
+def test_totp_enrollment_consumes_the_verification_counter(monkeypatch):
+    target = SimpleNamespace(id=17)
+    acting_admin = SimpleNamespace(id=1)
+    db = ConfigureDb(target)
+    consumed: list[tuple[int, int]] = []
+
+    monkeypatch.setattr(admin_security_api, "require_permission", lambda *args, **kwargs: None)
+    monkeypatch.setattr(admin_security_api, "match_totp_counter", lambda *args, **kwargs: 555)
+    monkeypatch.setattr(
+        admin_security_api,
+        "set_totp_secret",
+        lambda db, admin_id, secret, enabled: SimpleNamespace(enabled=enabled),
+    )
+    monkeypatch.setattr(
+        admin_security_api,
+        "consume_totp_counter",
+        lambda db, admin_id, counter: consumed.append((admin_id, counter)) or True,
+    )
+    monkeypatch.setattr(admin_security_api, "log_admin_action", lambda *args, **kwargs: None)
+
+    result = admin_security_api.configure_totp(
+        17,
+        admin_security_api.AdminTotpIn(
+            secret=SECRET,
+            enabled=True,
+            verification_code="123456",
+        ),
+        admin=acting_admin,
+        db=db,
+    )
+
+    assert result == {"ok": True, "enabled": True}
+    assert consumed == [(17, 555)]
+    assert db.commits == 1
+    assert db.rollbacks == 0
+
+
+def test_totp_enrollment_fails_closed_when_counter_cannot_be_consumed(monkeypatch):
+    target = SimpleNamespace(id=17)
+    acting_admin = SimpleNamespace(id=1)
+    db = ConfigureDb(target)
+
+    monkeypatch.setattr(admin_security_api, "require_permission", lambda *args, **kwargs: None)
+    monkeypatch.setattr(admin_security_api, "match_totp_counter", lambda *args, **kwargs: 555)
+    monkeypatch.setattr(
+        admin_security_api,
+        "set_totp_secret",
+        lambda db, admin_id, secret, enabled: SimpleNamespace(enabled=enabled),
+    )
+    monkeypatch.setattr(admin_security_api, "consume_totp_counter", lambda *args, **kwargs: False)
+    monkeypatch.setattr(admin_security_api, "log_admin_action", lambda *args, **kwargs: None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        admin_security_api.configure_totp(
+            17,
+            admin_security_api.AdminTotpIn(
+                secret=SECRET,
+                enabled=True,
+                verification_code="123456",
+            ),
+            admin=acting_admin,
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert db.commits == 0
+    assert db.rollbacks == 1
