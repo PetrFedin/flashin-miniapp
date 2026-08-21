@@ -415,12 +415,17 @@ def create_manifest(
 ) -> dict[str, Any]:
     secret = _secret(env_path)
     source_database = _validate_identifier(_compose_env("POSTGRES_DB"), "POSTGRES_DB")
+    # Capture the recovery-point timestamp immediately after the archive exists,
+    # before the isolated restore proof. RPO must not be understated by the time
+    # spent validating the backup after capture.
+    captured_at = utc_timestamp()
     snapshot = _restore_snapshot(backup, _temporary_database("flashin_backup_create"))
     manifest = build_manifest(
         backup,
         snapshot,
         source_database=source_database,
         secret=secret,
+        created_at=captured_at,
     )
     atomic_write_json(manifest_path, manifest)
     return manifest
