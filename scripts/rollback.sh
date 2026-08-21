@@ -4,6 +4,8 @@ set -euo pipefail
 RELEASE_REF=${1:-previous}
 BACKUP=${2:-}
 ROLLBACK_DRILL=${ROLLBACK_DRILL:-0}
+RECOVERY_SCOPE=ci
+RECOVERY_STARTED_AT=""
 
 export COMPOSE_FILE=${COMPOSE_FILE:-"docker-compose.yml:docker-compose.production.yml"}
 export COMPOSE_PROFILES=${COMPOSE_PROFILES:-"production,workers,scheduler,search,monitoring"}
@@ -56,6 +58,49 @@ else
     echo "Database backup is required. Set ALLOW_CODE_ONLY_ROLLBACK=1 only after confirming schema compatibility." >&2
     exit 1
   fi
+fi
+
+if [ "$ROLLBACK_DRILL" = "1" ]; then
+  RECOVERY_SCOPE=$(python3 - "$BACKUP" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, "scripts")
+from pilot_evidence import (  # noqa: E402
+    RECOVERY_ENV_KEYS,
+    _positive_seconds,
+    _verified_backup_manifest,
+    read_env_file,
+    require_signing_secret,
+)
+
+backup = Path(sys.argv[1]).resolve()
+env = read_env_file(Path(".env"))
+for key in RECOVERY_ENV_KEYS:
+    value = os.environ.get(key)
+    if value is not None and value.strip():
+        env[key] = value.strip()
+
+scope = str(env.get("PILOT_RECOVERY_SCOPE", "ci")).strip().lower() or "ci"
+if scope not in {"ci", "pilot_host"}:
+    raise SystemExit("PILOT_RECOVERY_SCOPE must be ci or pilot_host")
+
+if scope == "pilot_host":
+    secret = require_signing_secret(env)
+    host_id = str(env.get("PILOT_RECOVERY_HOST_ID", "")).strip()
+    if not host_id:
+        raise SystemExit("PILOT_RECOVERY_HOST_ID is required for pilot_host rollback drills")
+    _positive_seconds(env.get("PILOT_RECOVERY_RTO_SECONDS"), "PILOT_RECOVERY_RTO_SECONDS")
+    _positive_seconds(env.get("PILOT_RECOVERY_RPO_SECONDS"), "PILOT_RECOVERY_RPO_SECONDS")
+    manifest_value = str(env.get("PILOT_RECOVERY_BACKUP_MANIFEST", "")).strip()
+    manifest = Path(manifest_value).resolve() if manifest_value else Path(f"{backup}.manifest.json")
+    _verified_backup_manifest(manifest, backup, secret)
+
+print(scope)
+PY
+  )
+  echo "Rollback drill evidence scope: $RECOVERY_SCOPE"
 fi
 
 python3 "$CONTROL_SCRIPT" verify --archive "$RELEASE" >/dev/null
@@ -111,6 +156,10 @@ fi
 echo "Rolling back to verified runtime-guarded release: $RELEASE"
 [ -z "$BACKUP" ] || echo "Database restore source: $BACKUP"
 [ "$ROLLBACK_DRILL" != "1" ] || echo "Rollback drill evidence recording is enabled"
+
+if [ "$ROLLBACK_DRILL" = "1" ]; then
+  RECOVERY_STARTED_AT=$(python3 -c 'from datetime import UTC, datetime; print(datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"))')
+fi
 
 if docker compose ps --status running --services 2>/dev/null | grep -qx backend; then
   if docker compose exec -T backend test -f /app/scripts/pilot_runtime.py; then
@@ -346,7 +395,9 @@ PY
     --to-release-state "$(pwd)/$CURRENT_RELEASE_STATE" \
     --backup "$BACKUP" \
     --report "$(pwd)/$ROLLBACK_REPORT" \
-    --max-age-days "$max_age_days"
+    --max-age-days "$max_age_days" \
+    --recovery-scope "$RECOVERY_SCOPE" \
+    --started-at "$RECOVERY_STARTED_AT"
 fi
 
 echo "Rollback completed and release pointer promoted: $RELEASE"
