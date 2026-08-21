@@ -10,10 +10,11 @@ from ..models import AdminIpAllowlist, AdminLoginEvent, AdminSession, AdminUser
 from ..schemas import AdminIpAllowlistIn, AdminLoginEventOut
 from ..security import get_current_admin
 from ..services.admin_security import (
+    consume_totp_counter,
     create_password_reset,
+    match_totp_counter,
     revoke_admin_sessions,
     set_totp_secret,
-    verify_totp,
 )
 from ..services.audit import log_admin_action
 from ..services.rbac import require_permission
@@ -112,20 +113,35 @@ def configure_totp(
     db: Session = Depends(get_db),
 ):
     require_permission(db, admin, "security.write")
-    target = db.query(AdminUser).filter(AdminUser.id == admin_id).first()
+    # Serialize enrollment/rotation against login, which locks the same admin row
+    # before consuming a TOTP counter.
+    target = (
+        db.query(AdminUser)
+        .filter(AdminUser.id == admin_id)
+        .with_for_update()
+        .first()
+    )
     if not target:
         raise HTTPException(status_code=404, detail="Admin not found")
 
+    matched_counter = None
     if payload.enabled:
         try:
-            verified = verify_totp(payload.secret, payload.verification_code or "")
+            matched_counter = match_totp_counter(
+                payload.secret,
+                payload.verification_code or "",
+            )
         except ValueError:
-            verified = False
-        if not verified:
+            matched_counter = None
+        if matched_counter is None:
             raise HTTPException(status_code=400, detail="Valid TOTP verification code is required")
 
     try:
         row = set_totp_secret(db, admin_id, payload.secret, payload.enabled)
+        # The verification code used to enable/rotate MFA is already a successful
+        # authentication factor and must not remain reusable for the next login.
+        if matched_counter is not None and not consume_totp_counter(db, admin_id, matched_counter):
+            raise HTTPException(status_code=409, detail="TOTP verification code was already used")
         log_admin_action(
             db,
             admin,
@@ -136,6 +152,9 @@ def configure_totp(
         )
         db.commit()
         return {"ok": True, "enabled": row.enabled}
+    except HTTPException:
+        db.rollback()
+        raise
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
