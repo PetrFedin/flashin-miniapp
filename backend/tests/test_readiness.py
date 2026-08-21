@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from backend.api import health
 
 
-CURRENT_HEAD = "0032_fixed_precision_money"
+CURRENT_HEAD = "0033_admin_totp_replay_state"
 
 
 class ScalarResult:
