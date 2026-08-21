@@ -126,7 +126,8 @@ for _ in $(seq 1 90); do
 done
 docker compose exec -T backend curl -fsS http://localhost:8000/ready >/dev/null
 
-ROLLBACK_DRILL=1 bash scripts/rollback.sh "$PREVIOUS_ARCHIVE" "$BACKUP_FILE"
+PILOT_RECOVERY_SCOPE=ci ROLLBACK_DRILL=1 \
+  bash scripts/rollback.sh "$PREVIOUS_ARCHIVE" "$BACKUP_FILE"
 
 restored_marker=$(tr -d '\r\n' < "$MARKER_FILE")
 if [ "$restored_marker" != "$PREVIOUS_MARKER" ]; then
@@ -183,6 +184,10 @@ assert Path(previous_state["archive"]).resolve() == current_archive.resolve()
 assert report["result"] == "GO"
 assert report["from_release"]["sha256"] != report["to_release"]["sha256"]
 assert all(report["checks"].values())
+assert report["recovery"]["scope"] == "ci"
+assert report["recovery"]["host_fingerprint"] is None
+assert report["recovery"]["rto_target_seconds"] is None
+assert report["recovery"]["rpo_target_seconds"] is None
 print(json.dumps({
     "status": "ok",
     "from_release": report["from_release"]["release_id"],
@@ -190,6 +195,7 @@ print(json.dumps({
     "database_restored": report["checks"]["database_restored"],
     "services_running": report["checks"]["services_running"],
     "container_smoke": report["checks"]["container_smoke"],
+    "recovery_scope": report["recovery"]["scope"],
     "runtime_image_rebuilt": True,
     "release_pointer_promoted": True,
     "provider_command_worker_restored": True,
