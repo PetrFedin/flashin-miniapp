@@ -64,6 +64,62 @@ def _positive_int(env: Mapping[str, str], key: str, default: int, minimum: int, 
     return value
 
 
+def _pilot_recovery_settings(env: Mapping[str, str]) -> tuple[dict[str, Any], list[str]]:
+    """Return fail-closed live recovery targets used by pilot admission."""
+    errors: list[str] = []
+    scope = str(env.get("PILOT_RECOVERY_SCOPE", "")).strip().lower()
+    if scope != "pilot_host":
+        errors.append("PILOT_RECOVERY_SCOPE must be pilot_host for pilot admission")
+
+    host_id = str(env.get("PILOT_RECOVERY_HOST_ID", "")).strip()
+    if not host_id:
+        errors.append("PILOT_RECOVERY_HOST_ID is required for pilot admission")
+
+    targets: dict[str, int | None] = {"rto": None, "rpo": None}
+    for env_key, target_key in (
+        ("PILOT_RECOVERY_RTO_SECONDS", "rto"),
+        ("PILOT_RECOVERY_RPO_SECONDS", "rpo"),
+    ):
+        raw = str(env.get(env_key, "")).strip()
+        try:
+            value = int(raw)
+        except ValueError:
+            errors.append(f"{env_key} must be a positive integer")
+            continue
+        if value <= 0:
+            errors.append(f"{env_key} must be a positive integer")
+            continue
+        targets[target_key] = value
+
+    return {
+        "scope": scope,
+        "host_id": host_id,
+        "rto": targets["rto"],
+        "rpo": targets["rpo"],
+    }, list(dict.fromkeys(errors))
+
+
+def _validate_pilot_recovery_report(
+    report: Mapping[str, Any],
+    *,
+    env: Mapping[str, str],
+    rollback_max_age_days: int,
+) -> list[str]:
+    settings, errors = _pilot_recovery_settings(env)
+    errors.extend(
+        validate_rollback_drill_report(
+            report,
+            env=env,
+            max_age_days=rollback_max_age_days,
+            required_scope="pilot_host",
+            expected_host_id=settings.get("host_id"),
+            expected_rto_target_seconds=settings.get("rto"),
+            expected_rpo_target_seconds=settings.get("rpo"),
+        )
+    )
+    return list(dict.fromkeys(errors))
+
+
 def load_verified_release_state(path: Path) -> dict[str, Any]:
     state = load_json(path)
     archive = Path(str(state.get("archive", "")))
@@ -295,10 +351,10 @@ def validate_admission_manifest(
     if rollback_path and rollback_path.is_file():
         rollback_report = load_json(rollback_path)
         errors.extend(
-            validate_rollback_drill_report(
+            _validate_pilot_recovery_report(
                 rollback_report,
                 env=env,
-                max_age_days=rollback_max_age_days,
+                rollback_max_age_days=rollback_max_age_days,
             )
         )
         rollback_from = rollback_report.get("from_release")
@@ -350,10 +406,10 @@ def validate_admission_evidence_inputs(
         )
     )
     errors.extend(
-        validate_rollback_drill_report(
+        _validate_pilot_recovery_report(
             rollback_report,
             env=env,
-            max_age_days=rollback_max_age_days,
+            rollback_max_age_days=rollback_max_age_days,
         )
     )
     return list(dict.fromkeys(errors))
