@@ -22,7 +22,8 @@ def test_secure_admin_login_is_the_authoritative_application_route():
     for security_control in (
         "totp_code",
         "is_admin_ip_allowed",
-        "verify_stored_totp",
+        "match_stored_totp_counter",
+        "consume_totp_counter",
         "create_admin_session",
         "log_admin_login",
     ):
