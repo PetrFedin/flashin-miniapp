@@ -32,6 +32,11 @@ class FakeDb:
         self.admins = list(admins or [])
         self.added = []
         self.flushes = 0
+        self.executed = []
+
+    def execute(self, statement, params=None):
+        self.executed.append((str(statement), dict(params or {})))
+        return None
 
     def query(self, model):
         assert model is AdminUser
@@ -46,6 +51,15 @@ class FakeDb:
 
     def flush(self):
         self.flushes += 1
+
+
+def _assert_bootstrap_lock(db):
+    assert db.executed == [
+        (
+            "SELECT pg_advisory_xact_lock(:lock_id)",
+            {"lock_id": seed_admin.ADMIN_BOOTSTRAP_ADVISORY_LOCK_ID},
+        )
+    ]
 
 
 def test_empty_admin_table_creates_exactly_one_owner(monkeypatch):
@@ -72,6 +86,7 @@ def test_empty_admin_table_creates_exactly_one_owner(monkeypatch):
     assert admin.active is True
     assert verify_password(STRONG_PASSWORD, admin.password_hash) is True
     assert db.flushes == 1
+    _assert_bootstrap_lock(db)
     assert audit == [
         (
             "admin.bootstrap.create",
@@ -104,6 +119,7 @@ def test_existing_same_active_owner_is_idempotent_noop(monkeypatch):
     assert existing.password_hash == "original-hash"
     assert len(db.admins) == 1
     assert db.flushes == 0
+    _assert_bootstrap_lock(db)
 
 
 def test_existing_different_admin_closes_offline_creation(monkeypatch):
@@ -126,6 +142,7 @@ def test_existing_different_admin_closes_offline_creation(monkeypatch):
 
     assert db.admins == [existing]
     assert db.flushes == 0
+    _assert_bootstrap_lock(db)
 
 
 @pytest.mark.parametrize(
@@ -155,6 +172,7 @@ def test_existing_bootstrap_identity_cannot_be_promoted_or_reactivated(
     assert existing.role == role
     assert existing.active is active
     assert existing.password_hash == "original-hash"
+    _assert_bootstrap_lock(db)
 
 
 def test_seed_uses_same_strong_password_policy(monkeypatch):
@@ -169,6 +187,11 @@ def test_seed_uses_same_strong_password_policy(monkeypatch):
         )
 
     assert db.admins == []
+    assert db.executed == []
+
+
+def test_bootstrap_lock_id_fits_postgresql_signed_bigint():
+    assert 0 < seed_admin.ADMIN_BOOTSTRAP_ADVISORY_LOCK_ID < 2**63
 
 
 def test_production_password_prompt_requires_interactive_terminal(monkeypatch):
