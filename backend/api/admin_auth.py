@@ -14,6 +14,7 @@ from ..security import (
     password_needs_rehash,
     verify_password,
 )
+from ..services.admin_password_policy import validate_admin_password
 from ..services.admin_security import (
     consume_totp_counter,
     create_admin_session,
@@ -28,14 +29,6 @@ from ..services.rbac import effective_permissions
 
 router = APIRouter(prefix="/admin", tags=["admin-auth"])
 _DUMMY_PASSWORD_HASH = hash_password("not-a-real-admin-password")
-_COMMON_PASSWORDS = {
-    "password",
-    "password123",
-    "admin",
-    "admin123",
-    "qwerty123",
-    "change-me-now",
-}
 
 
 class AdminSessionLoginIn(BaseModel):
@@ -60,28 +53,6 @@ def _request_identity(request: Request) -> tuple[str, str]:
 
 def _production_admin_mfa_required() -> bool:
     return get_settings().app_env.strip().lower() == "production"
-
-
-def _validate_new_admin_password(password: str, email: str = "") -> None:
-    lowered = password.lower()
-    if lowered in _COMMON_PASSWORDS:
-        raise HTTPException(status_code=400, detail="New password is too weak")
-    classes = sum(
-        (
-            any(character.islower() for character in password),
-            any(character.isupper() for character in password),
-            any(character.isdigit() for character in password),
-            any(not character.isalnum() for character in password),
-        )
-    )
-    if classes < 3:
-        raise HTTPException(
-            status_code=400,
-            detail="New password must use at least three character classes",
-        )
-    email_local = (email or "").split("@", 1)[0].strip().lower()
-    if len(email_local) >= 4 and email_local in lowered:
-        raise HTTPException(status_code=400, detail="New password must not contain the email name")
 
 
 @router.post("/login", response_model=TokenOut)
@@ -291,7 +262,10 @@ def confirm_admin_password_reset(
             db.commit()
             raise HTTPException(status_code=400, detail="Reset token is invalid or expired")
 
-        _validate_new_admin_password(payload.new_password, admin.email)
+        try:
+            validate_admin_password(payload.new_password, admin.email)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         if verify_password(payload.new_password, admin.password_hash):
             raise HTTPException(status_code=400, detail="New password must be different")
 
