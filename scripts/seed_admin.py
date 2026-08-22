@@ -8,6 +8,7 @@ import getpass
 import json
 import sys
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from backend.config import get_settings
@@ -18,6 +19,9 @@ from backend.services.admin_password_policy import validate_admin_password
 from backend.services.audit import log_admin_action
 
 ACK_FLAG = "--acknowledge-production-admin-bootstrap"
+# Stable PostgreSQL transaction-level lock for the one-time first-admin decision.
+# Row locks alone cannot serialize two concurrent transactions while the table is empty.
+ADMIN_BOOTSTRAP_ADVISORY_LOCK_ID = 0x464C415348494E
 
 
 class SeedAdminError(RuntimeError):
@@ -39,9 +43,15 @@ def seed_first_admin(
     except ValueError as exc:
         raise SeedAdminError(str(exc)) from exc
 
-    # Lock the administrator set before deciding whether a first owner may be
-    # created. Once this table is non-empty, this operator script must never be
-    # usable as an offline path for adding another privileged account.
+    # Serialize the decision even when admin_users is empty. The advisory lock
+    # is released automatically with the surrounding transaction.
+    db.execute(
+        text("SELECT pg_advisory_xact_lock(:lock_id)"),
+        {"lock_id": ADMIN_BOOTSTRAP_ADVISORY_LOCK_ID},
+    )
+
+    # Once the transaction lock is held, row-lock all existing administrators
+    # too so account state cannot change underneath this bootstrap decision.
     admins = (
         db.query(AdminUser)
         .order_by(AdminUser.id)
