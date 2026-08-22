@@ -15,13 +15,14 @@ from ..security import (
     verify_password,
 )
 from ..services.admin_security import (
+    consume_totp_counter,
     create_admin_session,
     is_admin_ip_allowed,
     log_admin_login,
+    match_stored_totp_counter,
     revoke_admin_sessions,
     sha256,
     upgrade_totp_secret_encryption,
-    verify_stored_totp,
 )
 from ..services.rbac import effective_permissions
 
@@ -106,6 +107,9 @@ def admin_session_login(
         raise HTTPException(status_code=403, detail="Admin access is not allowed")
 
     try:
+        # This row lock is the serialization anchor for password + MFA state.
+        # Two concurrent login attempts for the same administrator cannot both
+        # consume the same TOTP counter before commit.
         admin = (
             db.query(AdminUser)
             .filter(AdminUser.email == email, AdminUser.active.is_(True))
@@ -151,20 +155,32 @@ def admin_session_login(
 
         if totp and totp.enabled:
             try:
-                totp_valid = verify_stored_totp(
+                totp_counter = match_stored_totp_counter(
                     admin.id,
                     totp.secret,
                     payload.totp_code or "",
                 )
             except ValueError:
-                totp_valid = False
-            if not totp_valid:
+                totp_counter = None
+            if totp_counter is None:
                 log_admin_login(
                     db,
                     email,
                     admin.id,
                     False,
                     "invalid_totp",
+                    ip_address,
+                    user_agent,
+                )
+                db.commit()
+                raise HTTPException(status_code=401, detail="Invalid admin credentials")
+            if not consume_totp_counter(db, admin.id, totp_counter):
+                log_admin_login(
+                    db,
+                    email,
+                    admin.id,
+                    False,
+                    "totp_replay",
                     ip_address,
                     user_agent,
                 )

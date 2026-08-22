@@ -12,6 +12,7 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from sqlalchemy.orm import Session
 
+from ..admin_mfa_models import AdminTotpReplayState
 from ..config import get_settings
 from ..database import utcnow_naive
 from ..models import (
@@ -224,20 +225,22 @@ def decrypt_totp_secret(admin_id: int, stored_secret: str) -> str:
         raise ValueError("TOTP secret cannot be decrypted") from exc
 
 
-def verify_totp(
+def match_totp_counter(
     secret: str,
     code: str,
     *,
     at_time: int | None = None,
     window: int = 1,
     step_seconds: int = 30,
-) -> bool:
+) -> int | None:
+    """Return the exact counter matched by a TOTP code, or None when invalid."""
+
     normalized_secret = normalize_totp_secret(secret)
     normalized_code = (code or "").strip()
     if len(normalized_code) != 6 or not normalized_code.isdigit():
-        return False
+        return None
     if window < 0 or window > 2 or step_seconds < 15:
-        return False
+        return None
 
     key = base64.b32decode(normalized_secret, casefold=True)
     current_time = int(time.time() if at_time is None else at_time)
@@ -256,8 +259,44 @@ def verify_totp(
         value = struct.unpack(">I", digest[index : index + 4])[0] & 0x7FFFFFFF
         candidate = f"{value % 1_000_000:06d}"
         if hmac.compare_digest(candidate, normalized_code):
-            return True
-    return False
+            return candidate_counter
+    return None
+
+
+def verify_totp(
+    secret: str,
+    code: str,
+    *,
+    at_time: int | None = None,
+    window: int = 1,
+    step_seconds: int = 30,
+) -> bool:
+    return (
+        match_totp_counter(
+            secret,
+            code,
+            at_time=at_time,
+            window=window,
+            step_seconds=step_seconds,
+        )
+        is not None
+    )
+
+
+def match_stored_totp_counter(
+    admin_id: int,
+    stored_secret: str,
+    code: str,
+    *,
+    at_time: int | None = None,
+    window: int = 1,
+) -> int | None:
+    return match_totp_counter(
+        decrypt_totp_secret(admin_id, stored_secret),
+        code,
+        at_time=at_time,
+        window=window,
+    )
 
 
 def verify_stored_totp(
@@ -268,12 +307,61 @@ def verify_stored_totp(
     at_time: int | None = None,
     window: int = 1,
 ) -> bool:
-    return verify_totp(
-        decrypt_totp_secret(admin_id, stored_secret),
-        code,
-        at_time=at_time,
-        window=window,
+    return (
+        match_stored_totp_counter(
+            admin_id,
+            stored_secret,
+            code,
+            at_time=at_time,
+            window=window,
+        )
+        is not None
     )
+
+
+def consume_totp_counter(db: Session, admin_id: int, counter: int) -> bool:
+    """Consume one TOTP counter monotonically inside the caller transaction.
+
+    Admin login locks the AdminUser row before this function runs, which
+    serializes concurrent login attempts for the same administrator. The replay
+    row is also locked when present so the invariant stays explicit at its own
+    persistence boundary.
+    """
+
+    if admin_id <= 0 or counter < 0:
+        return False
+    state = (
+        db.query(AdminTotpReplayState)
+        .filter(AdminTotpReplayState.admin_id == admin_id)
+        .with_for_update()
+        .first()
+    )
+    if state is not None:
+        if counter <= int(state.last_used_counter):
+            return False
+        state.last_used_counter = counter
+        state.updated_at = utcnow_naive()
+        return True
+
+    db.add(
+        AdminTotpReplayState(
+            admin_id=admin_id,
+            last_used_counter=counter,
+            updated_at=utcnow_naive(),
+        )
+    )
+    return True
+
+
+def reset_totp_replay_state(db: Session, admin_id: int) -> None:
+    state = (
+        db.query(AdminTotpReplayState)
+        .filter(AdminTotpReplayState.admin_id == admin_id)
+        .with_for_update()
+        .first()
+    )
+    if state is not None:
+        db.delete(state)
 
 
 def upgrade_totp_secret_encryption(row: AdminTotpSecret) -> bool:
@@ -306,6 +394,7 @@ def set_totp_secret(
     else:
         row.secret = encrypted_secret
         row.enabled = enabled
+    reset_totp_replay_state(db, admin_id)
     if enabled:
         revoke_admin_sessions(db, admin_id)
     return row
