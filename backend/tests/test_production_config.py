@@ -7,6 +7,9 @@ from backend.config import Settings
 def _safe_production_settings(**overrides):
     values = {
         "app_env": "production",
+        # CI keeps a local-development ADMIN_PASSWORD in the job environment.
+        # Production configuration tests must explicitly prove that it is absent.
+        "admin_password": "",
         "database_url": "postgresql+psycopg2://flashin:strong-db-password@db:5432/flashin",
         "cors_origins": "https://mini.flashin.store,https://admin.flashin.store",
         "telegram_bot_token": "1234567890:abcdefghijklmnopqrstuvwxyz",
