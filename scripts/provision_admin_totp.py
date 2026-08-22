@@ -49,12 +49,7 @@ def bootstrap_first_admin_totp(
 
     # Lock the complete administrator set in stable order. This serializes two
     # concurrent first-factor bootstrap attempts even while no TOTP row exists.
-    admins = (
-        db.query(AdminUser)
-        .order_by(AdminUser.id)
-        .with_for_update()
-        .all()
-    )
+    admins = db.query(AdminUser).order_by(AdminUser.id).with_for_update().all()
     target = next(
         (admin for admin in admins if admin.email.strip().lower() == normalized_email),
         None,
@@ -130,11 +125,19 @@ def main() -> int:
     if settings.app_env.strip().lower() != "production":
         print("Administrator MFA bootstrap is production-only", file=sys.stderr)
         return 2
+    if not sys.stdin.isatty():
+        print(
+            "MFA bootstrap requires an interactive terminal; refusing non-interactive secret input",
+            file=sys.stderr,
+        )
+        return 2
 
     email = (args.email or settings.admin_email).strip().lower()
     try:
         secret = getpass.getpass("TOTP secret (hidden): ").strip()
-        verification_code = getpass.getpass("Current 6-digit TOTP code (hidden): ").strip()
+        verification_code = getpass.getpass(
+            "Current 6-digit TOTP code (hidden): "
+        ).strip()
     except (EOFError, KeyboardInterrupt):
         print("MFA bootstrap cancelled", file=sys.stderr)
         return 2
@@ -147,6 +150,10 @@ def main() -> int:
             secret=secret,
             verification_code=verification_code,
         )
+        # Capture non-secret output before commit. SQLAlchemy expires mapped
+        # objects on commit by default and the session is closed before output.
+        target_id = int(target.id)
+        target_email = str(target.email)
         db.commit()
     except BootstrapError as exc:
         db.rollback()
@@ -163,8 +170,8 @@ def main() -> int:
         json.dumps(
             {
                 "ok": True,
-                "admin_id": target.id,
-                "email": target.email,
+                "admin_id": target_id,
+                "email": target_email,
                 "totp_enabled": True,
             },
             ensure_ascii=False,
