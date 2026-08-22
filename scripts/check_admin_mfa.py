@@ -8,6 +8,8 @@ import json
 from backend.database import SessionLocal
 from backend.models import AdminTotpSecret, AdminUser
 
+PRODUCTION_COMPOSE = "docker compose -f docker-compose.yml -f docker-compose.production.yml"
+
 
 def inspect_admin_mfa(db) -> dict:
     admins = (
@@ -30,6 +32,19 @@ def inspect_admin_mfa(db) -> dict:
     }
 
 
+def _first_admin_bootstrap_instructions() -> str:
+    return "\n".join(
+        [
+            "First production administrator bootstrap is required.",
+            "The release is not admitted while this gate is failing.",
+            "Run these operator-only commands, then rerun the same production deploy:",
+            f"  {PRODUCTION_COMPOSE} run --rm backend python scripts/seed_admin.py",
+            f"  {PRODUCTION_COMPOSE} run --rm backend python scripts/provision_admin_totp.py --acknowledge-production-mfa-bootstrap",
+            "The TOTP secret and current code are prompted without echo and are never accepted as CLI arguments.",
+        ]
+    )
+
+
 def main() -> int:
     db = SessionLocal()
     try:
@@ -39,12 +54,19 @@ def main() -> int:
 
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     if not result["active_admins"]:
-        print("No active administrator exists; provision one before production deploy.")
+        print(_first_admin_bootstrap_instructions())
         return 2
     if result["missing_mfa"]:
         print(
             "Production administrator MFA is not enabled for: "
             + ", ".join(result["missing_mfa"])
+        )
+        print(
+            "If no active administrator has MFA yet, use the one-time offline bootstrap for exactly one existing admin. "
+            "Once an active MFA administrator exists, configure remaining administrators through the authenticated admin security API."
+        )
+        print(
+            f"  {PRODUCTION_COMPOSE} run --rm backend python scripts/provision_admin_totp.py --acknowledge-production-mfa-bootstrap"
         )
         return 3
     return 0
