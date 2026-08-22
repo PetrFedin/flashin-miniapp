@@ -24,7 +24,8 @@ The offline administrator seed is a first-database bootstrap, not a general acco
 - production requires `--acknowledge-production-admin-bootstrap` and an interactive terminal;
 - `ADMIN_PASSWORD` is forbidden in production and the password is prompted twice without echo;
 - the same administrator password policy used by password reset is enforced;
-- the administrator table is locked before deciding whether creation is allowed;
+- a PostgreSQL transaction advisory lock serializes the first-admin decision even while `admin_users` is empty;
+- existing administrator rows are then locked before their state is evaluated;
 - when the table is empty, the command creates exactly one active `owner`;
 - once any administrator exists, the command never creates another account or changes a role/password/active flag;
 - rerunning for the same existing active owner is an idempotent no-op;
