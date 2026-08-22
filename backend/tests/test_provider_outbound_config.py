@@ -7,11 +7,11 @@ from backend.config import Settings
 def _production(**overrides):
     values = {
         "app_env": "production",
+        "admin_password": "",
         "database_url": "postgresql+psycopg2://flashin:strong-db-password@db:5432/flashin",
         "cors_origins": "https://mini.flashin.store,https://admin.flashin.store",
         "telegram_bot_token": "1234567890:abcdefghijklmnopqrstuvwxyz",
         "jwt_secret": "j" * 48,
-        "admin_password": "Strong-Admin-Password-2026",
         "admin_totp_encryption_key": "t" * 48,
         "outbox_signing_secret": "o" * 48,
         "pilot_evidence_signing_secret": "p" * 48,
