@@ -10,7 +10,7 @@ def test_strong_admin_password_is_accepted():
 
 def test_common_admin_password_is_rejected():
     with pytest.raises(ValueError, match="too weak"):
-        validate_admin_password("password123", "owner@flashin.store")
+        validate_admin_password("change-me-now", "owner@flashin.store")
 
 
 def test_password_requires_three_character_classes():
