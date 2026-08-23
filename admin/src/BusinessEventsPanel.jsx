@@ -310,7 +310,7 @@ function BusinessEventsRecoveryPanel({ onUnauthorized, canReplayPermission }) {
                   </button>
                 </div>
               ) : canReplayBusinessEvent(selectedEvent) ? (
-                <p>Просмотр доступен, но replay требует permission orders.write.</p>
+                <p>Просмотр доступен, но replay требует permission events.replay.</p>
               ) : (
                 <p>Replay доступен только для terminal-статуса failed.</p>
               )}
@@ -327,7 +327,7 @@ export default function BusinessEventsPanel({ onUnauthorized, session }) {
   const canProductsRead = hasAdminPermission(session, "products.read");
   const canShowroomRead = hasAdminPermission(session, "showroom.read");
   const canOrdersRead = hasAdminPermission(session, "orders.read");
-  const canOrdersWrite = hasAdminPermission(session, "orders.write");
+  const canEventsReplay = hasAdminPermission(session, "events.replay");
   const canService = hasAnyAdminPermission(session, ["support.write", "privacy.read", "orders.read"]);
 
   return (
@@ -343,7 +343,7 @@ export default function BusinessEventsPanel({ onUnauthorized, session }) {
       {canOrdersRead && (
         <BusinessEventsRecoveryPanel
           onUnauthorized={onUnauthorized}
-          canReplayPermission={canOrdersWrite}
+          canReplayPermission={canEventsReplay}
         />
       )}
     </>
