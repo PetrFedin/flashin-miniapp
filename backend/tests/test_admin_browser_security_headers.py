@@ -30,6 +30,7 @@ def test_admin_origin_has_fail_closed_browser_security_boundary():
         "default-src 'self'",
         "base-uri 'none'",
         "object-src 'none'",
+        "frame-src 'none'",
         "frame-ancestors 'none'",
         "form-action 'self'",
         "script-src 'self'",
