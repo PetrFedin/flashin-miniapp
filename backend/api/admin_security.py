@@ -148,11 +148,6 @@ def configure_totp(
 
     try:
         row = set_totp_secret(db, admin_id, payload.secret, payload.enabled)
-        # Enabling/rotating already revokes sessions inside set_totp_secret().
-        # Disabling MFA in controlled non-production environments must do the
-        # same so no bearer authenticated under the old MFA posture survives.
-        if not row.enabled:
-            revoke_admin_sessions(db, admin_id)
         # The verification code used to enable/rotate MFA is already a successful
         # authentication factor and must not remain reusable for the next login.
         if matched_counter is not None and not consume_totp_counter(db, admin_id, matched_counter):
