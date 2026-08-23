@@ -395,6 +395,8 @@ def set_totp_secret(
         row.secret = encrypted_secret
         row.enabled = enabled
     reset_totp_replay_state(db, admin_id)
-    if enabled:
-        revoke_admin_sessions(db, admin_id)
+    # Any MFA secret or enablement-state change invalidates sessions that were
+    # authenticated under the previous factor posture. Keep this invariant at
+    # the service boundary so HTTP and offline operator paths cannot diverge.
+    revoke_admin_sessions(db, admin_id)
     return row
