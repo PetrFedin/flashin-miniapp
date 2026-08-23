@@ -19,6 +19,36 @@ test("admin TOTP is never written to persistent browser storage by API layer", (
 });
 
 
+test("explicit Admin token clearing revokes the exact starting server session best effort", () => {
+  assert.equal(source.includes("function revokeAdminSessionBestEffort(token)"), true);
+  assert.equal(source.includes('fetch(`${API_BASE}/api/admin/logout`'), true);
+  assert.equal(source.includes('method: "POST"'), true);
+  assert.equal(source.includes('headers: { Authorization: `Bearer ${token}` }'), true);
+  assert.equal(source.includes('cache: "no-store"'), true);
+  assert.equal(source.includes("keepalive: true"), true);
+  assert.equal(source.includes("const tokenAtLogout = getAdminToken()"), true);
+  assert.equal(source.includes("clearAdminTokenLocal();\n  revokeAdminSessionBestEffort(tokenAtLogout);"), true);
+});
+
+
+test("401 cleanup is local-only and cannot revoke a replacement Admin session", () => {
+  assert.equal(source.includes("function clearAdminTokenIfCurrent(tokenAtStart)"), true);
+  assert.equal(
+    source.includes("if (getAdminToken() !== tokenAtStart) throw staleAdminSessionError()"),
+    true,
+  );
+  const clearBlock = source
+    .split("function clearAdminTokenIfCurrent(tokenAtStart)", 2)[1]
+    .split("async function errorDetail", 1)[0];
+  assert.equal(clearBlock.includes("clearAdminTokenLocal()"), true);
+  assert.equal(clearBlock.includes("revokeAdminSessionBestEffort"), false);
+  assert.equal(
+    source.includes("if (response.status === 401 && auth) clearAdminTokenIfCurrent(tokenAtStart)"),
+    true,
+  );
+});
+
+
 test("admin mutation dedupe and successful responses are bound to one auth session", () => {
   assert.equal(source.includes("const tokenAtStart = auth ? getAdminToken() : \"\""), true);
   assert.equal(source.includes("const coordinationScope = auth ? tokenAtStart : PUBLIC_REQUEST_SCOPE"), true);
