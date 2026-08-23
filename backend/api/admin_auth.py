@@ -1,13 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..database import get_db, utcnow_naive
 from ..middleware.rate_limit import _client_ip
-from ..models import AdminPasswordReset, AdminTotpSecret, AdminUser
+from ..models import AdminPasswordReset, AdminSession, AdminTotpSecret, AdminUser
 from ..schemas import TokenOut
 from ..security import (
+    bearer,
     create_admin_token,
     get_current_admin,
     hash_password,
@@ -204,6 +206,58 @@ def current_admin_session(
         "all_access": "*" in permissions,
         "permissions": sorted(permission for permission in permissions if permission != "*"),
     }
+
+
+@router.post("/logout", status_code=204)
+def admin_session_logout(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    admin: AdminUser = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """Revoke exactly the bearer-backed administrator session being logged out."""
+
+    if not credentials or credentials.scheme.lower() != "bearer":
+        raise HTTPException(status_code=401, detail="Admin authentication required")
+
+    try:
+        session = (
+            db.query(AdminSession)
+            .filter(
+                AdminSession.admin_id == admin.id,
+                AdminSession.session_token_hash == sha256(credentials.credentials),
+                AdminSession.revoked.is_(False),
+            )
+            .with_for_update()
+            .first()
+        )
+        if session is None:
+            raise HTTPException(status_code=401, detail="Admin session is not active")
+
+        session.revoked = True
+        session.revoked_at = utcnow_naive()
+        log_admin_login(
+            db,
+            admin.email,
+            admin.id,
+            True,
+            "logout",
+            session.ip_address,
+            session.user_agent,
+        )
+        db.commit()
+        return Response(
+            status_code=204,
+            headers={
+                "Cache-Control": "no-store, max-age=0",
+                "Pragma": "no-cache",
+            },
+        )
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.post("/password-reset/confirm")
