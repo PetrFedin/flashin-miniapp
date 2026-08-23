@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..config import get_settings
 from ..database import get_db
 from ..models import AdminIpAllowlist, AdminLoginEvent, AdminSession, AdminUser
 from ..schemas import AdminIpAllowlistIn, AdminLoginEventOut
@@ -26,6 +27,10 @@ class AdminTotpIn(BaseModel):
     secret: str = Field(min_length=16, max_length=128)
     enabled: bool = False
     verification_code: str | None = Field(default=None, min_length=6, max_length=8)
+
+
+def _production_admin_mfa_required() -> bool:
+    return get_settings().app_env.strip().lower() == "production"
 
 
 @router.get("/login-events", response_model=list[AdminLoginEventOut])
@@ -123,6 +128,11 @@ def configure_totp(
     )
     if not target:
         raise HTTPException(status_code=404, detail="Admin not found")
+    if _production_admin_mfa_required() and target.active and not payload.enabled:
+        raise HTTPException(
+            status_code=409,
+            detail="TOTP cannot be disabled for an active administrator in production",
+        )
 
     matched_counter = None
     if payload.enabled:
@@ -138,6 +148,11 @@ def configure_totp(
 
     try:
         row = set_totp_secret(db, admin_id, payload.secret, payload.enabled)
+        # Enabling/rotating already revokes sessions inside set_totp_secret().
+        # Disabling MFA in controlled non-production environments must do the
+        # same so no bearer authenticated under the old MFA posture survives.
+        if not row.enabled:
+            revoke_admin_sessions(db, admin_id)
         # The verification code used to enable/rotate MFA is already a successful
         # authentication factor and must not remain reusable for the next login.
         if matched_counter is not None and not consume_totp_counter(db, admin_id, matched_counter):
