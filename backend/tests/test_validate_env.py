@@ -17,7 +17,6 @@ def _valid_production_env() -> dict[str, str]:
         "TELEGRAM_BOT_TOKEN": "telegram-token-value",
         "JWT_SECRET": "j" * 48,
         "ADMIN_EMAIL": "admin@flashin.store",
-        "ADMIN_PASSWORD": "admin-password-2026",
         "ADMIN_TOTP_ENCRYPTION_KEY": "t" * 48,
         "MINI_APP_URL": "https://mini.flashin.store",
         "API_PUBLIC_URL": "https://api.flashin.store",
@@ -72,6 +71,16 @@ def test_valid_production_environment_passes(tmp_path):
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Environment OK" in result.stdout
+
+
+def test_persisted_production_admin_password_is_rejected(tmp_path):
+    values = _valid_production_env()
+    values["ADMIN_PASSWORD"] = "Strong-Admin-Password-2026"
+
+    result = _run_validator(tmp_path, values)
+
+    assert result.returncode == 1
+    assert "ADMIN_PASSWORD must not be stored in production" in result.stdout
 
 
 def test_database_password_mismatch_is_rejected(tmp_path):

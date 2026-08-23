@@ -17,7 +17,9 @@ class Settings(BaseSettings):
     admin_jwt_expire_minutes: int = 8 * 60
 
     admin_email: str = "admin@flashin.store"
-    admin_password: str = "change-me-now"
+    # Local-development compatibility only. Production bootstrap reads a
+    # one-time password from a hidden interactive prompt and forbids this env.
+    admin_password: str = ""
     admin_totp_encryption_key: str = ""
 
     payment_provider: str = "yookassa"
@@ -168,8 +170,10 @@ class Settings(BaseSettings):
 
         if len(self.jwt_secret) < 32 or self.jwt_secret.strip().lower() in weak_values:
             errors.append("JWT_SECRET must be a unique secret of at least 32 characters")
-        if len(self.admin_password) < 12 or self.admin_password.strip().lower() in weak_values:
-            errors.append("ADMIN_PASSWORD must be a strong non-default password")
+        if self.admin_password:
+            errors.append(
+                "ADMIN_PASSWORD must not be configured in production; use the interactive first-admin bootstrap"
+            )
         if (
             len(self.admin_totp_encryption_key) < 32
             or self.admin_totp_encryption_key.strip().lower() in weak_values

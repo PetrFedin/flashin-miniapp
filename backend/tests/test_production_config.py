@@ -7,6 +7,9 @@ from backend.config import Settings
 def _safe_production_settings(**overrides):
     values = {
         "app_env": "production",
+        # CI keeps a local-development ADMIN_PASSWORD in the job environment.
+        # Production configuration tests must explicitly prove that it is absent.
+        "admin_password": "",
         "database_url": "postgresql+psycopg2://flashin:strong-db-password@db:5432/flashin",
         "cors_origins": "https://mini.flashin.store,https://admin.flashin.store",
         "telegram_bot_token": "1234567890:abcdefghijklmnopqrstuvwxyz",
@@ -14,7 +17,6 @@ def _safe_production_settings(**overrides):
         "jwt_algorithm": "HS256",
         "jwt_expire_minutes": 30 * 24 * 60,
         "admin_jwt_expire_minutes": 480,
-        "admin_password": "Strong-Admin-Password-2026",
         "admin_totp_encryption_key": "t" * 48,
         "outbox_signing_secret": "o" * 48,
         "pilot_evidence_signing_secret": "p" * 48,
@@ -39,6 +41,7 @@ def test_safe_production_configuration_is_accepted():
     assert settings.app_env == "production"
     assert settings.jwt_algorithm == "HS256"
     assert settings.admin_jwt_expire_minutes == 480
+    assert settings.admin_password == ""
     assert settings.admin_totp_encryption_key != settings.jwt_secret
     assert settings.pilot_runtime_enforced is True
     assert settings.pilot_runtime_max_orders == 20
@@ -48,7 +51,6 @@ def test_default_production_secrets_are_rejected():
     with pytest.raises(ValidationError) as exc_info:
         _safe_production_settings(
             jwt_secret="test-secret",
-            admin_password="change-me-now",
             admin_totp_encryption_key="change-me",
             outbox_signing_secret="change-me-outbox-secret",
             pilot_evidence_signing_secret="change-me",
@@ -56,10 +58,16 @@ def test_default_production_secrets_are_rejected():
 
     message = str(exc_info.value)
     assert "JWT_SECRET" in message
-    assert "ADMIN_PASSWORD" in message
     assert "ADMIN_TOTP_ENCRYPTION_KEY" in message
     assert "OUTBOX_SIGNING_SECRET" in message
     assert "PILOT_EVIDENCE_SIGNING_SECRET" in message
+
+
+def test_production_rejects_persisted_admin_bootstrap_password():
+    with pytest.raises(ValidationError) as exc_info:
+        _safe_production_settings(admin_password="Strong-Admin-Password-2026")
+
+    assert "ADMIN_PASSWORD must not be configured in production" in str(exc_info.value)
 
 
 def test_totp_encryption_key_must_differ_from_jwt_secret():

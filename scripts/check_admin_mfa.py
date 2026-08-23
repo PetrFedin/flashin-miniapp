@@ -38,9 +38,10 @@ def _first_admin_bootstrap_instructions() -> str:
             "First production administrator bootstrap is required.",
             "The release is not admitted while this gate is failing.",
             "Run these operator-only commands, then rerun the same production deploy:",
-            f"  {PRODUCTION_COMPOSE} run --rm backend python scripts/seed_admin.py",
+            f"  {PRODUCTION_COMPOSE} run --rm backend python scripts/seed_admin.py --acknowledge-production-admin-bootstrap",
             f"  {PRODUCTION_COMPOSE} run --rm backend python scripts/provision_admin_totp.py --acknowledge-production-mfa-bootstrap",
-            "The TOTP secret and current code are prompted without echo and are never accepted as CLI arguments.",
+            "The administrator password, TOTP secret and current code are prompted without echo and are never accepted as CLI arguments.",
+            "ADMIN_PASSWORD must not be stored in the production environment.",
         ]
     )
 

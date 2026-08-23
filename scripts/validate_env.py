@@ -126,10 +126,11 @@ required = [
     "TELEGRAM_BOT_TOKEN",
     "JWT_SECRET",
     "ADMIN_EMAIL",
-    "ADMIN_PASSWORD",
     "MINI_APP_URL",
     "API_PUBLIC_URL",
 ]
+if not is_production:
+    required.append("ADMIN_PASSWORD")
 if is_production:
     required.extend(
         [
@@ -191,7 +192,11 @@ jwt_secret = env.get("JWT_SECRET", "")
 if jwt_secret and len(jwt_secret) < 32:
     invalid.append("JWT_SECRET must contain at least 32 characters")
 admin_password = env.get("ADMIN_PASSWORD", "")
-if admin_password and len(admin_password) < 12:
+if is_production and admin_password.strip():
+    invalid.append(
+        "ADMIN_PASSWORD must not be stored in production; use the interactive first-admin bootstrap"
+    )
+elif not is_production and admin_password and len(admin_password) < 12:
     invalid.append("ADMIN_PASSWORD must contain at least 12 characters")
 if is_production:
     totp_encryption_key = env.get("ADMIN_TOTP_ENCRYPTION_KEY", "")
