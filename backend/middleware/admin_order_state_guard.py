@@ -2,13 +2,12 @@ import json
 
 from starlette.responses import JSONResponse
 
-from ..order_statuses import PROVIDER_OWNED_ORDER_STATUSES
-
 
 class AdminOrderStateGuardMiddleware:
-    """Prevent generic admin edits from bypassing dedicated order workflows."""
+    """Fence the legacy Admin order PATCH before route-level workflow checks."""
 
     _MAX_BODY_BYTES = 64 * 1024
+    _ALLOWED_COMPATIBILITY_STATUS = "assembling"
 
     def __init__(self, app):
         self.app = app
@@ -42,21 +41,34 @@ class AdminOrderStateGuardMiddleware:
             await self.app(scope, self._replay(raw_body), send)
             return
 
-        requested_status = ""
         if isinstance(payload, dict):
+            delivery_status = str(payload.get("delivery_status") or "").strip()
+            tracking_number = str(payload.get("tracking_number") or "").strip()
             requested_status = str(payload.get("status") or "").strip().lower()
 
-        if requested_status in PROVIDER_OWNED_ORDER_STATUSES:
-            response = JSONResponse(
-                status_code=409,
-                content={
-                    "detail": (
-                        f"Status {requested_status} is controlled by a dedicated payment, refund, or cancellation workflow"
-                    )
-                },
-            )
-            await response(scope, receive, send)
-            return
+            if delivery_status or tracking_number:
+                response = JSONResponse(
+                    status_code=409,
+                    content={
+                        "detail": (
+                            "Delivery status and tracking are controlled by the dedicated shipment workflow"
+                        )
+                    },
+                )
+                await response(scope, receive, send)
+                return
+
+            if requested_status and requested_status != self._ALLOWED_COMPATIBILITY_STATUS:
+                response = JSONResponse(
+                    status_code=409,
+                    content={
+                        "detail": (
+                            "Generic order PATCH may only start paid-order fulfillment with status=assembling"
+                        )
+                    },
+                )
+                await response(scope, receive, send)
+                return
 
         await self.app(scope, self._replay(raw_body), send)
 
