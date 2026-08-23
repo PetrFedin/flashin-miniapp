@@ -25,9 +25,33 @@ export function getAdminToken() {
   return localStorage.getItem("admin_token") || "";
 }
 
+function clearAdminTokenLocal() {
+  localStorage.removeItem("admin_token");
+}
+
+function revokeAdminSessionBestEffort(token) {
+  if (!token) return;
+  void fetch(`${API_BASE}/api/admin/logout`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
+    keepalive: true,
+  }).catch(() => {
+    // Local logout remains authoritative for this browser even when the
+    // network is unavailable. The server-side session will still expire by
+    // its normal JWT/session lifetime and cannot affect a replacement token.
+  });
+}
+
 export function setAdminToken(token) {
-  if (token) localStorage.setItem("admin_token", token);
-  else localStorage.removeItem("admin_token");
+  if (token) {
+    localStorage.setItem("admin_token", token);
+    return;
+  }
+
+  const tokenAtLogout = getAdminToken();
+  clearAdminTokenLocal();
+  revokeAdminSessionBestEffort(tokenAtLogout);
 }
 
 function staleAdminSessionError() {
@@ -41,7 +65,7 @@ function assertAdminSessionUnchanged(auth, tokenAtStart) {
 
 function clearAdminTokenIfCurrent(tokenAtStart) {
   if (getAdminToken() !== tokenAtStart) throw staleAdminSessionError();
-  setAdminToken("");
+  clearAdminTokenLocal();
 }
 
 async function errorDetail(response) {
