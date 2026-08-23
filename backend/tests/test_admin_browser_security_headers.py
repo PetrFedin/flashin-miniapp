@@ -1,8 +1,10 @@
+import re
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
 CADDYFILE = ROOT / "deploy" / "Caddyfile"
+ADMIN_ROOT = ROOT / "admin"
 
 
 def _admin_site_block() -> str:
@@ -45,6 +47,21 @@ def test_admin_origin_has_fail_closed_browser_security_boundary():
     assert "'unsafe-inline'" not in csp_line
     assert "'unsafe-eval'" not in csp_line
     assert " *" not in csp_line
+
+
+def test_admin_source_stays_compatible_with_strict_script_and_style_csp():
+    index_source = (ADMIN_ROOT / "index.html").read_text(encoding="utf-8")
+    assert "<style" not in index_source.lower()
+    assert not re.search(r"<script(?![^>]*\bsrc\s*=)[^>]*>", index_source, flags=re.IGNORECASE)
+
+    source_files = sorted((ADMIN_ROOT / "src").glob("*.js")) + sorted(
+        (ADMIN_ROOT / "src").glob("*.jsx")
+    )
+    assert source_files
+    for path in source_files:
+        source = path.read_text(encoding="utf-8")
+        assert not re.search(r"\bstyle\s*=\s*\{", source), f"Inline style in {path.name} would require unsafe-inline"
+        assert "dangerouslySetInnerHTML" not in source, f"Raw HTML sink present in {path.name}"
 
 
 def test_customer_and_api_origins_do_not_inherit_admin_only_csp():
