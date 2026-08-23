@@ -71,6 +71,6 @@ def test_admin_session_endpoint_is_authenticated_no_store_and_sanitized():
     assert 'response.headers["Pragma"] = "no-cache"' in source
     assert '"all_access": "*" in permissions' in source
     assert '"permissions": sorted(' in source
-    endpoint = source.split('@router.get("/session")', 1)[1].split('@router.post("/password-reset/confirm")', 1)[0]
+    endpoint = source.split('@router.get("/session")', 1)[1].split('@router.post("/logout"', 1)[0]
     for forbidden in ("password_hash", "totp", "session_hash", "ip_address", "access_token"):
         assert forbidden not in endpoint
