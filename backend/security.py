@@ -5,15 +5,16 @@ import time
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qsl
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
 from .config import get_settings
 from .database import get_db
+from .middleware.rate_limit import _client_ip
 from .models import AdminUser, Customer
-from .services.admin_security import is_admin_session_active
+from .services.admin_security import is_admin_ip_allowed, is_admin_session_active
 
 bearer = HTTPBearer(auto_error=False)
 
@@ -231,6 +232,7 @@ def create_admin_token(admin_id: int, role: str) -> str:
 
 
 def get_current_admin(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
     db: Session = Depends(get_db),
 ) -> AdminUser:
@@ -261,4 +263,12 @@ def get_current_admin(
         raise HTTPException(status_code=401, detail="Admin not found")
     if not is_admin_session_active(db, admin.id, credentials.credentials):
         raise HTTPException(status_code=401, detail="Admin session is revoked or unknown")
+
+    settings = get_settings()
+    client_ip = _client_ip(
+        request,
+        trust_proxy_headers=settings.app_env.strip().lower() == "production",
+    )
+    if not is_admin_ip_allowed(db, client_ip):
+        raise HTTPException(status_code=403, detail="Admin access is not allowed")
     return admin
