@@ -32,6 +32,10 @@ admin.flashin.store {
     header {
         X-Frame-Options "DENY"
         Cache-Control "no-store"
+        Content-Security-Policy "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.flashin.store; manifest-src 'self'; worker-src 'self' blob:; upgrade-insecure-requests"
+        Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+        Cross-Origin-Opener-Policy "same-origin"
+        Cross-Origin-Resource-Policy "same-origin"
     }
     reverse_proxy admin:5174
 }
