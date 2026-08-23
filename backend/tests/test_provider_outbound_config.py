@@ -4,6 +4,12 @@ from pydantic import ValidationError
 from backend.config import Settings
 
 
+@pytest.fixture(autouse=True)
+def _clear_ci_admin_password(monkeypatch):
+    """Production Settings tests must not inherit the development-only CI bootstrap password."""
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+
+
 def _production(**overrides):
     values = {
         "app_env": "production",
