@@ -3,8 +3,6 @@ import subprocess
 import sys
 from textwrap import dedent
 
-from fastapi.routing import APIRoute
-
 from backend.api import catalog_merchandising, catalog_showroom
 
 
@@ -21,7 +19,7 @@ def _operations(routes) -> list[tuple[str, str]]:
     return [
         (route.path, method)
         for route in routes
-        if isinstance(route, APIRoute)
+        if getattr(route, "path", None) and getattr(route, "methods", None)
         for method in route.methods
         if method in {"GET", "POST", "PATCH", "PUT", "DELETE"}
     ]
@@ -36,14 +34,13 @@ def test_showroom_routes_have_one_physical_owner():
 
 
 def test_application_composition_registers_each_showroom_operation_once():
-    # The full backend suite intentionally exercises module reloads and application
-    # composition. Validate this boundary in a clean interpreter so unrelated test
-    # process state cannot turn a route-ownership regression into an order-dependent
-    # false negative/positive.
+    # Validate composition in a clean interpreter. Match the public route protocol
+    # (path + methods), not a concrete FastAPI route class: the contract under test
+    # is ownership/registration, and FastAPI may wrap or replace route classes when
+    # composing routers across supported versions.
     check = dedent(
         """
         from fastapi import FastAPI
-        from fastapi.routing import APIRoute
         from backend.api import catalog_merchandising, catalog_showroom
 
         expected = {
@@ -58,7 +55,7 @@ def test_application_composition_registers_each_showroom_operation_once():
         operations = [
             (route.path, method)
             for route in application.routes
-            if isinstance(route, APIRoute)
+            if getattr(route, "path", None) and getattr(route, "methods", None)
             for method in route.methods
             if method in {"GET", "POST", "PATCH", "PUT", "DELETE"}
         ]
