@@ -1,8 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.routing import APIRoute
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from .admin import router as admin_router
 from ..database import get_db
 from ..models import Customer, FulfillmentTask, Order
 from ..schemas import OrderOut, OrderStatusUpdate
@@ -14,7 +12,6 @@ from ..services.rbac import require_permission
 
 router = APIRouter(tags=["order-cancellation"])
 
-_ADMIN_ORDER_PATCH_PATH = "/admin/orders/{order_id}"
 _GENERIC_FULFILLMENT_START_STATUS = "assembling"
 _GENERIC_ORDER_WORKFLOW_MESSAGE = (
     "Generic order PATCH may only start fulfillment for a paid order; "
@@ -70,6 +67,11 @@ def _generic_order_workflow_error(order_id: int, managed_fields: list[str]) -> H
     )
 
 
+@router.patch(
+    "/admin/orders/{order_id}",
+    response_model=OrderOut,
+    name="start_admin_fulfillment_via_generic_patch",
+)
 def start_admin_fulfillment_via_generic_patch(
     order_id: int,
     payload: OrderStatusUpdate,
@@ -78,10 +80,10 @@ def start_admin_fulfillment_via_generic_patch(
 ):
     """Compatibility gateway for the one safe generic transition: paid -> assembling.
 
-    The legacy Admin table still starts picking from the order row. This route keeps
-    that UX while delegating the mutation to the authoritative fulfillment state
-    machine. All later fulfillment, shipment, tracking and financial transitions
-    must use their dedicated workflows.
+    The Admin order row may start picking through this compatibility endpoint, but
+    the mutation is delegated to the authoritative fulfillment state machine. All
+    later fulfillment, shipment, tracking and financial transitions must use their
+    dedicated workflows.
     """
 
     require_permission(db, admin, "orders.write")
@@ -162,43 +164,6 @@ def start_admin_fulfillment_via_generic_patch(
         raise
 
     return _load_order_response(db, order_id)
-
-
-def _replace_legacy_admin_order_patch() -> None:
-    matching = [
-        route
-        for route in admin_router.routes
-        if isinstance(route, APIRoute)
-        and route.path == _ADMIN_ORDER_PATCH_PATH
-        and "PATCH" in route.methods
-    ]
-    guarded = [
-        route
-        for route in matching
-        if route.endpoint is start_admin_fulfillment_via_generic_patch
-    ]
-    legacy = [
-        route
-        for route in matching
-        if route.endpoint is not start_admin_fulfillment_via_generic_patch
-    ]
-
-    if len(guarded) == 1 and not legacy:
-        return
-    if guarded or len(legacy) != 1:
-        raise RuntimeError("Expected exactly one legacy generic admin order PATCH route")
-
-    admin_router.routes.remove(legacy[0])
-    admin_router.add_api_route(
-        "/orders/{order_id}",
-        start_admin_fulfillment_via_generic_patch,
-        methods=["PATCH"],
-        response_model=OrderOut,
-        name="start_admin_fulfillment_via_generic_patch",
-    )
-
-
-_replace_legacy_admin_order_patch()
 
 
 @router.post(
