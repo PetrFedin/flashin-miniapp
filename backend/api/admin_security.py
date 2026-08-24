@@ -1,18 +1,20 @@
 import ipaddress
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..database import get_db
+from ..middleware.rate_limit import _client_ip
 from ..models import AdminIpAllowlist, AdminLoginEvent, AdminSession, AdminUser
 from ..schemas import AdminIpAllowlistIn, AdminLoginEventOut
 from ..security import get_current_admin
 from ..services.admin_security import (
     consume_totp_counter,
     create_password_reset,
+    is_admin_ip_allowed,
     match_totp_counter,
     revoke_admin_sessions,
     set_totp_secret,
@@ -29,8 +31,48 @@ class AdminTotpIn(BaseModel):
     verification_code: str | None = Field(default=None, min_length=6, max_length=8)
 
 
-def _production_admin_mfa_required() -> bool:
+class AdminIpAllowlistStateIn(BaseModel):
+    active: bool
+
+
+def _production_environment() -> bool:
     return get_settings().app_env.strip().lower() == "production"
+
+
+def _production_admin_mfa_required() -> bool:
+    return _production_environment()
+
+
+def _admin_request_ip(request: Request) -> str:
+    return _client_ip(request, trust_proxy_headers=_production_environment())
+
+
+def _active_ip_rules_for_update(db: Session) -> list[AdminIpAllowlist]:
+    return (
+        db.query(AdminIpAllowlist)
+        .filter(AdminIpAllowlist.active.is_(True))
+        .with_for_update()
+        .all()
+    )
+
+
+def _enforce_safe_ip_allowlist_result(
+    db: Session,
+    request: Request,
+    *,
+    require_active_rule: bool,
+) -> None:
+    active_rules = _active_ip_rules_for_update(db)
+    if require_active_rule and not active_rules:
+        raise HTTPException(
+            status_code=409,
+            detail="Production admin IP allowlist cannot be emptied via API",
+        )
+    if active_rules and not is_admin_ip_allowed(db, _admin_request_ip(request)):
+        raise HTTPException(
+            status_code=409,
+            detail="IP allowlist change would lock out the current administrator",
+        )
 
 
 @router.get("/login-events", response_model=list[AdminLoginEventOut])
@@ -182,6 +224,7 @@ def ip_allowlist(admin=Depends(get_current_admin), db: Session = Depends(get_db)
 @router.post("/ip-allowlist")
 def add_ip_rule(
     payload: AdminIpAllowlistIn,
+    request: Request,
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
@@ -199,6 +242,12 @@ def add_ip_rule(
         )
         db.add(row)
         db.flush()
+        if row.active:
+            _enforce_safe_ip_allowlist_result(
+                db,
+                request,
+                require_active_rule=False,
+            )
         log_admin_action(
             db,
             admin,
@@ -210,9 +259,62 @@ def add_ip_rule(
         db.commit()
         db.refresh(row)
         return row
+    except HTTPException:
+        db.rollback()
+        raise
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(status_code=409, detail="CIDR rule already exists") from exc
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.patch("/ip-allowlist/{rule_id}/state")
+def set_ip_rule_state(
+    rule_id: int,
+    payload: AdminIpAllowlistStateIn,
+    request: Request,
+    admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    require_permission(db, admin, "security.write")
+    try:
+        row = (
+            db.query(AdminIpAllowlist)
+            .filter(AdminIpAllowlist.id == rule_id)
+            .with_for_update()
+            .first()
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="IP allowlist rule not found")
+
+        before_active = bool(row.active)
+        row.active = payload.active
+        db.flush()
+        _enforce_safe_ip_allowlist_result(
+            db,
+            request,
+            require_active_rule=_production_environment(),
+        )
+        log_admin_action(
+            db,
+            admin,
+            "admin.ip_allowlist.state",
+            "admin_ip_allowlist",
+            row.id,
+            {
+                "cidr": row.cidr,
+                "before_active": before_active,
+                "after_active": bool(row.active),
+            },
+        )
+        db.commit()
+        db.refresh(row)
+        return row
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception:
         db.rollback()
         raise
