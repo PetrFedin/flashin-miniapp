@@ -32,6 +32,7 @@ from ..services.rbac import require_permission
 router = APIRouter(prefix="/platform", tags=["platform"])
 _EVENT_STATUSES = {"pending", "processed", "failed"}
 _PLATFORM_WRITE_PERMISSION = "platform.write"
+_EVENT_READ_PERMISSION = "events.read"
 _EVENT_REPLAY_PERMISSION = "events.replay"
 _AUDIT_READ_PERMISSION = "audit.read"
 _PUBLIC_REMOTE_CONFIG_PREFIX = "public."
@@ -261,7 +262,7 @@ def event_summary(
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    require_permission(db, admin, "orders.read")
+    require_permission(db, admin, _EVENT_READ_PERMISSION)
     counts = {status: 0 for status in _EVENT_STATUSES}
     for status, count in (
         db.query(BusinessEvent.status, func.count(BusinessEvent.id))
@@ -291,7 +292,7 @@ def list_events(
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    require_permission(db, admin, "orders.read")
+    require_permission(db, admin, _EVENT_READ_PERMISSION)
     query = db.query(BusinessEvent, BusinessEventRecoveryState).outerjoin(
         BusinessEventRecoveryState,
         BusinessEventRecoveryState.business_event_id == BusinessEvent.id,
@@ -322,7 +323,7 @@ def get_event(
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    require_permission(db, admin, "orders.read")
+    require_permission(db, admin, _EVENT_READ_PERMISSION)
     row = (
         db.query(BusinessEvent, BusinessEventRecoveryState)
         .outerjoin(
