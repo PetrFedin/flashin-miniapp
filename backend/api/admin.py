@@ -102,26 +102,6 @@ def _order_with_items(db: Session, order_id: int) -> Order | None:
     )
 
 
-@router.post("/login", response_model=TokenOut)
-def admin_login(payload: AdminLoginIn, db: Session = Depends(get_db)):
-    email = _clean(payload.email, "Email", 255).lower()
-    admin = (
-        db.query(AdminUser)
-        .filter(AdminUser.email == email, AdminUser.active.is_(True))
-        .with_for_update()
-        .first()
-    )
-    if not admin or not verify_password(payload.password, admin.password_hash):
-        db.rollback()
-        raise HTTPException(status_code=401, detail="Invalid admin credentials")
-    if password_needs_rehash(admin.password_hash):
-        admin.password_hash = hash_password(payload.password)
-        db.commit()
-    else:
-        db.rollback()
-    return TokenOut(access_token=create_admin_token(admin.id, admin.role))
-
-
 @router.get("/products", response_model=list[ProductOut])
 def admin_products(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
     require_permission(db, admin, "products.read")
@@ -351,37 +331,6 @@ def admin_update_order(
         raise
 
     return _order_with_items(db, order_id)
-
-
-@router.post("/promocodes")
-def admin_create_promo(
-    payload: PromoCodeCreate,
-    admin=Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    require_permission(db, admin, "promo.write")
-    code = _clean(payload.code, "Promo code", 64).upper()
-    if payload.discount_value < 0 or not math.isfinite(payload.discount_value):
-        raise HTTPException(status_code=400, detail="Discount value must be non-negative")
-    if payload.min_amount < 0 or not math.isfinite(payload.min_amount):
-        raise HTTPException(status_code=400, detail="Minimum amount must be non-negative")
-    if payload.max_uses < 0:
-        raise HTTPException(status_code=400, detail="Maximum uses must be non-negative")
-
-    try:
-        promo = PromoCode(**payload.model_dump())
-        promo.code = code
-        db.add(promo)
-        db.flush()
-        log_admin_action(db, admin, "promocode.create", "promocode", promo.id, {"code": code})
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(status_code=409, detail="Promo code already exists") from exc
-    except Exception:
-        db.rollback()
-        raise
-    return {"ok": True, "id": promo.id}
 
 
 @router.get("/notifications")

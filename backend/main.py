@@ -84,20 +84,6 @@ from .services.telegram_product_links import telegram_bot_username
 settings = get_settings()
 is_production = settings.app_env.strip().lower() == "production"
 
-_REMOVED_MONOLITH_ADMIN_ROUTES = {
-    ("/admin/login", "POST"),
-    ("/admin/promocodes", "POST"),
-}
-admin_router.routes[:] = [
-    route
-    for route in admin_router.routes
-    if not any(
-        getattr(route, "path", "") == path
-        and method in getattr(route, "methods", set())
-        for path, method in _REMOVED_MONOLITH_ADMIN_ROUTES
-    )
-]
-
 # The original rich-catalog module carried the first showroom implementation.
 # Route these exact operations through the stricter UTC/fixed-slot boundary.
 _REPLACED_CATALOG_SHOWROOM_ROUTES = {
