@@ -461,7 +461,7 @@ export default function CatalogCommercePanel({ onUnauthorized, session }) {
           <div className="table">
             {form.images.map((url, index) => (
               <div className="row" key={`${url}-${index}`}>
-                <img src={url} alt={`Фото ${index + 1}`} style={{ width: 72, height: 72, objectFit: "cover" }} />
+                <img className="catalog-image-preview" src={url} alt={`Фото ${index + 1}`} />
                 <span>{url}</span>
                 {canWrite && <button type="button" onClick={() => patch("images", moveItem(form.images, index, -1))}>↑</button>}
                 {canWrite && <button type="button" onClick={() => patch("images", moveItem(form.images, index, 1))}>↓</button>}
