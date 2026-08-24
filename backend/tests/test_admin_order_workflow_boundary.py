@@ -1,12 +1,16 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 from fastapi.routing import APIRoute
 
-from backend.api import admin as admin_api
 from backend.api import order_cancellation
+from backend.main import app
 from backend.schemas import OrderStatusUpdate
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class FakeSession:
@@ -208,26 +212,26 @@ def test_generic_fulfillment_start_rejects_unsettled_or_empty_orders(monkeypatch
         assert exc_info.value.status_code == 409
 
 
-def test_legacy_generic_patch_is_replaced_exactly_once_and_replacement_is_idempotent():
+def test_safe_admin_order_gateway_is_physical_and_unique():
+    monolith = (ROOT / "api" / "admin.py").read_text(encoding="utf-8")
+    source = (ROOT / "api" / "order_cancellation.py").read_text(encoding="utf-8")
+
+    assert "def admin_update_order(" not in monolith
+    assert '@router.patch("/orders/{order_id}"' not in monolith
+    assert "_replace_legacy_admin_order_patch" not in source
+    assert "admin_router.routes" not in source
+    assert "APIRoute" not in source
+
     matching = [
         route
-        for route in admin_api.router.routes
+        for route in order_cancellation.router.routes
         if isinstance(route, APIRoute)
         and route.path == "/admin/orders/{order_id}"
         and "PATCH" in route.methods
     ]
-
     assert len(matching) == 1
     assert matching[0].endpoint is order_cancellation.start_admin_fulfillment_via_generic_patch
-    assert matching[0].endpoint is not admin_api.admin_update_order
 
-    order_cancellation._replace_legacy_admin_order_patch()
-    after = [
-        route
-        for route in admin_api.router.routes
-        if isinstance(route, APIRoute)
-        and route.path == "/admin/orders/{order_id}"
-        and "PATCH" in route.methods
-    ]
-    assert len(after) == 1
-    assert after[0].endpoint is order_cancellation.start_admin_fulfillment_via_generic_patch
+    assert str(app.url_path_for("start_admin_fulfillment_via_generic_patch", order_id=17)) == "/api/admin/orders/17"
+    operation = app.openapi()["paths"]["/api/admin/orders/{order_id}"]["patch"]
+    assert operation["operationId"].startswith("start_admin_fulfillment_via_generic_patch")
