@@ -33,6 +33,7 @@ router = APIRouter(prefix="/platform", tags=["platform"])
 _EVENT_STATUSES = {"pending", "processed", "failed"}
 _PLATFORM_WRITE_PERMISSION = "platform.write"
 _EVENT_REPLAY_PERMISSION = "events.replay"
+_AUDIT_READ_PERMISSION = "audit.read"
 _PUBLIC_REMOTE_CONFIG_PREFIX = "public."
 
 
@@ -397,7 +398,7 @@ def list_audit_trail(
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    require_permission(db, admin, "orders.read")
+    require_permission(db, admin, _AUDIT_READ_PERMISSION)
     return (
         db.query(AuditTrail)
         .order_by(AuditTrail.created_at.desc())
