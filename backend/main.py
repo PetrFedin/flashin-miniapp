@@ -84,24 +84,6 @@ from .services.telegram_product_links import telegram_bot_username
 settings = get_settings()
 is_production = settings.app_env.strip().lower() == "production"
 
-# The original rich-catalog module carried the first showroom implementation.
-# Route these exact operations through the stricter UTC/fixed-slot boundary.
-_REPLACED_CATALOG_SHOWROOM_ROUTES = {
-    ("/catalog/showroom/appointments", "POST"),
-    ("/catalog/showroom/appointments/me", "GET"),
-    ("/catalog/admin/showroom/appointments", "GET"),
-    ("/catalog/admin/showroom/appointments/{appointment_id}", "PATCH"),
-}
-catalog_merchandising_router.routes[:] = [
-    route
-    for route in catalog_merchandising_router.routes
-    if not any(
-        getattr(route, "path", "") == path
-        and method in getattr(route, "methods", set())
-        for path, method in _REPLACED_CATALOG_SHOWROOM_ROUTES
-    )
-]
-
 if settings.sentry_dsn:
     sentry_sdk.init(
         dsn=settings.sentry_dsn,

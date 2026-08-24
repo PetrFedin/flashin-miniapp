@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import math
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Literal
 from urllib.parse import quote, urlsplit
 
@@ -17,7 +17,6 @@ from ..catalog_models import (
     ProductFeedback,
     ProductMerchandising,
     ProductVideo,
-    ShowroomAppointment,
 )
 from ..config import get_settings
 from ..database import get_db, utcnow_naive
@@ -147,17 +146,6 @@ class FeedbackIn(BaseModel):
 
 class FeedbackModerationIn(BaseModel):
     status: Literal["published", "hidden"]
-
-
-class ShowroomAppointmentIn(BaseModel):
-    product_id: int
-    starts_at: datetime
-    duration_minutes: int = Field(default=30, ge=15, le=180)
-    notes: str = Field(default="", max_length=2000)
-
-
-class ShowroomAppointmentStatusIn(BaseModel):
-    status: Literal["requested", "confirmed", "cancelled", "completed"]
 
 
 def _clean_text(value: object, field: str, limit: int, *, required: bool = False) -> str:
@@ -379,7 +367,7 @@ def _serialize_product(product: Product, context: dict[str, object], *, admin: b
     return result
 
 
-def _product_query(db: Session, *, active_only: bool) :
+def _product_query(db: Session, *, active_only: bool):
     query = db.query(Product).options(joinedload(Product.images), joinedload(Product.variants))
     if active_only:
         query = query.filter(Product.active.is_(True))
@@ -452,10 +440,7 @@ def list_catalog_products(
         raise HTTPException(status_code=400, detail="min_price cannot exceed max_price")
     products = _product_query(db, active_only=True).limit(500).all()
     context = _load_context(db, [product.id for product in products])
-    rows = [
-        _serialize_product(product, context)
-        for product in products
-    ]
+    rows = [_serialize_product(product, context) for product in products]
     rows = [
         item
         for item in rows
@@ -561,79 +546,6 @@ def upsert_product_feedback(
     db.commit()
     db.refresh(row)
     return {"id": row.id, "rating": row.rating, "comment": row.comment, "status": row.status}
-
-
-@router.post("/showroom/appointments")
-def create_showroom_appointment(
-    payload: ShowroomAppointmentIn,
-    customer: Customer = Depends(get_current_customer),
-    db: Session = Depends(get_db),
-):
-    product = db.query(Product).filter(Product.id == payload.product_id, Product.active.is_(True)).first()
-    if not product:
-        raise HTTPException(status_code=404, detail="Product not found")
-    merch = db.query(ProductMerchandising).filter(ProductMerchandising.product_id == product.id).first()
-    if merch and not merch.showroom_fitting_enabled:
-        raise HTTPException(status_code=409, detail="Showroom fitting is disabled for this product")
-    starts_at = payload.starts_at.replace(tzinfo=None) if payload.starts_at.tzinfo else payload.starts_at
-    now = utcnow_naive()
-    if starts_at <= now:
-        raise HTTPException(status_code=400, detail="Showroom appointment must be in the future")
-    if starts_at > now + timedelta(days=90):
-        raise HTTPException(status_code=400, detail="Showroom appointment cannot be more than 90 days ahead")
-    if starts_at.minute not in {0, 30} or starts_at.second or starts_at.microsecond:
-        raise HTTPException(status_code=400, detail="Showroom appointment must start on a 30-minute boundary")
-    slot_key = starts_at.strftime("%Y%m%d%H%M")
-    row = ShowroomAppointment(
-        customer_id=customer.id,
-        product_id=product.id,
-        starts_at=starts_at,
-        duration_minutes=payload.duration_minutes,
-        status="requested",
-        notes=payload.notes.strip(),
-        active_slot_key=slot_key,
-        created_at=now,
-        updated_at=now,
-    )
-    db.add(row)
-    try:
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(status_code=409, detail="This showroom time is already reserved") from exc
-    db.refresh(row)
-    return {
-        "id": row.id,
-        "product_id": row.product_id,
-        "starts_at": row.starts_at,
-        "duration_minutes": row.duration_minutes,
-        "status": row.status,
-    }
-
-
-@router.get("/showroom/appointments/me")
-def my_showroom_appointments(
-    customer: Customer = Depends(get_current_customer),
-    db: Session = Depends(get_db),
-):
-    rows = (
-        db.query(ShowroomAppointment)
-        .filter(ShowroomAppointment.customer_id == customer.id)
-        .order_by(ShowroomAppointment.starts_at.desc(), ShowroomAppointment.id.desc())
-        .limit(100)
-        .all()
-    )
-    return [
-        {
-            "id": row.id,
-            "product_id": row.product_id,
-            "starts_at": row.starts_at,
-            "duration_minutes": row.duration_minutes,
-            "status": row.status,
-            "notes": row.notes,
-        }
-        for row in rows
-    ]
 
 
 def _replace_images(db: Session, product: Product, values: list[str]) -> None:
@@ -1025,50 +937,4 @@ def admin_moderate_feedback(
     row.updated_at = utcnow_naive()
     log_admin_action(db, admin, "catalog.feedback.moderate", "product_feedback", row.id, {"status": row.status})
     db.commit()
-    return {"ok": True, "id": row.id, "status": row.status}
-
-
-@router.get("/admin/showroom/appointments")
-def admin_showroom_appointments(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
-    require_permission(db, admin, "showroom.read")
-    rows = (
-        db.query(ShowroomAppointment)
-        .order_by(ShowroomAppointment.starts_at.asc(), ShowroomAppointment.id.asc())
-        .limit(500)
-        .all()
-    )
-    return [
-        {
-            "id": row.id,
-            "customer_id": row.customer_id,
-            "product_id": row.product_id,
-            "starts_at": row.starts_at,
-            "duration_minutes": row.duration_minutes,
-            "status": row.status,
-            "notes": row.notes,
-        }
-        for row in rows
-    ]
-
-
-@router.patch("/admin/showroom/appointments/{appointment_id}")
-def admin_update_showroom_appointment(
-    appointment_id: int,
-    payload: ShowroomAppointmentStatusIn,
-    admin=Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    require_permission(db, admin, "showroom.write")
-    row = db.query(ShowroomAppointment).filter(ShowroomAppointment.id == appointment_id).with_for_update().first()
-    if not row:
-        raise HTTPException(status_code=404, detail="Appointment not found")
-    row.status = payload.status
-    row.active_slot_key = None if payload.status in {"cancelled", "completed"} else row.starts_at.strftime("%Y%m%d%H%M")
-    row.updated_at = utcnow_naive()
-    log_admin_action(db, admin, "showroom.appointment.update", "showroom_appointment", row.id, {"status": row.status})
-    try:
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(status_code=409, detail="Showroom slot is no longer available") from exc
     return {"ok": True, "id": row.id, "status": row.status}
