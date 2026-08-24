@@ -44,15 +44,16 @@ def _admin(role, admin_id=1):
     return SimpleNamespace(id=admin_id, role=role, email=f"{role}@flashin.test")
 
 
-def test_default_manager_order_and_security_read_do_not_grant_cross_domain_audit():
-    assert "orders.read" in DEFAULT_PERMISSIONS["manager"]
-    assert "security.read" in DEFAULT_PERMISSIONS["manager"]
-    assert "audit.read" not in DEFAULT_PERMISSIONS["manager"]
+@pytest.mark.parametrize("role", ["manager", "support"])
+def test_default_order_read_roles_do_not_grant_cross_domain_audit(role):
+    assert "orders.read" in DEFAULT_PERMISSIONS[role]
+    assert "security.read" in DEFAULT_PERMISSIONS[role]
+    assert "audit.read" not in DEFAULT_PERMISSIONS[role]
 
     db = AuditDb()
 
     with pytest.raises(HTTPException) as exc:
-        platform_api.list_audit_trail(admin=_admin("manager", 11), db=db)
+        platform_api.list_audit_trail(admin=_admin(role, 11), db=db)
 
     assert exc.value.status_code == 403
     assert exc.value.detail == "Missing permission: audit.read"
@@ -69,7 +70,7 @@ def test_owner_wildcard_can_read_audit_trail():
     assert db.audit_queries == 1
 
 
-def test_custom_role_requires_explicit_audit_read_grant():
+def test_custom_role_with_explicit_audit_read_can_read_audit_trail():
     row = SimpleNamespace(id=8, action="business_event.replay")
     db = AuditDb(
         permission_rows=[SimpleNamespace(permission="audit.read")],
