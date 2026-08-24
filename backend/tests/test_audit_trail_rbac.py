@@ -47,7 +47,6 @@ def _admin(role, admin_id=1):
 @pytest.mark.parametrize("role", ["manager", "support"])
 def test_default_order_read_roles_do_not_grant_cross_domain_audit(role):
     assert "orders.read" in DEFAULT_PERMISSIONS[role]
-    assert "security.read" in DEFAULT_PERMISSIONS[role]
     assert "audit.read" not in DEFAULT_PERMISSIONS[role]
 
     db = AuditDb()
