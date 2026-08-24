@@ -31,28 +31,31 @@ def test_catalog_tables_are_registered_with_expected_constraints():
     assert any(column.unique for column in ShowroomAppointment.__table__.columns if column.name == "active_slot_key")
 
 
-def test_catalog_api_has_public_admin_feedback_and_showroom_boundaries():
+def test_catalog_merchandising_api_owns_product_and_feedback_boundaries_only():
     source = API.read_text(encoding="utf-8")
     for route in (
         '@router.get("/products")',
         '@router.get("/products/{product_id}")',
         '@router.post("/products/{product_id}/feedback")',
-        '@router.post("/showroom/appointments")',
         '@router.get("/admin/products")',
         '@router.post("/admin/products")',
         '@router.put("/admin/products/{product_id}")',
         '@router.put("/admin/products/{product_id}/recommendations")',
         '@router.patch("/admin/feedback/{feedback_id}")',
-        '@router.get("/admin/showroom/appointments")',
-        '@router.patch("/admin/showroom/appointments/{appointment_id}")',
     ):
         assert route in source
     assert 'require_permission(db, admin, "products.write")' in source
-    assert 'require_permission(db, admin, "showroom.read")' in source
-    assert 'require_permission(db, admin, "showroom.write")' in source
     assert 'has_permission(db, admin, "inventory.write")' in source
     assert 'db.query(InventoryMovement.id)' in source
     assert 'transaction history and cannot be deleted' in source
+
+    for legacy_showroom_route in (
+        '@router.post("/showroom/appointments")',
+        '@router.get("/showroom/appointments/me")',
+        '@router.get("/admin/showroom/appointments")',
+        '@router.patch("/admin/showroom/appointments/{appointment_id}")',
+    ):
+        assert legacy_showroom_route not in source
 
 
 def test_catalog_public_serializer_does_not_expose_customer_identity_or_moysklad_ids():
