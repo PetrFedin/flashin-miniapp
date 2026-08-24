@@ -13,7 +13,7 @@ test("admin application mounts the permission-aware BusinessEvent workspace", ()
   assert.match(panelSource, /canOrdersRead && <OrderOperationsTracePanel onUnauthorized=\{onUnauthorized\} \/>/);
   assert.match(panelSource, /canOrdersRead && <FulfillmentPanelMount onUnauthorized=\{onUnauthorized\} session=\{session\} \/>/);
   assert.match(panelSource, /canService && <ServicePanelMount onUnauthorized=\{onUnauthorized\} session=\{session\} \/>/);
-  assert.match(panelSource, /canReplayPermission=\{canOrdersWrite\}/);
+  assert.match(panelSource, /canReplayPermission=\{canEventsReplay\}/);
 });
 
 
@@ -45,8 +45,9 @@ test("order incident workspace exposes safe inventory attention without raw ledg
 });
 
 
-test("replay requires orders.write, confirmation and a deduplicated mutation", () => {
-  assert.match(panelSource, /hasAdminPermission\(session, "orders\.write"\)/);
+test("replay requires events.replay, confirmation and a deduplicated mutation", () => {
+  assert.match(panelSource, /hasAdminPermission\(session, "events\.replay"\)/);
+  assert.doesNotMatch(panelSource, /hasAdminPermission\(session, "orders\.write"\)/);
   assert.match(panelSource, /!canReplayPermission/);
   assert.match(panelSource, /window\.confirm/);
   assert.match(panelSource, /business-event-replay:\$\{event\.id\}/);

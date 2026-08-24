@@ -31,6 +31,8 @@ from ..services.rbac import require_permission
 
 router = APIRouter(prefix="/platform", tags=["platform"])
 _EVENT_STATUSES = {"pending", "processed", "failed"}
+_PLATFORM_WRITE_PERMISSION = "platform.write"
+_EVENT_REPLAY_PERMISSION = "events.replay"
 
 
 class BusinessEventReplayIn(BaseModel):
@@ -89,16 +91,34 @@ def upsert_feature(
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    require_permission(db, admin, "orders.write")
-    row = db.query(FeatureFlag).filter(FeatureFlag.key == payload.key).first()
-    if not row:
-        row = FeatureFlag(key=payload.key)
-        db.add(row)
-    row.enabled = payload.enabled
-    row.description = payload.description
-    db.commit()
-    db.refresh(row)
-    return row
+    require_permission(db, admin, _PLATFORM_WRITE_PERMISSION)
+    try:
+        row = (
+            db.query(FeatureFlag)
+            .filter(FeatureFlag.key == payload.key)
+            .with_for_update()
+            .first()
+        )
+        if not row:
+            row = FeatureFlag(key=payload.key)
+            db.add(row)
+            db.flush()
+        row.enabled = payload.enabled
+        row.description = payload.description
+        log_admin_action(
+            db,
+            admin,
+            "platform.feature_flag.upsert",
+            "feature_flag",
+            row.id,
+            {"key": row.key, "enabled": row.enabled},
+        )
+        db.commit()
+        db.refresh(row)
+        return row
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.get("/remote-config")
@@ -112,16 +132,36 @@ def upsert_remote_config(
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    require_permission(db, admin, "orders.write")
-    row = db.query(RemoteConfig).filter(RemoteConfig.key == payload.key).first()
-    if not row:
-        row = RemoteConfig(key=payload.key)
-        db.add(row)
-    row.value_json = json.dumps(payload.value_json, ensure_ascii=False)
-    row.description = payload.description
-    db.commit()
-    db.refresh(row)
-    return row
+    require_permission(db, admin, _PLATFORM_WRITE_PERMISSION)
+    try:
+        row = (
+            db.query(RemoteConfig)
+            .filter(RemoteConfig.key == payload.key)
+            .with_for_update()
+            .first()
+        )
+        if not row:
+            row = RemoteConfig(key=payload.key)
+            db.add(row)
+            db.flush()
+        row.value_json = json.dumps(payload.value_json, ensure_ascii=False)
+        row.description = payload.description
+        # Deliberately do not duplicate remote-config values into the audit trail;
+        # configuration may contain operationally sensitive data.
+        log_admin_action(
+            db,
+            admin,
+            "platform.remote_config.upsert",
+            "remote_config",
+            row.id,
+            {"key": row.key},
+        )
+        db.commit()
+        db.refresh(row)
+        return row
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.get("/cms/pages/{slug}", response_model=CmsPageOut)
@@ -271,7 +311,7 @@ def replay_event(
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    require_permission(db, admin, "orders.write")
+    require_permission(db, admin, _EVENT_REPLAY_PERMISSION)
     reason = payload.reason.strip()
     if len(reason) < 5:
         raise HTTPException(status_code=422, detail="Replay reason is too short")

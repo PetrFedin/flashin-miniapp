@@ -45,7 +45,9 @@ def test_admin_replay_is_audited_and_not_processed_inline():
 
     assert '@router.post("/admin/events/{event_id}/replay")' in source
     assert '"business_event.replay"' in source
-    assert 'require_permission(db, admin, "orders.write")' in source
+    assert '_EVENT_REPLAY_PERMISSION = "events.replay"' in source
+    assert "require_permission(db, admin, _EVENT_REPLAY_PERMISSION)" in source
+    assert 'require_permission(db, admin, "orders.write")' not in source
     assert "process_pending_events" not in source
     assert '@router.get("/admin/events/summary")' in source
 
