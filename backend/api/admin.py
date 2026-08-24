@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session, joinedload
 
 from ..database import get_db
 from ..models import (
-    AdminUser,
     AuditLog,
     CrmProfile,
     Customer,
@@ -19,47 +18,26 @@ from ..models import (
     Product,
     ProductImage,
     ProductVariant,
-    PromoCode,
 )
-from ..order_statuses import ADMIN_MANAGED_ORDER_TRANSITIONS
 from ..schemas import (
-    AdminLoginIn,
     AdminProductUpdate,
     AuditLogOut,
     MoySkladConflictOut,
     MoySkladMappingRuleCreate,
     MoySkladMappingRuleOut,
     OrderOut,
-    OrderStatusUpdate,
     ProductCreate,
     ProductOut,
-    PromoCodeCreate,
-    TokenOut,
 )
-from ..security import (
-    create_admin_token,
-    get_current_admin,
-    hash_password,
-    password_needs_rehash,
-    verify_password,
-)
+from ..security import get_current_admin
 from ..services.audit import log_admin_action
 from ..services.inventory import adjust_stock
-from ..services.notifications import queue_order_status
 from ..services.rbac import require_permission
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 _MAX_CSV_BYTES = 5 * 1024 * 1024
 _MAX_CSV_ROWS = 10_000
-_DELIVERY_STATUSES = {
-    "not_started",
-    "assembling",
-    "ready",
-    "shipped",
-    "delivered",
-    "cancelled",
-}
 
 
 def _clean(value: object, field: str, max_length: int, required: bool = True) -> str:
@@ -91,15 +69,6 @@ def _stock_quantity(value: object) -> int:
     if not math.isfinite(quantity) or quantity < 0 or not quantity.is_integer():
         raise HTTPException(status_code=400, detail="Stock quantity must be a non-negative integer")
     return int(quantity)
-
-
-def _order_with_items(db: Session, order_id: int) -> Order | None:
-    return (
-        db.query(Order)
-        .options(joinedload(Order.items), joinedload(Order.customer))
-        .filter(Order.id == order_id)
-        .first()
-    )
 
 
 @router.get("/products", response_model=list[ProductOut])
@@ -263,74 +232,6 @@ def admin_update_stock(
 def admin_orders(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
     require_permission(db, admin, "orders.read")
     return db.query(Order).options(joinedload(Order.items)).order_by(Order.created_at.desc()).all()
-
-
-@router.patch("/orders/{order_id}", response_model=OrderOut)
-def admin_update_order(
-    order_id: int,
-    payload: OrderStatusUpdate,
-    admin=Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    require_permission(db, admin, "orders.write")
-    try:
-        order = db.query(Order).filter(Order.id == order_id).with_for_update().first()
-        if not order:
-            raise HTTPException(status_code=404, detail="Order not found")
-        previous_status = order.status
-        changed: dict[str, object] = {}
-
-        requested_status = (payload.status or "").strip().lower()
-        if requested_status and requested_status != order.status:
-            allowed_targets = ADMIN_MANAGED_ORDER_TRANSITIONS.get(order.status, frozenset())
-            if requested_status not in allowed_targets:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"Transition {order.status} -> {requested_status} is not allowed",
-                )
-            order.status = requested_status
-            changed["status"] = requested_status
-
-        if payload.delivery_status:
-            normalized_delivery_status = payload.delivery_status.strip().lower()
-            if normalized_delivery_status not in _DELIVERY_STATUSES:
-                raise HTTPException(status_code=400, detail="Invalid delivery status")
-            if normalized_delivery_status != order.delivery_status:
-                order.delivery_status = normalized_delivery_status
-                changed["delivery_status"] = normalized_delivery_status
-
-        if payload.tracking_number is not None:
-            tracking_number = _clean(
-                payload.tracking_number,
-                "Tracking number",
-                255,
-                required=False,
-            )
-            if tracking_number != order.tracking_number:
-                order.tracking_number = tracking_number
-                changed["tracking_number"] = tracking_number
-
-        if changed:
-            queue_order_status(db, order)
-            log_admin_action(
-                db,
-                admin,
-                "order.update",
-                "order",
-                order.id,
-                {"from_status": previous_status, **changed},
-            )
-            db.commit()
-        else:
-            db.rollback()
-    except HTTPException:
-        db.rollback()
-        raise
-    except Exception:
-        db.rollback()
-        raise
-
-    return _order_with_items(db, order_id)
 
 
 @router.get("/notifications")
