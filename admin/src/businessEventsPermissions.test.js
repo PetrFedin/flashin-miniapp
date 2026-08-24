@@ -8,7 +8,17 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const source = fs.readFileSync(path.join(here, "BusinessEventsPanel.jsx"), "utf8");
 
 
-test("BusinessEvent replay UI is gated by events.replay instead of orders.write", () => {
+test("BusinessEvent diagnostics require events.read instead of ordinary order access", () => {
+  assert.equal(
+    source.includes('const canEventsRead = hasAdminPermission(session, "events.read")'),
+    true,
+  );
+  assert.match(source, /\{canEventsRead && \(\s*<BusinessEventsRecoveryPanel/);
+  assert.doesNotMatch(source, /\{canOrdersRead && \(\s*<BusinessEventsRecoveryPanel/);
+});
+
+
+test("BusinessEvent replay remains a separate events.replay capability", () => {
   assert.equal(
     source.includes('const canEventsReplay = hasAdminPermission(session, "events.replay")'),
     true,

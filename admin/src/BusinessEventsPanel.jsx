@@ -327,6 +327,7 @@ export default function BusinessEventsPanel({ onUnauthorized, session }) {
   const canProductsRead = hasAdminPermission(session, "products.read");
   const canShowroomRead = hasAdminPermission(session, "showroom.read");
   const canOrdersRead = hasAdminPermission(session, "orders.read");
+  const canEventsRead = hasAdminPermission(session, "events.read");
   const canEventsReplay = hasAdminPermission(session, "events.replay");
   const canService = hasAnyAdminPermission(session, ["support.write", "privacy.read", "orders.read"]);
 
@@ -340,7 +341,7 @@ export default function BusinessEventsPanel({ onUnauthorized, session }) {
       {canOrdersRead && <OrderOperationsTracePanel onUnauthorized={onUnauthorized} />}
       {canOrdersRead && <FulfillmentPanelMount onUnauthorized={onUnauthorized} session={session} />}
       {canService && <ServicePanelMount onUnauthorized={onUnauthorized} session={session} />}
-      {canOrdersRead && (
+      {canEventsRead && (
         <BusinessEventsRecoveryPanel
           onUnauthorized={onUnauthorized}
           canReplayPermission={canEventsReplay}

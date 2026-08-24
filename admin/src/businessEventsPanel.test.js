@@ -7,12 +7,15 @@ const mainSource = readFileSync(new URL("./main.jsx", import.meta.url), "utf8");
 const tracePanelSource = readFileSync(new URL("./OrderOperationsTracePanel.jsx", import.meta.url), "utf8");
 
 
-test("admin application mounts the permission-aware BusinessEvent workspace", () => {
+test("admin application mounts permission-aware operational workspaces", () => {
   assert.match(mainSource, /import BusinessEventsPanel from "\.\/BusinessEventsPanel\.jsx"/);
   assert.match(mainSource, /<BusinessEventsPanel onUnauthorized=\{logout\} session=\{session\} \/>/);
   assert.match(panelSource, /canOrdersRead && <OrderOperationsTracePanel onUnauthorized=\{onUnauthorized\} \/>/);
   assert.match(panelSource, /canOrdersRead && <FulfillmentPanelMount onUnauthorized=\{onUnauthorized\} session=\{session\} \/>/);
   assert.match(panelSource, /canService && <ServicePanelMount onUnauthorized=\{onUnauthorized\} session=\{session\} \/>/);
+  assert.match(panelSource, /hasAdminPermission\(session, "events\.read"\)/);
+  assert.match(panelSource, /\{canEventsRead && \(\s*<BusinessEventsRecoveryPanel/);
+  assert.doesNotMatch(panelSource, /\{canOrdersRead && \(\s*<BusinessEventsRecoveryPanel/);
   assert.match(panelSource, /canReplayPermission=\{canEventsReplay\}/);
 });
 
@@ -25,10 +28,12 @@ test("release capability mount fallbacks remain real code and fail closed withou
 });
 
 
-test("panel reads summary, list and detail endpoints", () => {
+test("event diagnostics read summary, list and detail endpoints only from their gated child panel", () => {
   assert.match(panelSource, /\/api\/platform\/admin\/events\/summary/);
   assert.match(panelSource, /\/api\/platform\/admin\/events\$\{query\}/);
   assert.match(panelSource, /\/api\/platform\/admin\/events\/\$\{eventId\}/);
+  assert.match(panelSource, /function BusinessEventsRecoveryPanel/);
+  assert.match(panelSource, /\{canEventsRead && \(\s*<BusinessEventsRecoveryPanel/);
 });
 
 
