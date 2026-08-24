@@ -1,6 +1,8 @@
 from pathlib import Path
+import subprocess
+import sys
+from textwrap import dedent
 
-from fastapi import FastAPI
 from fastapi.routing import APIRoute
 
 from backend.api import catalog_merchandising, catalog_showroom
@@ -34,20 +36,49 @@ def test_showroom_routes_have_one_physical_owner():
 
 
 def test_application_composition_registers_each_showroom_operation_once():
-    application = FastAPI()
-    application.include_router(catalog_merchandising.router, prefix="/api")
-    application.include_router(catalog_showroom.router, prefix="/api")
-    application_operations = _operations(application.routes)
-    expected_application_operations = {
-        (f"/api{path}", method) for path, method in EXPECTED_SHOWROOM_OPERATIONS
-    }
+    # The full backend suite intentionally exercises module reloads and application
+    # composition. Validate this boundary in a clean interpreter so unrelated test
+    # process state cannot turn a route-ownership regression into an order-dependent
+    # false negative/positive.
+    check = dedent(
+        """
+        from fastapi import FastAPI
+        from fastapi.routing import APIRoute
+        from backend.api import catalog_merchandising, catalog_showroom
 
-    for operation in expected_application_operations:
-        assert application_operations.count(operation) == 1
+        expected = {
+            ("/api/catalog/showroom/appointments", "POST"),
+            ("/api/catalog/showroom/appointments/me", "GET"),
+            ("/api/catalog/admin/showroom/appointments", "GET"),
+            ("/api/catalog/admin/showroom/appointments/{appointment_id}", "PATCH"),
+        }
+        application = FastAPI()
+        application.include_router(catalog_merchandising.router, prefix="/api")
+        application.include_router(catalog_showroom.router, prefix="/api")
+        operations = [
+            (route.path, method)
+            for route in application.routes
+            if isinstance(route, APIRoute)
+            for method in route.methods
+            if method in {"GET", "POST", "PATCH", "PUT", "DELETE"}
+        ]
+        for operation in expected:
+            assert operations.count(operation) == 1, (operation, operations)
 
-    openapi = application.openapi()["paths"]
-    for path, method in expected_application_operations:
-        assert method.lower() in openapi[path]
+        openapi = application.openapi()["paths"]
+        for path, method in expected:
+            assert method.lower() in openapi[path], (path, method, openapi)
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", check],
+        cwd=ROOT.parent,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_main_registers_canonical_showroom_without_runtime_route_surgery():
