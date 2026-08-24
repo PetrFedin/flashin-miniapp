@@ -220,7 +220,10 @@ def test_safe_admin_order_gateway_is_physical_and_unique():
     assert '@router.patch("/orders/{order_id}"' not in monolith
     assert "_replace_legacy_admin_order_patch" not in source
     assert "admin_router.routes" not in source
-    assert "APIRoute" not in source
+    assert "from fastapi.routing import APIRoute" not in source
+    assert "isinstance(route, APIRoute)" not in source
+    assert ".routes.remove(" not in source
+    assert ".add_api_route(" not in source
 
     matching = [
         route
