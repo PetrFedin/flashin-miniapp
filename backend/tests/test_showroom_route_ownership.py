@@ -1,7 +1,6 @@
 from pathlib import Path
-import subprocess
-import sys
-from textwrap import dedent
+
+from fastapi import FastAPI
 
 from backend.api import catalog_merchandising, catalog_showroom
 
@@ -33,49 +32,18 @@ def test_showroom_routes_have_one_physical_owner():
     assert canonical_operations == EXPECTED_SHOWROOM_OPERATIONS
 
 
-def test_application_composition_registers_each_showroom_operation_once():
-    # Validate composition in a clean interpreter. Match the public route protocol
-    # (path + methods), not a concrete FastAPI route class: the contract under test
-    # is ownership/registration, and FastAPI may wrap or replace route classes when
-    # composing routers across supported versions.
-    check = dedent(
-        """
-        from fastapi import FastAPI
-        from backend.api import catalog_merchandising, catalog_showroom
+def test_application_composition_exposes_canonical_showroom_contract():
+    # FastAPI 0.137+ preserves included routers as a route tree instead of
+    # flattening app.routes. OpenAPI is the supported composed contract; physical
+    # uniqueness is asserted above and main.py inclusion uniqueness below.
+    application = FastAPI()
+    application.include_router(catalog_merchandising.router, prefix="/api")
+    application.include_router(catalog_showroom.router, prefix="/api")
 
-        expected = {
-            ("/api/catalog/showroom/appointments", "POST"),
-            ("/api/catalog/showroom/appointments/me", "GET"),
-            ("/api/catalog/admin/showroom/appointments", "GET"),
-            ("/api/catalog/admin/showroom/appointments/{appointment_id}", "PATCH"),
-        }
-        application = FastAPI()
-        application.include_router(catalog_merchandising.router, prefix="/api")
-        application.include_router(catalog_showroom.router, prefix="/api")
-        operations = [
-            (route.path, method)
-            for route in application.routes
-            if getattr(route, "path", None) and getattr(route, "methods", None)
-            for method in route.methods
-            if method in {"GET", "POST", "PATCH", "PUT", "DELETE"}
-        ]
-        for operation in expected:
-            assert operations.count(operation) == 1, (operation, operations)
-
-        openapi = application.openapi()["paths"]
-        for path, method in expected:
-            assert method.lower() in openapi[path], (path, method, openapi)
-        """
-    )
-    result = subprocess.run(
-        [sys.executable, "-c", check],
-        cwd=ROOT.parent,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
+    openapi = application.openapi()["paths"]
+    for path, method in EXPECTED_SHOWROOM_OPERATIONS:
+        public_path = f"/api{path}"
+        assert method.lower() in openapi[public_path], (public_path, method, openapi)
 
 
 def test_main_registers_canonical_showroom_without_runtime_route_surgery():
