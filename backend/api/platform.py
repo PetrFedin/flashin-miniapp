@@ -33,6 +33,7 @@ router = APIRouter(prefix="/platform", tags=["platform"])
 _EVENT_STATUSES = {"pending", "processed", "failed"}
 _PLATFORM_WRITE_PERMISSION = "platform.write"
 _EVENT_REPLAY_PERMISSION = "events.replay"
+_PUBLIC_REMOTE_CONFIG_PREFIX = "public."
 
 
 class BusinessEventReplayIn(BaseModel):
@@ -80,6 +81,22 @@ def _serialize_event(
     return result
 
 
+def _is_public_remote_config_key(key: str) -> bool:
+    return (
+        isinstance(key, str)
+        and key.startswith(_PUBLIC_REMOTE_CONFIG_PREFIX)
+        and len(key) > len(_PUBLIC_REMOTE_CONFIG_PREFIX)
+    )
+
+
+def _decode_public_remote_config_value(value_json: str | None) -> dict | None:
+    try:
+        value = json.loads(value_json or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
 @router.get("/features")
 def public_features(db: Session = Depends(get_db)):
     return {f.key: f.enabled for f in db.query(FeatureFlag).all()}
@@ -123,7 +140,22 @@ def upsert_feature(
 
 @router.get("/remote-config")
 def public_remote_config(db: Session = Depends(get_db)):
-    return {r.key: json.loads(r.value_json or "{}") for r in db.query(RemoteConfig).all()}
+    # RemoteConfig is also used for operational values that can be sensitive.
+    # Anonymous clients only receive entries deliberately placed in the public.*
+    # namespace; everything else is private by default.
+    rows = (
+        db.query(RemoteConfig)
+        .filter(RemoteConfig.key.like(f"{_PUBLIC_REMOTE_CONFIG_PREFIX}%"))
+        .all()
+    )
+    result = {}
+    for row in rows:
+        if not _is_public_remote_config_key(row.key):
+            continue
+        value = _decode_public_remote_config_value(row.value_json)
+        if value is not None:
+            result[row.key] = value
+    return result
 
 
 @router.post("/admin/remote-config", response_model=RemoteConfigOut)
