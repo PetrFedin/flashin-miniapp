@@ -1,6 +1,10 @@
 from pathlib import Path
 
+from fastapi.routing import APIRoute
+
 from backend.api.admin import router as admin_router
+from backend.api.admin_auth import router as admin_auth_router
+from backend.api.admin_promos import router as admin_promos_router
 from backend.main import app
 
 
@@ -11,12 +15,13 @@ ADMIN_AUTH = ROOT / "api" / "admin_auth.py"
 ADMIN_PROMOS = ROOT / "api" / "admin_promos.py"
 
 
-def _post_routes(path: str):
+def _router_post_routes(router, path: str):
     return [
         route
-        for route in app.routes
-        if getattr(route, "path", "") == path
-        and "POST" in getattr(route, "methods", set())
+        for route in router.routes
+        if isinstance(route, APIRoute)
+        and route.path == path
+        and "POST" in route.methods
     ]
 
 
@@ -32,9 +37,14 @@ def test_secure_admin_login_is_the_only_application_route():
     assert 'app.include_router(admin_auth_router, prefix="/api")' in main
     assert 'app.include_router(admin_router, prefix="/api")' in main
 
-    routes = _post_routes("/api/admin/login")
-    assert len(routes) == 1
-    assert getattr(routes[0], "name", "") == "admin_session_login"
+    canonical = _router_post_routes(admin_auth_router, "/admin/login")
+    assert len(canonical) == 1
+    assert canonical[0].endpoint.__name__ == "admin_session_login"
+    assert canonical[0].endpoint.__module__ == "backend.api.admin_auth"
+
+    assert str(app.url_path_for("admin_session_login")) == "/api/admin/login"
+    login_operation = app.openapi()["paths"]["/api/admin/login"]["post"]
+    assert login_operation["operationId"].startswith("admin_session_login")
 
     for security_control in (
         "totp_code",
@@ -58,9 +68,14 @@ def test_canonical_promo_creator_is_the_only_application_route():
     assert 'app.include_router(admin_promos_router, prefix="/api")' in main
     assert "normalize_promo_definition" in promos
 
-    routes = _post_routes("/api/admin/promocodes")
-    assert len(routes) == 1
-    assert routes[0].endpoint.__module__ == "backend.api.admin_promos"
+    canonical = _router_post_routes(admin_promos_router, "/admin/promocodes")
+    assert len(canonical) == 1
+    assert canonical[0].endpoint.__name__ == "admin_create_promo"
+    assert canonical[0].endpoint.__module__ == "backend.api.admin_promos"
+
+    assert str(app.url_path_for("admin_create_promo")) == "/api/admin/promocodes"
+    promo_operation = app.openapi()["paths"]["/api/admin/promocodes"]["post"]
+    assert promo_operation["operationId"].startswith("admin_create_promo")
 
 
 def test_monolith_router_does_not_register_auth_or_promo_mutations():
