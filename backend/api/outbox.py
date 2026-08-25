@@ -9,12 +9,17 @@ from ..schemas import WebhookOutboxOut
 from ..security import get_current_admin
 from ..services.audit import log_admin_action
 from ..services.rbac import require_permission
-from ..services.webhook_security import is_internal_destination, normalize_webhook_url
+from ..services.webhook_security import (
+    is_internal_destination,
+    normalize_webhook_url,
+    redact_webhook_destination,
+)
 
 router = APIRouter(prefix="/outbox", tags=["outbox"])
 
 _RETRYABLE_STATUSES = {"pending", "failed"}
 _LISTABLE_STATUSES = _RETRYABLE_STATUSES | {"sent", "discarded"}
+_SAFE_DELIVERY_ERROR = "Webhook delivery failed"
 
 
 def _reset_for_retry(row: WebhookOutbox, now: datetime) -> None:
@@ -40,6 +45,19 @@ def _reset_for_retry(row: WebhookOutbox, now: datetime) -> None:
     row.next_attempt_at = now
 
 
+def _public_outbox(row: WebhookOutbox) -> dict:
+    """Serialize operational outbox state without destination credentials or raw errors."""
+
+    return {
+        "id": row.id,
+        "destination": redact_webhook_destination(row.destination),
+        "event_type": row.event_type,
+        "status": row.status,
+        "attempts": row.attempts,
+        "last_error": _SAFE_DELIVERY_ERROR if row.last_error else "",
+    }
+
+
 @router.get("", response_model=list[WebhookOutboxOut])
 def list_outbox(
     status: str | None = Query(default=None),
@@ -54,7 +72,12 @@ def list_outbox(
         if normalized_status not in _LISTABLE_STATUSES:
             raise HTTPException(status_code=400, detail="Invalid outbox status")
         query = query.filter(WebhookOutbox.status == normalized_status)
-    return query.order_by(WebhookOutbox.created_at.desc(), WebhookOutbox.id.desc()).limit(limit).all()
+    rows = (
+        query.order_by(WebhookOutbox.created_at.desc(), WebhookOutbox.id.desc())
+        .limit(limit)
+        .all()
+    )
+    return [_public_outbox(row) for row in rows]
 
 
 @router.post("/failed/requeue")
@@ -130,7 +153,7 @@ def retry_outbox(
         previous = {
             "status": row.status,
             "attempts": row.attempts,
-            "last_error": row.last_error[:500],
+            "had_error": bool(row.last_error),
         }
         _reset_for_retry(row, utcnow_naive())
         log_admin_action(
