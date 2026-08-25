@@ -1,4 +1,3 @@
-import ast
 from pathlib import Path
 
 from backend.catalog_models import (
@@ -8,6 +7,7 @@ from backend.catalog_models import (
     ProductVideo,
     ShowroomAppointment,
 )
+from backend.services.rbac import DEFAULT_PERMISSIONS
 
 ROOT = Path(__file__).resolve().parents[1]
 API = ROOT / "api" / "catalog_merchandising.py"
@@ -59,16 +59,11 @@ def test_catalog_merchandising_api_owns_product_and_feedback_boundaries_only():
 
 
 def test_catalog_public_serializer_does_not_expose_customer_identity_or_moysklad_ids():
-    tree = ast.parse(API.read_text(encoding="utf-8"))
-    public_feedback = next(
-        node for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "product_feedback"
-    )
-    public_source = ast.get_source_segment(API.read_text(encoding="utf-8"), public_feedback) or ""
-    assert "customer_id" not in public_source
-    assert "telegram_id" not in public_source
-
     source = API.read_text(encoding="utf-8")
+    public_function = source.split("def product_feedback", 1)[1].split("\ndef ", 1)[0]
+    assert "customer_id" not in public_function
+    assert "telegram_id" not in public_function
+
     assert 'if admin else {}' in source
     assert 'result["moysklad_id"] = product.moysklad_id' in source
 
@@ -107,14 +102,7 @@ def test_default_roles_separate_showroom_customer_work_from_warehouse():
     source = RBAC.read_text(encoding="utf-8")
     assert '"showroom.read"' in source
     assert '"showroom.write"' in source
-    tree = ast.parse(source)
-    assignment = next(
-        node for node in ast.walk(tree)
-        if isinstance(node, ast.Assign)
-        and any(isinstance(target, ast.Name) and target.id == "DEFAULT_PERMISSIONS" for target in node.targets)
-    )
-    values = ast.literal_eval(assignment.value)
-    assert {"showroom.read", "showroom.write"}.issubset(values["manager"])
-    assert {"showroom.read", "showroom.write"}.issubset(values["support"])
-    assert "showroom.read" not in values["warehouse"]
-    assert "showroom.write" not in values["warehouse"]
+    assert {"showroom.read", "showroom.write"}.issubset(DEFAULT_PERMISSIONS["manager"])
+    assert {"showroom.read", "showroom.write"}.issubset(DEFAULT_PERMISSIONS["support"])
+    assert "showroom.read" not in DEFAULT_PERMISSIONS["warehouse"]
+    assert "showroom.write" not in DEFAULT_PERMISSIONS["warehouse"]
