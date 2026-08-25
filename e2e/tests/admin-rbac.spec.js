@@ -36,9 +36,11 @@ const ORDER = {
 const RETURN = {
   id: 801,
   order_id: ORDER.id,
+  customer_pii_visible: true,
   customer_id: 101,
   customer_username: "rbac_customer",
   customer_name: "RBAC Customer",
+  customer_phone: "+46700000101",
   reason: "Размер",
   status: "requested",
   currency: "RUB",
@@ -160,7 +162,17 @@ async function installRoleApi(page, roleName) {
     if (path === "/api/fulfillment/sla" && method === "GET") return json([]);
     if (path === "/api/support/admin/tickets" && method === "GET") return json([SUPPORT]);
     if (path === "/api/privacy/admin/requests" && method === "GET") return json([PRIVACY]);
-    if (path === "/api/admin/returns" && method === "GET") return json([RETURN]);
+    if (path === "/api/admin/returns" && method === "GET") {
+      const canReadCustomer = session.all_access || session.permissions.includes("customers.read");
+      return json([canReadCustomer ? RETURN : {
+        ...RETURN,
+        customer_pii_visible: false,
+        customer_id: null,
+        customer_username: "",
+        customer_name: "",
+        customer_phone: "",
+      }]);
+    }
     if (path === "/api/returns/admin/approve" && method === "POST") {
       return json({
         ok: true,
@@ -190,7 +202,7 @@ async function loginAs(page, roleName) {
   await expect(page.getByText(`${session.email} · ${session.role}`, { exact: true })).toBeVisible();
 }
 
-test("manager can mutate catalog and orders but cannot mutate stock, privacy, or refunds", async ({ page }) => {
+test("manager can mutate catalog and orders but cannot mutate stock, privacy, refunds, or customer PII", async ({ page }) => {
   const seen = await installRoleApi(page, "manager");
   await loginAs(page, "manager");
 
@@ -213,6 +225,8 @@ test("manager can mutate catalog and orders but cannot mutate stock, privacy, or
   await expect(privacy.getByRole("button", { name: "Исполнить privacy-запрос" })).toHaveCount(0);
   await expect(page.getByText(/нет refunds\.write/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Подтвердить refund" })).toHaveCount(0);
+  await expect(page.getByText("Данные клиента скрыты")).toBeVisible();
+  await expect(page.getByText("RBAC Customer")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Начать сборку" })).toBeVisible();
 
   expect(seen).not.toContain("POST /api/returns/admin/approve");
@@ -220,7 +234,7 @@ test("manager can mutate catalog and orders but cannot mutate stock, privacy, or
   expect(seen).not.toContain("GET /api/admin/audit-logs");
 });
 
-test("finance can refund without generic order mutation authority", async ({ page }) => {
+test("finance can refund without generic order mutation or customer PII authority", async ({ page }) => {
   const seen = await installRoleApi(page, "finance");
   await loginAs(page, "finance");
 
@@ -228,6 +242,8 @@ test("finance can refund without generic order mutation authority", async ({ pag
   await expect(returns).toBeVisible();
   await expect(page.getByText(/Только чтение: нет orders\.write/)).toBeVisible();
   await expect(returns.getByText(/нет refunds\.write/)).toHaveCount(0);
+  await expect(returns.getByText("Данные клиента скрыты")).toBeVisible();
+  await expect(returns.getByText("RBAC Customer")).toHaveCount(0);
 
   const refundButton = returns.getByRole("button", { name: "Подтвердить refund" });
   await expect(refundButton).toBeVisible();
@@ -236,9 +252,10 @@ test("finance can refund without generic order mutation authority", async ({ pag
   await expect.poll(() => seen.includes("POST /api/returns/admin/approve")).toBe(true);
 
   expect(ROLES.finance.permissions).not.toContain("orders.write");
+  expect(ROLES.finance.permissions).not.toContain("customers.read");
 });
 
-test("warehouse mutates stock and fulfillment but not catalog or financial order state", async ({ page }) => {
+test("warehouse mutates stock and fulfillment but not catalog, financial order state, refunds, or customer PII", async ({ page }) => {
   const seen = await installRoleApi(page, "warehouse");
   await loginAs(page, "warehouse");
 
@@ -256,6 +273,8 @@ test("warehouse mutates stock and fulfillment but not catalog or financial order
   await expect(page.getByText(/Fulfillment доступен только для чтения/)).toHaveCount(0);
   await expect(page.getByText(/Только чтение: нет orders.write/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Подтвердить refund" })).toHaveCount(0);
+  await expect(page.getByText("Данные клиента скрыты")).toBeVisible();
+  await expect(page.getByText("RBAC Customer")).toHaveCount(0);
   await expect(page.getByRole("article", { name: "Обращения клиентов" })).toHaveCount(0);
   await expect(page.getByRole("article", { name: "Privacy-запросы" })).toHaveCount(0);
 
@@ -265,7 +284,7 @@ test("warehouse mutates stock and fulfillment but not catalog or financial order
   expect(seen).not.toContain("GET /api/ops/abandoned-carts");
 });
 
-test("support sees customers and support queues but never catalog or money mutations", async ({ page }) => {
+test("support sees authorized customer identity and support queues but never catalog or money mutations", async ({ page }) => {
   const seen = await installRoleApi(page, "support");
   await loginAs(page, "support");
 
@@ -279,7 +298,10 @@ test("support sees customers and support queues but never catalog or money mutat
   await expect(support).toBeVisible();
   await expect(support.getByRole("button", { name: "Сохранить обращение" })).toBeVisible();
   await expect(page.getByRole("article", { name: "Privacy-запросы" })).toHaveCount(0);
-  await expect(page.getByRole("article", { name: "Возвраты и refunds" })).toBeVisible();
+  const returns = page.getByRole("article", { name: "Возвраты и refunds" });
+  await expect(returns).toBeVisible();
+  await expect(returns.getByText("RBAC Customer")).toBeVisible();
+  await expect(returns.getByText("Данные клиента скрыты")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Подтвердить refund" })).toHaveCount(0);
   await expect(page.getByText(/Fulfillment доступен только для чтения/)).toBeVisible();
 
