@@ -5,10 +5,30 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import Customer, Order, ReturnRequest
 from ..security import get_current_admin
-from ..services.rbac import require_permission
+from ..services.rbac import has_permission, require_permission
 from ..services.refund_state import refund_money
 
 router = APIRouter(prefix="/admin/returns", tags=["admin-returns"])
+
+
+def _customer_fields(customer: Customer | None, visible: bool) -> dict:
+    if not visible or customer is None:
+        return {
+            "customer_pii_visible": False,
+            "customer_id": None,
+            "customer_name": "",
+            "customer_username": "",
+            "customer_phone": "",
+        }
+    return {
+        "customer_pii_visible": True,
+        "customer_id": customer.id,
+        "customer_name": " ".join(
+            value for value in [customer.first_name, customer.last_name] if value
+        ).strip(),
+        "customer_username": customer.username,
+        "customer_phone": customer.phone,
+    }
 
 
 @router.get("")
@@ -19,6 +39,7 @@ def list_admin_returns(
     db: Session = Depends(get_db),
 ):
     require_permission(db, admin, "orders.read")
+    can_read_customer = has_permission(db, admin, "customers.read")
 
     refunded_totals = (
         db.query(
@@ -33,11 +54,9 @@ def list_admin_returns(
         db.query(
             ReturnRequest,
             Order,
-            Customer,
             func.coalesce(refunded_totals.c.refunded_total, 0),
         )
         .join(Order, Order.id == ReturnRequest.order_id)
-        .join(Customer, Customer.id == ReturnRequest.customer_id)
         .outerjoin(refunded_totals, refunded_totals.c.order_id == Order.id)
     )
     normalized_status = (status or "").strip().lower()
@@ -49,24 +68,29 @@ def list_admin_returns(
         .limit(limit)
         .all()
     )
+
+    customers_by_id: dict[int, Customer] = {}
+    if can_read_customer and rows:
+        customer_ids = {return_request.customer_id for return_request, _, _ in rows}
+        customers_by_id = {
+            customer.id: customer
+            for customer in db.query(Customer).filter(Customer.id.in_(customer_ids)).all()
+        }
+
     zero = refund_money(0, "zero")
     result = []
-    for return_request, order, customer, raw_refunded_total in rows:
+    for return_request, order, raw_refunded_total in rows:
         refunded_total = refund_money(raw_refunded_total, "refunded total")
         refundable_balance = max(
             refund_money(order.total_amount, "order total") - refunded_total,
             zero,
         )
+        customer = customers_by_id.get(return_request.customer_id) if can_read_customer else None
         result.append(
             {
                 "id": return_request.id,
                 "order_id": order.id,
-                "customer_id": customer.id,
-                "customer_name": " ".join(
-                    value for value in [customer.first_name, customer.last_name] if value
-                ).strip(),
-                "customer_username": customer.username,
-                "customer_phone": customer.phone,
+                **_customer_fields(customer, can_read_customer),
                 "reason": return_request.reason,
                 "status": return_request.status,
                 "refund_amount": return_request.refund_amount,
