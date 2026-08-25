@@ -1,3 +1,4 @@
+import ast
 from pathlib import Path
 
 from backend.catalog_models import (
@@ -59,11 +60,16 @@ def test_catalog_merchandising_api_owns_product_and_feedback_boundaries_only():
 
 
 def test_catalog_public_serializer_does_not_expose_customer_identity_or_moysklad_ids():
-    source = API.read_text(encoding="utf-8")
-    public_function = source.split("def product_feedback", 1)[1].split("\ndef ", 1)[0]
-    assert "customer_id" not in public_function
-    assert "telegram_id" not in public_function
+    tree = ast.parse(API.read_text(encoding="utf-8"))
+    public_feedback = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "product_feedback"
+    )
+    public_source = ast.get_source_segment(API.read_text(encoding="utf-8"), public_feedback) or ""
+    assert "customer_id" not in public_source
+    assert "telegram_id" not in public_source
 
+    source = API.read_text(encoding="utf-8")
     assert 'if admin else {}' in source
     assert 'result["moysklad_id"] = product.moysklad_id' in source
 
