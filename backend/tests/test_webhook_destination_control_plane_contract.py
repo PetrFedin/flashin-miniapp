@@ -79,10 +79,10 @@ def test_destination_audit_and_mutation_responses_do_not_expose_stored_url():
 
 
 def test_outbox_retry_and_discard_remain_operational_webhook_write_actions():
-    retry_block = OUTBOX_SOURCE.split('@router.post("/outbox/{outbox_id}/retry")', 1)[1].split(
-        '@router.post("/outbox/{outbox_id}/discard")', 1
+    retry_block = OUTBOX_SOURCE.split('@router.post("/{row_id}/retry")', 1)[1].split(
+        '@router.post("/{row_id}/discard")', 1
     )[0]
-    discard_block = OUTBOX_SOURCE.split('@router.post("/outbox/{outbox_id}/discard")', 1)[1]
+    discard_block = OUTBOX_SOURCE.split('@router.post("/{row_id}/discard")', 1)[1]
 
     assert 'require_permission(db, admin, "webhooks.write")' in retry_block
     assert 'require_permission(db, admin, "webhooks.write")' in discard_block
