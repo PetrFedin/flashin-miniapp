@@ -32,7 +32,7 @@ from ..schemas import (
 from ..security import get_current_admin
 from ..services.audit import log_admin_action
 from ..services.inventory import adjust_stock
-from ..services.rbac import require_permission
+from ..services.rbac import has_permission, require_permission
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -69,6 +69,13 @@ def _stock_quantity(value: object) -> int:
     if not math.isfinite(quantity) or quantity < 0 or not quantity.is_integer():
         raise HTTPException(status_code=400, detail="Stock quantity must be a non-negative integer")
     return int(quantity)
+
+
+def _admin_order_out(order: Order, can_read_customer: bool) -> OrderOut:
+    payload = OrderOut.model_validate(order)
+    if can_read_customer:
+        return payload
+    return payload.model_copy(update={"address": "", "comment": ""})
 
 
 @router.get("/products", response_model=list[ProductOut])
@@ -231,7 +238,14 @@ def admin_update_stock(
 @router.get("/orders", response_model=list[OrderOut])
 def admin_orders(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
     require_permission(db, admin, "orders.read")
-    return db.query(Order).options(joinedload(Order.items)).order_by(Order.created_at.desc()).all()
+    can_read_customer = has_permission(db, admin, "customers.read")
+    orders = (
+        db.query(Order)
+        .options(joinedload(Order.items))
+        .order_by(Order.created_at.desc())
+        .all()
+    )
+    return [_admin_order_out(order, can_read_customer) for order in orders]
 
 
 @router.get("/notifications")
@@ -376,6 +390,7 @@ async def admin_import_products_csv(
 @router.get("/orders/export-csv")
 def admin_export_orders_csv(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
     require_permission(db, admin, "orders.read")
+    can_read_customer = has_permission(db, admin, "customers.read")
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(
@@ -403,9 +418,9 @@ def admin_export_orders_csv(admin=Depends(get_current_admin), db: Session = Depe
                 order.delivery_status,
                 order.total_amount,
                 order.currency,
-                order.customer_id,
+                order.customer_id if can_read_customer else "",
                 order.delivery_type,
-                order.address,
+                order.address if can_read_customer else "",
                 order.tracking_number,
             ]
         )
