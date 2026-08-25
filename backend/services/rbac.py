@@ -4,6 +4,8 @@ from sqlalchemy.orm import Session
 from ..models import AdminRolePermission, AdminUser
 
 
+REFUNDS_WRITE_PERMISSION = "refunds.write"
+
 DEFAULT_PERMISSIONS = {
     "owner": {"*"},
     "manager": {
