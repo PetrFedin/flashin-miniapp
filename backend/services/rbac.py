@@ -9,6 +9,9 @@ DELIVERY_PROVIDERS_WRITE_PERMISSION = "delivery.providers.write"
 PAYMENT_RECONCILIATION_READ_PERMISSION = "payments.reconciliation.read"
 PAYMENT_RECONCILIATION_WRITE_PERMISSION = "payments.reconciliation.write"
 WEBHOOKS_CONFIGURE_PERMISSION = "webhooks.configure"
+CAMPAIGNS_READ_PERMISSION = "campaigns.read"
+CAMPAIGNS_WRITE_PERMISSION = "campaigns.write"
+CAMPAIGNS_SEND_PERMISSION = "campaigns.send"
 
 DEFAULT_PERMISSIONS = {
     "owner": {"*"},
@@ -29,6 +32,8 @@ DEFAULT_PERMISSIONS = {
         "media.write",
         "security.read",
         "privacy.read",
+        CAMPAIGNS_READ_PERMISSION,
+        CAMPAIGNS_WRITE_PERMISSION,
     },
     "support": {
         "orders.read",
