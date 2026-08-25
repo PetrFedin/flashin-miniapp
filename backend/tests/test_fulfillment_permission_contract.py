@@ -1,6 +1,9 @@
 from pathlib import Path
 
-from backend.services.rbac import DEFAULT_PERMISSIONS
+from backend.services.rbac import (
+    DEFAULT_PERMISSIONS,
+    DELIVERY_PROVIDERS_WRITE_PERMISSION,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,7 +31,7 @@ def test_picklist_and_task_mutations_require_fulfillment_write():
     assert 'require_permission(db, admin, "orders.write")' not in update_item
 
 
-def test_shipment_mutations_use_fulfillment_write_but_provider_config_stays_order_write():
+def test_shipment_mutations_and_provider_configuration_have_separate_authority():
     source = DELIVERY_API.read_text(encoding="utf-8")
     provider_config = source.split('@router.post("", response_model=DeliveryProviderOut)', 1)[1].split(
         '@router.post("/orders/{order_id}/shipment"', 1
@@ -40,7 +43,10 @@ def test_shipment_mutations_use_fulfillment_write_but_provider_config_stays_orde
         '@router.get("/shipments"', 1
     )[0]
 
-    assert 'require_permission(db, admin, "orders.write")' in provider_config
+    assert DELIVERY_PROVIDERS_WRITE_PERMISSION == "delivery.providers.write"
+    assert "DELIVERY_PROVIDERS_WRITE_PERMISSION" in provider_config
+    assert 'require_permission(db, admin, "orders.write")' not in provider_config
+    assert 'require_permission(db, admin, "fulfillment.write")' not in provider_config
     assert 'require_permission(db, admin, "fulfillment.write")' in create_shipment
     assert 'require_permission(db, admin, "orders.write")' not in create_shipment
     assert 'require_permission(db, admin, "fulfillment.write")' in patch_shipment
