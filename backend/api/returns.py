@@ -13,7 +13,7 @@ from ..services.pilot_circuit_breaker import (
     stop_pilot_for_order,
     trip_pilot_circuit_breaker,
 )
-from ..services.rbac import require_permission
+from ..services.rbac import REFUNDS_WRITE_PERMISSION, require_permission
 from ..services.refund_state import (
     apply_provider_refund_status,
     provider_refund_amount,
@@ -215,7 +215,7 @@ async def approve_return(
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    require_permission(db, admin, "orders.write")
+    require_permission(db, admin, REFUNDS_WRITE_PERMISSION)
 
     try:
         ret = (
