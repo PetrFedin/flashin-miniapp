@@ -305,7 +305,7 @@ export default function ServiceOperationsPanel({ onUnauthorized, session }) {
                         disabled={isBusy(`support-${ticket.id}`)}
                       >
                         {Object.entries(SUPPORT_PRIORITY_LABELS).map(([value, label]) => (
-                          <option value={value} key={value}>{SUPPORT_PRIORITY_LABELS[value] || label}</option>
+                          <option value={value} key={value}>{label}</option>
                         ))}
                       </select>
                     </label>
