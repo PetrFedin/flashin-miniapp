@@ -10,6 +10,7 @@ test("Service Operations derives every section from effective permissions", () =
   assert.match(panelSource, /hasAdminPermission\(session, "privacy\.read"\)/);
   assert.match(panelSource, /hasAdminPermission\(session, "privacy\.write"\)/);
   assert.match(panelSource, /hasAdminPermission\(session, "orders\.read"\)/);
+  assert.match(panelSource, /hasAdminPermission\(session, "customers\.read"\)/);
   assert.match(panelSource, /hasAdminPermission\(session, "refunds\.write"\)/);
   assert.doesNotMatch(panelSource, /hasAdminPermission\(session, "orders\.write"\)/);
 });
@@ -33,4 +34,10 @@ test("privacy and refund mutations fail closed without write permissions", () =>
   assert.match(panelSource, /canPrivacyWrite && \(/);
   assert.match(panelSource, /canRefundsWrite && \(/);
   assert.doesNotMatch(panelSource, /canReturnsWrite/);
+});
+
+
+test("returns customer identity is hidden unless both RBAC and server visibility allow it", () => {
+  assert.match(panelSource, /canCustomersRead && item\.customer_pii_visible/);
+  assert.match(panelSource, /Данные клиента скрыты/);
 });
