@@ -7,9 +7,12 @@ from sqlalchemy.orm import sessionmaker
 
 from backend.services.notification_delivery import (
     BATCH_SIZE,
+    DELIVERY_ALLOWED,
+    DELIVERY_SUPPRESSED,
     finish_delivery,
     claim_pending_batch,
     next_attempt_at,
+    preflight_notification_delivery,
     renew_delivery_lease,
     validate_batch_size,
 )
@@ -35,6 +38,7 @@ _validate_batch_size = validate_batch_size
 _next_attempt_at = next_attempt_at
 _claim_pending_batch_db = claim_pending_batch
 _renew_delivery_lease_db = renew_delivery_lease
+_preflight_notification_delivery_db = preflight_notification_delivery
 _finish_delivery_db = finish_delivery
 
 
@@ -53,6 +57,17 @@ def _renew_delivery_lease(notification_id: int, lease_token: str) -> bool:
     db = SessionLocal()
     try:
         return renew_delivery_lease(db, notification_id, lease_token)
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def _preflight_notification_delivery(notification_id: int, lease_token: str) -> str:
+    db = SessionLocal()
+    try:
+        return preflight_notification_delivery(db, notification_id, lease_token)
     except Exception:
         db.rollback()
         raise
@@ -87,6 +102,7 @@ async def send_pending_batch(bot: Bot) -> dict[str, int]:
         "sent": 0,
         "retry_scheduled": 0,
         "failed": 0,
+        "suppressed": 0,
         "ignored": 0,
     }
 
@@ -108,6 +124,18 @@ async def send_pending_batch(bot: Bot) -> dict[str, int]:
             if not _renew_delivery_lease(notification_id, lease_token):
                 result["ignored"] += 1
                 continue
+
+            # This is the authoritative marketing-consent boundary. Every first
+            # attempt and every retry passes it after validation/lease renewal
+            # and immediately before the external Telegram side effect.
+            preflight = _preflight_notification_delivery(notification_id, lease_token)
+            if preflight == DELIVERY_SUPPRESSED:
+                result["suppressed"] += 1
+                continue
+            if preflight != DELIVERY_ALLOWED:
+                result["ignored"] += 1
+                continue
+
             await bot.send_message(
                 chat_id=chat_id,
                 text=message,
