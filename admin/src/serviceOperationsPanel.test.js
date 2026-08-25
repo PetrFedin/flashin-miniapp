@@ -10,7 +10,8 @@ test("Service Operations derives every section from effective permissions", () =
   assert.match(panelSource, /hasAdminPermission\(session, "privacy\.read"\)/);
   assert.match(panelSource, /hasAdminPermission\(session, "privacy\.write"\)/);
   assert.match(panelSource, /hasAdminPermission\(session, "orders\.read"\)/);
-  assert.match(panelSource, /hasAdminPermission\(session, "orders\.write"\)/);
+  assert.match(panelSource, /hasAdminPermission\(session, "refunds\.write"\)/);
+  assert.doesNotMatch(panelSource, /hasAdminPermission\(session, "orders\.write"\)/);
 });
 
 
@@ -27,8 +28,9 @@ test("Service Operations keeps release capability endpoints explicit and only lo
 test("privacy and refund mutations fail closed without write permissions", () => {
   assert.match(panelSource, /if \(!canPrivacyWrite\)/);
   assert.match(panelSource, /privacy\.write/);
-  assert.match(panelSource, /if \(!canReturnsWrite\)/);
-  assert.match(panelSource, /orders\.write/);
+  assert.match(panelSource, /if \(!canRefundsWrite\)/);
+  assert.match(panelSource, /refunds\.write/);
   assert.match(panelSource, /canPrivacyWrite && \(/);
-  assert.match(panelSource, /canReturnsWrite && \(/);
+  assert.match(panelSource, /canRefundsWrite && \(/);
+  assert.doesNotMatch(panelSource, /canReturnsWrite/);
 });
