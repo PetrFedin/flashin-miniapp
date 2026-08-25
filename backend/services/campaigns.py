@@ -4,7 +4,8 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import utcnow_naive
-from ..models import ConsentRecord, CrmProfile, Customer, MarketingCampaign, Notification
+from ..models import ConsentRecord, CrmProfile, Customer, MarketingCampaign
+from .notifications import NOTIFICATION_PURPOSE_MARKETING, queue_notification
 
 _QUEUEABLE_CAMPAIGN_STATUSES = {"draft", "scheduled"}
 
@@ -60,14 +61,16 @@ def queue_campaign(db: Session, campaign: MarketingCampaign) -> CampaignQueueRes
     for customer in customers:
         if not customer.telegram_id:
             continue
-        db.add(
-            Notification(
-                telegram_id=customer.telegram_id,
-                message=locked.message,
-                status="pending",
-            )
-        )
-        queued += 1
+        if queue_notification(
+            db,
+            customer.telegram_id,
+            locked.message,
+            event_key=f"campaign:{locked.id}:customer:{customer.id}",
+            purpose=NOTIFICATION_PURPOSE_MARKETING,
+            customer_id=customer.id,
+            campaign_id=locked.id,
+        ):
+            queued += 1
 
     locked.status = "queued"
     locked.sent_count = queued
