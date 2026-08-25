@@ -42,7 +42,7 @@ export default function ServiceOperationsPanel({ onUnauthorized, session }) {
   const canPrivacyRead = hasAdminPermission(session, "privacy.read");
   const canPrivacyWrite = hasAdminPermission(session, "privacy.write");
   const canReturnsRead = hasAdminPermission(session, "orders.read");
-  const canReturnsWrite = hasAdminPermission(session, "orders.write");
+  const canRefundsWrite = hasAdminPermission(session, "refunds.write");
 
   const [tickets, setTickets] = useState([]);
   const [privacyRequests, setPrivacyRequests] = useState([]);
@@ -216,8 +216,8 @@ export default function ServiceOperationsPanel({ onUnauthorized, session }) {
   }
 
   async function approveReturn(item) {
-    if (!canReturnsWrite) {
-      setError("Недостаточно прав: подтверждение refund требует orders.write.");
+    if (!canRefundsWrite) {
+      setError("Недостаточно прав: подтверждение refund требует refunds.write.");
       return;
     }
     const rawAmount = refundAmounts[item.id] ?? item.refundable_balance;
@@ -363,7 +363,7 @@ export default function ServiceOperationsPanel({ onUnauthorized, session }) {
         {canReturnsRead && (
           <article className="service-card" aria-labelledby="returns-queue-title">
             <h3 id="returns-queue-title">Возвраты и refunds</h3>
-            {!canReturnsWrite && <p className="event-warning">Возвраты доступны только для чтения: нет orders.write.</p>}
+            {!canRefundsWrite && <p className="event-warning">Возвраты доступны только для чтения: нет refunds.write.</p>}
             {sectionErrors.returns && <p className="error-inline">{sectionErrors.returns}</p>}
             {!sectionErrors.returns && !returns.length && <p>Возвратов на обработку нет.</p>}
             {returns.map((item) => (
@@ -378,7 +378,7 @@ export default function ServiceOperationsPanel({ onUnauthorized, session }) {
                   {` · доступно ${money(item.refundable_balance, item.currency)}`}
                   {` · возвращено ${money(item.refunded_total, item.currency)}`}
                 </small>
-                {canReturnsWrite && (
+                {canRefundsWrite && (
                   <div className="service-controls">
                     <label>
                       Сумма возврата
