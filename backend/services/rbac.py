@@ -6,6 +6,8 @@ from ..models import AdminRolePermission, AdminUser
 
 REFUNDS_WRITE_PERMISSION = "refunds.write"
 DELIVERY_PROVIDERS_WRITE_PERMISSION = "delivery.providers.write"
+PAYMENT_RECONCILIATION_READ_PERMISSION = "payments.reconciliation.read"
+PAYMENT_RECONCILIATION_WRITE_PERMISSION = "payments.reconciliation.write"
 
 DEFAULT_PERMISSIONS = {
     "owner": {"*"},
