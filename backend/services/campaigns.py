@@ -1,33 +1,75 @@
+from dataclasses import dataclass
+
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import utcnow_naive
-from ..models import CrmProfile, Customer, MarketingCampaign, Notification
+from ..models import ConsentRecord, CrmProfile, Customer, MarketingCampaign, Notification
+
+_QUEUEABLE_CAMPAIGN_STATUSES = {"draft", "scheduled"}
 
 
-def queue_campaign(db: Session, campaign: MarketingCampaign) -> int:
-    query = db.query(Customer)
-    if campaign.segment != "all":
-        customer_ids = [
-            profile.customer_id
-            for profile in db.query(CrmProfile)
-            .filter(CrmProfile.segment == campaign.segment)
-            .all()
-        ]
-        query = query.filter(Customer.id.in_(customer_ids))
-    customers = query.all()
-    sent = 0
+@dataclass(frozen=True)
+class CampaignQueueResult:
+    queued: int
+    changed: bool
+
+
+def _marketing_recipients(db: Session, segment: str):
+    latest_consent_ids = (
+        db.query(func.max(ConsentRecord.id).label("consent_id"))
+        .filter(ConsentRecord.consent_type == "marketing")
+        .group_by(ConsentRecord.customer_id)
+        .subquery()
+    )
+    consented_customers = (
+        db.query(ConsentRecord.customer_id.label("customer_id"))
+        .join(latest_consent_ids, ConsentRecord.id == latest_consent_ids.c.consent_id)
+        .filter(ConsentRecord.granted.is_(True))
+        .subquery()
+    )
+
+    query = db.query(Customer).join(
+        consented_customers,
+        consented_customers.c.customer_id == Customer.id,
+    )
+    if segment != "all":
+        query = query.join(CrmProfile, CrmProfile.customer_id == Customer.id).filter(
+            CrmProfile.segment == segment
+        )
+    return query.distinct().all()
+
+
+def queue_campaign(db: Session, campaign: MarketingCampaign) -> CampaignQueueResult:
+    locked = (
+        db.query(MarketingCampaign)
+        .filter(MarketingCampaign.id == campaign.id)
+        .with_for_update()
+        .populate_existing()
+        .first()
+    )
+    if locked is None:
+        raise ValueError("Campaign not found")
+    if locked.status == "queued":
+        return CampaignQueueResult(queued=0, changed=False)
+    if locked.status not in _QUEUEABLE_CAMPAIGN_STATUSES:
+        raise ValueError(f"Campaign in status {locked.status} cannot be queued")
+
+    customers = _marketing_recipients(db, locked.segment)
+    queued = 0
     for customer in customers:
         if not customer.telegram_id:
             continue
         db.add(
             Notification(
                 telegram_id=customer.telegram_id,
-                message=campaign.message,
+                message=locked.message,
                 status="pending",
             )
         )
-        sent += 1
-    campaign.status = "queued"
-    campaign.sent_count = sent
-    campaign.sent_at = utcnow_naive()
-    return sent
+        queued += 1
+
+    locked.status = "queued"
+    locked.sent_count = queued
+    locked.sent_at = utcnow_naive()
+    return CampaignQueueResult(queued=queued, changed=True)
