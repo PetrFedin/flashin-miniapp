@@ -59,6 +59,14 @@ def redact_webhook_url(url: str) -> str:
     return urlunsplit((scheme, netloc, "/<redacted>", "", ""))
 
 
+def redact_webhook_destination(destination: str) -> str:
+    """Return a non-secret operational representation of an outbox destination."""
+
+    if is_internal_destination(destination):
+        return "internal://<redacted>"
+    return redact_webhook_url(destination)
+
+
 def _is_public_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     return not (
         address.is_private
