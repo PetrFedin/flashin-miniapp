@@ -5,6 +5,7 @@ from ..models import AdminRolePermission, AdminUser
 
 
 REFUNDS_WRITE_PERMISSION = "refunds.write"
+DELIVERY_PROVIDERS_WRITE_PERMISSION = "delivery.providers.write"
 
 DEFAULT_PERMISSIONS = {
     "owner": {"*"},
