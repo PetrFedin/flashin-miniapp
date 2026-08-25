@@ -120,6 +120,13 @@ const ROLES = {
       "notifications.retry", "webhooks.read",
     ],
   },
+  finance: {
+    id: 5,
+    email: "finance@flashin.test",
+    role: "finance",
+    all_access: false,
+    permissions: ["orders.read", "refunds.write"],
+  },
 };
 
 async function installRoleApi(page, roleName) {
@@ -154,6 +161,16 @@ async function installRoleApi(page, roleName) {
     if (path === "/api/support/admin/tickets" && method === "GET") return json([SUPPORT]);
     if (path === "/api/privacy/admin/requests" && method === "GET") return json([PRIVACY]);
     if (path === "/api/admin/returns" && method === "GET") return json([RETURN]);
+    if (path === "/api/returns/admin/approve" && method === "POST") {
+      return json({
+        ok: true,
+        refund_id: "refund-rbac",
+        status: "pending",
+        return_status: "refund_pending",
+        refund_amount: RETURN.refundable_balance,
+        idempotent: false,
+      });
+    }
     if (path === "/api/platform/admin/events/summary" && method === "GET") {
       return json({ counts: { failed: 0, pending: 0, processed: 0 }, oldest_failed_at: null });
     }
@@ -173,7 +190,7 @@ async function loginAs(page, roleName) {
   await expect(page.getByText(`${session.email} · ${session.role}`, { exact: true })).toBeVisible();
 }
 
-test("manager can mutate catalog and orders but cannot mutate stock or privacy", async ({ page }) => {
+test("manager can mutate catalog and orders but cannot mutate stock, privacy, or refunds", async ({ page }) => {
   const seen = await installRoleApi(page, "manager");
   await loginAs(page, "manager");
 
@@ -194,11 +211,31 @@ test("manager can mutate catalog and orders but cannot mutate stock or privacy",
   await expect(privacy).toBeVisible();
   await expect(privacy.getByText(/нет privacy\.write/)).toBeVisible();
   await expect(privacy.getByRole("button", { name: "Исполнить privacy-запрос" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Подтвердить refund" })).toBeVisible();
+  await expect(page.getByText(/нет refunds\.write/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Подтвердить refund" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Начать сборку" })).toBeVisible();
 
+  expect(seen).not.toContain("POST /api/returns/admin/approve");
   expect(seen).not.toContain("GET /api/ops/abandoned-carts");
   expect(seen).not.toContain("GET /api/admin/audit-logs");
+});
+
+test("finance can refund without generic order mutation authority", async ({ page }) => {
+  const seen = await installRoleApi(page, "finance");
+  await loginAs(page, "finance");
+
+  const returns = page.getByRole("article", { name: "Возвраты и refunds" });
+  await expect(returns).toBeVisible();
+  await expect(page.getByText(/Только чтение: нет orders\.write/)).toBeVisible();
+  await expect(returns.getByText(/нет refunds\.write/)).toHaveCount(0);
+
+  const refundButton = returns.getByRole("button", { name: "Подтвердить refund" });
+  await expect(refundButton).toBeVisible();
+  page.once("dialog", (dialog) => dialog.accept());
+  await refundButton.click();
+  await expect.poll(() => seen.includes("POST /api/returns/admin/approve")).toBe(true);
+
+  expect(ROLES.finance.permissions).not.toContain("orders.write");
 });
 
 test("warehouse mutates stock and fulfillment but not catalog or financial order state", async ({ page }) => {
