@@ -42,7 +42,12 @@ async def check_payment(
     try:
         provider = await fetch_yookassa_payment(payment.provider_payment_id)
         provider_id = str(provider.get("id") or "").strip()
-        if provider_id and provider_id != payment.provider_payment_id:
+        if not provider_id:
+            raise HTTPException(
+                status_code=502,
+                detail="Payment provider returned no payment identifier",
+            )
+        if provider_id != payment.provider_payment_id:
             raise HTTPException(
                 status_code=502,
                 detail="Payment provider returned a different payment identifier",
