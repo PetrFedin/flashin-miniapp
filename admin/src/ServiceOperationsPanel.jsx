@@ -42,6 +42,7 @@ export default function ServiceOperationsPanel({ onUnauthorized, session }) {
   const canPrivacyRead = hasAdminPermission(session, "privacy.read");
   const canPrivacyWrite = hasAdminPermission(session, "privacy.write");
   const canReturnsRead = hasAdminPermission(session, "orders.read");
+  const canCustomersRead = hasAdminPermission(session, "customers.read");
   const canRefundsWrite = hasAdminPermission(session, "refunds.write");
 
   const [tickets, setTickets] = useState([]);
@@ -304,7 +305,7 @@ export default function ServiceOperationsPanel({ onUnauthorized, session }) {
                         disabled={isBusy(`support-${ticket.id}`)}
                       >
                         {Object.entries(SUPPORT_PRIORITY_LABELS).map(([value, label]) => (
-                          <option value={value} key={value}>{label}</option>
+                          <option value={value} key={value}>{SUPPORT_PRIORITY_LABELS[value] || label}</option>
                         ))}
                       </select>
                     </label>
@@ -374,7 +375,9 @@ export default function ServiceOperationsPanel({ onUnauthorized, session }) {
                 </div>
                 <p>{item.reason}</p>
                 <small>
-                  {item.customer_name || item.customer_username || `Клиент #${item.customer_id}`}
+                  {canCustomersRead && item.customer_pii_visible
+                    ? (item.customer_name || item.customer_username || `Клиент #${item.customer_id}`)
+                    : "Данные клиента скрыты"}
                   {` · доступно ${money(item.refundable_balance, item.currency)}`}
                   {` · возвращено ${money(item.refunded_total, item.currency)}`}
                 </small>
