@@ -11,6 +11,7 @@ _MAX_WEBHOOK_URL_LENGTH = 255
 _MAX_RESOLVED_ADDRESSES = 16
 _BLOCKED_HOSTS = {"localhost", "localhost.localdomain", "metadata.google.internal"}
 _BLOCKED_SUFFIXES = (".local", ".internal", ".localhost")
+_REDACTED_WEBHOOK_URL = "<redacted>"
 
 
 def require_webhook_source(request: Request, allowed_ips: list[str] | None = None) -> None:
@@ -27,6 +28,35 @@ def is_internal_destination(url: str) -> bool:
         return urlsplit((url or "").strip()).scheme.lower() == _INTERNAL_SCHEME
     except ValueError:
         return False
+
+
+def redact_webhook_url(url: str) -> str:
+    """Return only the destination origin; path/query values are treated as secrets.
+
+    Webhook endpoints frequently embed opaque access tokens in their path or query.
+    The stored URL is still used for delivery, but control-plane reads and audit
+    records must not expose those credentials.
+    """
+
+    try:
+        parsed = urlsplit((url or "").strip())
+        scheme = parsed.scheme.lower()
+        hostname = (parsed.hostname or "").strip().lower().rstrip(".")
+        port = parsed.port
+    except (TypeError, ValueError):
+        return _REDACTED_WEBHOOK_URL
+
+    if not scheme or not hostname:
+        return _REDACTED_WEBHOOK_URL
+    try:
+        hostname = hostname.encode("idna").decode("ascii")
+    except UnicodeError:
+        return _REDACTED_WEBHOOK_URL
+
+    netloc_host = f"[{hostname}]" if ":" in hostname else hostname
+    default_port = 443 if scheme == "https" else 80 if scheme == "http" else None
+    netloc = netloc_host if port in (None, default_port) else f"{netloc_host}:{port}"
+    return urlunsplit((scheme, netloc, "/<redacted>", "", ""))
 
 
 def _is_public_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
