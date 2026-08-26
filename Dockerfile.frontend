@@ -8,7 +8,12 @@ ENV VITE_API_BASE=$VITE_API_BASE
 RUN npm run build
 
 FROM alpine:3.24.1
-RUN apk add --no-cache busybox-extras \
+# Keep runtime OpenSSL at or above the Alpine revision that fixes
+# CVE-2026-14456. The immutable base image can lag repository security fixes.
+RUN apk add --no-cache \
+      'libcrypto3>=3.5.8-r0' \
+      'libssl3>=3.5.8-r0' \
+      busybox-extras \
     && addgroup -S flashin \
     && adduser -S -G flashin flashin
 COPY --from=build --chown=flashin:flashin /app/dist /srv
