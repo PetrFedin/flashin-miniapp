@@ -39,12 +39,13 @@ class FakeSession:
 def order(*, status="paid", delivery_status="not_started"):
     return SimpleNamespace(
         id=77,
+        customer_id=42,
         status=status,
         payment_status="paid",
         delivery_status=delivery_status,
         total_amount=12500,
         currency="RUB",
-        customer=SimpleNamespace(telegram_id="123456"),
+        customer=SimpleNamespace(id=42, telegram_id="123456"),
     )
 
 
