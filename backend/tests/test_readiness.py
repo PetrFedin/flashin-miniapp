@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from backend.api import health
 
 
-CURRENT_HEAD = "0033_admin_totp_replay_state"
+CURRENT_HEAD = "0034_notification_policy_context"
 
 
 class ScalarResult:

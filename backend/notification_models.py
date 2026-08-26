@@ -47,3 +47,39 @@ class NotificationEventKey(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
     notification: Mapped["Notification"] = relationship("Notification")
+
+
+class NotificationPolicyContext(Base):
+    """Purpose/customer binding used by transport-time delivery policy checks.
+
+    Existing notifications intentionally have no policy row and are treated as
+    legacy transactional messages. Every notification created through the
+    canonical queue helper gets an explicit context going forward.
+    """
+
+    __tablename__ = "notification_policy_contexts"
+    __table_args__ = (
+        CheckConstraint(
+            "purpose IN ('transactional', 'marketing')",
+            name="ck_notification_policy_context_purpose",
+        ),
+    )
+
+    notification_id: Mapped[int] = mapped_column(
+        ForeignKey("notifications.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    purpose: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    customer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("customers.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    campaign_id: Mapped[int | None] = mapped_column(
+        ForeignKey("marketing_campaigns.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive, nullable=False)
+
+    notification: Mapped["Notification"] = relationship("Notification")
