@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from backend.api import health
 
 
-CURRENT_HEAD = "0034_notification_policy_context"
+CURRENT_HEAD = "0035_fulfillment_read_permission"
 
 
 class ScalarResult:
