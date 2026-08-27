@@ -12,6 +12,7 @@ WEBHOOKS_CONFIGURE_PERMISSION = "webhooks.configure"
 CAMPAIGNS_READ_PERMISSION = "campaigns.read"
 CAMPAIGNS_WRITE_PERMISSION = "campaigns.write"
 CAMPAIGNS_SEND_PERMISSION = "campaigns.send"
+FULFILLMENT_READ_PERMISSION = "fulfillment.read"
 
 DEFAULT_PERMISSIONS = {
     "owner": {"*"},
@@ -20,6 +21,7 @@ DEFAULT_PERMISSIONS = {
         "products.write",
         "orders.read",
         "orders.write",
+        FULFILLMENT_READ_PERMISSION,
         "fulfillment.write",
         "promo.write",
         "support.write",
@@ -49,6 +51,7 @@ DEFAULT_PERMISSIONS = {
         "products.read",
         "inventory.write",
         "orders.read",
+        FULFILLMENT_READ_PERMISSION,
         "fulfillment.write",
         "media.write",
     },

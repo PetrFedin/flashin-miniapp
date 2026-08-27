@@ -7,14 +7,14 @@ from ..schemas import FulfillmentTaskOut, FulfillmentUpdateIn, SlaEventOut
 from ..security import get_current_admin
 from ..services.audit import log_admin_action
 from ..services.fulfillment import update_fulfillment_status
-from ..services.rbac import require_permission
+from ..services.rbac import FULFILLMENT_READ_PERMISSION, require_permission
 
 router = APIRouter(prefix="/fulfillment", tags=["fulfillment"])
 
 
 @router.get("/tasks", response_model=list[FulfillmentTaskOut])
 def list_tasks(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
-    require_permission(db, admin, "orders.read")
+    require_permission(db, admin, FULFILLMENT_READ_PERMISSION)
     return (
         db.query(FulfillmentTask)
         .order_by(FulfillmentTask.created_at.desc(), FulfillmentTask.id.desc())
@@ -74,7 +74,7 @@ def update_task(
 
 @router.get("/sla", response_model=list[SlaEventOut])
 def list_sla(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
-    require_permission(db, admin, "orders.read")
+    require_permission(db, admin, FULFILLMENT_READ_PERMISSION)
     return db.query(SlaEvent).order_by(SlaEvent.due_at.asc()).limit(200).all()
 
 
@@ -84,7 +84,7 @@ def task_picklist(
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    require_permission(db, admin, "orders.read")
+    require_permission(db, admin, FULFILLMENT_READ_PERMISSION)
     task = db.query(FulfillmentTask).filter(FulfillmentTask.id == task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Fulfillment task not found")
