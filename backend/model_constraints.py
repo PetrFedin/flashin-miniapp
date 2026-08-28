@@ -170,6 +170,12 @@ def apply_model_constraints() -> None:
     )
     _unique(Order.__table__, "uq_orders_id_customer_id", "id", "customer_id")
     _unique(Cart.__table__, "uq_carts_id_customer_id", "id", "customer_id")
+    _unique(
+        ProductVariant.__table__,
+        "uq_product_variants_id_product_id",
+        "id",
+        "product_id",
+    )
 
     _index(
         WebhookOutbox.__table__,
@@ -317,7 +323,26 @@ def apply_customer_owned_reference_constraints() -> None:
     )
 
 
+def apply_product_variant_reference_constraints() -> None:
+    """Keep denormalized product/variant pairs internally consistent."""
+
+    variant_target = ("product_variants.id", "product_variants.product_id")
+    _foreign_key(
+        CartItem.__table__,
+        "fk_cart_items_variant_product",
+        ("variant_id", "product_id"),
+        variant_target,
+    )
+    _foreign_key(
+        OrderItem.__table__,
+        "fk_order_items_variant_product",
+        ("variant_id", "product_id"),
+        variant_target,
+    )
+
+
 apply_money_model_types()
 apply_model_constraints()
 configure_mappers()
 apply_customer_owned_reference_constraints()
+apply_product_variant_reference_constraints()
