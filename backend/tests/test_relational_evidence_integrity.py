@@ -190,7 +190,8 @@ def test_migration_is_fail_closed_and_never_rewrites_business_rows():
     assert "fulfillment task items reference order items from another order" in source
     assert "fk_payment_reconciliations_payment_order" in source
     assert "trg_fulfillment_task_items_same_order" in source
-    assert "CREATE OR REPLACE FUNCTION enforce_fulfillment_task_item_same_order" in source
+    assert '_FULFILLMENT_FUNCTION = "enforce_fulfillment_task_item_same_order"' in source
+    assert "CREATE OR REPLACE FUNCTION {_FULFILLMENT_FUNCTION}()" in source
     assert "UPDATE payment_reconciliations" not in source
     assert "DELETE FROM payment_reconciliations" not in source
     assert "UPDATE fulfillment_task_items" not in source
