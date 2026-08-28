@@ -41,16 +41,6 @@ OWNERSHIP_CHECKS: tuple[OwnershipCheck, ...] = (
         """,
     ),
     (
-        "loyalty_transactions.order_id/customer_id",
-        """
-        SELECT count(*)
-        FROM loyalty_transactions AS child
-        JOIN orders AS parent ON parent.id = child.order_id
-        WHERE child.order_id IS NOT NULL
-          AND child.customer_id <> parent.customer_id
-        """,
-    ),
-    (
         "loyalty_redemption_holds.order_id/customer_id",
         """
         SELECT count(*)
@@ -151,13 +141,6 @@ def upgrade() -> None:
         ["id", "customer_id"],
     )
     op.create_foreign_key(
-        "fk_loyalty_transactions_order_customer",
-        "loyalty_transactions",
-        "orders",
-        ["order_id", "customer_id"],
-        ["id", "customer_id"],
-    )
-    op.create_foreign_key(
         "fk_loyalty_redemption_holds_order_customer",
         "loyalty_redemption_holds",
         "orders",
@@ -219,11 +202,6 @@ def downgrade() -> None:
     op.drop_constraint(
         "fk_loyalty_redemption_holds_order_customer",
         "loyalty_redemption_holds",
-        type_="foreignkey",
-    )
-    op.drop_constraint(
-        "fk_loyalty_transactions_order_customer",
-        "loyalty_transactions",
         type_="foreignkey",
     )
     op.drop_constraint(
