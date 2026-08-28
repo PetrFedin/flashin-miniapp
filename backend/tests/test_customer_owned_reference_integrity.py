@@ -10,6 +10,7 @@ from backend.models import (
     LoyaltyRedemptionHold,
     LoyaltyTransaction,
     Order,
+    ReferralAttribution,
     ReturnRequest,
     SupportTicket,
 )
@@ -89,6 +90,13 @@ def test_parent_customer_identity_pairs_are_unique_in_metadata():
             ("orders.id", "orders.customer_id"),
             "CASCADE",
         ),
+        (
+            ReferralAttribution.__table__,
+            "fk_referral_attributions_rewarded_order_invited_customer",
+            ("rewarded_order_id", "invited_customer_id"),
+            ("orders.id", "orders.customer_id"),
+            None,
+        ),
     ],
 )
 def test_customer_owned_reference_constraints_match_production_metadata(
@@ -127,6 +135,16 @@ def test_support_ticket_privacy_anonymization_remains_schema_valid():
     )
 
     assert SupportTicket.__table__.c.customer_id.nullable is True
+    assert constraint.match is None
+
+
+def test_pending_referral_attribution_remains_schema_valid_without_rewarded_order():
+    constraint = _named_constraint(
+        ReferralAttribution.__table__,
+        "fk_referral_attributions_rewarded_order_invited_customer",
+    )
+
+    assert ReferralAttribution.__table__.c.rewarded_order_id.nullable is True
     assert constraint.match is None
 
 
