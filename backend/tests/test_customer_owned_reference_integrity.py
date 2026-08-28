@@ -55,13 +55,6 @@ def test_parent_customer_identity_pairs_are_unique_in_metadata():
             None,
         ),
         (
-            LoyaltyTransaction.__table__,
-            "fk_loyalty_transactions_order_customer",
-            ("order_id", "customer_id"),
-            ("orders.id", "orders.customer_id"),
-            None,
-        ),
-        (
             LoyaltyRedemptionHold.__table__,
             "fk_loyalty_redemption_holds_order_customer",
             ("order_id", "customer_id"),
@@ -111,6 +104,20 @@ def test_customer_owned_reference_constraints_match_production_metadata(
     assert tuple(constraint.column_keys) == local_columns
     assert tuple(element.target_fullname for element in constraint.elements) == remote_columns
     assert constraint.ondelete == ondelete
+
+
+def test_loyalty_order_reference_is_provenance_not_customer_ownership():
+    """Referral rewards point at the invited customer's source order.
+
+    The loyalty transaction belongs to the referrer, so a global
+    (order_id, customer_id) ownership FK would reject a valid referral reward.
+    """
+
+    names = {constraint.name for constraint in LoyaltyTransaction.__table__.constraints}
+    labels = {label for label, _ in migration.OWNERSHIP_CHECKS}
+
+    assert "fk_loyalty_transactions_order_customer" not in names
+    assert "loyalty_transactions.order_id/customer_id" not in labels
 
 
 def test_support_ticket_privacy_anonymization_remains_schema_valid():
