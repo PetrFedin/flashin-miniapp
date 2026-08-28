@@ -5,8 +5,10 @@ metadata prevents local/test databases created with ``Base.metadata.create_all``
 from being weaker than PostgreSQL production.
 """
 
-from sqlalchemy import CheckConstraint, Index, UniqueConstraint, text
+from sqlalchemy import CheckConstraint, ForeignKeyConstraint, Index, UniqueConstraint, text
+from sqlalchemy.orm import configure_mappers
 
+from .checkout_models import CheckoutAttempt
 from .money_model_types import apply_money_model_types
 from .models import (
     AdminPasswordReset,
@@ -27,9 +29,11 @@ from .models import (
     PromoCode,
     ReferralCode,
     ReturnRequest,
+    SupportTicket,
     WebhookDestination,
     WebhookOutbox,
 )
+from .pilot_models import PilotOrderSlot
 
 
 def _constraint_names(table) -> set[str]:
@@ -55,6 +59,25 @@ def _replace_check(table, name: str, expression: str) -> None:
 def _unique(table, name: str, *columns: str) -> None:
     if name not in _constraint_names(table):
         table.append_constraint(UniqueConstraint(*columns, name=name))
+
+
+def _foreign_key(
+    table,
+    name: str,
+    local_columns: tuple[str, ...],
+    remote_columns: tuple[str, ...],
+    *,
+    ondelete: str | None = None,
+) -> None:
+    if name not in _constraint_names(table):
+        table.append_constraint(
+            ForeignKeyConstraint(
+                local_columns,
+                remote_columns,
+                name=name,
+                ondelete=ondelete,
+            )
+        )
 
 
 def _index(table, name: str, columns: list) -> None:
@@ -144,6 +167,8 @@ def apply_model_constraints() -> None:
         "url",
         "event_type",
     )
+    _unique(Order.__table__, "uq_orders_id_customer_id", "id", "customer_id")
+    _unique(Cart.__table__, "uq_carts_id_customer_id", "id", "customer_id")
 
     _index(
         WebhookOutbox.__table__,
@@ -222,5 +247,71 @@ def apply_model_constraints() -> None:
     )
 
 
+def apply_customer_owned_reference_constraints() -> None:
+    """Add cross-table ownership invariants after ORM joins are configured.
+
+    Existing relationships intentionally continue to use their original
+    single-column foreign keys. Configuring the mappers before these composite
+    constraints are attached prevents the additional database-level path from
+    making relationship inference ambiguous while keeping create_all metadata
+    as strict as production Alembic migrations.
+    """
+
+    order_target = ("orders.id", "orders.customer_id")
+    cart_target = ("carts.id", "carts.customer_id")
+
+    _foreign_key(
+        ReturnRequest.__table__,
+        "fk_return_requests_order_customer",
+        ("order_id", "customer_id"),
+        order_target,
+    )
+    _foreign_key(
+        SupportTicket.__table__,
+        "fk_support_tickets_order_customer",
+        ("order_id", "customer_id"),
+        order_target,
+    )
+    _foreign_key(
+        LoyaltyTransaction.__table__,
+        "fk_loyalty_transactions_order_customer",
+        ("order_id", "customer_id"),
+        order_target,
+    )
+    _foreign_key(
+        LoyaltyRedemptionHold.__table__,
+        "fk_loyalty_redemption_holds_order_customer",
+        ("order_id", "customer_id"),
+        order_target,
+    )
+    _foreign_key(
+        LoyaltyRedemptionHold.__table__,
+        "fk_loyalty_redemption_holds_cart_customer",
+        ("cart_id", "customer_id"),
+        cart_target,
+    )
+    _foreign_key(
+        CheckoutAttempt.__table__,
+        "fk_checkout_attempts_order_customer",
+        ("order_id", "customer_id"),
+        order_target,
+    )
+    _foreign_key(
+        CheckoutAttempt.__table__,
+        "fk_checkout_attempts_cart_customer",
+        ("cart_id", "customer_id"),
+        cart_target,
+    )
+    _foreign_key(
+        PilotOrderSlot.__table__,
+        "fk_pilot_order_slots_order_customer",
+        ("order_id", "customer_id"),
+        order_target,
+        ondelete="CASCADE",
+    )
+
+
 apply_money_model_types()
 apply_model_constraints()
+configure_mappers()
+apply_customer_owned_reference_constraints()
