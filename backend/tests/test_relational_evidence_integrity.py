@@ -186,7 +186,7 @@ def test_migration_is_fail_closed_and_never_rewrites_business_rows():
     source = MIGRATION.read_text(encoding="utf-8")
 
     assert "0037_product_variant_reference_integrity" in source
-    assert "payment_reconciliations reference an order different" in source
+    assert "payment reconciliations reference an order different" in source
     assert "fulfillment task items reference order items from another order" in source
     assert "fk_payment_reconciliations_payment_order" in source
     assert "trg_fulfillment_task_items_same_order" in source
