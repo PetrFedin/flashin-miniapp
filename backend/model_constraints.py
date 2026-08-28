@@ -27,6 +27,7 @@ from .models import (
     PaymentEvent,
     ProductVariant,
     PromoCode,
+    ReferralAttribution,
     ReferralCode,
     ReturnRequest,
     SupportTicket,
@@ -307,6 +308,12 @@ def apply_customer_owned_reference_constraints() -> None:
         ("order_id", "customer_id"),
         order_target,
         ondelete="CASCADE",
+    )
+    _foreign_key(
+        ReferralAttribution.__table__,
+        "fk_referral_attributions_rewarded_order_invited_customer",
+        ("rewarded_order_id", "invited_customer_id"),
+        order_target,
     )
 
 
