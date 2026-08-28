@@ -5,7 +5,15 @@ metadata prevents local/test databases created with ``Base.metadata.create_all``
 from being weaker than PostgreSQL production.
 """
 
-from sqlalchemy import CheckConstraint, ForeignKeyConstraint, Index, UniqueConstraint, text
+from sqlalchemy import (
+    CheckConstraint,
+    DDL,
+    ForeignKeyConstraint,
+    Index,
+    UniqueConstraint,
+    event,
+    text,
+)
 from sqlalchemy.orm import configure_mappers
 
 from .checkout_models import CheckoutAttempt
@@ -18,6 +26,7 @@ from .models import (
     CartItem,
     CrmProfile,
     FulfillmentTask,
+    FulfillmentTaskItem,
     InventoryMovement,
     LoyaltyRedemptionHold,
     LoyaltyTransaction,
@@ -25,6 +34,7 @@ from .models import (
     OrderItem,
     Payment,
     PaymentEvent,
+    PaymentReconciliation,
     ProductVariant,
     PromoCode,
     ReferralAttribution,
@@ -176,6 +186,7 @@ def apply_model_constraints() -> None:
         "id",
         "product_id",
     )
+    _unique(Payment.__table__, "uq_payments_id_order_id", "id", "order_id")
 
     _index(
         WebhookOutbox.__table__,
@@ -341,8 +352,112 @@ def apply_product_variant_reference_constraints() -> None:
     )
 
 
+def apply_payment_reconciliation_reference_constraints() -> None:
+    """Bind local reconciliation references without constraining provider evidence."""
+
+    _foreign_key(
+        PaymentReconciliation.__table__,
+        "fk_payment_reconciliations_payment_order",
+        ("payment_id", "order_id"),
+        ("payments.id", "payments.order_id"),
+    )
+
+
+def register_fulfillment_task_item_order_triggers() -> None:
+    """Make create_all databases enforce the same same-order rule as Alembic.
+
+    ``FulfillmentTaskItem`` does not duplicate ``order_id``, so this invariant
+    cannot be represented as a normal composite foreign key without changing
+    the data model. Production uses a PostgreSQL trigger. Tests/local SQLite
+    receive an equivalent trigger through SQLAlchemy DDL events.
+    """
+
+    table = FulfillmentTaskItem.__table__
+    marker = "fulfillment_task_item_same_order_triggers_registered"
+    if table.info.get(marker):
+        return
+    table.info[marker] = True
+
+    sqlite_insert = DDL(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_fulfillment_task_items_same_order_insert
+        BEFORE INSERT ON fulfillment_task_items
+        FOR EACH ROW
+        WHEN NOT EXISTS (
+            SELECT 1
+            FROM fulfillment_tasks AS task
+            JOIN order_items AS order_item
+              ON order_item.id = NEW.order_item_id
+            WHERE task.id = NEW.task_id
+              AND task.order_id = order_item.order_id
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'fulfillment task item must reference an order item from the same order');
+        END
+        """
+    ).execute_if(dialect="sqlite")
+    sqlite_update = DDL(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_fulfillment_task_items_same_order_update
+        BEFORE UPDATE OF task_id, order_item_id ON fulfillment_task_items
+        FOR EACH ROW
+        WHEN NOT EXISTS (
+            SELECT 1
+            FROM fulfillment_tasks AS task
+            JOIN order_items AS order_item
+              ON order_item.id = NEW.order_item_id
+            WHERE task.id = NEW.task_id
+              AND task.order_id = order_item.order_id
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'fulfillment task item must reference an order item from the same order');
+        END
+        """
+    ).execute_if(dialect="sqlite")
+    postgres_function = DDL(
+        """
+        CREATE OR REPLACE FUNCTION enforce_fulfillment_task_item_same_order()
+        RETURNS trigger AS $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM fulfillment_tasks AS task
+                JOIN order_items AS order_item
+                  ON order_item.id = NEW.order_item_id
+                WHERE task.id = NEW.task_id
+                  AND task.order_id = order_item.order_id
+            ) THEN
+                RAISE EXCEPTION 'fulfillment task item must reference an order item from the same order';
+            END IF;
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql
+        """
+    ).execute_if(dialect="postgresql")
+    postgres_trigger = DDL(
+        """
+        CREATE TRIGGER trg_fulfillment_task_items_same_order
+        BEFORE INSERT OR UPDATE OF task_id, order_item_id
+        ON fulfillment_task_items
+        FOR EACH ROW
+        EXECUTE FUNCTION enforce_fulfillment_task_item_same_order()
+        """
+    ).execute_if(dialect="postgresql")
+    postgres_drop_function = DDL(
+        "DROP FUNCTION IF EXISTS enforce_fulfillment_task_item_same_order()"
+    ).execute_if(dialect="postgresql")
+
+    event.listen(table, "after_create", sqlite_insert)
+    event.listen(table, "after_create", sqlite_update)
+    event.listen(table, "after_create", postgres_function)
+    event.listen(table, "after_create", postgres_trigger)
+    event.listen(table, "after_drop", postgres_drop_function)
+
+
 apply_money_model_types()
 apply_model_constraints()
 configure_mappers()
 apply_customer_owned_reference_constraints()
 apply_product_variant_reference_constraints()
+apply_payment_reconciliation_reference_constraints()
+register_fulfillment_task_item_order_triggers()
