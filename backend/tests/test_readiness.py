@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from backend.api import health
 
 
-CURRENT_HEAD = "0036_customer_owned_reference_integrity"
+CURRENT_HEAD = "0037_product_variant_reference_integrity"
 
 
 class ScalarResult:
