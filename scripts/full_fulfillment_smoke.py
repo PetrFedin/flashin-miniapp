@@ -203,6 +203,16 @@ def main() -> int:
         )
         assert packed["status"] == "packed"
 
+        rejected_packed_edit = client.patch(
+            f"/api/fulfillment/task-items/{task_item['task_item_id']}"
+            "?picked_qty=0&status=to_pick"
+        )
+        assert rejected_packed_edit.status_code == 409
+        assert (
+            rejected_packed_edit.json()["detail"]
+            == "Picklist cannot be edited while fulfillment task is packed"
+        )
+
         ready = _expect(
             client.patch(
                 f"/api/fulfillment/tasks/{task_id}",
@@ -212,6 +222,16 @@ def main() -> int:
             "mark ready",
         )
         assert ready["status"] == "ready"
+
+        rejected_ready_edit = client.patch(
+            f"/api/fulfillment/task-items/{task_item['task_item_id']}"
+            "?picked_qty=0&status=to_pick"
+        )
+        assert rejected_ready_edit.status_code == 409
+        assert (
+            rejected_ready_edit.json()["detail"]
+            == "Picklist cannot be edited while fulfillment task is ready"
+        )
 
         shipment = _expect(
             client.post(
