@@ -248,13 +248,18 @@ def apply_model_constraints() -> None:
 
 
 def apply_customer_owned_reference_constraints() -> None:
-    """Add cross-table ownership invariants after ORM joins are configured.
+    """Add true customer-owned cross-table invariants after ORM joins are configured.
 
     Existing relationships intentionally continue to use their original
     single-column foreign keys. Configuring the mappers before these composite
     constraints are attached prevents the additional database-level path from
     making relationship inference ambiguous while keeping create_all metadata
     as strict as production Alembic migrations.
+
+    ``LoyaltyTransaction.order_id`` is deliberately excluded: referral reward
+    and referral refund rows credit/debit the referrer while pointing at the
+    invited customer's source order, so that column is provenance rather than
+    an ownership relation.
     """
 
     order_target = ("orders.id", "orders.customer_id")
@@ -269,12 +274,6 @@ def apply_customer_owned_reference_constraints() -> None:
     _foreign_key(
         SupportTicket.__table__,
         "fk_support_tickets_order_customer",
-        ("order_id", "customer_id"),
-        order_target,
-    )
-    _foreign_key(
-        LoyaltyTransaction.__table__,
-        "fk_loyalty_transactions_order_customer",
         ("order_id", "customer_id"),
         order_target,
     )
