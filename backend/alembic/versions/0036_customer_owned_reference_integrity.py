@@ -88,6 +88,16 @@ OWNERSHIP_CHECKS: tuple[OwnershipCheck, ...] = (
         WHERE child.customer_id <> parent.customer_id
         """,
     ),
+    (
+        "referral_attributions.rewarded_order_id/invited_customer_id",
+        """
+        SELECT count(*)
+        FROM referral_attributions AS child
+        JOIN orders AS parent ON parent.id = child.rewarded_order_id
+        WHERE child.rewarded_order_id IS NOT NULL
+          AND child.invited_customer_id <> parent.customer_id
+        """,
+    ),
 )
 
 
@@ -176,9 +186,21 @@ def upgrade() -> None:
         ["id", "customer_id"],
         ondelete="CASCADE",
     )
+    op.create_foreign_key(
+        "fk_referral_attributions_rewarded_order_invited_customer",
+        "referral_attributions",
+        "orders",
+        ["rewarded_order_id", "invited_customer_id"],
+        ["id", "customer_id"],
+    )
 
 
 def downgrade() -> None:
+    op.drop_constraint(
+        "fk_referral_attributions_rewarded_order_invited_customer",
+        "referral_attributions",
+        type_="foreignkey",
+    )
     op.drop_constraint(
         "fk_pilot_order_slots_order_customer",
         "pilot_order_slots",
