@@ -11,6 +11,8 @@ from ..services.rbac import FULFILLMENT_READ_PERMISSION, require_permission
 
 router = APIRouter(prefix="/fulfillment", tags=["fulfillment"])
 
+_PICKLIST_EDITABLE_TASK_STATUSES = frozenset({"new", "picking", "blocked"})
+
 
 @router.get("/tasks", response_model=list[FulfillmentTaskOut])
 def list_tasks(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
@@ -132,14 +134,53 @@ def update_task_item(
         raise HTTPException(status_code=400, detail="Picklist issue requires a meaningful comment")
 
     try:
+        # Discover the parent without taking a child lock. All state-changing
+        # fulfillment paths then use one canonical lock order: task -> task item
+        # -> order item. This serializes packing against picklist mutation and
+        # avoids the inverse child -> parent lock order that can deadlock.
+        task_id = (
+            db.query(FulfillmentTaskItem.task_id)
+            .filter(FulfillmentTaskItem.id == task_item_id)
+            .scalar()
+        )
+        if task_id is None:
+            raise HTTPException(status_code=404, detail="Fulfillment task item not found")
+
+        task = (
+            db.query(FulfillmentTask)
+            .filter(FulfillmentTask.id == task_id)
+            .with_for_update()
+            .first()
+        )
+        if not task:
+            raise HTTPException(
+                status_code=409,
+                detail="Picklist item is linked to a missing fulfillment task",
+            )
+        task_status = str(task.status or "").strip().lower()
+        if task_status not in _PICKLIST_EDITABLE_TASK_STATUSES:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Picklist cannot be edited while fulfillment task is {task_status}",
+            )
+
+        # Re-read and lock the child under the locked parent. If a legacy/direct
+        # writer re-parented the row between discovery and the parent lock, fail
+        # closed rather than mutating under the wrong task lock.
         item = (
             db.query(FulfillmentTaskItem)
-            .filter(FulfillmentTaskItem.id == task_item_id)
+            .filter(
+                FulfillmentTaskItem.id == task_item_id,
+                FulfillmentTaskItem.task_id == task.id,
+            )
             .with_for_update()
             .first()
         )
         if not item:
-            raise HTTPException(status_code=404, detail="Fulfillment task item not found")
+            raise HTTPException(
+                status_code=409,
+                detail="Fulfillment task item changed while being updated",
+            )
         order_item = (
             db.query(OrderItem)
             .filter(OrderItem.id == item.order_item_id)
