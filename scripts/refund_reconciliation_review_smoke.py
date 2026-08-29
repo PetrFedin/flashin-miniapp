@@ -15,9 +15,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from backend.api import returns as returns_api
 from backend.database import engine
 from backend.jobs import refund_jobs
 from backend.models import Customer, Order, ReturnRequest
+from backend.services.refund_state import apply_provider_refund_status
 
 
 def _provider_refund(refund_id: str, value: str, currency: str) -> dict:
@@ -41,6 +43,7 @@ def main() -> int:
         join_transaction_mode="create_savepoint",
     )
     original_fetch = refund_jobs.fetch_yookassa_refund
+    original_stop_pilot = returns_api.stop_pilot_for_order
     provider_calls: list[str] = []
 
     try:
@@ -176,6 +179,48 @@ def main() -> int:
         assert persisted_valid_order.status == "partially_refunded"
         assert persisted_valid_order.payment_status == "partially_refunded"
 
+        # Late provider observations from another concurrent approver must not
+        # demote a refund that reconciliation already finalized successfully.
+        for stale_status in ("pending", "canceled", "succeeded"):
+            stale_result = apply_provider_refund_status(
+                db,
+                persisted_valid_return,
+                persisted_valid_order,
+                stale_status,
+            )
+            assert stale_result["idempotent"] is True
+            assert stale_result["return_status"] == "approved_partial"
+            assert persisted_valid_return.status == "approved_partial"
+            assert persisted_valid_order.status == "partially_refunded"
+            assert persisted_valid_order.payment_status == "partially_refunded"
+
+        def fail_if_pilot_stopped(*args, **kwargs):
+            raise AssertionError("stale terminal review must not stop the pilot")
+
+        returns_api.stop_pilot_for_order = fail_if_pilot_stopped
+        stale_review_response = returns_api._mark_review_required(
+            db,
+            persisted_valid_return.id,
+            persisted_valid_order.id,
+            "refund-stale-provider-observation",
+        )
+        returns_api.stop_pilot_for_order = original_stop_pilot
+        assert stale_review_response is not None
+        assert stale_review_response["idempotent"] is True
+        assert stale_review_response["return_status"] == "approved_partial"
+
+        db.expire_all()
+        persisted_valid_return = (
+            db.query(ReturnRequest)
+            .filter(ReturnRequest.id == valid_return.id)
+            .one()
+        )
+        persisted_valid_order = db.query(Order).filter(Order.id == valid_order.id).one()
+        assert persisted_valid_return.status == "approved_partial"
+        assert persisted_valid_return.provider_refund_id == valid_return.provider_refund_id
+        assert persisted_valid_order.status == "partially_refunded"
+        assert persisted_valid_order.payment_status == "partially_refunded"
+
         assert sorted(provider_calls) == sorted(provider_payloads)
         second = asyncio.run(refund_jobs.reconcile_pending_refunds(db, limit=50))
         assert second == {
@@ -200,6 +245,7 @@ def main() -> int:
                     "valid_return": persisted_valid_return.id,
                     "provider_calls": len(provider_calls),
                     "automatic_rechecks_after_review": 0,
+                    "terminal_stale_observations_ignored": 4,
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -208,6 +254,7 @@ def main() -> int:
         return 0
     finally:
         refund_jobs.fetch_yookassa_refund = original_fetch
+        returns_api.stop_pilot_for_order = original_stop_pilot
         db.close()
         if outer_transaction.is_active:
             outer_transaction.rollback()
