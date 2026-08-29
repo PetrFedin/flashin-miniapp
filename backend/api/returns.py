@@ -91,6 +91,15 @@ def _mark_review_required(
     try:
         ret = db.query(ReturnRequest).filter(ReturnRequest.id == return_id).with_for_update().first()
         order = db.query(Order).filter(Order.id == order_id).with_for_update().first()
+
+        # A concurrent approver may have finalized the same provider refund while
+        # this request was validating an older/malformed provider observation.
+        # Terminal local success is monotonic: stale review evidence must not
+        # demote the return/order or trip the pilot circuit breaker.
+        if ret and ret.status in _FINAL_RETURN_STATUSES:
+            db.rollback()
+            return
+
         if ret:
             if provider_refund_id and not ret.provider_refund_id:
                 ret.provider_refund_id = provider_refund_id
