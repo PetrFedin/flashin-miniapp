@@ -53,10 +53,26 @@ def _refund_response(ret: ReturnRequest, provider_status: str, *, idempotent: bo
     }
 
 
-def _mark_retry_required(db: Session, return_id: int, order_id: int) -> None:
+def _terminal_refund_response(ret: ReturnRequest | None) -> dict | None:
+    if (
+        not ret
+        or ret.status not in _FINAL_RETURN_STATUSES
+        or not (ret.provider_refund_id or "").strip()
+    ):
+        return None
+    return _refund_response(ret, "succeeded", idempotent=True)
+
+
+def _mark_retry_required(db: Session, return_id: int, order_id: int) -> dict | None:
     try:
         ret = db.query(ReturnRequest).filter(ReturnRequest.id == return_id).with_for_update().first()
         order = db.query(Order).filter(Order.id == order_id).with_for_update().first()
+
+        if ret and ret.status in _FINAL_RETURN_STATUSES:
+            response = _terminal_refund_response(ret)
+            db.rollback()
+            return response
+
         if ret and ret.status == "processing":
             ret.status = "refund_retry_required"
         if order and order.payment_status == "refund_processing":
@@ -68,6 +84,7 @@ def _mark_retry_required(db: Session, return_id: int, order_id: int) -> None:
                 reason="refund_retry_required",
             )
         db.commit()
+        return None
     except PilotCircuitBreakerError as exc:
         db.rollback()
         raise HTTPException(
@@ -87,7 +104,7 @@ def _mark_review_required(
     return_id: int,
     order_id: int,
     provider_refund_id: str,
-) -> None:
+) -> dict | None:
     try:
         ret = db.query(ReturnRequest).filter(ReturnRequest.id == return_id).with_for_update().first()
         order = db.query(Order).filter(Order.id == order_id).with_for_update().first()
@@ -97,8 +114,9 @@ def _mark_review_required(
         # Terminal local success is monotonic: stale review evidence must not
         # demote the return/order or trip the pilot circuit breaker.
         if ret and ret.status in _FINAL_RETURN_STATUSES:
+            response = _terminal_refund_response(ret)
             db.rollback()
-            return
+            return response
 
         if ret:
             if provider_refund_id and not ret.provider_refund_id:
@@ -113,6 +131,7 @@ def _mark_review_required(
                 reason="refund_review_required",
             )
         db.commit()
+        return None
     except PilotCircuitBreakerError as exc:
         db.rollback()
         raise HTTPException(
@@ -240,8 +259,10 @@ async def approve_return(
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
 
-        if ret.status in _FINAL_RETURN_STATUSES and ret.provider_refund_id:
-            return _refund_response(ret, "succeeded", idempotent=True)
+        finalized_response = _terminal_refund_response(ret)
+        if finalized_response:
+            db.rollback()
+            return finalized_response
         if order.payment_status not in {
             "paid",
             "refund_processing",
@@ -328,7 +349,9 @@ async def approve_return(
                 return_id,
             )
     except HTTPException:
-        _mark_retry_required(db, return_id, order_id)
+        finalized_response = _mark_retry_required(db, return_id, order_id)
+        if finalized_response:
+            return finalized_response
         raise
 
     provider_refund_id = str(data.get("refund_id") or "").strip()
@@ -340,7 +363,9 @@ async def approve_return(
         if actual_provider_amount != requested_amount:
             raise HTTPException(status_code=409, detail="Provider refund amount does not match approved amount")
     except HTTPException:
-        _mark_review_required(db, return_id, order_id, provider_refund_id)
+        finalized_response = _mark_review_required(db, return_id, order_id, provider_refund_id)
+        if finalized_response:
+            return finalized_response
         raise
 
     try:
@@ -353,6 +378,16 @@ async def approve_return(
         order = db.query(Order).filter(Order.id == order_id).with_for_update().first()
         if not ret or not order:
             raise HTTPException(status_code=409, detail="Refund state disappeared during processing")
+
+        # The provider call happened outside the DB transaction. Another request
+        # may have finalized this same refund while this one was in flight.
+        # Release the locks and return the already committed terminal result before
+        # validating stale provider identifiers or amounts from this request.
+        finalized_response = _terminal_refund_response(ret)
+        if finalized_response:
+            db.rollback()
+            return finalized_response
+
         if ret.provider_refund_id and ret.provider_refund_id != provider_refund_id:
             raise HTTPException(status_code=409, detail="Return request is linked to another provider refund")
         if refund_money(ret.refund_amount, "stored refund amount") != requested_amount:
