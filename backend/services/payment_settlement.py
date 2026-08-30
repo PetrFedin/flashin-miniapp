@@ -2,6 +2,7 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import HTTPException
 
+from ..models import Customer
 from ..order_statuses import SETTLED_ORDER_PAYMENT_STATUSES
 from .event_dispatcher import emit_event
 from .fulfillment import ensure_fulfillment_task
@@ -26,12 +27,28 @@ def _order_item_quantities(order) -> dict[int, int]:
     return quantities
 
 
+def _lock_settlement_customer(db, customer_id: int) -> Customer:
+    customer = (
+        db.query(Customer)
+        .filter(Customer.id == customer_id)
+        .with_for_update()
+        .first()
+    )
+    if not customer:
+        raise HTTPException(status_code=409, detail="Settlement customer is missing")
+    return customer
+
+
 def settle_paid_order(db, order) -> bool:
     if order.payment_status in SETTLED_ORDER_PAYMENT_STATUSES:
         return False
     if order.status == "cancelled" or order.payment_status == "cancelled":
         raise HTTPException(status_code=409, detail="Cancelled order requires payment review")
 
+    # Checkout serializes customer state before inventory. Settlement must use
+    # the same customer -> variant order or a checkout for the same customer
+    # and SKU can deadlock against a payment settlement.
+    _lock_settlement_customer(db, order.customer_id)
     commit_reservations_to_sold(
         db,
         _order_item_quantities(order),
