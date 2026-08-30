@@ -110,6 +110,8 @@ jobs:
         run: python scripts/provider_integration_spine_smoke.py
       - name: Run transactional customer journey smoke
         run: python scripts/customer_journey_smoke.py
+      - name: Run checkout-settlement lock-order smoke
+        run: python scripts/checkout_settlement_lock_order_smoke.py
       - name: Run transactional referral attribution smoke
         run: python scripts/referral_attribution_smoke.py
       - name: Run transactional order cancellation smoke
