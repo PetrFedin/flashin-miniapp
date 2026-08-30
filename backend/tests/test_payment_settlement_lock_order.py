@@ -26,11 +26,11 @@ class _CustomerQuery:
 class _CustomerDb:
     def __init__(self, customer):
         self.query_model = None
-        self.query = _CustomerQuery(customer)
+        self.query_state = _CustomerQuery(customer)
 
     def query(self, model):
         self.query_model = model
-        return self.query
+        return self.query_state
 
 
 def _order(*, payment_status: str = "pending"):
@@ -112,7 +112,7 @@ def test_settlement_customer_lock_uses_for_update():
 
     assert locked is customer
     assert db.query_model is Customer
-    assert db.query.for_update is True
+    assert db.query_state.for_update is True
 
 
 def test_missing_settlement_customer_fails_closed_before_inventory():
@@ -123,4 +123,4 @@ def test_missing_settlement_customer_fails_closed_before_inventory():
 
     assert exc.value.status_code == 409
     assert exc.value.detail == "Settlement customer is missing"
-    assert db.query.for_update is True
+    assert db.query_state.for_update is True
