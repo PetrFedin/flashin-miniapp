@@ -252,12 +252,13 @@ def mark_payment_creation_review_required(
     *,
     provider_payment_id: str = "",
 ) -> None:
-    attempt = (
-        db.query(PaymentCreationAttempt)
-        .filter(PaymentCreationAttempt.id == attempt_id)
-        .with_for_update()
-        .first()
-    )
+    # Provider-integrity error handling later locks/updates Order in the same
+    # transaction. Acquire that root row before Attempt, matching begin/finalize.
+    order_id = _load_payment_creation_attempt_order_id(db, attempt_id)
+    if order_id is None:
+        return
+    _select_payment_creation_order_for_update(db, order_id)
+    attempt = _select_payment_creation_attempt_for_update(db, attempt_id)
     if not attempt or attempt.status in {
         COMPLETED_PAYMENT_ATTEMPT_STATUS,
         ABANDONED_PAYMENT_ATTEMPT_STATUS,
@@ -354,36 +355,52 @@ def _review_attempt(
     attempt.updated_at = utcnow_naive()
 
 
-def _payment_creation_attempt_order_id(db: Session, attempt_id: int) -> int:
+def _load_payment_creation_attempt_order_id(db: Session, attempt_id: int) -> int | None:
     order_id = (
         db.query(PaymentCreationAttempt.order_id)
         .filter(PaymentCreationAttempt.id == attempt_id)
         .scalar()
     )
-    if order_id is None:
-        raise HTTPException(status_code=409, detail="Payment creation attempt is missing")
-    return int(order_id)
+    return int(order_id) if order_id is not None else None
 
 
-def _lock_payment_creation_order(db: Session, order_id: int) -> Order:
-    order = (
+def _select_payment_creation_order_for_update(db: Session, order_id: int) -> Order | None:
+    return (
         db.query(Order)
         .filter(Order.id == order_id)
         .with_for_update()
         .first()
     )
+
+
+def _select_payment_creation_attempt_for_update(
+    db: Session,
+    attempt_id: int,
+) -> PaymentCreationAttempt | None:
+    return (
+        db.query(PaymentCreationAttempt)
+        .filter(PaymentCreationAttempt.id == attempt_id)
+        .with_for_update()
+        .first()
+    )
+
+
+def _payment_creation_attempt_order_id(db: Session, attempt_id: int) -> int:
+    order_id = _load_payment_creation_attempt_order_id(db, attempt_id)
+    if order_id is None:
+        raise HTTPException(status_code=409, detail="Payment creation attempt is missing")
+    return order_id
+
+
+def _lock_payment_creation_order(db: Session, order_id: int) -> Order:
+    order = _select_payment_creation_order_for_update(db, order_id)
     if not order:
         raise HTTPException(status_code=409, detail="Payment order is missing")
     return order
 
 
 def _lock_payment_creation_attempt(db: Session, attempt_id: int) -> PaymentCreationAttempt:
-    attempt = (
-        db.query(PaymentCreationAttempt)
-        .filter(PaymentCreationAttempt.id == attempt_id)
-        .with_for_update()
-        .first()
-    )
+    attempt = _select_payment_creation_attempt_for_update(db, attempt_id)
     if not attempt:
         raise HTTPException(status_code=409, detail="Payment creation attempt is missing")
     return attempt
