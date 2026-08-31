@@ -53,6 +53,11 @@ class FakeQuery:
         return None
 
     def scalar(self):
+        entity_key = str(getattr(self.entity, "key", ""))
+        if entity_key == "order_id":
+            matches = [value for value in self.session.attempts if self._matches(value)]
+            return matches[-1].order_id if matches else None
+
         function_name = str(getattr(self.entity, "name", ""))
         if function_name == "max":
             values = [
