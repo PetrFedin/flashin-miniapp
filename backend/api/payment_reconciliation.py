@@ -6,7 +6,11 @@ from ..models import Payment, PaymentReconciliation
 from ..schemas import PaymentReconciliationOut
 from ..security import get_current_admin
 from ..services.audit import log_admin_action
-from ..services.payment_reconciliation import create_reconciliation_row, resolve_reconciliation
+from ..services.payment_reconciliation import (
+    create_reconciliation_row,
+    lock_fresh_payment_for_reconciliation,
+    resolve_reconciliation,
+)
 from ..services.payments import fetch_yookassa_payment
 from ..services.rbac import (
     PAYMENT_RECONCILIATION_READ_PERMISSION,
@@ -37,17 +41,29 @@ async def check_payment(
     require_permission(db, admin, PAYMENT_RECONCILIATION_WRITE_PERMISSION)
     payment = db.query(Payment).filter(Payment.id == payment_id).first()
     if not payment:
+        db.rollback()
         raise HTTPException(status_code=404, detail="Payment not found")
 
+    order_id = int(payment.order_id)
+    provider_payment_id = str(payment.provider_payment_id or "").strip()
+    if not provider_payment_id:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Payment provider identifier is missing")
+
+    # Do not keep an ORM transaction open across external provider I/O. Only
+    # primitive identity is retained; local payment state is reloaded/locked
+    # after the provider response before any comparison is persisted.
+    db.rollback()
+
     try:
-        provider = await fetch_yookassa_payment(payment.provider_payment_id)
+        provider = await fetch_yookassa_payment(provider_payment_id)
         provider_id = str(provider.get("id") or "").strip()
         if not provider_id:
             raise HTTPException(
                 status_code=502,
                 detail="Payment provider returned no payment identifier",
             )
-        if provider_id != payment.provider_payment_id:
+        if provider_id != provider_payment_id:
             raise HTTPException(
                 status_code=502,
                 detail="Payment provider returned a different payment identifier",
@@ -61,10 +77,16 @@ async def check_payment(
         if not isinstance(amount_payload, dict) or amount_payload.get("value") in (None, ""):
             raise HTTPException(status_code=502, detail="Payment provider returned no amount")
 
+        fresh_payment = lock_fresh_payment_for_reconciliation(
+            db,
+            payment_id,
+            expected_order_id=order_id,
+            expected_provider_payment_id=provider_payment_id,
+        )
         try:
             row = create_reconciliation_row(
                 db,
-                payment,
+                fresh_payment,
                 provider_status,
                 amount_payload["value"],
             )
@@ -82,8 +104,8 @@ async def check_payment(
             "payment_reconciliation",
             row.id,
             {
-                "payment_id": payment.id,
-                "order_id": payment.order_id,
+                "payment_id": fresh_payment.id,
+                "order_id": fresh_payment.order_id,
                 "result": row.status,
                 "local_status": row.local_status,
                 "provider_status": row.provider_status,
