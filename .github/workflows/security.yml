@@ -20,6 +20,7 @@ concurrency:
 jobs:
   dependency-review:
     if: github.event_name == 'pull_request' || github.event_name == 'push'
+    needs: dependency-vulnerability-scan
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -28,13 +29,43 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # releases/v4, 2026-07-16
+      - name: Detect GitHub dependency graph support
+        id: dependency-graph
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          response_file="$(mktemp)"
+          status="$(
+            curl --silent --show-error \
+              --output "$response_file" \
+              --write-out '%{http_code}' \
+              --header 'Accept: application/vnd.github+json' \
+              --header "Authorization: Bearer ${GH_TOKEN}" \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/dependency-graph/sbom"
+          )"
+          case "$status" in
+            200)
+              echo 'available=true' >> "$GITHUB_OUTPUT"
+              ;;
+            403|404)
+              echo 'available=false' >> "$GITHUB_OUTPUT"
+              echo '::warning title=Dependency graph unavailable::GitHub differential dependency review is unavailable for this repository. HIGH/CRITICAL dependency enforcement remains mandatory through dependency-vulnerability-scan; enable Dependency graph in repository security settings to restore differential review.'
+              ;;
+            *)
+              cat "$response_file" >&2
+              echo "::error title=Dependency graph preflight failed::Unexpected GitHub API status ${status}."
+              exit 1
+              ;;
+          esac
       - name: Review pull request dependency changes
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && steps.dependency-graph.outputs.available == 'true'
         uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
         with:
           fail-on-severity: high
       - name: Require a previous release commit for push review
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && steps.dependency-graph.outputs.available == 'true'
         env:
           BEFORE_SHA: ${{ github.event.before }}
         run: |
@@ -42,12 +73,17 @@ jobs:
           test -n "$BEFORE_SHA"
           test "$BEFORE_SHA" != "0000000000000000000000000000000000000000"
       - name: Review release dependency changes
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && steps.dependency-graph.outputs.available == 'true'
         uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
         with:
           base-ref: ${{ github.event.before }}
           head-ref: ${{ github.sha }}
           fail-on-severity: high
+      - name: Record dependency-review fallback
+        if: steps.dependency-graph.outputs.available != 'true'
+        run: |
+          set -euo pipefail
+          echo 'GitHub Dependency Graph is unavailable; mandatory Trivy HIGH/CRITICAL dependency scan passed before this job via needs.'
 
   codeql:
     runs-on: ubuntu-latest
