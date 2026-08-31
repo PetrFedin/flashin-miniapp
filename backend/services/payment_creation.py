@@ -354,13 +354,30 @@ def _review_attempt(
     attempt.updated_at = utcnow_naive()
 
 
-def finalize_payment_creation(
-    db: Session,
-    attempt_id: int,
-    provider_payment_id: str,
-    provider_status: str,
-    confirmation_url: str,
-) -> tuple[Order, Payment]:
+def _payment_creation_attempt_order_id(db: Session, attempt_id: int) -> int:
+    order_id = (
+        db.query(PaymentCreationAttempt.order_id)
+        .filter(PaymentCreationAttempt.id == attempt_id)
+        .scalar()
+    )
+    if order_id is None:
+        raise HTTPException(status_code=409, detail="Payment creation attempt is missing")
+    return int(order_id)
+
+
+def _lock_payment_creation_order(db: Session, order_id: int) -> Order:
+    order = (
+        db.query(Order)
+        .filter(Order.id == order_id)
+        .with_for_update()
+        .first()
+    )
+    if not order:
+        raise HTTPException(status_code=409, detail="Payment order is missing")
+    return order
+
+
+def _lock_payment_creation_attempt(db: Session, attempt_id: int) -> PaymentCreationAttempt:
     attempt = (
         db.query(PaymentCreationAttempt)
         .filter(PaymentCreationAttempt.id == attempt_id)
@@ -369,6 +386,35 @@ def finalize_payment_creation(
     )
     if not attempt:
         raise HTTPException(status_code=409, detail="Payment creation attempt is missing")
+    return attempt
+
+
+def _lock_finalize_order_then_attempt(
+    db: Session,
+    attempt_id: int,
+) -> tuple[Order, PaymentCreationAttempt]:
+    # begin_payment_creation() serializes on Order before touching Payment or
+    # PaymentCreationAttempt. Finalization must reacquire that same root lock
+    # first or concurrent retry/finalize requests can form Order <-> Attempt.
+    order_id = _payment_creation_attempt_order_id(db, attempt_id)
+    order = _lock_payment_creation_order(db, order_id)
+    attempt = _lock_payment_creation_attempt(db, attempt_id)
+    if int(attempt.order_id) != int(order.id):
+        raise HTTPException(
+            status_code=409,
+            detail="Payment creation attempt changed during finalization",
+        )
+    return order, attempt
+
+
+def finalize_payment_creation(
+    db: Session,
+    attempt_id: int,
+    provider_payment_id: str,
+    provider_status: str,
+    confirmation_url: str,
+) -> tuple[Order, Payment]:
+    order, attempt = _lock_finalize_order_then_attempt(db, attempt_id)
 
     if attempt.status == COMPLETED_PAYMENT_ATTEMPT_STATUS and attempt.provider_payment_id:
         existing = (
@@ -387,15 +433,6 @@ def finalize_payment_creation(
         ABANDONED_PAYMENT_ATTEMPT_STATUS,
     }:
         raise HTTPException(status_code=409, detail="Payment creation attempt cannot be finalized automatically")
-
-    order = (
-        db.query(Order)
-        .filter(Order.id == attempt.order_id)
-        .with_for_update()
-        .first()
-    )
-    if not order:
-        raise HTTPException(status_code=409, detail="Payment order is missing")
 
     payment = (
         db.query(Payment)
