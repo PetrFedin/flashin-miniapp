@@ -74,6 +74,20 @@ def _lock_cart(db: Session, cart_id: int) -> Cart:
     return cart
 
 
+def _attach_referral_then_lock_cart(
+    db: Session,
+    code: str,
+    *,
+    customer_id: int,
+    cart_id: int,
+) -> Cart:
+    # Checkout serializes Customer before Cart. get_or_create_cart() commits
+    # before this mutation phase, so referral must reacquire that same order.
+    if not attach_referral_to_customer(db, code, customer_id):
+        raise HTTPException(status_code=404, detail="Referral code not found or unavailable")
+    return _lock_cart(db, cart_id)
+
+
 def _validate_item(item: CartItem) -> None:
     if not item.product or not item.variant or item.variant.product_id != item.product_id:
         raise HTTPException(
@@ -450,9 +464,12 @@ def apply_referral(payload: ReferralApplyIn, customer: Customer = Depends(get_cu
     if not code:
         raise HTTPException(status_code=422, detail="Referral code is required")
     try:
-        locked_cart = _lock_cart(db, cart.id)
-        if not attach_referral_to_customer(db, code, customer.id):
-            raise HTTPException(status_code=404, detail="Referral code not found or unavailable")
+        locked_cart = _attach_referral_then_lock_cart(
+            db,
+            code,
+            customer_id=customer.id,
+            cart_id=cart.id,
+        )
         locked_cart.referral_code = code[:64]
         return _commit_reconciled_cart(db, cart.id)
     except HTTPException:
