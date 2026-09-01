@@ -21,17 +21,20 @@ RUN printf '%s\n' \
     && go mod init flashin-ingress \
     && go get \
       "github.com/caddyserver/caddy/v2@v${CADDY_VERSION}" \
+      golang.org/x/crypto@v0.55.0 \
       golang.org/x/net@v0.56.0 \
       golang.org/x/text@v0.39.0 \
       google.golang.org/grpc@v1.82.1 \
     && go mod tidy \
     && go mod verify \
     && go list -m -f '{{.Path}} {{.Version}}' all | grep -Fx "github.com/caddyserver/caddy/v2 v${CADDY_VERSION}" \
+    && go list -m -f '{{.Path}} {{.Version}}' all | grep -Fx 'golang.org/x/crypto v0.55.0' \
     && go list -m -f '{{.Path}} {{.Version}}' all | grep -Fx 'golang.org/x/net v0.56.0' \
     && go list -m -f '{{.Path}} {{.Version}}' all | grep -Fx 'golang.org/x/text v0.39.0' \
     && go list -m -f '{{.Path}} {{.Version}}' all | grep -Fx 'google.golang.org/grpc v1.82.1' \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/caddy . \
-    && go version -m /out/caddy | grep -E "github.com/caddyserver/caddy/v2[[:space:]]+v${CADDY_VERSION}"
+    && go version -m /out/caddy | grep -E "github.com/caddyserver/caddy/v2[[:space:]]+v${CADDY_VERSION}" \
+    && go version -m /out/caddy | grep -E 'golang.org/x/crypto[[:space:]]+v0\.55\.0'
 
 FROM alpine:3.24.1
 # The base tag can lag patched packages published to the Alpine 3.24
