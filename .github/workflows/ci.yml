@@ -124,6 +124,8 @@ jobs:
         run: python scripts/payment_reconciliation_recovery_smoke.py
       - name: Run transactional cumulative refund smoke
         run: python scripts/cumulative_refund_smoke.py
+      - name: Run refund return lock-order smoke
+        run: python scripts/refund_return_lock_order_smoke.py
       - name: Run atomic business event worker smoke
         run: python scripts/business_event_worker_smoke.py
       - name: Run business event recovery smoke
