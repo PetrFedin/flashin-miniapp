@@ -14,6 +14,10 @@ from ..services.pilot_circuit_breaker import (
     trip_pilot_circuit_breaker,
 )
 from ..services.rbac import REFUNDS_WRITE_PERMISSION, require_permission
+from ..services.refund_locking import (
+    lock_return_request_for_approval,
+    lock_return_request_for_known_order,
+)
 from ..services.refund_state import (
     apply_provider_refund_status,
     provider_refund_amount,
@@ -65,8 +69,7 @@ def _terminal_refund_response(ret: ReturnRequest | None) -> dict | None:
 
 def _mark_retry_required(db: Session, return_id: int, order_id: int) -> dict | None:
     try:
-        ret = db.query(ReturnRequest).filter(ReturnRequest.id == return_id).with_for_update().first()
-        order = db.query(Order).filter(Order.id == order_id).with_for_update().first()
+        order, ret = lock_return_request_for_known_order(db, return_id, order_id)
 
         if ret and ret.status in _FINAL_RETURN_STATUSES:
             response = _terminal_refund_response(ret)
@@ -85,6 +88,9 @@ def _mark_retry_required(db: Session, return_id: int, order_id: int) -> dict | N
             )
         db.commit()
         return None
+    except HTTPException:
+        db.rollback()
+        raise
     except PilotCircuitBreakerError as exc:
         db.rollback()
         raise HTTPException(
@@ -106,8 +112,7 @@ def _mark_review_required(
     provider_refund_id: str,
 ) -> dict | None:
     try:
-        ret = db.query(ReturnRequest).filter(ReturnRequest.id == return_id).with_for_update().first()
-        order = db.query(Order).filter(Order.id == order_id).with_for_update().first()
+        order, ret = lock_return_request_for_known_order(db, return_id, order_id)
 
         # A concurrent approver may have finalized the same provider refund while
         # this request was validating an older/malformed provider observation.
@@ -132,6 +137,9 @@ def _mark_review_required(
             )
         db.commit()
         return None
+    except HTTPException:
+        db.rollback()
+        raise
     except PilotCircuitBreakerError as exc:
         db.rollback()
         raise HTTPException(
@@ -246,18 +254,7 @@ async def approve_return(
     require_permission(db, admin, REFUNDS_WRITE_PERMISSION)
 
     try:
-        ret = (
-            db.query(ReturnRequest)
-            .filter(ReturnRequest.id == payload.return_id)
-            .with_for_update()
-            .first()
-        )
-        if not ret:
-            raise HTTPException(status_code=404, detail="Return request not found")
-
-        order = db.query(Order).filter(Order.id == ret.order_id).with_for_update().first()
-        if not order:
-            raise HTTPException(status_code=404, detail="Order not found")
+        order, ret = lock_return_request_for_approval(db, payload.return_id)
 
         finalized_response = _terminal_refund_response(ret)
         if finalized_response:
@@ -369,13 +366,7 @@ async def approve_return(
         raise
 
     try:
-        ret = (
-            db.query(ReturnRequest)
-            .filter(ReturnRequest.id == return_id)
-            .with_for_update()
-            .first()
-        )
-        order = db.query(Order).filter(Order.id == order_id).with_for_update().first()
+        order, ret = lock_return_request_for_known_order(db, return_id, order_id)
         if not ret or not order:
             raise HTTPException(status_code=409, detail="Refund state disappeared during processing")
 
