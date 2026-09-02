@@ -138,13 +138,13 @@ def update_fulfillment_status(
         raise ValueError(f"Fulfillment transition {task.status} -> {normalized_status} is not allowed")
     if normalized_status == "blocked" and len((comment or "").strip()) < 5:
         raise ValueError("Blocked fulfillment task requires a meaningful comment")
+    if normalized_status == "packed" and not _picklist_is_complete(db, task):
+        raise ValueError("Every picklist item must be fully picked before packing")
 
     if order.payment_status not in {"paid", "partially_refunded"}:
         raise ValueError("Only a paid order can enter fulfillment")
     if order.status in {"cancelled", "refunded", "refund_requested"}:
         raise ValueError("Order cannot be fulfilled in its current state")
-    if normalized_status == "packed" and not _picklist_is_complete(db, task):
-        raise ValueError("Every picklist item must be fully picked before packing")
 
     now = utcnow_naive()
     task.status = normalized_status
