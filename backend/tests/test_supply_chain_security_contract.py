@@ -98,12 +98,13 @@ def test_ingress_builds_versioned_caddy_with_patched_go_dependencies():
     assert "golang.org/x/crypto@v0.55.0" in ingress
     assert "golang.org/x/net@v0.57.0" in ingress
     assert "golang.org/x/text@v0.41.0" in ingress
-    assert "google.golang.org/grpc@v1.82.1" in ingress
+    assert "google.golang.org/grpc@v1.83.1" in ingress
     assert "go mod verify" in ingress
     assert "go version -m /out/caddy" in ingress
     assert "golang.org/x/crypto[[:space:]]+v0\\.55\\.0" in ingress
     assert "golang.org/x/net[[:space:]]+v0\\.57\\.0" in ingress
     assert "golang.org/x/text[[:space:]]+v0\\.41\\.0" in ingress
+    assert "google.golang.org/grpc[[:space:]]+v1\\.83\\.1" in ingress
     assert "FROM alpine:3.24.1" in ingress
     assert "dockerfile: Dockerfile.ingress" in compose
     assert "image: caddy:2" not in compose
