@@ -109,10 +109,22 @@ def _picklist_is_complete(db: Session, task: FulfillmentTask) -> bool:
 
 def update_fulfillment_status(
     db: Session,
+    order: Order,
     task: FulfillmentTask,
     status: str,
     comment: str = "",
 ) -> None:
+    """Apply a transition after the caller locks Order -> FulfillmentTask.
+
+    This service intentionally never reacquires the Order row. Root locks must
+    be established before child picklist/SLA rows are touched so fulfillment
+    transitions cannot invert the Order -> FulfillmentTask order used by paid
+    settlement and task creation paths.
+    """
+
+    if int(task.order_id) != int(order.id):
+        raise ValueError("Fulfillment task changed while being updated")
+
     normalized_status = str(status or "").strip().lower()
     if normalized_status not in _FULFILLMENT_TRANSITIONS:
         raise ValueError("Unsupported fulfillment status")
@@ -126,21 +138,13 @@ def update_fulfillment_status(
         raise ValueError(f"Fulfillment transition {task.status} -> {normalized_status} is not allowed")
     if normalized_status == "blocked" and len((comment or "").strip()) < 5:
         raise ValueError("Blocked fulfillment task requires a meaningful comment")
-    if normalized_status == "packed" and not _picklist_is_complete(db, task):
-        raise ValueError("Every picklist item must be fully picked before packing")
 
-    order = (
-        db.query(Order)
-        .filter(Order.id == task.order_id)
-        .with_for_update()
-        .first()
-    )
-    if not order:
-        raise ValueError("Fulfillment task is linked to a missing order")
     if order.payment_status not in {"paid", "partially_refunded"}:
         raise ValueError("Only a paid order can enter fulfillment")
     if order.status in {"cancelled", "refunded", "refund_requested"}:
         raise ValueError("Order cannot be fulfilled in its current state")
+    if normalized_status == "packed" and not _picklist_is_complete(db, task):
+        raise ValueError("Every picklist item must be fully picked before packing")
 
     now = utcnow_naive()
     task.status = normalized_status
