@@ -3,9 +3,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import Order, ReturnRequest
 from ..services.payments import fetch_yookassa_refund
 from ..services.pilot_circuit_breaker import PilotCircuitBreakerError, trip_pilot_circuit_breaker
+from ..services.refund_locking import lock_return_request_for_provider_refund
 from ..services.refund_state import (
     apply_provider_refund_status,
     provider_refund_amount,
@@ -68,15 +68,9 @@ async def _process_refund_webhook(payload: dict, db: Session):
         raise HTTPException(status_code=409, detail="Provider refund is not succeeded")
 
     try:
-        ret = (
-            db.query(ReturnRequest)
-            .filter(ReturnRequest.provider_refund_id == refund_id)
-            .with_for_update()
-            .first()
-        )
+        order, ret = lock_return_request_for_provider_refund(db, refund_id)
         if not ret:
             raise HTTPException(status_code=409, detail="Provider refund is not bound to a return request")
-        order = db.query(Order).filter(Order.id == ret.order_id).with_for_update().first()
         if not order:
             raise HTTPException(status_code=409, detail="Refund order is missing")
 

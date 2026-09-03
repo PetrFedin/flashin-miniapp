@@ -41,9 +41,10 @@ class _Db:
         self.rollbacks += 1
 
 
-def _return(status="processing", provider_refund_id=""):
+def _return(status="processing", provider_refund_id="", order_id=202):
     return SimpleNamespace(
         id=101,
+        order_id=order_id,
         status=status,
         provider_refund_id=provider_refund_id,
         refund_amount=250.0,
