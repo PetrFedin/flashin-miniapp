@@ -86,6 +86,15 @@ def _release_hold(hold: LoyaltyRedemptionHold | None) -> None:
     hold.released_at = utcnow_naive()
 
 
+def _locked_loyalty_profile(db: Session, customer_id: int) -> CrmProfile | None:
+    return (
+        db.query(CrmProfile)
+        .filter(CrmProfile.customer_id == customer_id)
+        .with_for_update()
+        .first()
+    )
+
+
 def _reserved_holds(db: Session, cart: Cart) -> tuple[list[LoyaltyRedemptionHold], LoyaltyRedemptionHold | None]:
     holds = (
         db.query(LoyaltyRedemptionHold)
@@ -186,6 +195,11 @@ def _reconcile_loyalty(
     subtotal: Decimal,
     promo_discount: Decimal,
 ) -> tuple[int, Decimal]:
+    # Canonical loyalty row order: CrmProfile -> LoyaltyRedemptionHold.
+    # Checkout uses the same order; taking the profile first here prevents
+    # cart-loyalty requests from holding a redemption row while waiting for
+    # the customer's profile.
+    profile = _locked_loyalty_profile(db, cart.customer_id)
     holds, current_hold = _reserved_holds(db, cart)
     requested_points = _whole_requested_points(cart.loyalty_points_to_redeem)
     if requested_points <= 0:
@@ -193,12 +207,6 @@ def _reconcile_loyalty(
         _release_hold(current_hold)
         return 0, Decimal("0.00")
 
-    profile = (
-        db.query(CrmProfile)
-        .filter(CrmProfile.customer_id == cart.customer_id)
-        .with_for_update()
-        .first()
-    )
     if not profile:
         cart.loyalty_points_to_redeem = Decimal("0.0000")
         _release_hold(current_hold)
@@ -272,6 +280,11 @@ def reconcile_cart_adjustments(db: Session, cart: Cart) -> CartAdjustmentResult:
 def apply_loyalty_request(db: Session, cart: Cart, points: object) -> CartAdjustmentResult:
     requested_points = _strict_requested_points(points)
     baseline = reconcile_cart_adjustments(db, cart)
+
+    # Baseline already followed profile -> hold. Preserve the same order for
+    # the explicit-request validation pass so the transaction can never add a
+    # late reverse edge.
+    profile = _locked_loyalty_profile(db, cart.customer_id)
     holds, current_hold = _reserved_holds(db, cart)
 
     if requested_points == 0:
@@ -286,12 +299,6 @@ def apply_loyalty_request(db: Session, cart: Cart, points: object) -> CartAdjust
             unit_prices=baseline.unit_prices,
         )
 
-    profile = (
-        db.query(CrmProfile)
-        .filter(CrmProfile.customer_id == cart.customer_id)
-        .with_for_update()
-        .first()
-    )
     if not profile:
         raise HTTPException(status_code=409, detail="Loyalty profile not found")
 
