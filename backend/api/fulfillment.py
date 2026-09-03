@@ -7,6 +7,7 @@ from ..schemas import FulfillmentTaskOut, FulfillmentUpdateIn, SlaEventOut
 from ..security import get_current_admin
 from ..services.audit import log_admin_action
 from ..services.fulfillment import update_fulfillment_status
+from ..services.fulfillment_locking import lock_fulfillment_task_for_update
 from ..services.rbac import FULFILLMENT_READ_PERMISSION, require_permission
 
 router = APIRouter(prefix="/fulfillment", tags=["fulfillment"])
@@ -34,17 +35,10 @@ def update_task(
 ):
     require_permission(db, admin, "fulfillment.write")
     try:
-        task = (
-            db.query(FulfillmentTask)
-            .filter(FulfillmentTask.id == task_id)
-            .with_for_update()
-            .first()
-        )
-        if not task:
-            raise HTTPException(status_code=404, detail="Fulfillment task not found")
+        order, task = lock_fulfillment_task_for_update(db, task_id)
         previous_status = task.status
         try:
-            update_fulfillment_status(db, task, payload.status, payload.comment)
+            update_fulfillment_status(db, order, task, payload.status, payload.comment)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         if task.assigned_admin_id is None:
@@ -134,10 +128,10 @@ def update_task_item(
         raise HTTPException(status_code=400, detail="Picklist issue requires a meaningful comment")
 
     try:
-        # Discover the parent without taking a child lock. All state-changing
-        # fulfillment paths then use one canonical lock order: task -> task item
-        # -> order item. This serializes packing against picklist mutation and
-        # avoids the inverse child -> parent lock order that can deadlock.
+        # Discover the parent without taking a child lock. Picklist mutation
+        # then serializes task -> task item -> order item. It does not acquire
+        # the Order root; order-changing task transitions use the separate
+        # canonical Order -> FulfillmentTask root sequence.
         task_id = (
             db.query(FulfillmentTaskItem.task_id)
             .filter(FulfillmentTaskItem.id == task_item_id)

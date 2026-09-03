@@ -40,6 +40,7 @@ from backend.provider_models import ProviderCommand
 from backend.services import moysklad_outbound
 from backend.services.delivery_providers import ensure_ready_shipment, transition_shipment
 from backend.services.fulfillment import update_fulfillment_status
+from backend.services.fulfillment_locking import lock_fulfillment_task_for_update
 from backend.services.inventory import reserve_variant
 from backend.services.payment_settlement import settle_paid_order
 from backend.services.refund_state import apply_provider_refund_status
@@ -196,8 +197,20 @@ def main() -> int:
         assert persisted_variant.stock_qty == 3
         assert persisted_variant.reserved_qty == 0
 
-        task = db.query(FulfillmentTask).filter(FulfillmentTask.order_id == order_id).one()
-        update_fulfillment_status(db, task, "picking", "Provider spine picking")
+        task_id = (
+            db.query(FulfillmentTask.id)
+            .filter(FulfillmentTask.order_id == order_id)
+            .scalar()
+        )
+        assert task_id is not None
+        fulfillment_order, task = lock_fulfillment_task_for_update(db, int(task_id))
+        update_fulfillment_status(
+            db,
+            fulfillment_order,
+            task,
+            "picking",
+            "Provider spine picking",
+        )
         task_item = (
             db.query(FulfillmentTaskItem)
             .filter(FulfillmentTaskItem.task_id == task.id)
@@ -205,8 +218,20 @@ def main() -> int:
         )
         task_item.status = "picked"
         task_item.picked_qty = 2
-        update_fulfillment_status(db, task, "packed", "Provider spine packed")
-        update_fulfillment_status(db, task, "ready", "Provider spine ready")
+        update_fulfillment_status(
+            db,
+            fulfillment_order,
+            task,
+            "packed",
+            "Provider spine packed",
+        )
+        update_fulfillment_status(
+            db,
+            fulfillment_order,
+            task,
+            "ready",
+            "Provider spine ready",
+        )
         db.flush()
 
         shipment, created = ensure_ready_shipment(db, paid_order, "pickup")
