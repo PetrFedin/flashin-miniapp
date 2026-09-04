@@ -2,7 +2,7 @@
 
 **Repository:** `PetrFedin/flashin-miniapp`  
 **Hardening baseline:** `pilot/e2e-hardening-20260808`  
-**Current verified pilot head:** `56ebed25dc15e11ceff9a677cf42bbdd6764c2ea`  
+**Current verified pilot head:** `35b3a2ebb9eb10a99eaed38392086cbfd171ea2b`  
 **Purpose:** authoritative, evidence-based launch-readiness register.  
 **Rule:** a capability is not `DONE` because code exists. `DONE` requires the evidence stated in this document. Unknown or externally unverifiable work is never promoted to `DONE`.
 
@@ -19,7 +19,7 @@
 
 **Current decision: NOT READY / NO-GO.**
 
-The hardening branch now has dedicated, green concurrency proof for the known refund/return and fulfillment root-lock inversions, plus material release/security automation. Launch remains forbidden until the remaining P0/P1 risks are audited and closed, issue #119 acceptance evidence is complete, production prerequisites are configured, protected-branch controls are enabled, and controlled external-live verification is complete.
+The hardening branch now has dedicated, green concurrency proof for the known refund/return, fulfillment and checkout-loyalty root-lock inversions, plus material release/security automation. Launch remains forbidden until the remaining P0/P1 risks are audited and closed, issue #119 acceptance evidence is complete, production prerequisites are configured, protected-branch controls are enabled, and controlled external-live verification is complete.
 
 ## Evidence discipline
 
@@ -40,9 +40,10 @@ If the evidence is only planned, the item remains `MISSING`, `PARTIAL`, `IN_PROG
 |---|---|---|---|---|
 | P0 | Caddy `golang.org/x/crypto` CVE-2026-56854 | DONE | PR #201 merged after CI/Security; ingress contract requires patched dependency | Keep Trivy/security contract mandatory |
 | P0 | Caddy gRPC CVE-2026-84304 | DONE | PR #202 merged; CI, Security, Trivy, SBOM, signed backup/restore, signed rollback and production Compose isolation passed | Keep built-binary version assertion and image scan mandatory |
-| P0 | Refund/return DB lock ordering | DONE | PR #200 merged into pilot as `5450779bfafd9373e0b1d9b09146e4ff92b2ca8e`; canonical `Order -> ReturnRequest`, relationship revalidation and real PostgreSQL lock-order proof passed full gates | Preserve invariant in repository-wide lock audit |
-| P1 | Fulfillment DB lock ordering | DONE | PR #205 exact head `710e3c9ff00bc3e872eb35eb2f34c2fd268ec0c7` passed CI #1384 and Security #243, including PostgreSQL NOWAIT proof, then merged as pilot `56ebed25dc15e11ceff9a677cf42bbdd6764c2ea`; issue #204 closed | Preserve canonical `Order -> FulfillmentTask`; audit child-row interactions separately |
-| P1 | Systematic DB lock-order inventory | IN_PROGRESS | Known root pairs are hardened, but no complete authoritative repository-wide lock matrix exists yet | Create/maintain `docs/DATABASE_LOCK_ORDER.md`; audit every `FOR UPDATE` and mutation path; every newly proven inversion gets a separate issue/PR/smoke |
+| P0 | Refund/return DB lock ordering | DONE | PR #200 merged; canonical `Order -> ReturnRequest`, relationship revalidation and real PostgreSQL lock-order proof passed full gates | Preserve invariant in repository-wide lock audit |
+| P1 | Fulfillment DB lock ordering | DONE | PR #205 exact head `710e3c9ff00bc3e872eb35eb2f34c2fd268ec0c7` passed full CI/Security/release-safety including PostgreSQL NOWAIT proof, then merged; issue #204 closed | Preserve canonical `Order -> FulfillmentTask`; audit child-row interactions separately |
+| P0 | Checkout/cart loyalty DB lock ordering | DONE | PR #207 exact head `e2a3192b0fef6fc85534c589aaf2c2de438c891e` passed CI `33782393441` and Security `33782393457`, including real PostgreSQL loyalty lock-order smoke, and merged into pilot `35b3a2ebb9eb10a99eaed38392086cbfd171ea2b` | Preserve `CrmProfile -> LoyaltyRedemptionHold`; close issue #206 only after lock registry evidence is merged |
+| P1 | Systematic DB lock-order inventory | IN_PROGRESS | `docs/DATABASE_LOCK_ORDER.md` has been created on the current audit branch with conservative evidence states; repository-wide second pass is not complete | Merge the registry only after exact-head gates; audit every `FOR UPDATE` and mutation path; every newly proven inversion gets a separate issue/PR/smoke |
 | P1 | External-I/O transaction-boundary audit | PARTIAL | Refund/payment hardening contains prepare/finalize patterns, but repository-wide provider/network audit is not complete | Audit payment, refund, delivery, MoySklad, Telegram, search/storage/notifications; eliminate long external I/O under DB locks |
 | P0 | Main branch protection | BLOCKED_EXTERNAL | Fresh repository check: `main` is still `protected:false` | Admin enables PR requirement, required CI/Security, no force push/deletion; verify before launch |
 | P1 | Pilot/release branch protection | BLOCKED_EXTERNAL | Fresh repository check: `pilot/e2e-hardening-20260808` is also `protected:false`; code policy is enforced by process/CI, not GitHub branch control | Add appropriate protected-branch/ruleset controls before this branch is used as a release authority |
@@ -65,9 +66,10 @@ The following pairs are proven/hardened and must not be inverted by later change
 - `Order -> Payment`
 - `Order -> ReturnRequest`
 - `Order -> FulfillmentTask`
+- `CrmProfile -> LoyaltyRedemptionHold`
 - multi-row `ProductVariant` acquisition must remain deterministic by stable sorted/ID order where multiple variants are locked
 
-This is **not** a complete global hierarchy. A repository-wide audit is now the active P1 concurrency workstream.
+This is **not** a complete global hierarchy. `docs/DATABASE_LOCK_ORDER.md` is the evidence registry and the repository-wide audit remains the active P1 concurrency workstream.
 
 ## Phase plan and maturity
 
@@ -79,11 +81,13 @@ This is **not** a complete global hierarchy. A repository-wide audit is now the 
 | #202 ingress gRPC CVE | DONE | L5 repository/CI security evidence |
 | #200 refund/return lock order | DONE | L4 concurrency + full CI/Security/release-safety evidence |
 | #204/#205 fulfillment `Order -> FulfillmentTask` | DONE | L4 concurrency + full CI/Security/release-safety evidence |
-| Readiness register PR #203 | IN_PROGRESS | Must remain current and pass repository gates before merge |
+| Readiness register PR #203 | DONE | Merged; post-merge CI `33782266150` and Security `33782266161` completed success |
 
 ### Phase 2 — database concurrency
 
 Status: `IN_PROGRESS`.
+
+Completed/hardened evidence now includes `CrmProfile -> LoyaltyRedemptionHold` through PR #207 in addition to the earlier Customer/Cart and Order-root contracts. The broader graph is not yet certified.
 
 Required work:
 
@@ -94,7 +98,9 @@ Required work:
 - preserve deterministic multi-row ordering;
 - for every proven inversion: issue -> dedicated branch -> minimal fix -> regression test -> real PostgreSQL concurrency smoke -> full gate.
 
-Exit artifact: `docs/DATABASE_LOCK_ORDER.md` with evidence status per edge.
+Current active audit candidate: the local lock sequence in `backend/services/loyalty.py::refund_redeemed_points` reaches `LoyaltyTransaction -> LoyaltyRedemptionHold -> CrmProfile`. This is recorded as `POTENTIAL_CYCLE`, not as a confirmed deadlock, until the same-row opposite call graph and a real PostgreSQL wait cycle are proven.
+
+Exit artifact: `docs/DATABASE_LOCK_ORDER.md` with evidence status per edge plus a completed repository-wide second pass.
 
 ### Phase 3 — transaction boundaries and provider safety
 
@@ -205,8 +211,8 @@ Launch-critical capabilities require at least `L5`; payment/refund/provider boun
 
 | Artifact | Status | Notes |
 |---|---|---|
-| `docs/PRODUCTION_READINESS_MASTER_PLAN.md` | IN_PROGRESS | PR #203; update continuously with evidence |
-| `docs/DATABASE_LOCK_ORDER.md` | MISSING | Active next P1 artifact; build from exhaustive repository audit |
+| `docs/PRODUCTION_READINESS_MASTER_PLAN.md` | IN_PROGRESS | Authoritative register exists from merged PR #203; current audit branch synchronizes it to pilot `35b3a2e...` and PR #207 evidence |
+| `docs/DATABASE_LOCK_ORDER.md` | IN_PROGRESS | Created in the current audit branch; first evidence-based matrix exists, but the repository-wide audit is not complete and this docs change is not merged yet |
 | `docs/IDEMPOTENCY_CONTRACTS.md` | MISSING | Must map checkout/payment/refund/cancellation/webhooks/notification/shipment semantics |
 | `docs/RBAC_MATRIX.md` | MISSING | Must be derived from actual named permissions/endpoints |
 | `docs/SLO.md` | MISSING | Define measurable production objectives and owners |
@@ -245,14 +251,15 @@ A PR must not be merged if required CI, Security, release rollback, restore or p
 
 ## Next execution sequence
 
-1. Merge this readiness update only after fresh exact-head CI + Security gates.
-2. Build `docs/DATABASE_LOCK_ORDER.md` from a repository-wide inventory of every `FOR UPDATE` and relevant mutation path.
-3. Classify each lock edge as proven-safe, one-direction-only, potential cycle, or missing evidence; do not invent a global hierarchy.
-4. For each newly proven inversion, open an issue and a dedicated minimal branch/PR with regression + real PostgreSQL concurrency proof.
-5. After known lock cycles are closed, perform the repository-wide transaction-boundary audit and remove external I/O from long-lived DB lock scopes.
-6. Audit ORM money types against the actual migrated PostgreSQL schema before changing financial types; separate schema corrections into focused PRs.
-7. Continue P0 -> P1 through financial integrity, inventory/fulfillment, security, reliability, observability and release readiness.
-8. Keep #119 open until every real launch prerequisite is evidenced.
+1. Merge the current database-lock-order/readiness documentation update only after fresh exact-head CI + Security gates.
+2. Close issue #206 only after the merged lock registry records the `CrmProfile -> LoyaltyRedemptionHold` contract; PR #207 and its exact green runs remain the implementation evidence.
+3. Continue the repository-wide inventory of every `FOR UPDATE` and relevant mutation path; classify each edge as hardened, observed one-way, potential cycle, or unverified.
+4. Prove or dismiss the current loyalty-refund `POTENTIAL_CYCLE` using the complete caller/root-lock graph and real PostgreSQL concurrency behavior.
+5. For each newly proven inversion, open an issue and a dedicated minimal branch/PR with regression + real PostgreSQL concurrency proof.
+6. After known lock cycles are closed, perform the repository-wide transaction-boundary audit and remove external I/O from long-lived DB lock scopes.
+7. Audit ORM money types against the actual migrated PostgreSQL schema before changing financial types; separate schema corrections into focused PRs.
+8. Continue P0 -> P1 through financial integrity, inventory/fulfillment, security, reliability, observability and release readiness.
+9. Keep #119 open until every real launch prerequisite is evidenced.
 
 ## Change-control rule for this document
 
