@@ -30,6 +30,37 @@ def _public_points(value: Decimal) -> float:
     return float(value.quantize(_POINTS_STEP, rounding=ROUND_HALF_UP))
 
 
+def _locked_referral_reward_root(
+    db: Session,
+    *,
+    order_id: int,
+) -> tuple[ReferralAttribution | None, ReferralCode | None]:
+    """Lock a rewarded-order referral root before any loyalty profile mutation.
+
+    Referral settlement already serializes the reusable referrer identity as
+    ReferralAttribution -> ReferralCode -> CrmProfile. A full refund must never
+    acquire the same referrer's CrmProfile before its ReferralCode or two
+    different invited orders using one code can deadlock each other.
+    """
+
+    attribution = (
+        db.query(ReferralAttribution)
+        .filter(ReferralAttribution.rewarded_order_id == order_id)
+        .with_for_update()
+        .first()
+    )
+    if not attribution:
+        return None, None
+
+    referral = (
+        db.query(ReferralCode)
+        .filter(ReferralCode.id == attribution.referral_code_id)
+        .with_for_update()
+        .first()
+    )
+    return attribution, referral
+
+
 def _reverse_transaction(
     db: Session,
     *,
@@ -130,7 +161,14 @@ def apply_full_refund_loyalty(
     This ordering prevents previously spent reward points from consuming the
     customer's restored redemption balance. Any reward that cannot be recovered
     is reported to the admin audit payload instead of pushing the balance below zero.
+
+    If the order was referral-rewarded, its attribution and reusable referral
+    code are locked before any profile balance mutation. This matches payment
+    settlement's ReferralCode -> CrmProfile order across different invited
+    orders that share one referrer.
     """
+
+    attribution, referral = _locked_referral_reward_root(db, order_id=order_id)
 
     customer_reward = _reverse_transaction(
         db,
@@ -160,19 +198,7 @@ def apply_full_refund_loyalty(
         )
         referral_adjustments.append({"customer_id": reward.customer_id, **adjustment})
 
-    attribution = (
-        db.query(ReferralAttribution)
-        .filter(ReferralAttribution.rewarded_order_id == order_id)
-        .with_for_update()
-        .first()
-    )
     if attribution and attribution.status == "rewarded":
-        referral = (
-            db.query(ReferralCode)
-            .filter(ReferralCode.id == attribution.referral_code_id)
-            .with_for_update()
-            .first()
-        )
         attribution.status = "reversed"
         if referral:
             referral.used_count = max(int(referral.used_count or 0) - 1, 0)
