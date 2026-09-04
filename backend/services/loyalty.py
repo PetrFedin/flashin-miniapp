@@ -143,6 +143,10 @@ def apply_referral(db: Session, code: str, new_customer_id: int) -> bool:
 def redeem_points(db: Session, customer_id: int, cart: Cart, points) -> Cart:
     settings = get_settings()
     requested_points = _points(points, "loyalty points")
+
+    # Keep the compatibility service on the same canonical loyalty lock order
+    # as checkout and cart adjustment flows: profile before reserved holds.
+    profile = _locked_profile(db, customer_id)
     holds = (
         db.query(LoyaltyRedemptionHold)
         .filter(
@@ -161,7 +165,6 @@ def redeem_points(db: Session, customer_id: int, cart: Cart, points) -> Cart:
             current_hold.released_at = utcnow_naive()
         return cart
 
-    profile = _locked_profile(db, customer_id)
     if not profile:
         raise HTTPException(status_code=409, detail="Loyalty profile not found")
 
