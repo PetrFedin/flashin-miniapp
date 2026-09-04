@@ -2,7 +2,7 @@
 
 Status: IN_PROGRESS
 
-Audit baseline: `pilot/e2e-hardening-20260808` at `35b3a2ebb9eb10a99eaed38392086cbfd171ea2b`.
+Audit baseline: `pilot/e2e-hardening-20260808` at `fee79ffbf4c8dbe3e0fa7c004b223842b664bf90` (merged PR #208).
 
 This document is the authoritative registry for database row-lock ordering discovered during the production concurrency audit. It records only orders that are supported by code and test evidence. It is intentionally **not** a global lock hierarchy yet.
 
@@ -25,6 +25,7 @@ A `PROVEN_HARDENED` edge may still be downgraded if later repository evidence re
 | `Order -> ReturnRequest` | `PROVEN_HARDENED` | `backend/services/refund_locking.py`; return/refund API and webhook paths use Order-first root locking with relationship revalidation | `backend/tests/test_refund_return_lock_order.py`; `backend/tests/test_refund_terminal_state_integrity.py`; `scripts/refund_return_lock_order_smoke.py` | PR #200 |
 | `Order -> FulfillmentTask` | `PROVEN_HARDENED` | `backend/services/fulfillment_locking.py`; generic fulfillment update snapshots `task.order_id`, locks Order, then Task, then revalidates | `backend/tests/test_fulfillment_lock_order.py`; `scripts/fulfillment_lock_order_smoke.py`; provider integration spine | PR #205 / issue #204 |
 | `CrmProfile -> LoyaltyRedemptionHold` | `PROVEN_HARDENED` | `backend/services/cart_adjustments.py`; `backend/services/loyalty.py::redeem_points` lock profile before reserved holds | `backend/tests/test_loyalty_lock_order.py`; `scripts/loyalty_lock_order_smoke.py` | PR #207 / issue #206 |
+| `ReferralAttribution -> ReferralCode -> CrmProfile(referrer)` | `PROVEN_HARDENED` | Payment settlement already uses attribution/code before referrer profile; `backend/services/refund_loyalty.py` now locks the rewarded-order referral root before any loyalty profile mutation | `backend/tests/test_referral_refund_lock_order.py`; `scripts/referral_refund_lock_order_smoke.py` through the mandatory PostgreSQL backend suite | PR #210 / issue #209 |
 
 ## Required pair audit matrix
 
@@ -35,7 +36,8 @@ The table below is deliberately conservative. `UNVERIFIED` means no conclusion i
 | `Customer <-> CrmProfile` | `UNVERIFIED` | No global conclusion yet | auth/customer creation, loyalty, referral rewards, admin CRM | Trace all root locks and same-customer mutations |
 | `Customer <-> Cart` | `PROVEN_HARDENED` | `Customer -> Cart` | `backend/api/cart.py`; checkout/referral | Keep invariant; audit any new cart roots |
 | `Customer <-> LoyaltyRedemptionHold` | `UNVERIFIED` | Hold rows are customer-scoped, but a direct Customer/Hold lock cycle is not yet proven | checkout, cart loyalty, cancellation/refund restoration | Trace same-customer paths |
-| `CrmProfile <-> LoyaltyRedemptionHold` | `PROVEN_HARDENED` for checkout/cart redemption roots; wider loyalty audit still in progress | `CrmProfile -> LoyaltyRedemptionHold` | cart adjustments, loyalty redemption | Audit refund/manual-adjustment paths for reverse edges |
+| `CrmProfile <-> LoyaltyRedemptionHold` | `PROVEN_HARDENED` for checkout/cart redemption roots; wider loyalty audit still in progress | `CrmProfile -> LoyaltyRedemptionHold` for redemption; `refund_redeemed_points` still has a local reverse edge requiring same-row proof | cart adjustments, loyalty redemption/refund | Continue caller/same-row proof for refund restoration; do not assume the wider graph is safe |
+| `ReferralCode <-> CrmProfile(referrer)` | `PROVEN_HARDENED` for settlement/full-refund referral reward paths | Canonical reusable-referrer path is `ReferralAttribution -> ReferralCode -> CrmProfile(referrer)` | `reward_referral_after_first_paid_order`; `apply_full_refund_loyalty` | Preserve code-before-profile ordering; audit other referral/admin paths |
 | `Cart <-> CartItem` | `OBSERVED_ONE_WAY` | cart endpoints lock Cart before existing CartItem rows | add/update/remove cart item | Search for CartItem-rooted code that later locks Cart |
 | `Cart <-> PromoCode` | `OBSERVED_ONE_WAY` | cart is locked before adjustment reconciliation; promo is then locked | `/cart/promo`, cart reconciliation, checkout | Audit promo admin/usage paths for reverse edge |
 | `Cart <-> ProductVariant` | `OBSERVED_ONE_WAY` | item mutation paths commonly lock Cart before ProductVariant | add/update item | Compare with inventory/checkout paths before declaring invariant |
@@ -55,13 +57,26 @@ The table below is deliberately conservative. `UNVERIFIED` means no conclusion i
 | `Product <-> pricing publication` | `UNVERIFIED` | No global conclusion yet | pricing publication/version services | Identify exact model/table and lock sites |
 | `Webhook outbox <-> domain rows` | `UNVERIFIED` | No global conclusion yet | payment/refund/domain event enqueue and workers | Audit producer/worker lock direction |
 
-## Active audit findings that are not yet defects
+## Confirmed cycle hardened by PR #210
 
-### Loyalty refund path
+### Reusable referral code: full refund vs another referred payment settlement
 
-`backend/services/loyalty.py::refund_redeemed_points` must be treated as an active audit target. The currently observed local sequence includes a lock on an existing `LoyaltyTransaction`, then a `LoyaltyRedemptionHold`, followed by `add_points(...)`, which locks `CrmProfile`.
+Issue #209 proved a reachable same-row cycle across **different invited orders** sharing one referrer:
 
-This creates a **local reverse edge** relative to the proven redemption contract `CrmProfile -> LoyaltyRedemptionHold`, but it is **not yet classified as a production deadlock**. Before opening a P0 defect, the audit must prove that the opposite path can acquire the same rows in a concurrent transaction and can complete a wait cycle. Until then the finding remains `POTENTIAL_CYCLE` for investigation, not a confirmed incident.
+- full refund previously reached `CrmProfile(referrer) -> ReferralCode(referrer)` while reversing a `referral_reward` and only later updating referral attribution/code state;
+- payment settlement for another invited customer uses `ReferralAttribution -> ReferralCode(referrer) -> CrmProfile(referrer)`.
+
+Different orders do not share an Order root lock, while the reusable referral code and referrer profile are the same rows. That allowed one transaction to hold the profile and wait for the code while the other held the code and waited for the profile.
+
+PR #210 moves full-refund referral-root locking ahead of profile mutation. The real PostgreSQL NOWAIT regression holds the shared `ReferralCode`, starts real `apply_full_refund_loyalty`, proves the exact referrer `CrmProfile` remains NOWAIT-lockable while the worker waits, releases the root, and then verifies referral reversal state. The old sequence would fail the NOWAIT assertion.
+
+## Active audit finding still requiring proof
+
+### Redemption-hold refund restoration
+
+`backend/services/loyalty.py::refund_redeemed_points` remains an active audit target independent of PR #210. The currently observed local sequence includes a lock on an existing `LoyaltyTransaction`, then a `LoyaltyRedemptionHold`, followed by `add_points(...)`, which locks `CrmProfile`.
+
+This creates a **local reverse edge** relative to the proven redemption contract `CrmProfile -> LoyaltyRedemptionHold`, but it is **not yet classified as a production deadlock**. Before opening another P0 concurrency defect, the audit must prove that the opposite path can acquire the same hold/profile rows in a concurrent transaction and can complete a wait cycle. Until then the finding remains `POTENTIAL_CYCLE` for investigation, not a confirmed incident.
 
 Required proof before escalation:
 
@@ -88,11 +103,13 @@ For hardened root/child relationships such as Order/ReturnRequest and Order/Fulf
 5. fail closed with `409 Conflict` when the relationship changed or the root disappeared;
 6. do not let a downstream service silently reacquire the root in the reverse order.
 
+For reusable referral identity, acquire the rewarded-order `ReferralAttribution` and its `ReferralCode` before mutating the referrer's `CrmProfile`.
+
 ## Audit sequence
 
 The remaining database-concurrency audit proceeds in this order:
 
-1. loyalty refund / manual adjustment / cancellation restoration;
+1. loyalty redemption refund / manual adjustment / cancellation restoration;
 2. Cart / CartItem / PromoCode / ProductVariant mutation graph;
 3. Order / OrderItem / ProductVariant graph;
 4. fulfillment item / order item / SLA graph;
@@ -102,7 +119,7 @@ The remaining database-concurrency audit proceeds in this order:
 8. background jobs and reconciliation workers;
 9. repository-wide second pass over every `.with_for_update()` and raw `FOR UPDATE` occurrence.
 
-Every confirmed inversion gets its own issue -> branch -> PR -> regression test -> real PostgreSQL concurrency proof -> full CI -> Security. Independent inversions are not bundled into this documentation PR.
+Every confirmed inversion gets its own issue -> branch -> PR -> regression test -> real PostgreSQL concurrency proof -> full CI -> Security. Independent inversions are not bundled together.
 
 ## Change control
 
