@@ -61,6 +61,7 @@ class SessionStub:
 
 def test_default_operational_roles_do_not_inherit_crm_recompute_authority():
     assert CRM_RECOMPUTE_PERMISSION == "crm.recompute"
+    assert DEFAULT_PERMISSIONS["owner"] == {"*"}
     assert CRM_RECOMPUTE_PERMISSION not in DEFAULT_PERMISSIONS["manager"]
     assert CRM_RECOMPUTE_PERMISSION not in DEFAULT_PERMISSIONS["support"]
     assert CRM_RECOMPUTE_PERMISSION not in DEFAULT_PERMISSIONS["warehouse"]
