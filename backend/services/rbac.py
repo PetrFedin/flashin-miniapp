@@ -13,6 +13,7 @@ CAMPAIGNS_READ_PERMISSION = "campaigns.read"
 CAMPAIGNS_WRITE_PERMISSION = "campaigns.write"
 CAMPAIGNS_SEND_PERMISSION = "campaigns.send"
 FULFILLMENT_READ_PERMISSION = "fulfillment.read"
+CRM_RECOMPUTE_PERMISSION = "crm.recompute"
 
 DEFAULT_PERMISSIONS = {
     "owner": {"*"},
