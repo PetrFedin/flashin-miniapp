@@ -82,6 +82,13 @@ def _install_order_loader(monkeypatch, db, order):
 
 def _install_provider_probe(monkeypatch, db, expected_post_path):
     calls = []
+    settings = SimpleNamespace(
+        moysklad_base_url="https://api.moysklad.test/api/remap/1.2",
+        moysklad_organization_id="organization-id",
+        moysklad_agent_id="agent-id",
+        moysklad_store_id="store-id",
+    )
+    monkeypatch.setattr(moysklad_outbound, "get_settings", lambda: settings)
 
     async def request_json(method, path, *, json_body=None, params=None):
         assert db.in_transaction() is False
