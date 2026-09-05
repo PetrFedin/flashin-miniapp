@@ -215,3 +215,61 @@ def test_sales_return_worker_handler_does_not_open_dependency_transaction(monkey
     )
 
     assert result == "sales-return-id"
+
+
+def test_sales_return_dependency_pending_is_scheduled_for_retry_not_review(monkeypatch):
+    command = {
+        "id": 91,
+        "provider": "moysklad",
+        "command_type": "moysklad.sales_return.create",
+        "idempotency_key": "return:17:sales_return:v1",
+        "aggregate_type": "return",
+        "aggregate_id": "17",
+        "payload_json": '{"order_id":42,"return_id":17}',
+        "lease_token": "lease-token",
+    }
+    captured = {}
+
+    monkeypatch.setattr(
+        provider_command_jobs,
+        "enforce_terminal_provider_command_pilot_stop",
+        lambda _db: None,
+    )
+    monkeypatch.setattr(
+        provider_command_jobs,
+        "claim_provider_commands",
+        lambda _db, *, provider, limit: [command],
+    )
+
+    async def export_sales_return(_db, order_id, return_id):
+        assert order_id == 42
+        assert return_id == 17
+        raise moysklad_outbound.MoySkladDependencyPending(
+            "MoySklad demand dependency is not completed yet"
+        )
+
+    def fail_provider_command(
+        _db,
+        command_id,
+        lease_token,
+        error,
+        *,
+        review_required=False,
+    ):
+        captured["command_id"] = command_id
+        captured["lease_token"] = lease_token
+        captured["error"] = error
+        captured["review_required"] = review_required
+        return "retry_scheduled"
+
+    monkeypatch.setattr(provider_command_jobs, "export_sales_return", export_sales_return)
+    monkeypatch.setattr(provider_command_jobs, "fail_provider_command", fail_provider_command)
+
+    result = asyncio.run(provider_command_jobs.process_provider_commands(object(), limit=1))
+
+    assert result["retry_scheduled"] == 1
+    assert result["review_required"] == 0
+    assert captured["command_id"] == 91
+    assert captured["lease_token"] == "lease-token"
+    assert isinstance(captured["error"], moysklad_outbound.MoySkladDependencyPending)
+    assert captured["review_required"] is False
