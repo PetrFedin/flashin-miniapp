@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import uuid
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 
@@ -11,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..models import Order, OrderItem, Product, ProductVariant, ReturnRequest
+from ..provider_models import ProviderCommand
 from .provider_commands import enqueue_provider_command
 
 _MONEY = Decimal("0.01")
@@ -19,6 +21,38 @@ _SYNC_NAMESPACE = uuid.UUID("d5288fc4-9e28-4de8-8a0e-cbb8c1cc1a9f")
 
 class MoySkladReviewRequired(RuntimeError):
     """Permanent/configuration/data issue that must not be retried blindly."""
+
+
+class MoySkladDependencyPending(RuntimeError):
+    """Retryable ordering dependency that is expected to resolve asynchronously."""
+
+
+@dataclass(frozen=True)
+class _OrderLineSnapshot:
+    moysklad_id: str
+    quantity: int
+    net_total_cents: int
+
+
+@dataclass(frozen=True)
+class _OrderExportSnapshot:
+    id: int
+    total_amount: Decimal
+    total_cents: int
+    currency: str
+    payment_status: str
+    delivery_status: str
+    delivery_type: str
+    delivery_cents: int
+    lines: tuple[_OrderLineSnapshot, ...]
+
+
+@dataclass(frozen=True)
+class _SalesReturnSnapshot:
+    order: _OrderExportSnapshot
+    return_id: int
+    provider_refund_id: str
+    demand_external_id: str
 
 
 def _money_cents(value: object, field: str) -> int:
@@ -136,7 +170,10 @@ async def _resolve_assortment_meta(moysklad_id: str) -> dict[str, Any]:
     return {"meta": meta}
 
 
-def _load_order_items(db: Session, order_id: int) -> tuple[Order, list[tuple[OrderItem, ProductVariant, Product]]]:
+def _load_order_items(
+    db: Session,
+    order_id: int,
+) -> tuple[Order, list[tuple[OrderItem, ProductVariant, Product]]]:
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
         raise MoySkladReviewRequired(f"Order {order_id} does not exist")
@@ -165,8 +202,14 @@ def _load_order_items(db: Session, order_id: int) -> tuple[Order, list[tuple[Ord
     return order, items
 
 
-def _allocate_net_line_totals(order: Order, items: list[tuple[OrderItem, ProductVariant, Product]]) -> list[int]:
-    gross_lines = [_money_cents(item.price, "order item price") * item.quantity for item, _, _ in items]
+def _allocate_net_line_totals(
+    order: Order,
+    items: list[tuple[OrderItem, ProductVariant, Product]],
+) -> list[int]:
+    gross_lines = [
+        _money_cents(item.price, "order item price") * item.quantity
+        for item, _, _ in items
+    ]
     gross_total = sum(gross_lines)
     if gross_total <= 0:
         raise MoySkladReviewRequired("Order merchandise total must be positive")
@@ -199,18 +242,114 @@ def _allocate_net_line_totals(order: Order, items: list[tuple[OrderItem, Product
     return line_totals
 
 
-async def _document_positions(
+def _require_clean_export_session(db: Session) -> None:
+    if db.in_transaction():
+        raise MoySkladReviewRequired(
+            "MoySklad outbound export requires a clean database session"
+        )
+
+
+def _snapshot_order(
+    order: Order,
+    items: list[tuple[OrderItem, ProductVariant, Product]],
+) -> _OrderExportSnapshot:
+    line_totals = _allocate_net_line_totals(order, items)
+    lines: list[_OrderLineSnapshot] = []
+    for (item, variant, product), line_total in zip(items, line_totals, strict=True):
+        moysklad_id = str(variant.moysklad_id or product.moysklad_id or "").strip()
+        lines.append(
+            _OrderLineSnapshot(
+                moysklad_id=moysklad_id,
+                quantity=int(item.quantity),
+                net_total_cents=int(line_total),
+            )
+        )
+
+    return _OrderExportSnapshot(
+        id=int(order.id),
+        total_amount=Decimal(str(order.total_amount)).quantize(
+            _MONEY,
+            rounding=ROUND_HALF_UP,
+        ),
+        total_cents=_money_cents(order.total_amount, "order total"),
+        currency=str(order.currency),
+        payment_status=str(order.payment_status),
+        delivery_status=str(order.delivery_status),
+        delivery_type=str(order.delivery_type),
+        delivery_cents=_money_cents(order.delivery_price, "delivery price"),
+        lines=tuple(lines),
+    )
+
+
+def _prepare_order_snapshot(db: Session, order_id: int) -> _OrderExportSnapshot:
+    _require_clean_export_session(db)
+    try:
+        order, items = _load_order_items(db, order_id)
+        return _snapshot_order(order, items)
+    finally:
+        if db.in_transaction():
+            db.rollback()
+
+
+def _prepare_sales_return_snapshot(
     db: Session,
     order_id: int,
-) -> tuple[Order, list[dict[str, Any]]]:
-    order, items = _load_order_items(db, order_id)
-    line_totals = _allocate_net_line_totals(order, items)
+    return_id: int,
+) -> _SalesReturnSnapshot:
+    _require_clean_export_session(db)
+    try:
+        order, items = _load_order_items(db, order_id)
+        order_snapshot = _snapshot_order(order, items)
+        ret = (
+            db.query(ReturnRequest)
+            .filter(
+                ReturnRequest.id == return_id,
+                ReturnRequest.order_id == order.id,
+            )
+            .first()
+        )
+        if not ret:
+            raise MoySkladReviewRequired(f"Return request {return_id} does not exist")
+        if ret.status != "approved" or order.payment_status != "refunded":
+            raise MoySkladReviewRequired(
+                "MoySklad stock return requires a completed full refund with unambiguous item composition"
+            )
+
+        demand_command_key = f"order:{order.id}:demand:v1"
+        demand_command = (
+            db.query(ProviderCommand)
+            .filter(
+                ProviderCommand.provider == "moysklad",
+                ProviderCommand.idempotency_key == demand_command_key,
+                ProviderCommand.status == "sent",
+            )
+            .first()
+        )
+        if not demand_command or not str(demand_command.external_id or "").strip():
+            raise MoySkladDependencyPending(
+                "MoySklad demand dependency is not completed yet"
+            )
+
+        return _SalesReturnSnapshot(
+            order=order_snapshot,
+            return_id=int(ret.id),
+            provider_refund_id=str(ret.provider_refund_id),
+            demand_external_id=str(demand_command.external_id).strip(),
+        )
+    finally:
+        if db.in_transaction():
+            db.rollback()
+
+
+async def _document_positions(
+    order: _OrderExportSnapshot,
+) -> list[dict[str, Any]]:
     positions: list[dict[str, Any]] = []
 
-    for (item, variant, product), line_total in zip(items, line_totals, strict=True):
-        assortment = await _resolve_assortment_meta(variant.moysklad_id or product.moysklad_id)
-        base_price, remainder = divmod(line_total, item.quantity)
-        base_quantity = item.quantity - remainder
+    for line in order.lines:
+        assortment = await _resolve_assortment_meta(line.moysklad_id)
+        base_price, remainder = divmod(line.net_total_cents, line.quantity)
+        base_quantity = line.quantity - remainder
         if base_quantity:
             positions.append(
                 {
@@ -232,34 +371,41 @@ async def _document_positions(
                 }
             )
 
-    delivery_cents = _money_cents(order.delivery_price, "delivery price")
-    if delivery_cents:
+    if order.delivery_cents:
         settings = get_settings()
         if not settings.moysklad_delivery_service_id.strip():
             raise MoySkladReviewRequired(
                 "MOYSKLAD_DELIVERY_SERVICE_ID is required for paid delivery"
             )
-        delivery_meta = await _resolve_assortment_meta(settings.moysklad_delivery_service_id)
+        delivery_meta = await _resolve_assortment_meta(
+            settings.moysklad_delivery_service_id
+        )
         positions.append(
             {
                 "assortment": delivery_meta,
                 "quantity": 1,
-                "price": delivery_cents,
+                "price": order.delivery_cents,
                 "discount": 0,
                 "vat": 0,
             }
         )
 
-    rendered_total = sum(int(position["price"]) * int(position["quantity"]) for position in positions)
-    expected_total = _money_cents(order.total_amount, "order total")
-    if rendered_total != expected_total:
+    rendered_total = sum(
+        int(position["price"]) * int(position["quantity"])
+        for position in positions
+    )
+    if rendered_total != order.total_cents:
         raise MoySkladReviewRequired(
-            f"MoySklad position total {rendered_total} does not match order total {expected_total}"
+            f"MoySklad position total {rendered_total} does not match order total {order.total_cents}"
         )
-    return order, positions
+    return positions
 
 
-def _base_document(order: Order, positions: list[dict[str, Any]], sync_id: str) -> dict[str, Any]:
+def _base_document(
+    order: _OrderExportSnapshot,
+    positions: list[dict[str, Any]],
+    sync_id: str,
+) -> dict[str, Any]:
     settings = get_settings()
     return {
         "syncId": sync_id,
@@ -267,7 +413,7 @@ def _base_document(order: Order, positions: list[dict[str, Any]], sync_id: str) 
         "agent": _entity_meta("counterparty", settings.moysklad_agent_id),
         "store": _entity_meta("store", settings.moysklad_store_id),
         "description": (
-            f"FLASHIN order #{order.id}; local_total={Decimal(str(order.total_amount)).quantize(_MONEY)} "
+            f"FLASHIN order #{order.id}; local_total={order.total_amount} "
             f"{order.currency}; payment_status={order.payment_status}; delivery={order.delivery_type}"
         )[:4096],
         "positions": positions,
@@ -278,9 +424,10 @@ def _base_document(order: Order, positions: list[dict[str, Any]], sync_id: str) 
 
 async def export_customer_order(db: Session, order_id: int) -> str:
     _require_export_configuration()
-    order, positions = await _document_positions(db, order_id)
+    order = _prepare_order_snapshot(db, order_id)
     if order.payment_status not in {"paid", "partially_refunded", "refunded"}:
         raise MoySkladReviewRequired("Only a paid order can be exported to MoySklad")
+    positions = await _document_positions(order)
     sync_id = _sync_id("customerorder", order.id)
     payload = _base_document(order, positions, sync_id)
     payload["externalCode"] = f"FLASHIN-ORDER-{order.id}"
@@ -293,9 +440,10 @@ async def export_customer_order(db: Session, order_id: int) -> str:
 
 async def export_demand(db: Session, order_id: int) -> str:
     _require_export_configuration()
-    order, positions = await _document_positions(db, order_id)
+    order = _prepare_order_snapshot(db, order_id)
     if order.delivery_status not in {"shipped", "delivered"}:
         raise MoySkladReviewRequired("Only a shipped order can create a MoySklad demand")
+    positions = await _document_positions(order)
     sync_id = _sync_id("demand", order.id)
     payload = _base_document(order, positions, sync_id)
     payload["externalCode"] = f"FLASHIN-DEMAND-{order.id}"
@@ -308,39 +456,15 @@ async def export_demand(db: Session, order_id: int) -> str:
 
 async def export_sales_return(db: Session, order_id: int, return_id: int) -> str:
     _require_export_configuration()
-    order, positions = await _document_positions(db, order_id)
-    ret = db.query(ReturnRequest).filter(ReturnRequest.id == return_id, ReturnRequest.order_id == order.id).first()
-    if not ret:
-        raise MoySkladReviewRequired(f"Return request {return_id} does not exist")
-    if ret.status != "approved" or order.payment_status != "refunded":
-        raise MoySkladReviewRequired(
-            "MoySklad stock return requires a completed full refund with unambiguous item composition"
-        )
-
-    demand_command_key = f"order:{order.id}:demand:v1"
-    from ..provider_models import ProviderCommand
-
-    demand_command = (
-        db.query(ProviderCommand)
-        .filter(
-            ProviderCommand.provider == "moysklad",
-            ProviderCommand.idempotency_key == demand_command_key,
-            ProviderCommand.status == "sent",
-        )
-        .first()
-    )
-    if not demand_command or not demand_command.external_id:
-        raise MoySkladReviewRequired(
-            "A completed MoySklad demand is required before creating a sales return"
-        )
-
-    sync_id = _sync_id("salesreturn", ret.id)
-    payload = _base_document(order, positions, sync_id)
-    payload["externalCode"] = f"FLASHIN-RETURN-{ret.id}"
-    payload["demand"] = _entity_meta("demand", demand_command.external_id)
+    snapshot = _prepare_sales_return_snapshot(db, order_id, return_id)
+    positions = await _document_positions(snapshot.order)
+    sync_id = _sync_id("salesreturn", snapshot.return_id)
+    payload = _base_document(snapshot.order, positions, sync_id)
+    payload["externalCode"] = f"FLASHIN-RETURN-{snapshot.return_id}"
+    payload["demand"] = _entity_meta("demand", snapshot.demand_external_id)
     payload["description"] = (
-        f"FLASHIN full refund return #{ret.id} for order #{order.id}; "
-        f"provider_refund_id={ret.provider_refund_id}"
+        f"FLASHIN full refund return #{snapshot.return_id} for order #{snapshot.order.id}; "
+        f"provider_refund_id={snapshot.provider_refund_id}"
     )[:4096]
     result = await _request_json("POST", "entity/salesreturn", json_body=payload)
     external_id = str(result.get("id") or "").strip()
