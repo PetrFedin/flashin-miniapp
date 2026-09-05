@@ -7,8 +7,9 @@ from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from ..database import utcnow_naive
-from ..models import Notification
-from ..notification_models import NotificationDeliveryState
+from ..models import ConsentRecord, Notification
+from ..notification_models import NotificationDeliveryState, NotificationPolicyContext
+from .notifications import NOTIFICATION_PURPOSE_MARKETING
 
 
 RETRYABLE_NOTIFICATION_STATUSES = {"pending", "failed"}
@@ -24,6 +25,11 @@ MAX_BACKOFF_SECONDS = max(
 )
 LEASE_SECONDS = max(30, int(os.getenv("NOTIFICATION_LEASE_SECONDS", "180")))
 
+DELIVERY_ALLOWED = "allowed"
+DELIVERY_SUPPRESSED = "suppressed"
+DELIVERY_IGNORED = "ignored"
+_SUPPRESSED_ERROR = "Suppressed by marketing consent policy"
+
 
 def reset_notification_delivery(
     notification: Notification,
@@ -33,9 +39,10 @@ def reset_notification_delivery(
 ) -> NotificationDeliveryState:
     """Reset a failed/pending notification for an immediate, audited retry.
 
-    Sent notifications are deliberately not retryable because Telegram does not
-    provide an idempotency key for sendMessage and replaying them could create a
-    duplicate customer message.
+    Sent or policy-suppressed notifications are deliberately not retryable.
+    Telegram does not provide an idempotency key for sendMessage, and a
+    marketing message whose consent has been withdrawn must not be revived by
+    an operational retry.
     """
     if notification.status == "sent":
         raise HTTPException(status_code=409, detail="Sent notification cannot be retried")
@@ -195,6 +202,82 @@ def renew_delivery_lease(
     state.updated_at = now
     db.commit()
     return True
+
+
+def preflight_notification_delivery(
+    db: Session,
+    notification_id: int,
+    lease_token: str,
+) -> str:
+    """Apply purpose-specific policy immediately before the transport call.
+
+    Marketing consent is append-only, so the latest record by created_at/id is
+    authoritative. Missing policy context remains allowed for legacy rows;
+    malformed marketing context fails closed. A suppressed row is terminal and
+    its lease state is deleted so neither automatic nor manual retry can revive
+    it without creating a new notification under a new consent decision.
+    """
+    normalized_token = str(lease_token or "").strip()
+    if not normalized_token:
+        return DELIVERY_IGNORED
+
+    row = (
+        db.query(Notification)
+        .filter(
+            Notification.id == notification_id,
+            Notification.status == "processing",
+        )
+        .with_for_update()
+        .first()
+    )
+    if not row or row.status != "processing":
+        db.rollback()
+        return DELIVERY_IGNORED
+
+    state = (
+        db.query(NotificationDeliveryState)
+        .filter(
+            NotificationDeliveryState.notification_id == row.id,
+            NotificationDeliveryState.lease_token == normalized_token,
+        )
+        .with_for_update()
+        .first()
+    )
+    if not state or state.lease_token != normalized_token:
+        db.rollback()
+        return DELIVERY_IGNORED
+
+    context = (
+        db.query(NotificationPolicyContext)
+        .filter(NotificationPolicyContext.notification_id == row.id)
+        .first()
+    )
+    if context is None or context.purpose != NOTIFICATION_PURPOSE_MARKETING:
+        db.rollback()
+        return DELIVERY_ALLOWED
+
+    latest_consent = None
+    if context.customer_id is not None:
+        latest_consent = (
+            db.query(ConsentRecord)
+            .filter(
+                ConsentRecord.customer_id == context.customer_id,
+                ConsentRecord.consent_type == "marketing",
+            )
+            .order_by(ConsentRecord.created_at.desc(), ConsentRecord.id.desc())
+            .first()
+        )
+
+    if latest_consent is not None and bool(latest_consent.granted):
+        db.rollback()
+        return DELIVERY_ALLOWED
+
+    row.status = DELIVERY_SUPPRESSED
+    row.error = _SUPPRESSED_ERROR
+    row.sent_at = None
+    db.delete(state)
+    db.commit()
+    return DELIVERY_SUPPRESSED
 
 
 def finish_delivery(

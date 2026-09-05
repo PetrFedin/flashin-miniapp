@@ -31,6 +31,46 @@ const pilotRuntimeStatus = {
   },
 };
 
+const pilotReadinessStatus = {
+  schema_version: 1,
+  decision: "GO",
+  ready_for_next_order: true,
+  blocking_codes: [],
+  warning_codes: [],
+  diagnostics: {
+    critical: {
+      database: true,
+      migrations: true,
+      env: true,
+      payments: true,
+      moysklad: true,
+      scheduler: true,
+      notification_delivery: true,
+      webhook_outbox: true,
+      moysklad_sync: true,
+    },
+    advisory: {
+      media: true,
+      search: true,
+    },
+  },
+  runtime: {
+    checkout_decision: "GO",
+    enforced: true,
+    status: "active",
+    accepted_orders: 3,
+    remaining_orders: 17,
+    allowlist_count: 5,
+    database_integrity_healthy: true,
+    artifact_integrity_applicable: true,
+    artifact_integrity_healthy: true,
+    money_attention_required: false,
+    operational_safety_applicable: true,
+    operational_safety_healthy: true,
+  },
+  request_id: "browser-e2e-request-id",
+};
+
 function failedBusinessEvent() {
   return {
     id: 501,
@@ -58,11 +98,12 @@ async function mockAdminApi(page) {
     title: "Pilot Jacket",
     slug: "pilot-jacket",
     brand: "FLASHIN",
+    description: "",
     price: 12000,
     currency: "RUB",
     category: "Outerwear",
     active: true,
-    variants: [{ id: 11, size: "M", sku: "FLASH-001-M", stock_qty: 5 }],
+    variants: [{ id: 11, size: "M", color: "", sku: "FLASH-001-M", stock_qty: 5, reserved_qty: 0 }],
   }];
   let orders = [
     {
@@ -130,6 +171,15 @@ async function mockAdminApi(page) {
     });
 
     if (path === "/api/admin/login" && method === "POST") return json({ access_token: "admin-pilot-token" });
+    if (path === "/api/admin/session" && method === "GET") {
+      return json({
+        id: 1,
+        email: "pilot@flashin.test",
+        role: "owner",
+        all_access: true,
+        permissions: [],
+      });
+    }
     if (path === "/api/admin/products" && method === "GET") return json(products);
     if (path === "/api/admin/orders" && method === "GET") return json(orders);
     if (path === "/api/admin/audit-logs" && method === "GET") {
@@ -155,6 +205,7 @@ async function mockAdminApi(page) {
         title: "Imported Pilot Shirt",
         slug: "imported-pilot-shirt",
         brand: "FLASHIN",
+        description: "",
         price: 7000,
         currency: "RUB",
         category: "Shirts",
@@ -185,6 +236,7 @@ async function mockAdminApi(page) {
 
     if (path === "/api/ops/abandoned-carts/queue-notifications" && method === "POST") return json({ queued: 1 });
     if (path === "/api/ops/inventory/snapshot" && method === "POST") return json({ created: true });
+    if (path === "/api/ops/pilot-readiness" && method === "GET") return json(pilotReadinessStatus);
     if (path === "/api/ops/pilot-runtime" && method === "GET") return json(pilotRuntimeStatus);
 
     if (path === "/api/support/admin/tickets" && method === "GET") return json(supportTickets);
@@ -264,26 +316,29 @@ test("Admin critical pilot operator journey", async ({ page }) => {
   const productsSection = page.locator("section").filter({
     has: page.getByRole("heading", { name: "Товары" }),
   });
+  const createProductSection = page.locator("section").filter({
+    has: page.getByRole("heading", { name: "Создать товар", exact: true }),
+  });
   await expect(productsSection.getByText("Pilot Jacket", { exact: true })).toBeVisible();
 
   await page.getByPlaceholder("CODE").fill("PILOT10");
   await page.getByRole("button", { name: "Создать" }).first().click();
   await expect(page.getByRole("status")).toContainText("Промокод создан");
 
-  await page.getByPlaceholder("SKU", { exact: true }).fill("FLASH-002");
-  await page.getByPlaceholder("Название").fill("Pilot Trousers");
-  await page.getByPlaceholder("slug").fill("pilot-trousers");
-  await page.getByPlaceholder("Цена").fill("9000");
-  await page.getByPlaceholder("Размер", { exact: true }).fill("M");
-  await page.getByPlaceholder("SKU размера").fill("FLASH-002-M");
-  await page.getByRole("button", { name: /Создать товар/i }).click();
+  await createProductSection.getByPlaceholder("SKU", { exact: true }).fill("FLASH-002");
+  await createProductSection.getByPlaceholder("Название", { exact: true }).fill("Pilot Trousers");
+  await createProductSection.getByPlaceholder("slug", { exact: true }).fill("pilot-trousers");
+  await createProductSection.getByPlaceholder("Цена", { exact: true }).fill("9000");
+  await createProductSection.getByPlaceholder("Размер", { exact: true }).fill("M");
+  await createProductSection.getByPlaceholder("SKU размера", { exact: true }).fill("FLASH-002-M");
+  await createProductSection.getByRole("button", { name: /Создать товар/i }).click();
   await expect(productsSection.getByText("Pilot Trousers", { exact: true })).toBeVisible();
 
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Отменить до оплаты" }).click();
   await expect(page.getByText("Отменён")).toBeVisible();
 
-  await page.getByRole("button", { name: "Обновить", exact: true }).click();
+  await page.locator("main > header").getByRole("button", { name: "Обновить", exact: true }).click();
   await expect(page.getByRole("status")).toContainText("Данные обновлены");
 
   await page.getByRole("button", { name: "Выйти" }).click();
@@ -314,7 +369,7 @@ test("Admin operations, fulfillment and BusinessEvent recovery journey", async (
   ));
   await page.getByRole("button", { name: "Сделать снимок остатков" }).click();
   expect((await inventorySnapshot).ok()).toBe(true);
-  await expect(page.getByText("FLASH-001-M")).toBeVisible();
+  await expect(page.getByText("FLASH-001-M", { exact: true }).first()).toBeVisible();
 
   const csvInput = page.locator('input[accept=".csv,text/csv"]');
   await csvInput.setInputFiles({

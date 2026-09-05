@@ -24,6 +24,15 @@ async function mockOwnerJourney(page) {
     });
 
     if (path === "/api/admin/login" && method === "POST") return json({ access_token: "owner-pilot-token" });
+    if (path === "/api/admin/session" && method === "GET") {
+      return json({
+        id: 42,
+        email: "owner@flashin.test",
+        role: "support",
+        all_access: false,
+        permissions: ["support.write"],
+      });
+    }
     if (path === "/api/admin/products" && method === "GET") return json([]);
     if (path === "/api/admin/orders" && method === "GET") return json([]);
     if (path === "/api/admin/audit-logs" && method === "GET") return json([]);

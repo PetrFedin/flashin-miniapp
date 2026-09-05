@@ -100,10 +100,14 @@ def apply_provider_refund_status(
     provider_status: str,
 ) -> dict[str, object]:
     normalized_status = provider_status.strip().lower()
-    if normalized_status == "succeeded":
-        if ret.status in _FINAL_REFUND_STATUSES:
-            return _idempotent_succeeded_result(db, ret, order)
 
+    # A provider observation can be stale relative to another concurrent approval.
+    # Once local success is finalized, no later pending/canceled/succeeded response
+    # may demote it or replay loyalty, inventory, notification, or outbound effects.
+    if ret.status in _FINAL_REFUND_STATUSES:
+        return _idempotent_succeeded_result(db, ret, order)
+
+    if normalized_status == "succeeded":
         order_total = refund_money(order.total_amount, "order total")
         previous_total = completed_refund_total(
             db,

@@ -5,7 +5,6 @@ from typing import Any, Awaitable, Callable
 
 from sqlalchemy.orm import Session
 
-from ..provider_models import ProviderCommand
 from ..services.moysklad_outbound import (
     MoySkladReviewRequired,
     export_customer_order,
@@ -34,24 +33,9 @@ async def _demand(db: Session, payload: dict[str, Any]) -> str:
 
 
 async def _sales_return(db: Session, payload: dict[str, Any]) -> str:
-    order_id = int(payload["order_id"])
-    demand = (
-        db.query(ProviderCommand)
-        .filter(
-            ProviderCommand.provider == "moysklad",
-            ProviderCommand.idempotency_key == f"order:{order_id}:demand:v1",
-            ProviderCommand.status == "sent",
-            ProviderCommand.external_id != "",
-        )
-        .first()
-    )
-    if not demand:
-        # Dependency lag is retryable. Do not strand a valid return in manual
-        # review just because the preceding demand is still being retried.
-        raise RuntimeError("MoySklad demand dependency is not completed yet")
     return await export_sales_return(
         db,
-        order_id,
+        int(payload["order_id"]),
         int(payload["return_id"]),
     )
 

@@ -1,4 +1,5 @@
 import json
+from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
@@ -14,14 +15,14 @@ _SHIPMENT_TRANSITIONS = {
 }
 
 
-def calculate_delivery_price(provider_code: str, zone: str = "default") -> float:
+def calculate_delivery_price(provider_code: str, zone: str = "default") -> Decimal:
     base = {
-        "courier": 500,
-        "cdek": 700,
-        "boxberry": 650,
-        "pickup": 0,
+        "courier": Decimal("500.00"),
+        "cdek": Decimal("700.00"),
+        "boxberry": Decimal("650.00"),
+        "pickup": Decimal("0.00"),
     }
-    return float(base.get(provider_code, 500))
+    return base.get(provider_code, Decimal("500.00"))
 
 
 def create_shipment(db: Session, order: Order, provider_code: str = "courier") -> DeliveryShipment:

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
+import { hasAdminPermission } from "./adminPermissions.js";
 import { AdminApiError, adminJson } from "./api.js";
 import {
   FULFILLMENT_STATUS_LABELS,
@@ -30,7 +31,8 @@ function slaLabel(event) {
   return `${event.event_type}: ${event.status} · ${due}`;
 }
 
-export default function FulfillmentOperationsPanel({ onUnauthorized }) {
+export default function FulfillmentOperationsPanel({ onUnauthorized, session }) {
+  const canWrite = hasAdminPermission(session, "fulfillment.write");
   const [tasks, setTasks] = useState([]);
   const [shipments, setShipments] = useState([]);
   const [slaEvents, setSlaEvents] = useState([]);
@@ -125,7 +127,14 @@ export default function FulfillmentOperationsPanel({ onUnauthorized }) {
     run("initial-fulfillment-load", load);
   }, []);
 
+  function requireWrite() {
+    if (canWrite) return true;
+    setError("Недостаточно прав: изменение fulfillment требует fulfillment.write.");
+    return false;
+  }
+
   async function updateTask(task, status, message) {
+    if (!requireWrite()) return;
     const updated = await run(
       `task-${task.id}`,
       () => adminJson(`/api/fulfillment/tasks/${task.id}`, {
@@ -138,6 +147,7 @@ export default function FulfillmentOperationsPanel({ onUnauthorized }) {
   }
 
   async function pickAndPack(task) {
+    if (!requireWrite()) return;
     const result = await run(`pick-pack-${task.id}`, async () => {
       const picklist = await adminJson(`/api/fulfillment/tasks/${task.id}/picklist`);
       const items = Array.isArray(picklist?.items) ? picklist.items : [];
@@ -173,6 +183,7 @@ export default function FulfillmentOperationsPanel({ onUnauthorized }) {
   }
 
   async function createShipment(task) {
+    if (!requireWrite()) return;
     const shipment = await run(
       `shipment-create-${task.order_id}`,
       () => adminJson(
@@ -185,6 +196,7 @@ export default function FulfillmentOperationsPanel({ onUnauthorized }) {
   }
 
   async function ship(task, shipment) {
+    if (!requireWrite()) return;
     const validation = normalizeTracking(trackingDrafts[shipment.id]);
     if (validation.error) {
       setError(validation.error);
@@ -203,6 +215,7 @@ export default function FulfillmentOperationsPanel({ onUnauthorized }) {
   }
 
   async function deliver(task, shipment) {
+    if (!requireWrite()) return;
     if (!window.confirm(`Подтвердить доставку заказа #${task.order_id}?`)) return;
     const updated = await run(
       `shipment-deliver-${shipment.id}`,
@@ -217,6 +230,7 @@ export default function FulfillmentOperationsPanel({ onUnauthorized }) {
   }
 
   async function handleAction(task, shipment) {
+    if (!requireWrite()) return;
     const action = fulfillmentAction(task, shipment);
     if (!action) return;
     if (action.type === "task") {
@@ -256,6 +270,7 @@ export default function FulfillmentOperationsPanel({ onUnauthorized }) {
 
       {error && <div className="error" role="alert">{error}<button type="button" onClick={() => setError("")}>×</button></div>}
       {notice && <div className="notice" role="status">{notice}<button type="button" onClick={() => setNotice("")}>×</button></div>}
+      {!canWrite && <p className="event-warning">Fulfillment доступен только для чтения: нет fulfillment.write.</p>}
       {sectionErrors.tasks && <p className="error-inline">Задачи: {sectionErrors.tasks}</p>}
       {sectionErrors.shipments && <p className="error-inline">Отгрузки: {sectionErrors.shipments}</p>}
       {sectionErrors.sla && <p className="error-inline">SLA: {sectionErrors.sla}</p>}
@@ -289,7 +304,7 @@ export default function FulfillmentOperationsPanel({ onUnauthorized }) {
                   <small>{shipment.provider_code}{shipment.tracking_number ? ` · ${shipment.tracking_number}` : ""}</small>
                 </div>
               )}
-              {shipment?.status === "created" && (
+              {canWrite && shipment?.status === "created" && (
                 <label>
                   Трек-номер
                   <input
@@ -304,7 +319,7 @@ export default function FulfillmentOperationsPanel({ onUnauthorized }) {
                   />
                 </label>
               )}
-              {action ? (
+              {canWrite && action ? (
                 <button
                   type="button"
                   onClick={() => handleAction(task, shipment)}
@@ -312,9 +327,9 @@ export default function FulfillmentOperationsPanel({ onUnauthorized }) {
                 >
                   {action.label}
                 </button>
-              ) : (
+              ) : !action ? (
                 <p><b>Цикл завершён.</b></p>
-              )}
+              ) : null}
             </article>
           );
         })}

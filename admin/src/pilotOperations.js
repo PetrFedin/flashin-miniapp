@@ -22,6 +22,7 @@ export const PILOT_INTEGRITY_LABELS = Object.freeze({
   active_runtime_exhausted: "Активный runtime уже исчерпал лимит",
   completed_before_limit: "Runtime завершён до двадцатого заказа",
   stopped_without_reason: "Остановка не содержит причины",
+  pilot_database_evidence_invalid: "Подписанные результаты пилота не сходятся с PostgreSQL",
   admission_evidence_invalid: "Admission evidence не подтверждён",
   current_release_invalid: "Текущий release не подтверждён",
   previous_release_invalid: "Rollback release не подтверждён",
@@ -47,11 +48,18 @@ export const PILOT_STOP_LABELS = Object.freeze({
   "auto:payment_review:paid_after_cancel": "Оплата пришла после отмены заказа",
   "auto:payment_review:canceled_after_settlement": "Отмена пришла после settlement",
   "auto:payment_review:provider_cancel_conflict": "Отмена провайдера конфликтует с заказом",
+  "auto:payment_review_required": "Оплата требует ручной проверки",
   "auto:payment_reconciliation_mismatch": "Reconciliation выявил расхождение",
   "auto:refund_retry_required": "Возврат требует повторной попытки",
   "auto:refund_review_required": "Возврат требует ручной проверки",
   "auto:refund_finalization_integrity_failure": "Нарушена целостность финализации возврата",
   "auto:refund_finalization_integrity_conflict": "Конфликт повторной финализации возврата",
+  "auto:runtime_artifact_integrity_failure": "Runtime evidence или release binding не прошли проверку",
+  "auto:pilot_control_decision_stop": "Pilot control переведён в STOP",
+  "auto:pilot_database_integrity_failure": "Database evidence пилота не прошёл проверку",
+  "auto:operational_safety_failure": "Операционный safety-контур требует остановки",
+  "auto:pilot_money_safety_evaluation_failure": "Money safety нельзя надёжно подтвердить",
+  "auto:pilot_runtime_configuration_mismatch": "Конфигурация pilot runtime нарушена",
   "auto:pilot_slot_runtime_mismatch": "Слот связан с другим runtime",
   "auto:integrity_failure": "Автоматическая остановка из-за нарушения целостности",
 });
@@ -124,6 +132,11 @@ function fallbackStatus() {
       healthy: null,
       codes: ["response_contract_invalid"],
     },
+    continuation: {
+      applicable: false,
+      ready: null,
+      nextSequence: null,
+    },
     moneyAttention: {
       paymentReviewOrders: 0,
       refundAttentionOrders: 0,
@@ -139,10 +152,12 @@ export function normalizePilotOperationsStatus(payload) {
   const runtimePresent = isObject(payload.runtime);
   const databasePresent = isObject(payload.database_integrity);
   const artifactsPresent = isObject(payload.artifact_integrity);
+  const continuationPresent = isObject(payload.continuation);
   const moneyPresent = isObject(payload.money_attention);
   const runtime = runtimePresent ? payload.runtime : {};
   const database = databasePresent ? payload.database_integrity : {};
   const artifacts = artifactsPresent ? payload.artifact_integrity : {};
+  const continuation = continuationPresent ? payload.continuation : {};
   const money = moneyPresent ? payload.money_attention : {};
   const databaseResult = normalizedCodes(database.codes);
   const artifactResult = normalizedCodes(artifacts.codes);
@@ -180,6 +195,8 @@ export function normalizePilotOperationsStatus(payload) {
     && typeof database.healthy === "boolean"
     && typeof artifacts.applicable === "boolean"
     && (typeof artifacts.healthy === "boolean" || artifacts.healthy === null)
+    && typeof continuation.applicable === "boolean"
+    && (typeof continuation.ready === "boolean" || continuation.ready === null)
     && typeof money.attention_required === "boolean";
   const integrityCoherent = database.healthy !== true || databaseResult.codes.length === 0;
   const artifactCoherent = artifacts.healthy !== true || artifactResult.codes.length === 0;
@@ -191,11 +208,18 @@ export function normalizePilotOperationsStatus(payload) {
     runtime.accepted_orders <= runtime.max_orders
     && runtime.remaining_orders <= runtime.max_orders
   );
+  const continuationCoherent = continuation.applicable === true
+    ? (typeof continuation.ready === "boolean"
+      && isSafeInteger(continuation.next_sequence)
+      && continuation.next_sequence === runtime.accepted_orders + 1
+      && continuation.next_sequence <= 20)
+    : continuation.ready === null && continuation.next_sequence === null;
   const contractValid = Boolean(
     expectedDecision
     && runtimePresent
     && databasePresent
     && artifactsPresent
+    && continuationPresent
     && moneyPresent
     && statusValid
     && runRefValid
@@ -213,6 +237,7 @@ export function normalizePilotOperationsStatus(payload) {
     && artifactCoherent
     && moneyCoherent
     && runtimeCountsCoherent
+    && continuationCoherent
   );
 
   const databaseHealthy = database.healthy === true && databaseResult.codes.length === 0;
@@ -222,6 +247,7 @@ export function normalizePilotOperationsStatus(payload) {
     && runtime.accepted_orders < runtime.max_orders
     && runtime.remaining_orders === runtime.max_orders - runtime.accepted_orders
     && runtime.slot_count === runtime.accepted_orders;
+  const continuationReady = continuation.applicable === true && continuation.ready === true;
   const decision = payload.checkout_decision === "GO"
     && contractValid
     && payload.enforced === true
@@ -229,6 +255,7 @@ export function normalizePilotOperationsStatus(payload) {
     && checkoutCountsSafe
     && databaseHealthy
     && artifactHealthy
+    && continuationReady
     && !attentionRequired
     ? "GO"
     : "NO-GO";
@@ -263,6 +290,11 @@ export function normalizePilotOperationsStatus(payload) {
       applicable: artifacts.applicable === true,
       healthy: artifacts.healthy === null ? null : contractValid && artifactHealthy,
       codes: [...new Set([...artifactResult.codes, ...contractCodes])],
+    },
+    continuation: {
+      applicable: continuation.applicable === true,
+      ready: continuation.ready === null ? null : continuation.ready === true,
+      nextSequence: isSafeInteger(continuation.next_sequence) ? continuation.next_sequence : null,
     },
     moneyAttention: {
       paymentReviewOrders: safeInteger(money.payment_review_orders),

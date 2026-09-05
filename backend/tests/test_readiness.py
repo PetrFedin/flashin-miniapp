@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from backend.api import health
 
 
-CURRENT_HEAD = "0026_inventory_return_movement"
+CURRENT_HEAD = "0038_relational_evidence_integrity"
 
 
 class ScalarResult:

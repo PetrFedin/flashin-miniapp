@@ -1,6 +1,6 @@
-import math
 import random
 import string
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -20,16 +20,27 @@ from ..models import (
 from ..order_statuses import SETTLED_ORDER_PAYMENT_STATUSES
 
 _REFERRAL_INELIGIBLE_DETAIL = "Referral code must be applied before the first paid order"
+_POINTS_STEP = Decimal("0.0001")
+_MONEY_STEP = Decimal("0.01")
+_HUNDRED = Decimal("100")
 
 
-def _finite_number(value: float, field: str) -> float:
+def _decimal_number(value, field: str) -> Decimal:
     try:
-        number = float(value)
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail=f"Invalid {field}")
-    if not math.isfinite(number):
+        number = value if isinstance(value, Decimal) else Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid {field}") from exc
+    if not number.is_finite():
         raise HTTPException(status_code=400, detail=f"Invalid {field}")
     return number
+
+
+def _points(value, field: str) -> Decimal:
+    return _decimal_number(value, field).quantize(_POINTS_STEP, rounding=ROUND_HALF_UP)
+
+
+def _money(value, field: str) -> Decimal:
+    return _decimal_number(value, field).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
 
 
 def _locked_profile(db: Session, customer_id: int, create: bool = False) -> CrmProfile | None:
@@ -40,7 +51,7 @@ def _locked_profile(db: Session, customer_id: int, create: bool = False) -> CrmP
         .first()
     )
     if not profile and create:
-        profile = CrmProfile(customer_id=customer_id, segment="new", loyalty_points=0)
+        profile = CrmProfile(customer_id=customer_id, segment="new", loyalty_points=Decimal("0.0000"))
         db.add(profile)
         db.flush()
     return profile
@@ -76,16 +87,19 @@ def _has_prior_settled_order(
 def add_points(
     db: Session,
     customer_id: int,
-    points: float,
+    points,
     reason: str,
     order_id: int | None = None,
 ) -> None:
-    points_value = _finite_number(points, "loyalty points")
+    points_value = _points(points, "loyalty points")
     if points_value == 0:
         return
 
     profile = _locked_profile(db, customer_id, create=True)
-    new_balance = _finite_number(profile.loyalty_points, "loyalty balance") + points_value
+    new_balance = (_points(profile.loyalty_points, "loyalty balance") + points_value).quantize(
+        _POINTS_STEP,
+        rounding=ROUND_HALF_UP,
+    )
     if new_balance < 0:
         raise HTTPException(status_code=409, detail="Loyalty balance cannot become negative")
 
@@ -126,9 +140,13 @@ def apply_referral(db: Session, code: str, new_customer_id: int) -> bool:
     return attach_referral_to_customer(db, code, new_customer_id)
 
 
-def redeem_points(db: Session, customer_id: int, cart: Cart, points: float) -> Cart:
+def redeem_points(db: Session, customer_id: int, cart: Cart, points) -> Cart:
     settings = get_settings()
-    requested_points = _finite_number(points, "loyalty points")
+    requested_points = _points(points, "loyalty points")
+
+    # Keep the compatibility service on the same canonical loyalty lock order
+    # as checkout and cart adjustment flows: profile before reserved holds.
+    profile = _locked_profile(db, customer_id)
     holds = (
         db.query(LoyaltyRedemptionHold)
         .filter(
@@ -141,31 +159,42 @@ def redeem_points(db: Session, customer_id: int, cart: Cart, points: float) -> C
     current_hold = next((hold for hold in holds if hold.cart_id == cart.id), None)
 
     if requested_points <= 0:
-        cart.loyalty_points_to_redeem = 0
+        cart.loyalty_points_to_redeem = Decimal("0.0000")
         if current_hold:
             current_hold.status = "released"
             current_hold.released_at = utcnow_naive()
         return cart
 
-    profile = _locked_profile(db, customer_id)
     if not profile:
         raise HTTPException(status_code=409, detail="Loyalty profile not found")
 
     other_reserved = sum(
-        _finite_number(hold.points, "reserved loyalty points")
-        for hold in holds
-        if hold.cart_id != cart.id
+        (
+            _points(hold.points, "reserved loyalty points")
+            for hold in holds
+            if hold.cart_id != cart.id
+        ),
+        Decimal("0.0000"),
     )
-    available_points = _finite_number(profile.loyalty_points, "loyalty balance") - other_reserved
+    available_points = (
+        _points(profile.loyalty_points, "loyalty balance") - other_reserved
+    ).quantize(_POINTS_STEP, rounding=ROUND_HALF_UP)
     if requested_points > available_points:
         raise HTTPException(status_code=409, detail="Not enough available loyalty points")
 
     subtotal = sum(
-        _finite_number(item.product.price, "product price") * item.quantity
-        for item in cart.items
-    )
-    max_discount = subtotal * _finite_number(settings.loyalty_max_redeem_percent, "loyalty limit") / 100
-    requested_discount = requested_points * _finite_number(settings.loyalty_point_value_rub, "loyalty point value")
+        (_money(item.product.price, "product price") * item.quantity for item in cart.items),
+        Decimal("0.00"),
+    ).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
+    max_discount = (
+        subtotal
+        * _decimal_number(settings.loyalty_max_redeem_percent, "loyalty limit")
+        / _HUNDRED
+    ).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
+    requested_discount = (
+        requested_points
+        * _decimal_number(settings.loyalty_point_value_rub, "loyalty point value")
+    ).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
     if requested_discount > max_discount:
         raise HTTPException(
             status_code=409,
@@ -276,9 +305,9 @@ def create_redemption_hold(
     db: Session,
     customer_id: int,
     cart_id: int,
-    points: float,
+    points,
 ) -> LoyaltyRedemptionHold | None:
-    points_value = _finite_number(points, "loyalty points")
+    points_value = _points(points, "loyalty points")
     hold = (
         db.query(LoyaltyRedemptionHold)
         .filter(
@@ -313,9 +342,9 @@ def mark_redemption_committed(
     customer_id: int,
     cart_id: int | None,
     order_id: int,
-    points: float,
+    points,
 ) -> None:
-    points_value = _finite_number(points, "loyalty points")
+    points_value = _points(points, "loyalty points")
     if points_value <= 0:
         return
 
@@ -359,8 +388,8 @@ def mark_redemption_committed(
     )
 
 
-def refund_redeemed_points(db: Session, customer_id: int, order_id: int, points: float) -> None:
-    points_value = _finite_number(points, "loyalty points")
+def refund_redeemed_points(db: Session, customer_id: int, order_id: int, points) -> None:
+    points_value = _points(points, "loyalty points")
     if points_value <= 0:
         return
 

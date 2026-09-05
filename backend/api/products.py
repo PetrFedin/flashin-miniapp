@@ -8,6 +8,7 @@ from ..config import get_settings
 from ..database import get_db
 from ..models import Product
 from ..schemas import ProductOut
+from ..services.pricing import ProductPriceQuote, load_product_price_quotes
 
 router = APIRouter(prefix="/products", tags=["products"])
 settings = get_settings()
@@ -26,13 +27,21 @@ def _load_active_product(db: Session, *, product_id: int | None = None, slug: st
     return product
 
 
-def _discount_percent(product: Product) -> int:
-    if not product.old_price or product.old_price <= product.price or product.old_price <= 0:
+def _serialize_product(product: Product, pricing: ProductPriceQuote) -> dict:
+    payload = ProductOut.model_validate(product).model_dump()
+    payload["price"] = float(pricing.effective_price)
+    payload["old_price"] = float(pricing.compare_at_price) if pricing.compare_at_price is not None else None
+    return payload
+
+
+def _discount_percent(pricing: ProductPriceQuote) -> int:
+    compare_at = pricing.compare_at_price
+    if compare_at is None or compare_at <= pricing.effective_price or compare_at <= 0:
         return 0
-    return round((product.old_price - product.price) / product.old_price * 100)
+    return round((compare_at - pricing.effective_price) / compare_at * 100)
 
 
-def _commerce_card(product: Product) -> dict:
+def _commerce_card(product: Product, pricing: ProductPriceQuote) -> dict:
     images = sorted(product.images, key=lambda image: image.sort_order)
     variants = sorted(product.variants, key=lambda variant: (variant.color or "", variant.size or ""))
 
@@ -71,11 +80,11 @@ def _commerce_card(product: Product) -> dict:
 
     low_stock = 0 < total_available <= 3
     sold_out = total_available <= 0
-    discount_percent = _discount_percent(product)
+    discount_percent = _discount_percent(pricing)
     completeness_checks = {
         "title": bool(product.title.strip()),
         "description": len(product.description.strip()) >= 80,
-        "price": product.price > 0,
+        "price": pricing.effective_price > 0,
         "images": len(images) >= 3,
         "variants": bool(variants),
         "sizes": len({variant.size for variant in variants if variant.size}) >= 1,
@@ -105,8 +114,8 @@ def _commerce_card(product: Product) -> dict:
             "description": product.description,
             "category": product.category,
             "gender": product.gender,
-            "price": product.price,
-            "old_price": product.old_price,
+            "price": float(pricing.effective_price),
+            "old_price": float(pricing.compare_at_price) if pricing.compare_at_price is not None else None,
             "currency": product.currency,
             "discount_percent": discount_percent,
             "is_drop": product.is_drop,
@@ -114,6 +123,7 @@ def _commerce_card(product: Product) -> dict:
             "drop_starts_at": product.drop_starts_at,
             "vip_only_until": product.vip_only_until,
             "badges": badges,
+            "pricing": pricing.public_payload(),
         },
         "gallery": [
             {
@@ -171,25 +181,34 @@ def list_products(
     products = query.order_by(Product.created_at.desc()).all()
     if size:
         products = [p for p in products if any(v.size == size and v.available_qty > 0 for v in p.variants)]
-    return products
+    quotes = load_product_price_quotes(db, products)
+    return [_serialize_product(product, quotes[product.id]) for product in products]
 
 
 @router.get("/{product_id}/commerce-card")
 def get_product_commerce_card(product_id: int, db: Session = Depends(get_db)):
     """Telegram Mini App product-card payload with variants, stock and sharing metadata."""
-    return _commerce_card(_load_active_product(db, product_id=product_id))
+    product = _load_active_product(db, product_id=product_id)
+    pricing = load_product_price_quotes(db, [product])[product.id]
+    return _commerce_card(product, pricing)
 
 
 @router.get("/slug/{slug}/commerce-card")
 def get_product_commerce_card_by_slug(slug: str, db: Session = Depends(get_db)):
-    return _commerce_card(_load_active_product(db, slug=slug))
+    product = _load_active_product(db, slug=slug)
+    pricing = load_product_price_quotes(db, [product])[product.id]
+    return _commerce_card(product, pricing)
 
 
 @router.get("/{product_id}", response_model=ProductOut)
 def get_product(product_id: int, db: Session = Depends(get_db)):
-    return _load_active_product(db, product_id=product_id)
+    product = _load_active_product(db, product_id=product_id)
+    pricing = load_product_price_quotes(db, [product])[product.id]
+    return _serialize_product(product, pricing)
 
 
 @router.get("/slug/{slug}", response_model=ProductOut)
 def get_product_by_slug(slug: str, db: Session = Depends(get_db)):
-    return _load_active_product(db, slug=slug)
+    product = _load_active_product(db, slug=slug)
+    pricing = load_product_price_quotes(db, [product])[product.id]
+    return _serialize_product(product, pricing)

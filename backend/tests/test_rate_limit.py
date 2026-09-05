@@ -30,21 +30,38 @@ def test_static_routes_are_not_over_normalized():
 
 
 def test_proxy_headers_are_ignored_when_not_trusted():
-    request = _request(headers={"x-forwarded-for": "203.0.113.10"})
+    request = _request(
+        headers={
+            "x-forwarded-for": "203.0.113.10",
+            "x-real-ip": "198.51.100.7",
+        }
+    )
 
     assert _client_ip(request, trust_proxy_headers=False) == "10.0.0.1"
 
 
-def test_last_valid_forwarded_ip_is_used_behind_isolated_proxy():
-    request = _request(
-        headers={"x-forwarded-for": "invalid, 198.51.100.7, 203.0.113.10"}
-    )
+def test_single_valid_forwarded_ip_is_used_behind_isolated_proxy():
+    request = _request(headers={"x-forwarded-for": "203.0.113.10"})
 
     assert _client_ip(request, trust_proxy_headers=True) == "203.0.113.10"
 
 
-def test_invalid_forwarded_chain_falls_back_to_direct_ip():
-    request = _request(headers={"x-forwarded-for": "unknown, invalid"})
+def test_forwarded_chain_fails_closed_to_direct_peer():
+    request = _request(
+        headers={"x-forwarded-for": "198.51.100.7, 203.0.113.10"}
+    )
+
+    assert _client_ip(request, trust_proxy_headers=True) == "10.0.0.1"
+
+
+def test_invalid_forwarded_value_falls_back_to_direct_ip():
+    request = _request(headers={"x-forwarded-for": "not-an-ip"})
+
+    assert _client_ip(request, trust_proxy_headers=True) == "10.0.0.1"
+
+
+def test_x_real_ip_is_never_an_application_client_identity_fallback():
+    request = _request(headers={"x-real-ip": "203.0.113.10"})
 
     assert _client_ip(request, trust_proxy_headers=True) == "10.0.0.1"
 

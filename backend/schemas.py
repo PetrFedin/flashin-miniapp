@@ -1,5 +1,6 @@
+import math
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 
 class ImageOut(BaseModel):
@@ -469,6 +470,46 @@ class AdminProductUpdate(BaseModel):
     category: str | None = None
     brand: str | None = None
     active: bool | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("title", "brand", "category")
+    @classmethod
+    def validate_required_text(cls, value: str | None, info: ValidationInfo):
+        field_name = info.field_name
+        if value is None:
+            raise ValueError(f"{field_name} cannot be null")
+        cleaned = value.strip()
+        limits = {"title": 255, "brand": 120, "category": 120}
+        if not cleaned:
+            raise ValueError(f"{field_name} cannot be blank")
+        if len(cleaned) > limits[field_name]:
+            raise ValueError(f"{field_name} is too long")
+        return cleaned
+
+    @field_validator("description")
+    @classmethod
+    def validate_description(cls, value: str | None):
+        if value is None:
+            raise ValueError("description cannot be null")
+        cleaned = value.strip()
+        if len(cleaned) > 20_000:
+            raise ValueError("description is too long")
+        return cleaned
+
+    @field_validator("price")
+    @classmethod
+    def validate_price(cls, value: float | None):
+        if value is None or not math.isfinite(value) or value <= 0:
+            raise ValueError("price must be finite and positive")
+        return round(value, 2)
+
+    @field_validator("active")
+    @classmethod
+    def validate_active(cls, value: bool | None):
+        if value is None:
+            raise ValueError("active cannot be null")
+        return value
 
 
 class SearchRebuildOut(BaseModel):

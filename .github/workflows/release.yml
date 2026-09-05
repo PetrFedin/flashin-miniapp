@@ -3,16 +3,66 @@ name: Release
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: release-${{ github.sha }}
+  cancel-in-progress: false
+
 jobs:
   package:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - name: Preflight
-        run: python3 scripts/preflight.py
-      - name: Package
-        run: zip -r flashin-miniapp-release.zip . -x "*.git*"
-      - uses: actions/upload-artifact@v4
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # releases/v4, 2026-07-16
         with:
-          name: flashin-miniapp-release
-          path: flashin-miniapp-release.zip
+          fetch-depth: 1
+
+      - name: Require protected exact-green main
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/release_ci_gate.py
+
+      - name: Run repository preflight
+        run: python3 scripts/preflight.py
+
+      - name: Refuse tracked private pilot evidence
+        run: python3 scripts/release_private_evidence_guard.py
+
+      - name: Build verified immutable release archive
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_id="main-${GITHUB_RUN_NUMBER}-${GITHUB_SHA:0:12}"
+          archive="$(python3 scripts/release_control.py create --release-id "$release_id" --print-path)"
+          python3 scripts/release_control.py verify --archive "$archive"
+          python3 scripts/pilot_release_capability.py inspect --archive "$archive"
+          test -f "${archive}.sha256"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+          echo "checksum=${archive}.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Generate source CycloneDX SBOM
+        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # Trivy v0.74.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          format: cyclonedx
+          output: flashin-source-sbom.cdx.json
+          exit-code: "0"
+          version: v0.74.0
+
+      - name: Upload immutable release, checksum and SBOM
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # releases/v4
+        with:
+          name: flashin-immutable-release-${{ github.sha }}
+          path: |
+            ${{ steps.package.outputs.archive }}
+            ${{ steps.package.outputs.checksum }}
+            flashin-source-sbom.cdx.json
+          if-no-files-found: error
+          retention-days: 90

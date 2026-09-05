@@ -14,7 +14,12 @@ from pilot_evidence import (  # noqa: E402
     sha256_file,
     sign_payload,
 )
-from pilot_lifecycle_admission import validate_attached_lifecycle  # noqa: E402
+from pilot_lifecycle_admission import (  # noqa: E402
+    ORDER_CONTEXT_EVIDENCE_PATH,
+    ORDER_CORRELATED_SCENARIOS,
+    validate_attached_lifecycle,
+    validate_order_lifecycle_correlation,
+)
 from pilot_live_lifecycle import (  # noqa: E402
     BASE_REQUIRED_SCENARIOS,
     build_report,
@@ -72,22 +77,56 @@ def _input(root: Path, env, *, owner="Operations", notes="controlled live observ
     _pilot_dir, evidence_dir = _paths(root)
     evidence = evidence_dir / "evidence.txt"
     evidence.write_text("FLASHIN controlled pilot evidence\n", encoding="utf-8")
+    context = evidence_dir / "real_order_e2e_context.json"
+    context.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "kind": "flashin_real_order_e2e_context",
+                "phase": "payment_created",
+                "created_at": "2026-08-06T12:00:00Z",
+                "api_base": env["API_PUBLIC_URL"],
+                "subject_id": "order:4242",
+                "order_id": 4242,
+                "product_id": 7,
+                "variant_id": 9,
+                "quantity": 1,
+                "baseline_stock_qty": 5,
+                "baseline_reserved_qty": 0,
+                "provider": "yookassa",
+                "provider_payment_id": "payment-4242",
+            }
+        ),
+        encoding="utf-8",
+    )
     scenarios = []
     for index, name in enumerate(required_scenarios(env), start=1):
+        scenario_evidence = [
+            {
+                "label": "sanitized operator evidence",
+                "path": str(evidence),
+            }
+        ]
+        if name in ORDER_CORRELATED_SCENARIOS:
+            scenario_evidence.append(
+                {
+                    "label": "shared real-order E2E context",
+                    "path": str(context),
+                }
+            )
         scenarios.append(
             {
                 "name": name,
                 "status": "PASS",
                 "observed_at": "2026-08-06T12:00:00Z",
                 "owner": owner,
-                "subject_id": f"subject-{index}",
+                "subject_id": (
+                    "order:4242"
+                    if name in ORDER_CORRELATED_SCENARIOS
+                    else f"subject-{index}"
+                ),
                 "notes": notes,
-                "evidence": [
-                    {
-                        "label": "sanitized operator evidence",
-                        "path": str(evidence),
-                    }
-                ],
+                "evidence": scenario_evidence,
             }
         )
     return {"scenarios": scenarios}, evidence
@@ -143,6 +182,23 @@ def test_live_lifecycle_report_requires_exact_deployed_scenarios_and_hashes(tmp_
         max_age_hours=24,
         now=NOW,
     ) == []
+    assert validate_order_lifecycle_correlation(report, root=tmp_path) == []
+    order_scenarios = [
+        scenario
+        for scenario in report["scenarios"]
+        if scenario["name"] in ORDER_CORRELATED_SCENARIOS
+    ]
+    assert order_scenarios
+    context_hashes = set()
+    for scenario in order_scenarios:
+        context_entries = [
+            item
+            for item in scenario["evidence"]
+            if item["path"] == ORDER_CONTEXT_EVIDENCE_PATH
+        ]
+        assert len(context_entries) == 1
+        context_hashes.add(context_entries[0]["sha256"])
+    assert len(context_hashes) == 1
     assert all(
         item["path"].startswith("docs/pilot/evidence/")
         for scenario in report["scenarios"]
@@ -159,6 +215,60 @@ def test_live_lifecycle_report_requires_exact_deployed_scenarios_and_hashes(tmp_
         now=NOW,
     )
     assert any("checksum does not match" in error for error in errors)
+
+
+def test_order_linked_scenarios_must_share_one_controlled_subject(tmp_path):
+    env = _env()
+    _write_env(tmp_path, env)
+    report, _ = _report(tmp_path, env)
+    mismatched = json.loads(json.dumps(report))
+    mismatched.pop("signature")
+    refund = next(
+        scenario
+        for scenario in mismatched["scenarios"]
+        if scenario["name"] == "yookassa_refund"
+    )
+    refund["subject_id"] = "order:9999"
+    mismatched = sign_payload(mismatched, SECRET)
+
+    errors = validate_order_lifecycle_correlation(mismatched, root=tmp_path)
+    assert any("share one controlled-order subject_id" in error for error in errors)
+    assert any("context subject_id does not match lifecycle" in error for error in errors)
+
+    pilot_dir, _ = _paths(tmp_path)
+    report_path = pilot_dir / "live_lifecycle_report.json"
+    report_path.write_text(json.dumps(mismatched), encoding="utf-8")
+    manifest = _manifest(env, report_path, attached=True)
+    manifest_path = pilot_dir / "pilot_admission_manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    attached_errors = validate_attached_lifecycle(
+        manifest_path,
+        manifest,
+        env=env,
+        root=tmp_path,
+        max_age_hours=24,
+        now=NOW,
+    )
+    assert any("share one controlled-order subject_id" in error for error in attached_errors)
+
+
+def test_order_linked_scenario_missing_shared_context_is_rejected(tmp_path):
+    env = _env()
+    report, _ = _report(tmp_path, env)
+    refund = next(
+        scenario
+        for scenario in report["scenarios"]
+        if scenario["name"] == "yookassa_refund"
+    )
+    refund["evidence"] = [
+        item
+        for item in refund["evidence"]
+        if item["path"] != ORDER_CONTEXT_EVIDENCE_PATH
+    ]
+
+    errors = validate_order_lifecycle_correlation(report, root=tmp_path)
+    assert any("must reference exactly one shared real-order E2E context" in error for error in errors)
 
 
 def test_conditional_search_and_media_scenarios_are_required(tmp_path):
@@ -189,6 +299,7 @@ def test_conditional_search_and_media_scenarios_are_required(tmp_path):
         max_age_hours=24,
         now=NOW,
     ) == []
+    assert validate_order_lifecycle_correlation(report, root=tmp_path) == []
 
 
 def test_tampering_staleness_and_raw_init_data_fail_closed(tmp_path):

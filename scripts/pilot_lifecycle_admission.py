@@ -27,6 +27,19 @@ DEFAULT_MANIFEST = ROOT / "docs/pilot/pilot_admission_manifest.json"
 DEFAULT_REPORT = ROOT / "docs/pilot/live_lifecycle_report.json"
 ACKNOWLEDGEMENT_KEY = "live_lifecycle_completed"
 EVIDENCE_KEY = "live_lifecycle_report"
+ORDER_CONTEXT_EVIDENCE_PATH = "docs/pilot/evidence/real_order_e2e_context.json"
+ORDER_CORRELATED_SCENARIOS = frozenset(
+    {
+        "yookassa_payment_redirect",
+        "yookassa_payment_return",
+        "yookassa_duplicate_webhook",
+        "yookassa_refund",
+        "moysklad_customerorder_outbound",
+        "moysklad_demand_outbound",
+        "moysklad_salesreturn_outbound",
+        "notification_delivery",
+    }
+)
 
 
 def _portable_report_path(root: Path, report_path: Path) -> str:
@@ -50,6 +63,132 @@ def _resolve_report_path(root: Path, raw: object) -> Path:
     if path.exists():
         return path
     return (root / "docs/pilot" / path.name).absolute()
+
+
+def validate_order_lifecycle_correlation(
+    report: Mapping[str, Any],
+    *,
+    root: Path | None = None,
+    expected_api_base: str | None = None,
+) -> list[str]:
+    """Require order-linked provider evidence to describe one controlled order."""
+
+    scenarios = report.get("scenarios")
+    if not isinstance(scenarios, list):
+        return []
+
+    subjects: dict[str, str] = {}
+    context_digests: dict[str, str] = {}
+    errors: list[str] = []
+    for scenario in scenarios:
+        if not isinstance(scenario, Mapping):
+            continue
+        name = str(scenario.get("name", "")).strip()
+        if name not in ORDER_CORRELATED_SCENARIOS:
+            continue
+        subject_id = str(scenario.get("subject_id", "")).strip()
+        if subject_id:
+            subjects[name] = subject_id
+
+        evidence = scenario.get("evidence")
+        context_entries = [
+            item
+            for item in evidence
+            if isinstance(item, Mapping)
+            and str(item.get("path", "")).strip() == ORDER_CONTEXT_EVIDENCE_PATH
+        ] if isinstance(evidence, list) else []
+        scenario_specific_entries = [
+            item
+            for item in evidence
+            if isinstance(item, Mapping)
+            and str(item.get("path", "")).strip()
+            and str(item.get("path", "")).strip() != ORDER_CONTEXT_EVIDENCE_PATH
+        ] if isinstance(evidence, list) else []
+        if len(context_entries) != 1:
+            errors.append(
+                f"order-linked scenario {name} must reference exactly one shared real-order E2E context artifact"
+            )
+            continue
+        if not scenario_specific_entries:
+            errors.append(
+                f"order-linked scenario {name} must include scenario-specific evidence in addition to the shared real-order E2E context artifact"
+            )
+        digest = str(context_entries[0].get("sha256", "")).strip()
+        if len(digest) != 64:
+            errors.append(
+                f"order-linked scenario {name} shared context SHA-256 is invalid"
+            )
+        else:
+            context_digests[name] = digest
+
+    unique_subjects = set(subjects.values())
+    if len(unique_subjects) > 1:
+        errors.append(
+            "order-linked live lifecycle scenarios must share one controlled-order subject_id"
+        )
+    if len(set(context_digests.values())) > 1:
+        errors.append(
+            "order-linked live lifecycle scenarios must share one real-order E2E context checksum"
+        )
+
+    if root is not None and context_digests:
+        context_path = root / ORDER_CONTEXT_EVIDENCE_PATH
+        try:
+            context = load_json(context_path)
+        except (OSError, ValueError) as exc:
+            errors.append(f"real-order E2E context artifact is invalid: {exc}")
+        else:
+            if context.get("schema_version") != 1:
+                errors.append("real-order E2E context schema is invalid")
+            if context.get("kind") != "flashin_real_order_e2e_context":
+                errors.append("real-order E2E context kind is invalid")
+            if context.get("phase") != "payment_created":
+                errors.append(
+                    "real-order E2E context is provisional and has not reached payment_created"
+                )
+            if context.get("provider") != "yookassa":
+                errors.append("real-order E2E context provider is invalid")
+
+            context_api_base = str(context.get("api_base") or "").strip().rstrip("/")
+            if not context_api_base:
+                errors.append("real-order E2E context api_base is invalid")
+            if expected_api_base is not None:
+                normalized_expected_api_base = str(expected_api_base or "").strip().rstrip("/")
+                if not normalized_expected_api_base:
+                    errors.append("pilot API_PUBLIC_URL is missing for real-order E2E context validation")
+                elif context_api_base != normalized_expected_api_base:
+                    errors.append("real-order E2E context api_base does not match pilot API_PUBLIC_URL")
+
+            order_id = context.get("order_id")
+            if isinstance(order_id, bool):
+                order_id = None
+            try:
+                normalized_order_id = int(order_id)
+            except (TypeError, ValueError):
+                normalized_order_id = 0
+            if normalized_order_id <= 0:
+                errors.append("real-order E2E context order_id is invalid")
+            else:
+                context_subject = str(context.get("subject_id", "")).strip()
+                expected_subject = f"order:{normalized_order_id}"
+                if context_subject != expected_subject:
+                    errors.append("real-order E2E context subject_id does not match order_id")
+                if (
+                    context_subject
+                    and unique_subjects
+                    and any(subject != context_subject for subject in unique_subjects)
+                ):
+                    errors.append(
+                        "real-order E2E context subject_id does not match lifecycle scenario subject_id"
+                    )
+            try:
+                baseline_reserved = int(context.get("baseline_reserved_qty"))
+            except (TypeError, ValueError):
+                baseline_reserved = -1
+            if baseline_reserved != 0:
+                errors.append("real-order E2E context baseline reservation must be zero")
+
+    return list(dict.fromkeys(errors))
 
 
 def _evidence_entry(
@@ -114,6 +253,13 @@ def validate_attached_lifecycle(
                 now=now,
             )
         )
+    errors.extend(
+        validate_order_lifecycle_correlation(
+            report,
+            root=root,
+            expected_api_base=env.get("API_PUBLIC_URL"),
+        )
+    )
 
     approvals = manifest.get("approvals")
     approved_names = (
@@ -176,6 +322,13 @@ def attach_lifecycle_report(
         root=root,
         env=env,
         expected_release=release,
+    )
+    lifecycle_errors.extend(
+        validate_order_lifecycle_correlation(
+            report,
+            root=root,
+            expected_api_base=env.get("API_PUBLIC_URL"),
+        )
     )
     if lifecycle_errors:
         raise ValueError(

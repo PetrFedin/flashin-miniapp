@@ -4,8 +4,8 @@
 The script is executed by CI after Alembic migrations. All generated data lives
 inside one outer transaction and is rolled back at the end. The only mocked
 boundary is the external payment provider; application routes, persistence,
-inventory, loyalty, promotion, payment settlement, fulfillment, outbox, and
-notification code are real.
+inventory, scheduled pricing, loyalty, promotion, payment settlement,
+fulfillment, outbox, and notification code are real.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from backend.api import payments as payments_api
+from backend.catalog_models import ProductMerchandising
 from backend.checkout_models import CheckoutAttempt
 from backend.database import engine, get_db
 from backend.main import app
@@ -36,6 +37,7 @@ from backend.models import (
     LoyaltyTransaction,
     Notification,
     Order,
+    OrderItem,
     Payment,
     PaymentEvent,
     Product,
@@ -112,12 +114,17 @@ def main() -> int:
         )
         db.add_all([customer, product, variant, promo])
         db.flush()
+        merchandising = ProductMerchandising(
+            product_id=product.id,
+            availability_status="in_stock",
+            promo_price=900.0,
+        )
         profile = CrmProfile(
             customer_id=customer.id,
             segment="smoke",
             loyalty_points=500,
         )
-        db.add(profile)
+        db.add_all([merchandising, profile])
         db.commit()
 
         def override_db():
@@ -176,8 +183,9 @@ def main() -> int:
             200,
             "add cart item",
         )
-        assert _money(cart["total_amount"]) == Decimal("2000.00")
-        assert _money(cart["final_amount"]) == Decimal("2000.00")
+        assert _money(cart["items"][0]["price"]) == Decimal("900.00")
+        assert _money(cart["total_amount"]) == Decimal("1800.00")
+        assert _money(cart["final_amount"]) == Decimal("1800.00")
 
         cart = _expect(
             client.post("/api/cart/promo", json={"code": promo.code}),
@@ -185,15 +193,15 @@ def main() -> int:
             "apply promotion",
         )
         assert cart["promo_code"] == promo.code
-        assert _money(cart["discount_amount"]) == Decimal("200.00")
-        assert _money(cart["final_amount"]) == Decimal("1800.00")
+        assert _money(cart["discount_amount"]) == Decimal("180.00")
+        assert _money(cart["final_amount"]) == Decimal("1620.00")
 
         cart = _expect(
             client.post("/api/cart/loyalty", json={"points": 100}),
             200,
             "reserve loyalty points",
         )
-        assert _money(cart["final_amount"]) == Decimal("1700.00")
+        assert _money(cart["final_amount"]) == Decimal("1520.00")
 
         checkout_key = f"smoke-checkout-{token}"
         checkout_payload = {
@@ -212,7 +220,9 @@ def main() -> int:
             200,
             "checkout",
         )
-        assert _money(order["total_amount"]) == Decimal("1700.00")
+        assert _money(order["total_amount"]) == Decimal("1520.00")
+        assert len(order["items"]) == 1
+        assert _money(order["items"][0]["price"]) == Decimal("900.00")
         assert order["status"] == "created"
         assert order["payment_status"] == "pending"
         order_id = int(order["id"])
@@ -227,6 +237,15 @@ def main() -> int:
             "idempotent checkout replay",
         )
         assert replayed_order["id"] == order_id
+        assert _money(replayed_order["items"][0]["price"]) == Decimal("900.00")
+
+        # Remove the live promotion after checkout. The historical OrderItem must
+        # retain the locked effective price used for the order and provider amount.
+        merchandising.promo_price = None
+        db.commit()
+        db.expire_all()
+        historical_item = db.query(OrderItem).filter(OrderItem.order_id == order_id).one()
+        assert _money(historical_item.price) == Decimal("900.00")
 
         payment = _expect(
             client.post("/api/payments", json={"order_id": order_id}),
@@ -258,6 +277,7 @@ def main() -> int:
 
         db.expire_all()
         persisted_order = db.query(Order).filter(Order.id == order_id).one()
+        persisted_item = db.query(OrderItem).filter(OrderItem.order_id == order_id).one()
         persisted_variant = db.query(ProductVariant).filter(ProductVariant.id == variant.id).one()
         persisted_promo = db.query(PromoCode).filter(PromoCode.id == promo.id).one()
         persisted_profile = db.query(CrmProfile).filter(CrmProfile.customer_id == customer.id).one()
@@ -286,17 +306,18 @@ def main() -> int:
 
         assert persisted_order.status == "paid"
         assert persisted_order.payment_status == "paid"
-        assert _money(persisted_order.total_amount) == Decimal("1700.00")
+        assert _money(persisted_order.total_amount) == Decimal("1520.00")
+        assert _money(persisted_item.price) == Decimal("900.00")
         assert persisted_variant.stock_qty == 3
         assert persisted_variant.reserved_qty == 0
         assert persisted_promo.used_count == 1
         assert persisted_cart.status == "converted"
         assert hold.status == "committed"
         assert _money(hold.points) == Decimal("100.00")
-        assert _money(persisted_profile.loyalty_points) == Decimal("417.00")
+        assert _money(persisted_profile.loyalty_points) == Decimal("415.20")
         assert [(row.reason, _money(row.points_delta)) for row in loyalty_rows] == [
             ("loyalty_redeemed", Decimal("-100.00")),
-            ("order_paid", Decimal("17.00")),
+            ("order_paid", Decimal("15.20")),
         ]
         assert len(notifications) == 1
         assert len(event_keys) == 1
@@ -326,6 +347,7 @@ def main() -> int:
                 {
                     "status": "ok",
                     "order_id": order_id,
+                    "scheduled_unit_price": f"{_money(persisted_item.price):.2f}",
                     "total": f"{_money(persisted_order.total_amount):.2f}",
                     "stock_after_sale": persisted_variant.stock_qty,
                     "loyalty_after_sale": f"{_money(persisted_profile.loyalty_points):.2f}",

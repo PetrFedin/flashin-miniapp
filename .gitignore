@@ -27,7 +27,12 @@ backups/
 deploy/release/builds/
 deploy/release/runtime/
 
+# Generated external alerting configuration and root-only credentials.
+deploy/runtime/
+deploy/secrets/alertmanager.env
+
 # Live pilot evidence contains real operational identifiers and must remain local/private.
+docs/pilot/evidence/
 docs/pilot/live_pilot_state.json
 docs/pilot/live_pilot_summary.md
 docs/pilot/live_pilot_state.json.lock
@@ -50,3 +55,4 @@ docs/pilot_live_gate_report.md
 postgres-data/
 meili_data/
 grafana-data/
+alertmanager-data/

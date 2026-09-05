@@ -19,12 +19,15 @@ from pilot_evidence import (
     utc_timestamp,
 )
 from pilot_readiness import (
+    CheckResult,
     build_live_checks,
     build_predeploy_checks,
     build_report,
     read_env,
+    run_command,
     write_report,
 )
+from provider_wiring_preflight import validate_wiring
 
 ROOT = Path(__file__).resolve().parents[1]
 CURRENT_RELEASE_PATH = ROOT / "deploy/release/runtime/current_release.json"
@@ -39,6 +42,49 @@ def _positive_int(env: Mapping[str, str], key: str, default: int) -> int:
     if value < 5 or value > 120:
         raise ValueError(f"{key} must be between 5 and 120")
     return value
+
+
+def _provider_wiring_checks(env: Mapping[str, str]) -> list[CheckResult]:
+    report = validate_wiring(env)
+    return [
+        CheckResult(
+            name=f"provider_wiring:{item['name']}",
+            ok=item["ok"] is True,
+            critical=True,
+            detail=str(item.get("detail") or ""),
+        )
+        for item in report.get("checks", [])
+        if isinstance(item, Mapping)
+    ]
+
+
+def _alertmanager_config_check() -> CheckResult:
+    return run_command(
+        "alertmanager:config",
+        ["python3", "scripts/render_alertmanager_config.py", "--check"],
+        root=ROOT,
+    )
+
+
+def _alertmanager_live_delivery_check() -> CheckResult:
+    return run_command(
+        "live:alertmanager_delivery",
+        [
+            "docker",
+            "compose",
+            "-f",
+            "docker-compose.yml",
+            "-f",
+            "docker-compose.production.yml",
+            "exec",
+            "-T",
+            "backend",
+            "python",
+            "scripts/alertmanager_delivery_smoke.py",
+        ],
+        root=ROOT,
+        timeout=120,
+    )
 
 
 def build_signed_live_report(
@@ -78,13 +124,16 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    env = read_env(ROOT / ".env")
     checks = build_predeploy_checks(ROOT)
+    checks.extend(_provider_wiring_checks(env))
+    checks.append(_alertmanager_config_check())
     if args.phase == "live":
         checks.extend(build_live_checks(ROOT))
+        checks.append(_alertmanager_live_delivery_check())
 
     report = build_report(args.phase, checks)
     if args.phase == "live":
-        env = read_env(ROOT / ".env")
         current_release = load_json(CURRENT_RELEASE_PATH)
         max_age_minutes = _positive_int(
             env, "PILOT_LIVE_GATE_MAX_AGE_MINUTES", 30

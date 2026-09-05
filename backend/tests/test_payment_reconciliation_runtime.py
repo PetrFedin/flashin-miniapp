@@ -1,10 +1,10 @@
-import asyncio
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 
 from backend.api import payments as payments_api
+from backend.services.payment_attempts import can_fallback_to_stored_attempt
 
 
 def make_order():
@@ -33,98 +33,80 @@ def provider_payment(status, confirmation_url=None):
     return data
 
 
-def test_pending_attempt_refreshes_provider_confirmation_url(monkeypatch):
-    async def fetch(_payment_id):
-        return provider_payment("pending", "https://pay.example/new")
-
-    monkeypatch.setattr(payments_api, "fetch_yookassa_payment", fetch)
+def test_pending_attempt_refreshes_provider_confirmation_url():
     payment = make_payment()
 
-    result = asyncio.run(payments_api._reconcile_existing_payment(make_order(), payment))
+    result = payments_api._apply_provider_reconciliation(
+        make_order(),
+        payment,
+        provider_payment("pending", "https://pay.example/new"),
+    )
 
     assert result is payment
     assert payment.status == "pending"
     assert payment.confirmation_url == "https://pay.example/new"
 
 
-def test_canceled_provider_attempt_is_replaced(monkeypatch):
-    async def fetch(_payment_id):
-        return provider_payment("canceled")
-
-    monkeypatch.setattr(payments_api, "fetch_yookassa_payment", fetch)
+def test_canceled_provider_attempt_is_replaced():
     payment = make_payment()
 
-    result = asyncio.run(payments_api._reconcile_existing_payment(make_order(), payment))
+    result = payments_api._apply_provider_reconciliation(
+        make_order(),
+        payment,
+        provider_payment("canceled"),
+    )
 
     assert result is None
     assert payment.status == "canceled"
     assert payment.confirmation_url == ""
 
 
-def test_succeeded_provider_attempt_is_not_duplicated(monkeypatch):
-    async def fetch(_payment_id):
-        return provider_payment("succeeded", "https://pay.example/stale")
-
-    monkeypatch.setattr(payments_api, "fetch_yookassa_payment", fetch)
+def test_succeeded_provider_attempt_is_not_duplicated():
     payment = make_payment()
 
-    result = asyncio.run(payments_api._reconcile_existing_payment(make_order(), payment))
+    result = payments_api._apply_provider_reconciliation(
+        make_order(),
+        payment,
+        provider_payment("succeeded", "https://pay.example/stale"),
+    )
 
     assert result is payment
     assert payment.status == "succeeded"
     assert payment.confirmation_url == ""
 
 
-def test_provider_outage_falls_back_only_to_existing_active_link(monkeypatch):
-    async def fail(_payment_id):
-        raise HTTPException(status_code=502, detail="provider offline")
-
-    monkeypatch.setattr(payments_api, "fetch_yookassa_payment", fail)
+def test_provider_outage_falls_back_only_to_existing_active_link():
     payment = make_payment()
 
-    result = asyncio.run(payments_api._reconcile_existing_payment(make_order(), payment))
-
-    assert result is payment
-    assert payment.confirmation_url == "https://pay.example/old"
+    assert can_fallback_to_stored_attempt(payment.status, payment.confirmation_url) is True
 
 
-def test_provider_outage_without_active_link_is_not_hidden(monkeypatch):
-    async def fail(_payment_id):
-        raise HTTPException(status_code=502, detail="provider offline")
+def test_provider_outage_without_active_link_is_not_hidden():
+    payment = make_payment(confirmation_url="")
 
-    monkeypatch.setattr(payments_api, "fetch_yookassa_payment", fail)
+    assert can_fallback_to_stored_attempt(payment.status, payment.confirmation_url) is False
+
+
+def test_active_provider_attempt_without_any_confirmation_url_is_blocked():
     payment = make_payment(confirmation_url="")
 
     with pytest.raises(HTTPException) as exc_info:
-        asyncio.run(payments_api._reconcile_existing_payment(make_order(), payment))
-
-    assert exc_info.value.status_code == 502
-
-
-def test_active_provider_attempt_without_any_confirmation_url_is_blocked(monkeypatch):
-    async def fetch(_payment_id):
-        return provider_payment("pending")
-
-    monkeypatch.setattr(payments_api, "fetch_yookassa_payment", fetch)
-    payment = make_payment(confirmation_url="")
-
-    with pytest.raises(HTTPException) as exc_info:
-        asyncio.run(payments_api._reconcile_existing_payment(make_order(), payment))
+        payments_api._apply_provider_reconciliation(
+            make_order(),
+            payment,
+            provider_payment("pending"),
+        )
 
     assert exc_info.value.status_code == 409
     assert "confirmation URL" in exc_info.value.detail
 
 
-def test_provider_order_reference_mismatch_is_rejected(monkeypatch):
-    async def fetch(_payment_id):
-        data = provider_payment("pending", "https://pay.example/new")
-        data["metadata"]["order_id"] = "8"
-        return data
-
-    monkeypatch.setattr(payments_api, "fetch_yookassa_payment", fetch)
+def test_provider_order_reference_mismatch_is_rejected():
+    data = provider_payment("pending", "https://pay.example/new")
+    data["metadata"]["order_id"] = "8"
 
     with pytest.raises(HTTPException) as exc_info:
-        asyncio.run(payments_api._reconcile_existing_payment(make_order(), make_payment()))
+        payments_api._apply_provider_reconciliation(make_order(), make_payment(), data)
 
     assert exc_info.value.status_code == 409
     assert "another order" in exc_info.value.detail

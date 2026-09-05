@@ -3,9 +3,15 @@
 ## Pilot launch
 
 - `docs/pilot/pilot_launch_runbook.md`
+- `docs/pilot/pilot_launch_preflight.md`
+- `docs/pilot/final_admission_operator.md`
 - `docs/pilot/provider_evidence_and_admission.md`
 - `docs/pilot/pilot_runtime_guard.md`
+- `docs/pilot/pilot_readiness_cockpit.md`
 - `docs/pilot/provider_probe_runbook.md`
+- `docs/pilot/live_lifecycle_evidence.md`
+- `docs/pilot/real_provider_e2e_recovery.md`
+- `docs/pilot/order_incident_trace.md`
 - `docs/pilot/release_and_rollback_runbook.md`
 - `docs/acceptance/pilot_acceptance_signoff.md`
 

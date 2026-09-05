@@ -4,6 +4,17 @@ from sqlalchemy.orm import Session
 from ..models import AdminRolePermission, AdminUser
 
 
+REFUNDS_WRITE_PERMISSION = "refunds.write"
+DELIVERY_PROVIDERS_WRITE_PERMISSION = "delivery.providers.write"
+PAYMENT_RECONCILIATION_READ_PERMISSION = "payments.reconciliation.read"
+PAYMENT_RECONCILIATION_WRITE_PERMISSION = "payments.reconciliation.write"
+WEBHOOKS_CONFIGURE_PERMISSION = "webhooks.configure"
+CAMPAIGNS_READ_PERMISSION = "campaigns.read"
+CAMPAIGNS_WRITE_PERMISSION = "campaigns.write"
+CAMPAIGNS_SEND_PERMISSION = "campaigns.send"
+FULFILLMENT_READ_PERMISSION = "fulfillment.read"
+CRM_RECOMPUTE_PERMISSION = "crm.recompute"
+
 DEFAULT_PERMISSIONS = {
     "owner": {"*"},
     "manager": {
@@ -11,8 +22,12 @@ DEFAULT_PERMISSIONS = {
         "products.write",
         "orders.read",
         "orders.write",
+        FULFILLMENT_READ_PERMISSION,
+        "fulfillment.write",
         "promo.write",
         "support.write",
+        "showroom.read",
+        "showroom.write",
         "notifications.read",
         "notifications.retry",
         "webhooks.read",
@@ -20,11 +35,15 @@ DEFAULT_PERMISSIONS = {
         "media.write",
         "security.read",
         "privacy.read",
+        CAMPAIGNS_READ_PERMISSION,
+        CAMPAIGNS_WRITE_PERMISSION,
     },
     "support": {
         "orders.read",
         "support.write",
         "customers.read",
+        "showroom.read",
+        "showroom.write",
         "notifications.read",
         "notifications.retry",
         "webhooks.read",
@@ -33,16 +52,31 @@ DEFAULT_PERMISSIONS = {
         "products.read",
         "inventory.write",
         "orders.read",
+        FULFILLMENT_READ_PERMISSION,
+        "fulfillment.write",
         "media.write",
     },
 }
 
 
-def has_permission(db: Session, admin: AdminUser, permission: str) -> bool:
+def effective_permissions(db: Session, admin: AdminUser) -> set[str]:
+    """Return the exact permission set used by authorization decisions.
+
+    A role with any database-configured rows uses those rows as its complete
+    permission set, matching the historical authorization semantics. Owners
+    remain unrestricted and are represented by the explicit wildcard.
+    """
+
     if admin.role == "owner":
-        return True
+        return {"*"}
     configured = db.query(AdminRolePermission).filter(AdminRolePermission.role == admin.role).all()
-    permissions = {row.permission for row in configured} or DEFAULT_PERMISSIONS.get(admin.role, set())
+    if configured:
+        return {str(row.permission).strip() for row in configured if str(row.permission).strip()}
+    return set(DEFAULT_PERMISSIONS.get(admin.role, set()))
+
+
+def has_permission(db: Session, admin: AdminUser, permission: str) -> bool:
+    permissions = effective_permissions(db, admin)
     return "*" in permissions or permission in permissions
 
 

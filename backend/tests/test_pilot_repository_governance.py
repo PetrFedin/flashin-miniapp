@@ -16,6 +16,11 @@ from pilot_control_binding import (  # noqa: E402
 )
 from pilot_evidence import configuration_fingerprint, sha256_file  # noqa: E402
 from pilot_governance_admission import validate_attached_governance  # noqa: E402
+from pilot_governance_policy import (  # noqa: E402
+    TRUSTED_SECURITY_REQUIRED_JOBS,
+    TRUSTED_SECURITY_WORKFLOW_API_PATH,
+    TRUSTED_SECURITY_WORKFLOW_NAME,
+)
 from pilot_repository_governance import (  # noqa: E402
     build_report,
     evaluate_snapshot,
@@ -126,6 +131,30 @@ def _snapshot(*, checks=REQUIRED_CHECKS, protected=True, bypass_actors=None):
     }
 
 
+def _bind_required_job_evidence(report):
+    unsigned = json.loads(json.dumps(report))
+    unsigned.pop("signature", None)
+    unsigned["workflow"]["required_jobs"] = {
+        name: "success" for name in REQUIRED_CHECKS
+    }
+    unsigned["security_workflow"] = {
+        "id": 678,
+        "name": TRUSTED_SECURITY_WORKFLOW_NAME,
+        "path": TRUSTED_SECURITY_WORKFLOW_API_PATH,
+        "event": "push",
+        "status": "completed",
+        "conclusion": "success",
+        "head_sha": unsigned["branch"]["head_sha"],
+        "html_url": "https://github.com/PetrFedin/flashin-miniapp/actions/runs/678",
+        "created_at": "2026-08-06T11:31:00Z",
+        "updated_at": "2026-08-06T11:51:00Z",
+        "required_jobs": {
+            name: "success" for name in TRUSTED_SECURITY_REQUIRED_JOBS
+        },
+    }
+    return pilot_evidence.sign_payload(unsigned, SECRET)
+
+
 def test_ruleset_governance_report_binds_exact_release_and_successful_ci():
     env = _env()
     report = build_report(
@@ -145,6 +174,8 @@ def test_ruleset_governance_report_binds_exact_release_and_successful_ci():
     ) == []
     assert report["branch"]["head_sha"] == RELEASE["git_commit"]
     assert report["workflow"]["conclusion"] == "success"
+    assert "required_jobs" not in report["workflow"]
+    assert "security_workflow" not in report
     assert set(report["policy"]["required_checks"]) == set(REQUIRED_CHECKS)
     assert report["policy"]["actions_app_id"] == ACTIONS_APP_ID
     assert all(
@@ -232,7 +263,7 @@ def test_governance_attachment_requires_signed_technical_owner(tmp_path, monkeyp
     _write_env(tmp_path, env)
     pilot_dir = tmp_path / "docs/pilot"
     pilot_dir.mkdir(parents=True)
-    report = build_report(
+    direct_report = build_report(
         _snapshot(),
         env=env,
         current_release=RELEASE,
@@ -240,7 +271,7 @@ def test_governance_attachment_requires_signed_technical_owner(tmp_path, monkeyp
         now=NOW,
     )
     report_path = pilot_dir / "repository_governance_report.json"
-    report_path.write_text(json.dumps(report), encoding="utf-8")
+    report_path.write_text(json.dumps(direct_report), encoding="utf-8")
     manifest = {
         "schema_version": 1,
         "kind": "pilot_admission",
@@ -275,6 +306,21 @@ def test_governance_attachment_requires_signed_technical_owner(tmp_path, monkeyp
     manifest_path = pilot_dir / "pilot_admission_manifest.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
+    direct_errors = validate_attached_governance(
+        manifest_path,
+        manifest,
+        env=env,
+        root=tmp_path,
+        max_age_minutes=60,
+        now=NOW,
+    )
+    assert any("workflow job evidence is missing" in error for error in direct_errors)
+    assert any("Security workflow evidence is missing" in error for error in direct_errors)
+
+    report = _bind_required_job_evidence(direct_report)
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    manifest["evidence"]["repository_governance_report"]["sha256"] = sha256_file(report_path)
+
     assert validate_attached_governance(
         manifest_path,
         manifest,
@@ -306,6 +352,7 @@ def test_governance_attachment_requires_signed_technical_owner(tmp_path, monkeyp
         owner="Operations",
         now=NOW,
     )
+    wrong_owner = _bind_required_job_evidence(wrong_owner)
     report_path.write_text(json.dumps(wrong_owner), encoding="utf-8")
     manifest["evidence"]["repository_governance_report"]["sha256"] = sha256_file(report_path)
     errors = validate_attached_governance(

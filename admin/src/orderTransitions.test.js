@@ -8,11 +8,11 @@ import {
 } from "./orderTransitions.js";
 
 
-test("fulfillment progression exposes only the next valid state", () => {
+test("order table exposes only the fulfillment start transition", () => {
   assert.equal(nextFulfillmentStatus({ status: "paid" }), "assembling");
-  assert.equal(nextFulfillmentStatus({ status: "assembling" }), "ready");
-  assert.equal(nextFulfillmentStatus({ status: "ready" }), "shipped");
-  assert.equal(nextFulfillmentStatus({ status: "shipped" }), "completed");
+  assert.equal(nextFulfillmentStatus({ status: "assembling" }), null);
+  assert.equal(nextFulfillmentStatus({ status: "ready" }), null);
+  assert.equal(nextFulfillmentStatus({ status: "shipped" }), null);
   assert.equal(nextFulfillmentStatus({ status: "completed" }), null);
 });
 
@@ -33,7 +33,7 @@ test("only an untouched unpaid order may be cancelled directly", () => {
 });
 
 
-test("order actions never expose provider-owned status rewrites", () => {
+test("order actions never expose later fulfillment, shipment, or provider-owned rewrites", () => {
   assert.deepEqual(
     orderAction({ status: "paid", payment_status: "paid" }),
     {
@@ -50,12 +50,14 @@ test("order actions never expose provider-owned status rewrites", () => {
       label: "Отменить до оплаты",
     },
   );
-  assert.equal(
-    orderAction({ status: "payment_created", payment_status: "payment_created" }),
-    null,
-  );
-  assert.equal(
-    orderAction({ status: "refund_requested", payment_status: "paid" }),
-    null,
-  );
+  for (const status of [
+    "assembling",
+    "ready",
+    "shipped",
+    "completed",
+    "payment_created",
+    "refund_requested",
+  ]) {
+    assert.equal(orderAction({ status, payment_status: "paid" }), null);
+  }
 });

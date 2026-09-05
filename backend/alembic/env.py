@@ -6,7 +6,11 @@ from sqlalchemy import create_engine, pool
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
+from backend import admin_mfa_models  # noqa: F401
+from backend import catalog_intent_models  # noqa: F401
+from backend import catalog_models  # noqa: F401
 from backend import checkout_models  # noqa: F401
+from backend import payment_attempt_models  # noqa: F401
 from backend import pilot_models  # noqa: F401
 from backend import provider_models  # noqa: F401
 from backend import (  # noqa: F401

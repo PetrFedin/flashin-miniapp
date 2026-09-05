@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session, joinedload
 
 from ..database import get_db
 from ..models import (
-    AdminUser,
     AuditLog,
     CrmProfile,
     Customer,
@@ -19,47 +18,26 @@ from ..models import (
     Product,
     ProductImage,
     ProductVariant,
-    PromoCode,
 )
-from ..order_statuses import ADMIN_MANAGED_ORDER_TRANSITIONS
 from ..schemas import (
-    AdminLoginIn,
     AdminProductUpdate,
     AuditLogOut,
     MoySkladConflictOut,
     MoySkladMappingRuleCreate,
     MoySkladMappingRuleOut,
     OrderOut,
-    OrderStatusUpdate,
     ProductCreate,
     ProductOut,
-    PromoCodeCreate,
-    TokenOut,
 )
-from ..security import (
-    create_admin_token,
-    get_current_admin,
-    hash_password,
-    password_needs_rehash,
-    verify_password,
-)
+from ..security import get_current_admin
 from ..services.audit import log_admin_action
 from ..services.inventory import adjust_stock
-from ..services.notifications import queue_order_status
-from ..services.rbac import require_permission
+from ..services.rbac import has_permission, require_permission
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 _MAX_CSV_BYTES = 5 * 1024 * 1024
 _MAX_CSV_ROWS = 10_000
-_DELIVERY_STATUSES = {
-    "not_started",
-    "assembling",
-    "ready",
-    "shipped",
-    "delivered",
-    "cancelled",
-}
 
 
 def _clean(value: object, field: str, max_length: int, required: bool = True) -> str:
@@ -93,33 +71,11 @@ def _stock_quantity(value: object) -> int:
     return int(quantity)
 
 
-def _order_with_items(db: Session, order_id: int) -> Order | None:
-    return (
-        db.query(Order)
-        .options(joinedload(Order.items), joinedload(Order.customer))
-        .filter(Order.id == order_id)
-        .first()
-    )
-
-
-@router.post("/login", response_model=TokenOut)
-def admin_login(payload: AdminLoginIn, db: Session = Depends(get_db)):
-    email = _clean(payload.email, "Email", 255).lower()
-    admin = (
-        db.query(AdminUser)
-        .filter(AdminUser.email == email, AdminUser.active.is_(True))
-        .with_for_update()
-        .first()
-    )
-    if not admin or not verify_password(payload.password, admin.password_hash):
-        db.rollback()
-        raise HTTPException(status_code=401, detail="Invalid admin credentials")
-    if password_needs_rehash(admin.password_hash):
-        admin.password_hash = hash_password(payload.password)
-        db.commit()
-    else:
-        db.rollback()
-    return TokenOut(access_token=create_admin_token(admin.id, admin.role))
+def _admin_order_out(order: Order, can_read_customer: bool) -> OrderOut:
+    payload = OrderOut.model_validate(order)
+    if can_read_customer:
+        return payload
+    return payload.model_copy(update={"address": "", "comment": ""})
 
 
 @router.get("/products", response_model=list[ProductOut])
@@ -140,6 +96,9 @@ def admin_create_product(
     db: Session = Depends(get_db),
 ):
     require_permission(db, admin, "products.write")
+    initial_stocks = [_stock_quantity(raw_variant.get("stock_qty", 0)) for raw_variant in payload.variants]
+    if any(stock_qty > 0 for stock_qty in initial_stocks):
+        require_permission(db, admin, "inventory.write")
     sku = _clean(payload.sku, "SKU", 120).upper()
     slug = _clean(payload.slug, "Slug", 255).lower()
     title = _clean(payload.title, "Title", 255)
@@ -170,21 +129,29 @@ def admin_create_product(
             cleaned_url = _clean(url, "Image URL", 2048)
             db.add(ProductImage(product_id=product.id, url=cleaned_url, sort_order=index))
 
-        for raw_variant in payload.variants:
+        for index, raw_variant in enumerate(payload.variants):
             variant_sku = _clean(raw_variant.get("sku"), "Variant SKU", 120).upper()
             if variant_sku in variant_skus:
                 raise HTTPException(status_code=409, detail=f"Duplicate variant SKU: {variant_sku}")
             variant_skus.add(variant_sku)
-            db.add(
-                ProductVariant(
-                    product_id=product.id,
-                    size=_clean(raw_variant.get("size"), "Variant size", 32),
-                    color=_clean(raw_variant.get("color", ""), "Variant color", 64, required=False),
-                    sku=variant_sku,
-                    stock_qty=_stock_quantity(raw_variant.get("stock_qty", 0)),
-                    reserved_qty=0,
-                )
+            variant = ProductVariant(
+                product_id=product.id,
+                size=_clean(raw_variant.get("size"), "Variant size", 32),
+                color=_clean(raw_variant.get("color", ""), "Variant color", 64, required=False),
+                sku=variant_sku,
+                stock_qty=0,
+                reserved_qty=0,
             )
+            db.add(variant)
+            db.flush()
+            if initial_stocks[index] > 0:
+                adjust_stock(
+                    db,
+                    variant.id,
+                    initial_stocks[index],
+                    reason="Product creation",
+                    admin_id=admin.id,
+                )
 
         log_admin_action(db, admin, "product.create", "product", product.id, {"sku": sku})
         db.commit()
@@ -271,106 +238,14 @@ def admin_update_stock(
 @router.get("/orders", response_model=list[OrderOut])
 def admin_orders(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
     require_permission(db, admin, "orders.read")
-    return db.query(Order).options(joinedload(Order.items)).order_by(Order.created_at.desc()).all()
-
-
-@router.patch("/orders/{order_id}", response_model=OrderOut)
-def admin_update_order(
-    order_id: int,
-    payload: OrderStatusUpdate,
-    admin=Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    require_permission(db, admin, "orders.write")
-    try:
-        order = db.query(Order).filter(Order.id == order_id).with_for_update().first()
-        if not order:
-            raise HTTPException(status_code=404, detail="Order not found")
-        previous_status = order.status
-        changed: dict[str, object] = {}
-
-        requested_status = (payload.status or "").strip().lower()
-        if requested_status and requested_status != order.status:
-            allowed_targets = ADMIN_MANAGED_ORDER_TRANSITIONS.get(order.status, frozenset())
-            if requested_status not in allowed_targets:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"Transition {order.status} -> {requested_status} is not allowed",
-                )
-            order.status = requested_status
-            changed["status"] = requested_status
-
-        if payload.delivery_status:
-            normalized_delivery_status = payload.delivery_status.strip().lower()
-            if normalized_delivery_status not in _DELIVERY_STATUSES:
-                raise HTTPException(status_code=400, detail="Invalid delivery status")
-            if normalized_delivery_status != order.delivery_status:
-                order.delivery_status = normalized_delivery_status
-                changed["delivery_status"] = normalized_delivery_status
-
-        if payload.tracking_number is not None:
-            tracking_number = _clean(
-                payload.tracking_number,
-                "Tracking number",
-                255,
-                required=False,
-            )
-            if tracking_number != order.tracking_number:
-                order.tracking_number = tracking_number
-                changed["tracking_number"] = tracking_number
-
-        if changed:
-            queue_order_status(db, order)
-            log_admin_action(
-                db,
-                admin,
-                "order.update",
-                "order",
-                order.id,
-                {"from_status": previous_status, **changed},
-            )
-            db.commit()
-        else:
-            db.rollback()
-    except HTTPException:
-        db.rollback()
-        raise
-    except Exception:
-        db.rollback()
-        raise
-
-    return _order_with_items(db, order_id)
-
-
-@router.post("/promocodes")
-def admin_create_promo(
-    payload: PromoCodeCreate,
-    admin=Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    require_permission(db, admin, "promo.write")
-    code = _clean(payload.code, "Promo code", 64).upper()
-    if payload.discount_value < 0 or not math.isfinite(payload.discount_value):
-        raise HTTPException(status_code=400, detail="Discount value must be non-negative")
-    if payload.min_amount < 0 or not math.isfinite(payload.min_amount):
-        raise HTTPException(status_code=400, detail="Minimum amount must be non-negative")
-    if payload.max_uses < 0:
-        raise HTTPException(status_code=400, detail="Maximum uses must be non-negative")
-
-    try:
-        promo = PromoCode(**payload.model_dump())
-        promo.code = code
-        db.add(promo)
-        db.flush()
-        log_admin_action(db, admin, "promocode.create", "promocode", promo.id, {"code": code})
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(status_code=409, detail="Promo code already exists") from exc
-    except Exception:
-        db.rollback()
-        raise
-    return {"ok": True, "id": promo.id}
+    can_read_customer = has_permission(db, admin, "customers.read")
+    orders = (
+        db.query(Order)
+        .options(joinedload(Order.items))
+        .order_by(Order.created_at.desc())
+        .all()
+    )
+    return [_admin_order_out(order, can_read_customer) for order in orders]
 
 
 @router.get("/notifications")
@@ -386,6 +261,7 @@ async def admin_import_products_csv(
     db: Session = Depends(get_db),
 ):
     require_permission(db, admin, "products.write")
+    require_permission(db, admin, "inventory.write")
     raw = await file.read(_MAX_CSV_BYTES + 1)
     if len(raw) > _MAX_CSV_BYTES:
         raise HTTPException(status_code=413, detail="CSV file is too large")
@@ -446,16 +322,24 @@ async def admin_import_products_csv(
                 .first()
             )
             if not variant:
-                db.add(
-                    ProductVariant(
-                        product_id=product.id,
-                        size=_clean(row.get("size"), f"Size at row {row_number}", 32),
-                        color=_clean(row.get("color", ""), "Color", 64, required=False),
-                        sku=variant_sku,
-                        stock_qty=stock_qty,
-                        reserved_qty=0,
-                    )
+                variant = ProductVariant(
+                    product_id=product.id,
+                    size=_clean(row.get("size"), f"Size at row {row_number}", 32),
+                    color=_clean(row.get("color", ""), "Color", 64, required=False),
+                    sku=variant_sku,
+                    stock_qty=0,
+                    reserved_qty=0,
                 )
+                db.add(variant)
+                db.flush()
+                if stock_qty > 0:
+                    adjust_stock(
+                        db,
+                        variant.id,
+                        stock_qty,
+                        reason="CSV import",
+                        admin_id=admin.id,
+                    )
             else:
                 if variant.product_id != product.id:
                     raise HTTPException(
@@ -506,6 +390,7 @@ async def admin_import_products_csv(
 @router.get("/orders/export-csv")
 def admin_export_orders_csv(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
     require_permission(db, admin, "orders.read")
+    can_read_customer = has_permission(db, admin, "customers.read")
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(
@@ -533,9 +418,9 @@ def admin_export_orders_csv(admin=Depends(get_current_admin), db: Session = Depe
                 order.delivery_status,
                 order.total_amount,
                 order.currency,
-                order.customer_id,
+                order.customer_id if can_read_customer else "",
                 order.delivery_type,
-                order.address,
+                order.address if can_read_customer else "",
                 order.tracking_number,
             ]
         )

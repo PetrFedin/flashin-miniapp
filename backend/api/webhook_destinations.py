@@ -9,8 +9,8 @@ from ..models import WebhookDestination
 from ..schemas import WebhookDestinationCreate, WebhookDestinationOut
 from ..security import get_current_admin
 from ..services.audit import log_admin_action
-from ..services.rbac import require_permission
-from ..services.webhook_security import normalize_webhook_url
+from ..services.rbac import WEBHOOKS_CONFIGURE_PERMISSION, require_permission
+from ..services.webhook_security import normalize_webhook_url, redact_webhook_url
 
 router = APIRouter(prefix="/webhook-destinations", tags=["webhook-destinations"])
 
@@ -26,10 +26,21 @@ def _normalize_event_type(value: str) -> str:
     return event_type
 
 
+def _public_destination(row: WebhookDestination) -> dict:
+    return {
+        "id": row.id,
+        "name": row.name,
+        "url": redact_webhook_url(row.url),
+        "event_type": row.event_type,
+        "active": row.active,
+    }
+
+
 @router.get("", response_model=list[WebhookDestinationOut])
 def list_destinations(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
     require_permission(db, admin, "webhooks.read")
-    return db.query(WebhookDestination).order_by(WebhookDestination.created_at.desc()).all()
+    rows = db.query(WebhookDestination).order_by(WebhookDestination.created_at.desc()).all()
+    return [_public_destination(row) for row in rows]
 
 
 @router.post("", response_model=WebhookDestinationOut)
@@ -38,7 +49,7 @@ def create_destination(
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    require_permission(db, admin, "webhooks.write")
+    require_permission(db, admin, WEBHOOKS_CONFIGURE_PERMISSION)
     name = (payload.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Webhook destination name is required")
@@ -80,11 +91,16 @@ def create_destination(
             "webhook_destination.create",
             "webhook_destination",
             row.id,
-            {"name": name, "url": url, "event_type": event_type, "active": payload.active},
+            {
+                "name": name,
+                "url": redact_webhook_url(url),
+                "event_type": event_type,
+                "active": payload.active,
+            },
         )
         db.commit()
         db.refresh(row)
-        return row
+        return _public_destination(row)
     except HTTPException:
         db.rollback()
         raise
@@ -103,7 +119,7 @@ def set_destination_active(
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    require_permission(db, admin, "webhooks.write")
+    require_permission(db, admin, WEBHOOKS_CONFIGURE_PERMISSION)
     try:
         row = (
             db.query(WebhookDestination)
@@ -125,7 +141,7 @@ def set_destination_active(
         )
         db.commit()
         db.refresh(row)
-        return row
+        return _public_destination(row)
     except HTTPException:
         db.rollback()
         raise

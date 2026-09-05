@@ -4,6 +4,7 @@ import { devices, expect, test } from "@playwright/test";
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "test-token";
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "admin@test.local";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "test-password";
+const API_BASE = "http://127.0.0.1:8000";
 
 function signedTelegramInitData(user) {
   const values = {
@@ -56,8 +57,24 @@ async function loginAdmin(page) {
   await expect(page.getByRole("button", { name: "Выйти" })).toBeVisible();
 }
 
-test("real storefront, API, PostgreSQL and admin fulfillment share one order", async ({ page, browser }) => {
+async function orderState(request, orderId) {
+  const response = await request.get(`${API_BASE}/__e2e/state/orders/${orderId}`);
+  expect(response.ok()).toBeTruthy();
+  return response.json();
+}
+
+test("Telegram -> YooKassa webhook -> stock/MoySklad -> fulfillment -> refund -> notification", async ({ page, browser }) => {
   await installTelegram(page);
+
+  const catalogResponse = await page.request.get(`${API_BASE}/api/products`);
+  expect(catalogResponse.ok(), "Integrated catalog API must be reachable before purchase").toBeTruthy();
+  const catalog = await catalogResponse.json();
+  const targetProduct = catalog.find((item) => item.title === "FLASHIN Wool Coat");
+  expect(targetProduct, "FLASHIN Wool Coat must exist in integrated seed data").toBeTruthy();
+  const purchasableVariant = targetProduct.variants.find((item) => item.available_qty > 0);
+  expect(purchasableVariant, "FLASHIN Wool Coat must expose at least one available variant").toBeTruthy();
+  const baselineStockQty = purchasableVariant.stock_qty;
+
   await page.goto("/");
 
   await expect(page.getByRole("heading", { name: "Каталог" })).toBeVisible();
@@ -65,7 +82,7 @@ test("real storefront, API, PostgreSQL and admin fulfillment share one order", a
   await page.getByText("FLASHIN Wool Coat").first().click();
   await expect(page.getByRole("heading", { name: "FLASHIN Wool Coat" })).toBeVisible();
 
-  await page.getByRole("button", { name: "Добавить размер S в корзину" }).click();
+  await page.getByRole("button", { name: `Добавить размер ${purchasableVariant.size} в корзину` }).click();
   await expect(page.getByText("добавлен в корзину")).toBeVisible();
   await page.getByRole("button", { name: /Корзина · 1/ }).click();
 
@@ -95,12 +112,24 @@ test("real storefront, API, PostgreSQL and admin fulfillment share one order", a
   expect(order.id).toBeGreaterThan(0);
   expect(paymentResponse.ok()).toBeTruthy();
 
-  // The successful payment response triggers an immediate provider redirect. Reading
-  // its body after navigation is racy in Chromium; the real persisted result is
-  // asserted below through the post-redirect Mini App state and the same Admin DB row.
+  // The payment response triggers an immediate provider navigation, so its body is
+  // deliberately not consumed after the redirect. Persisted state below proves
+  // that the pending provider attempt passed through confirmation and webhook.
   await expect(page.getByRole("button", { name: "Заказы" })).toHaveClass(/active/);
   await expect(page.getByRole("status")).toContainText(`Заказ #${order.id} оплачен`);
   await expect(page.getByText("Оплачено", { exact: true })).toBeVisible();
+
+  let state = await orderState(page.request, order.id);
+  expect(state.order.status).toBe("paid");
+  expect(state.order.payment_status).toBe("paid");
+  expect(state.variants).toHaveLength(1);
+  expect(state.variants[0].sku).toBe(purchasableVariant.sku);
+  expect(state.variants[0].stock_qty).toBe(baselineStockQty - 1);
+  expect(state.variants[0].reserved_qty).toBe(0);
+  expect(state.inventory_movements.map((item) => item.kind)).toEqual(["reserve", "commit"]);
+  expect(state.fulfillment?.status).toBe("new");
+  expect(state.provider_commands.map((item) => item.command_type)).toContain("moysklad.customer_order.create");
+  expect(state.notifications.filter((item) => item.message.includes("оплачен"))).toHaveLength(1);
 
   const adminContext = await browser.newContext({ ...devices["Desktop Chrome"] });
   const adminPage = await adminContext.newPage();
@@ -128,6 +157,10 @@ test("real storefront, API, PostgreSQL and admin fulfillment share one order", a
   await expect(adminPage.getByRole("status")).toContainText("передан в доставку");
   await expect(task.getByText(tracking)).toBeVisible();
 
+  state = await orderState(adminPage.request, order.id);
+  expect(state.order.status).toBe("shipped");
+  expect(state.provider_commands.map((item) => item.command_type)).toContain("moysklad.demand.create");
+
   adminPage.once("dialog", (dialog) => dialog.accept());
   await task.getByRole("button", { name: "Подтвердить доставку" }).click();
   await expect(adminPage.getByRole("status")).toContainText("доставлен и завершён");
@@ -138,6 +171,98 @@ test("real storefront, API, PostgreSQL and admin fulfillment share one order", a
   await expect(page.getByText("Доставлен", { exact: true })).toBeVisible();
   await expect(page.getByText("Доставлена", { exact: true })).toBeVisible();
   await expect(page.getByText(tracking)).toBeVisible();
+
+  // The customer registers the return from the real Mini App against the same row.
+  await page.getByPlaceholder("Что необходимо вернуть и почему").fill("Не подошёл размер изделия, полный возврат E2E");
+  await page.getByRole("button", { name: "Зарегистрировать возврат" }).click();
+  await expect(page.getByRole("status")).toContainText(`Запрос на возврат заказа #${order.id} зарегистрирован`);
+  await expect(page.getByText("Возврат рассматривается", { exact: true })).toBeVisible();
+
+  state = await orderState(page.request, order.id);
+  expect(state.returns).toHaveLength(1);
+  expect(state.returns[0].status).toBe("requested");
+  const returnId = state.returns[0].id;
+
+  // Admin approves the full amount. The local provider intentionally returns
+  // pending first, so no stock restoration can occur before refund.succeeded.
+  await adminPage.getByRole("button", { name: "Обновить сервис" }).click();
+  const returnsQueue = adminPage.getByRole("article", { name: "Возвраты и refunds" });
+  await expect(returnsQueue.getByText(`#${returnId} · Заказ #${order.id}`)).toBeVisible();
+  await adminPage.getByLabel(`Сумма возврата ${returnId}`).fill(String(state.order.total_amount));
+  adminPage.once("dialog", (dialog) => dialog.accept());
+  await returnsQueue.getByRole("button", { name: "Подтвердить refund" }).click();
+  await expect(
+    adminPage.getByRole("status").filter({
+      hasText: `Возврат #${returnId} передан платёжному провайдеру`,
+    }),
+  ).toBeVisible();
+
+  state = await orderState(adminPage.request, order.id);
+  expect(state.order.status).toBe("refund_requested");
+  expect(state.order.payment_status).toBe("refund_pending");
+  expect(state.returns[0].status).toBe("refund_pending");
+  expect(state.variants[0].stock_qty).toBe(baselineStockQty - 1);
+  const refundId = state.returns[0].provider_refund_id;
+  expect(refundId).toContain("e2e-refund-");
+
+  // Provider success is delivered twice to the canonical webhook. The second
+  // callback must be idempotent: inventory, notification and provider commands
+  // may not be duplicated.
+  const refundConfirmation = await adminPage.request.post(
+    `${API_BASE}/__e2e/yookassa/confirm-refund/${refundId}`,
+  );
+  expect(refundConfirmation.ok()).toBeTruthy();
+
+  state = await orderState(adminPage.request, order.id);
+  expect(state.order.status).toBe("refunded");
+  expect(state.order.payment_status).toBe("refunded");
+  expect(state.order.delivery_status).toBe("delivered");
+  expect(state.returns[0].status).toBe("approved");
+  expect(state.variants[0].stock_qty).toBe(baselineStockQty);
+  expect(state.variants[0].reserved_qty).toBe(0);
+
+  const movementKinds = state.inventory_movements.map((item) => item.kind);
+  expect(movementKinds).toEqual(["reserve", "commit", "return"]);
+  expect(movementKinds.filter((kind) => kind === "return")).toHaveLength(1);
+
+  const commandTypes = state.provider_commands.map((item) => item.command_type);
+  expect(commandTypes).toContain("moysklad.customer_order.create");
+  expect(commandTypes).toContain("moysklad.demand.create");
+  expect(commandTypes).toContain("moysklad.sales_return.create");
+  expect(commandTypes.filter((type) => type === "moysklad.sales_return.create")).toHaveLength(1);
+
+  const refundNotifications = state.notifications.filter((item) => item.message.includes("полностью возвращена"));
+  expect(refundNotifications).toHaveLength(1);
+  expect(refundNotifications[0].status).toBe("pending");
+
+  await page.reload();
+  await page.getByRole("button", { name: "Заказы" }).click();
+  await expect(page.getByText("Возвращён", { exact: true })).toBeVisible();
+  await expect(page.getByText("Возвращено", { exact: true })).toBeVisible();
+
+  await adminPage.getByRole("button", { name: "Обновить сервис" }).click();
+  await expect(returnsQueue.getByText("Возвращён полностью", { exact: true })).toBeVisible();
+
+  const adminToken = await adminPage.evaluate(() => localStorage.getItem("admin_token"));
+  expect(adminToken, "Integrated admin login must persist its bearer token").toBeTruthy();
+  const traceResponse = await adminPage.request.get(
+    `${API_BASE}/api/ops/orders/${order.id}/trace`,
+    { headers: { Authorization: `Bearer ${adminToken}` } },
+  );
+  expect(traceResponse.ok(), "Read-only order lifecycle trace must be available on the real stack").toBeTruthy();
+  const trace = await traceResponse.json();
+  expect(trace.schema_version).toBe(3);
+  expect(["PASS", "PENDING", "REVIEW", "BLOCKED"]).toContain(trace.reconciliation.overall_status);
+  expect(typeof trace.reconciliation.requires_operator_action).toBe("boolean");
+  expect(trace.reconciliation.stages.map((item) => item.key)).toEqual([
+    "payment",
+    "inventory",
+    "moysklad",
+    "fulfillment",
+    "refunds",
+    "notifications",
+  ]);
+  expect(trace.reconciliation.stages.every((item) => ["PASS", "PENDING", "REVIEW", "BLOCKED"].includes(item.status))).toBe(true);
 
   await adminContext.close();
 });

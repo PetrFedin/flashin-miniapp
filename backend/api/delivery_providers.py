@@ -9,15 +9,89 @@ from ..schemas import DeliveryProviderIn, DeliveryProviderOut, DeliveryShipmentO
 from ..security import get_current_admin
 from ..services.audit import log_admin_action
 from ..services.delivery_providers import ensure_ready_shipment, transition_shipment
-from ..services.rbac import require_permission
+from ..services.rbac import DELIVERY_PROVIDERS_WRITE_PERMISSION, require_permission
 
 router = APIRouter(prefix="/delivery-providers", tags=["delivery-providers"])
+
+_PROVIDER_CONFIG_MAX_BYTES = 8 * 1024
+_SENSITIVE_PROVIDER_CONFIG_KEYS = {
+    "access_key",
+    "access_token",
+    "api_key",
+    "apikey",
+    "authorization",
+    "client_secret",
+    "credential",
+    "credentials",
+    "password",
+    "passwd",
+    "private_key",
+    "refresh_token",
+    "secret",
+    "signing_secret",
+    "token",
+}
+_SENSITIVE_PROVIDER_CONFIG_SUFFIXES = (
+    "_api_key",
+    "_password",
+    "_private_key",
+    "_secret",
+    "_token",
+)
+
+
+def _public_provider(provider: DeliveryProvider) -> dict:
+    """Never expose provider configuration through operational read APIs."""
+
+    return {
+        "id": provider.id,
+        "code": provider.code,
+        "name": provider.name,
+        "active": provider.active,
+        "config_json": "{}",
+    }
+
+
+def _normalize_config_key(value: object) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _sensitive_config_paths(value: object, path: str = "config_json") -> list[str]:
+    matches: list[str] = []
+    if isinstance(value, dict):
+        for raw_key, nested in value.items():
+            key = _normalize_config_key(raw_key)
+            current = f"{path}.{key or '<empty>'}"
+            if key in _SENSITIVE_PROVIDER_CONFIG_KEYS or key.endswith(_SENSITIVE_PROVIDER_CONFIG_SUFFIXES):
+                matches.append(current)
+            matches.extend(_sensitive_config_paths(nested, current))
+    elif isinstance(value, list):
+        for index, nested in enumerate(value):
+            matches.extend(_sensitive_config_paths(nested, f"{path}[{index}]"))
+    return matches
+
+
+def _validated_provider_config(config: dict) -> str:
+    sensitive_paths = _sensitive_config_paths(config)
+    if sensitive_paths:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Delivery provider config_json must not contain credentials or secrets; "
+                "use secret-managed provider configuration"
+            ),
+        )
+    encoded = json.dumps(config, ensure_ascii=False, sort_keys=True)
+    if len(encoded.encode("utf-8")) > _PROVIDER_CONFIG_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Delivery provider config_json is too large")
+    return encoded
 
 
 @router.get("", response_model=list[DeliveryProviderOut])
 def providers(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
     require_permission(db, admin, "orders.read")
-    return db.query(DeliveryProvider).order_by(DeliveryProvider.code).all()
+    rows = db.query(DeliveryProvider).order_by(DeliveryProvider.code).all()
+    return [_public_provider(row) for row in rows]
 
 
 @router.post("", response_model=DeliveryProviderOut)
@@ -26,17 +100,32 @@ def upsert_provider(
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    require_permission(db, admin, "orders.write")
+    require_permission(db, admin, DELIVERY_PROVIDERS_WRITE_PERMISSION)
+    config_json = _validated_provider_config(dict(payload.config_json or {}))
     row = db.query(DeliveryProvider).filter(DeliveryProvider.code == payload.code).first()
     if not row:
         row = DeliveryProvider(code=payload.code)
         db.add(row)
     row.name = payload.name
     row.active = payload.active
-    row.config_json = json.dumps(payload.config_json, ensure_ascii=False)
+    row.config_json = config_json
+    db.flush()
+    log_admin_action(
+        db,
+        admin,
+        "delivery.provider.upsert",
+        "delivery_provider",
+        row.id,
+        {
+            "code": row.code,
+            "name": row.name,
+            "active": row.active,
+            "config_changed": True,
+        },
+    )
     db.commit()
     db.refresh(row)
-    return row
+    return _public_provider(row)
 
 
 @router.post("/orders/{order_id}/shipment", response_model=DeliveryShipmentOut)
@@ -46,7 +135,7 @@ def create_order_shipment(
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    require_permission(db, admin, "orders.write")
+    require_permission(db, admin, "fulfillment.write")
     try:
         order = (
             db.query(Order)
@@ -91,7 +180,7 @@ def patch_shipment(
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    require_permission(db, admin, "orders.write")
+    require_permission(db, admin, "fulfillment.write")
     try:
         shipment = (
             db.query(DeliveryShipment)

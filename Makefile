@@ -1,4 +1,4 @@
-.PHONY: help init build up down logs migrate health workers search monitoring backup restore test preflight clean deploy-prod rollback rollback-drill rollback-drill-status verify-backup seed-admin validate-env openapi release-notes diagnostics setup-wizard check-integrations provider-probes readiness pilot-sheet readiness-gate pilot-gate loadtest performance-budget security-audit media-jobs loadtest-catalog loadtest-webhooks real-e2e grafana-dashboards simple-start launch-local launch-production connected-audit simplicity-score env-todo pilot-runner pilot-init pilot-record pilot-status pilot-final pilot-admit pilot-admission-status pilot-lifecycle-create pilot-lifecycle-attach pilot-lifecycle-status pilot-governance-create pilot-governance-attach pilot-governance-status pilot-runtime-arm pilot-runtime-status pilot-runtime-stop release-create release-verify release-status release-pack release-freeze pilot-evidence package-audit test-all transaction-integrity
+.PHONY: help init build up down logs migrate health workers search monitoring backup restore test preflight clean deploy-prod rollback rollback-drill rollback-drill-status verify-backup seed-admin validate-env openapi release-notes diagnostics setup-wizard check-integrations provider-probes readiness pilot-sheet readiness-gate pilot-gate pilot-live-verify telegram-launch-check telegram-launch-configure telegram-real-auth loadtest performance-budget security-audit media-jobs loadtest-catalog loadtest-webhooks real-e2e real-order-e2e real-order-e2e-status real-lifecycle-e2e grafana-dashboards simple-start launch-local launch-production connected-audit simplicity-score env-todo pilot-runner pilot-init pilot-record pilot-status pilot-final pilot-admit pilot-admission-status pilot-launch-preflight pilot-lifecycle-create pilot-lifecycle-attach pilot-lifecycle-status pilot-governance-create pilot-governance-attach pilot-governance-status pilot-checklist-create pilot-checklist-status pilot-checklist-attach pilot-runtime-arm pilot-runtime-status pilot-runtime-stop release-create release-verify release-status release-pack release-freeze pilot-evidence package-audit test-all transaction-integrity
 
 help:
 	@echo "FLASHIN commands:"
@@ -16,6 +16,13 @@ help:
 	@echo "  make readiness-gate        - strict predeploy GO/NO-GO gate"
 	@echo "  make provider-probes       - run side-effectful live provider probes once"
 	@echo "  make pilot-gate            - verify public endpoints and signed provider evidence"
+	@echo "  make pilot-live-verify     - read-only Telegram launch check plus live pilot gate"
+	@echo "  make telegram-launch-check - verify Telegram Bot identity/default Mini App menu"
+	@echo "  make telegram-launch-configure ARGS='...' - converge Telegram menu only with explicit operator acknowledgement"
+	@echo "  make telegram-real-auth ARGS='...' - prove deployed real Telegram initData auth with explicit provisioning acknowledgement"
+	@echo "  make real-order-e2e        - run guarded deployed order/payment E2E"
+	@echo "  make real-order-e2e-status - inspect crash-safe real-order context/recovery state"
+	@echo "  make real-lifecycle-e2e    - run guarded deployed terminal refund/lifecycle E2E"
 	@echo "  make rollback-drill        - execute rollback and record signed drill evidence"
 	@echo "  make pilot-admit           - create signed human/business pilot admission"
 	@echo "  make pilot-lifecycle-create - sign file-backed deployed lifecycle evidence"
@@ -24,8 +31,13 @@ help:
 	@echo "  make pilot-governance-create - sign exact GitHub branch/rules/CI evidence"
 	@echo "  make pilot-governance-attach - bind GitHub governance evidence to admission"
 	@echo "  make pilot-governance-status - verify admission, lifecycle and governance"
+	@echo "  make pilot-checklist-create - create signed final P01-P20 launch checklist evidence"
+	@echo "  make pilot-checklist-status - verify signed P01-P20 launch checklist evidence"
+	@echo "  make pilot-checklist-attach - bind final P01-P20 checklist to pilot admission"
+	@echo "  make pilot-admission-status - verify final lifecycle + governance + P01-P20 admission chain"
+	@echo "  make pilot-launch-preflight - read-only staged check before pilot runtime arm"
 	@echo "  make pilot-runner          - initialize/show admission-gated 20-order control"
-	@echo "  make pilot-runtime-arm     - open checkout for allowlisted pilot Telegram IDs"
+	@echo "  make pilot-runtime-arm     - preflight + final admission, then open checkout for allowlisted pilot Telegram IDs"
 	@echo "  make pilot-runtime-status  - verify DB counter, evidence binding and remaining slots"
 	@echo "  make pilot-runtime-stop    - immediately block new pilot checkout"
 	@echo "  make pilot-status          - recalculate current pilot decision"
@@ -144,6 +156,21 @@ readiness-gate:
 pilot-gate:
 	python3 scripts/readiness_gate.py --phase live
 
+pilot-live-verify:
+	$(MAKE) telegram-launch-check
+	$(MAKE) pilot-gate
+
+telegram-launch-check:
+	python3 scripts/check_telegram_bot.py
+
+telegram-launch-configure:
+	@echo "Read-only when provider state already matches; any mutation requires explicit acknowledgement passed in ARGS."
+	python3 scripts/configure_telegram_launch_surface.py $(ARGS)
+
+telegram-real-auth:
+	@echo "Requires TELEGRAM_INIT_DATA and TELEGRAM_EXPECTED_USER_ID in the process environment; customer provisioning requires explicit acknowledgement in ARGS."
+	python3 scripts/telegram_real_auth_smoke.py $(ARGS)
+
 
 loadtest:
 	API_BASE=http://localhost:8000 k6 run deploy/loadtest/k6_smoke.js
@@ -167,6 +194,15 @@ loadtest-webhooks:
 
 real-e2e:
 	RUN_REAL_E2E=1 pytest backend/tests/e2e
+
+real-order-e2e:
+	RUN_REAL_E2E=1 python -m pytest -q backend/tests/e2e/test_real_order_flow_runner.py
+
+real-order-e2e-status:
+	python3 scripts/real_e2e_context_status.py $(ARGS)
+
+real-lifecycle-e2e:
+	RUN_REAL_LIFECYCLE_E2E=1 python -m pytest -q backend/tests/e2e/test_order_payment_refund_flow.py
 
 grafana-dashboards:
 	@ls -1 deploy/grafana/dashboards
@@ -196,7 +232,10 @@ pilot-admit:
 	python3 scripts/pilot_admission.py create $(ARGS)
 
 pilot-admission-status:
-	python3 scripts/pilot_governance_admission.py verify $(ARGS)
+	python3 scripts/pilot_launch_admission.py verify $(ARGS)
+
+pilot-launch-preflight:
+	python3 scripts/pilot_launch_preflight.py $(ARGS)
 
 pilot-lifecycle-create:
 	@echo "Usage: make pilot-lifecycle-create ARGS='--input docs/pilot/live_lifecycle_input.json'"
@@ -218,6 +257,15 @@ pilot-governance-attach:
 pilot-governance-status:
 	python3 scripts/pilot_governance_admission.py verify $(ARGS)
 
+pilot-checklist-create:
+	python3 scripts/pilot_launch_checklist.py create $(ARGS)
+
+pilot-checklist-status:
+	python3 scripts/pilot_launch_checklist.py verify $(ARGS)
+
+pilot-checklist-attach:
+	python3 scripts/pilot_launch_admission.py attach $(ARGS)
+
 pilot-runner:
 	python3 scripts/pilot_runner.py
 
@@ -227,6 +275,8 @@ pilot-init:
 
 pilot-runtime-arm:
 	@echo "Usage: make pilot-runtime-arm ARGS='--telegram-id 123456789 [--telegram-id ...] [--resume]'"
+	python3 scripts/pilot_launch_preflight.py
+	python3 scripts/pilot_launch_admission.py verify
 	python3 scripts/pilot_runtime.py arm $(ARGS)
 
 pilot-runtime-status:
