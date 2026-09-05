@@ -2,7 +2,7 @@
 
 **Repository:** `PetrFedin/flashin-miniapp`  
 **Hardening baseline:** `pilot/e2e-hardening-20260808`  
-**Current verified pilot head:** `35b3a2ebb9eb10a99eaed38392086cbfd171ea2b`  
+**Current verified pilot head:** `2c3a18c618e19cec4420867ed16650a985652535`  
 **Purpose:** authoritative, evidence-based launch-readiness register.  
 **Rule:** a capability is not `DONE` because code exists. `DONE` requires the evidence stated in this document. Unknown or externally unverifiable work is never promoted to `DONE`.
 
@@ -19,7 +19,7 @@
 
 **Current decision: NOT READY / NO-GO.**
 
-The hardening branch now has dedicated, green concurrency proof for the known refund/return, fulfillment and checkout-loyalty root-lock inversions, plus material release/security automation. Launch remains forbidden until the remaining P0/P1 risks are audited and closed, issue #119 acceptance evidence is complete, production prerequisites are configured, protected-branch controls are enabled, and controlled external-live verification is complete.
+The hardening branch has dedicated concurrency proof for the known refund/return, fulfillment, checkout-loyalty and cross-order referral lock inversions, an evidence-based database lock-order registry, hardened CRM recompute authority, and a corrected MoySklad outbound database/provider transaction boundary. Material CI, Security, signed backup/restore, signed rollback and production Compose isolation automation is present. Launch remains forbidden until the remaining P0/P1 risks are audited and closed, issue #119 acceptance evidence is complete, production prerequisites are configured, protected-branch controls are enabled, and controlled external-live verification is complete.
 
 ## Evidence discipline
 
@@ -42,24 +42,28 @@ If the evidence is only planned, the item remains `MISSING`, `PARTIAL`, `IN_PROG
 | P0 | Caddy gRPC CVE-2026-84304 | DONE | PR #202 merged; CI, Security, Trivy, SBOM, signed backup/restore, signed rollback and production Compose isolation passed | Keep built-binary version assertion and image scan mandatory |
 | P0 | Refund/return DB lock ordering | DONE | PR #200 merged; canonical `Order -> ReturnRequest`, relationship revalidation and real PostgreSQL lock-order proof passed full gates | Preserve invariant in repository-wide lock audit |
 | P1 | Fulfillment DB lock ordering | DONE | PR #205 exact head `710e3c9ff00bc3e872eb35eb2f34c2fd268ec0c7` passed full CI/Security/release-safety including PostgreSQL NOWAIT proof, then merged; issue #204 closed | Preserve canonical `Order -> FulfillmentTask`; audit child-row interactions separately |
-| P0 | Checkout/cart loyalty DB lock ordering | DONE | PR #207 exact head `e2a3192b0fef6fc85534c589aaf2c2de438c891e` passed CI `33782393441` and Security `33782393457`, including real PostgreSQL loyalty lock-order smoke, and merged into pilot `35b3a2ebb9eb10a99eaed38392086cbfd171ea2b` | Preserve `CrmProfile -> LoyaltyRedemptionHold`; close issue #206 only after lock registry evidence is merged |
-| P1 | Systematic DB lock-order inventory | IN_PROGRESS | `docs/DATABASE_LOCK_ORDER.md` has been created on the current audit branch with conservative evidence states; repository-wide second pass is not complete | Merge the registry only after exact-head gates; audit every `FOR UPDATE` and mutation path; every newly proven inversion gets a separate issue/PR/smoke |
-| P1 | External-I/O transaction-boundary audit | PARTIAL | Refund/payment hardening contains prepare/finalize patterns, but repository-wide provider/network audit is not complete | Audit payment, refund, delivery, MoySklad, Telegram, search/storage/notifications; eliminate long external I/O under DB locks |
-| P0 | Main branch protection | BLOCKED_EXTERNAL | Fresh repository check: `main` is still `protected:false` | Admin enables PR requirement, required CI/Security, no force push/deletion; verify before launch |
-| P1 | Pilot/release branch protection | BLOCKED_EXTERNAL | Fresh repository check: `pilot/e2e-hardening-20260808` is also `protected:false`; code policy is enforced by process/CI, not GitHub branch control | Add appropriate protected-branch/ruleset controls before this branch is used as a release authority |
-| P1 | GitHub Dependency Graph | BLOCKED_EXTERNAL | Issue #196 remains open; Security retains mandatory Trivy fallback when GitHub differential dependency review is unavailable | Enable Dependency Graph and prove dependency-review blocks a deliberately vulnerable dependency; retain Trivy defense in depth |
+| P0 | Checkout/cart loyalty DB lock ordering | DONE | PR #207 exact head `e2a3192b0fef6fc85534c589aaf2c2de438c891e` passed CI `33782393441` and Security `33782393457`, including real PostgreSQL loyalty lock-order smoke | Preserve `CrmProfile -> LoyaltyRedemptionHold`; issue #206 is closed after registry merge |
+| P1 | Database lock-order evidence registry | DONE | PR #208 exact head `221cd5090ab51fa90b1fdbd3e932be8c5bfeeb6b` passed CI #1390 / `33859924724` and Security #252 / `33859924503`; merged as `fee79ffbf4c8dbe3e0fa7c004b223842b664bf90` | Keep `docs/DATABASE_LOCK_ORDER.md` updated as audit evidence evolves; registry existence does not certify the whole graph |
+| P0 | Cross-order referral refund/settlement lock inversion | DONE | Issue #209 fixed by PR #210. Exact head `444beea6ca395f0d8cc37b4176f744bcfaa32478` passed CI #1393 and Security #256 including real PostgreSQL proof; merged as `aa2da3cf0d73ebb4ecee38754ffa6ba9f755c73f` | Preserve `ReferralAttribution -> ReferralCode -> CrmProfile(referrer)` ordering for shared referral identity |
+| P0 | CRM recompute authorization / loyalty balance ownership | DONE | Issue #211 fixed by PR #212. Exact head `771eceb1a6ebf4353d1fb7ccc1949e993d9bb595` passed CI #1396 and Security #260; merged as `e938bda53bbd2666b91f0a291712dda7d54ee488` | Keep global CRM mutation behind `crm.recompute`; loyalty balance remains ledger/service-owned |
+| P1 | MoySklad outbound DB/provider transaction boundary | DONE | Issue #213 fixed by PR #214. Exact head `4c89331769d6fdbbcdcf62287e6526e662d1413f` passed CI #1400 / `33980013694` and Security #265 / `33980013702`; merged as `2c3a18c618e19cec4420867ed16650a985652535` | Preserve snapshot -> end DB transaction -> provider HTTP -> fresh provider-command finalize boundary |
+| P1 | Systematic DB lock-order inventory | IN_PROGRESS | `docs/DATABASE_LOCK_ORDER.md` is merged and records proven, one-way, potential-cycle and unverified edges; repository-wide second pass is not complete | Audit every `FOR UPDATE` and relevant mutation path; every newly proven inversion gets a separate issue/PR/PostgreSQL smoke |
+| P1 | External-I/O transaction-boundary audit | PARTIAL | Payment creation, refund approval and MoySklad inbound paths were audited as transaction-safe; MoySklad outbound was fixed by #214. Telegram/notification, delivery, search/storage/email/webhook dispatch and remaining provider paths are not yet fully audited | Complete provider/network audit and eliminate long external I/O under DB transactions |
+| P0 | Main branch protection | BLOCKED_EXTERNAL | Fresh repository evidence still requires protected-main verification; launch policy treats `protected:false` as NO-GO | Admin enables PR requirement, required CI/Security, no force push/deletion; verify before launch |
+| P1 | Pilot/release branch protection | BLOCKED_EXTERNAL | Fresh pilot check at merge `2c3a18c6...` reports `protected:false`; code policy is enforced by process/CI, not GitHub branch control | Add appropriate protected-branch/ruleset controls before this branch is used as a release authority |
+| P1 | GitHub Dependency Graph | BLOCKED_EXTERNAL | Issue #196 remains open; Security #265 used the mandatory fallback path and Trivy vulnerability scanning remained green | Enable Dependency Graph and prove differential dependency-review blocks a deliberately vulnerable dependency; retain Trivy defense in depth |
 | P0 | Launch gate #119 | IN_PROGRESS | Issue #119 remains open and is the authoritative real-launch gate | Close only after all live/provider/infrastructure/governance evidence is attached and independently verifiable |
 | P0 | Production domain/DNS/TLS/Telegram allowed domain | BLOCKED_EXTERNAL | Requires real deployment/domain ownership and provider configuration | Configure and verify public HTTPS, renewal, secure headers and Telegram allowed domain |
 | P0 | Production Telegram credentials | BLOCKED_EXTERNAL | Real secret/provider configuration must not be fabricated in repository | Configure through approved secret backend and perform controlled live verification |
 | P0 | Production YooKassa credentials/callback | BLOCKED_EXTERNAL | Real financial-provider configuration cannot be proven with CI-only evidence | Configure secret backend/callback and perform explicitly approved controlled live smoke/reconciliation |
 | P0 | Production secret backend/rotation | BLOCKED_EXTERNAL | Requires deployment/admin secret-store configuration | Configure, document ownership/rotation and verify fail-closed production validation |
 | P0 | Controlled external-live smoke | BLOCKED_EXTERNAL | Real provider/domain action requires explicit approval; must not be simulated as proof | Execute only after infrastructure/provider prerequisites and record evidence in #119 |
-| P1 | CI backup/restore + release rollback automation | DONE | CI exercises signed PostgreSQL backup/restore and signed full release rollback drills | Do not equate CI drill with production DR; production restore evidence remains required |
+| P1 | CI backup/restore + release rollback automation | DONE | Exact-head CI #1400 again passed signed PostgreSQL backup/restore, signed full release rollback and production Compose isolation | Do not equate CI drill with production DR; production restore evidence remains required |
 | P1 | Production DR operational proof | PARTIAL | DR documentation and CI drills exist; production RPO/RTO, off-host retention and production-like rehearsal are not yet fully evidenced | Define/approve RPO/RTO, retention/off-host storage and run production-like restore rehearsal |
 
 ## Proven lock-order baseline
 
-The following pairs are proven/hardened and must not be inverted by later changes:
+The following pairs/chains are proven/hardened and must not be inverted by later changes:
 
 - `Customer -> Cart`
 - `Order -> PaymentCreationAttempt`
@@ -67,9 +71,10 @@ The following pairs are proven/hardened and must not be inverted by later change
 - `Order -> ReturnRequest`
 - `Order -> FulfillmentTask`
 - `CrmProfile -> LoyaltyRedemptionHold`
+- `ReferralAttribution -> ReferralCode -> CrmProfile(referrer)` for referral settlement/full-refund reversal of shared referral identity
 - multi-row `ProductVariant` acquisition must remain deterministic by stable sorted/ID order where multiple variants are locked
 
-This is **not** a complete global hierarchy. `docs/DATABASE_LOCK_ORDER.md` is the evidence registry and the repository-wide audit remains the active P1 concurrency workstream.
+This is **not** a complete global hierarchy. `docs/DATABASE_LOCK_ORDER.md` is the evidence registry and the repository-wide audit remains an active P1 concurrency workstream.
 
 ## Phase plan and maturity
 
@@ -81,39 +86,49 @@ This is **not** a complete global hierarchy. `docs/DATABASE_LOCK_ORDER.md` is th
 | #202 ingress gRPC CVE | DONE | L5 repository/CI security evidence |
 | #200 refund/return lock order | DONE | L4 concurrency + full CI/Security/release-safety evidence |
 | #204/#205 fulfillment `Order -> FulfillmentTask` | DONE | L4 concurrency + full CI/Security/release-safety evidence |
-| Readiness register PR #203 | DONE | Merged; post-merge CI `33782266150` and Security `33782266161` completed success |
+| #206/#207 loyalty `CrmProfile -> LoyaltyRedemptionHold` | DONE | L4 real PostgreSQL concurrency + full CI/Security; issue #206 closed |
+| #208 lock-order/readiness registry | DONE | Documentation registry merged after exact-head CI #1390 and Security #252 |
+| #209/#210 referral refund cross-order deadlock | DONE | L4 real PostgreSQL concurrency + full gates |
+| #211/#212 CRM recompute authority | DONE | Dedicated mutation permission, loyalty ownership separation, atomic audit/commit + full gates |
+| #213/#214 MoySklad outbound transaction boundary | DONE | Provider boundary regression coverage + exact-head CI #1400 and Security #265 |
 
 ### Phase 2 — database concurrency
 
 Status: `IN_PROGRESS`.
 
-Completed/hardened evidence now includes `CrmProfile -> LoyaltyRedemptionHold` through PR #207 in addition to the earlier Customer/Cart and Order-root contracts. The broader graph is not yet certified.
+Completed/hardened evidence includes the root contracts above and the cross-order referral chain from PR #210. The broader graph is not yet certified.
 
 Required work:
 
 - inventory every `.with_for_update()` / `FOR UPDATE` and relevant write path;
-- document lock acquisition edges by endpoint/service;
 - verify pairs involving Customer, CrmProfile, Cart, CartItem, PromoCode, LoyaltyRedemptionHold/ledger, Order, Payment, PaymentCreationAttempt, ReturnRequest, FulfillmentTask, FulfillmentTaskItem, OrderItem, ProductVariant, SlaEvent, Product/pricing and outbox/domain rows;
 - classify child-only mutations separately from root-lock cycles rather than assuming a conflict;
 - preserve deterministic multi-row ordering;
 - for every proven inversion: issue -> dedicated branch -> minimal fix -> regression test -> real PostgreSQL concurrency smoke -> full gate.
 
-Current active audit candidate: the local lock sequence in `backend/services/loyalty.py::refund_redeemed_points` reaches `LoyaltyTransaction -> LoyaltyRedemptionHold -> CrmProfile`. This is recorded as `POTENTIAL_CYCLE`, not as a confirmed deadlock, until the same-row opposite call graph and a real PostgreSQL wait cycle are proven.
+Remaining audit candidate: the local sequence in `backend/services/loyalty.py::refund_redeemed_points` reaches `LoyaltyRedemptionHold -> CrmProfile` in a path that must be compared with all same-row opposite callers. It remains `POTENTIAL_CYCLE`, not a confirmed defect, until a complete call graph and real PostgreSQL wait cycle prove it.
 
-Exit artifact: `docs/DATABASE_LOCK_ORDER.md` with evidence status per edge plus a completed repository-wide second pass.
+Exit artifact: continuously maintained `docs/DATABASE_LOCK_ORDER.md` with evidence status per edge plus a completed repository-wide second pass.
 
 ### Phase 3 — transaction boundaries and provider safety
 
 Status: `PARTIAL`.
 
+Evidence completed so far:
+
+- payment creation path: DB prepare/commit -> provider I/O -> fresh finalize was audited as safe;
+- return approval/refund path: prepare is committed before provider refund call, then fresh `Order -> ReturnRequest` re-lock/revalidation;
+- MoySklad inbound synchronization commits before network page fetches / between durable writes;
+- MoySklad outbound `customerorder`, `demand` and `salesreturn` was corrected by PR #214 so all DB-derived state becomes a frozen snapshot and the read transaction ends before provider GET/POST.
+
 Required work:
 
-- locate external network I/O under active SQLAlchemy transactions;
+- audit Telegram/notification transports, delivery provider, email, S3/CDN, Meilisearch/search, external webhook dispatch and remaining network call sites;
 - prefer `prepare -> commit -> external call -> fresh-lock finalize` across provider boundaries;
 - define explicit connect/read/write/pool timeouts;
 - bounded retry + backoff/jitter only for safe/idempotent operations;
 - provider idempotency keys and ambiguous-result reconciliation;
-- no row locks held while waiting seconds on external providers unless an audited exception is documented.
+- no row locks or implicit read transactions held while waiting seconds on external providers unless an audited exception is documented.
 
 ### Phase 4 — financial integrity
 
@@ -130,7 +145,7 @@ Payment/refund/cancellation/promo/loyalty must prove:
 - operator-visible reason + immutable audit for manual financial resolution;
 - concurrency/failure tests for remaining critical races.
 
-A separate schema/ORM audit is required because current ORM models still contain SQLAlchemy `Float` declarations for monetary fields while migration `0032_fixed_precision_money.py` may have changed physical PostgreSQL types. No conclusion is promoted until actual ORM-to-schema consistency is verified.
+CRM recompute no longer overwrites the loyalty balance after PR #212, but a separate schema/ORM audit remains required because current ORM models may still contain SQLAlchemy `Float` declarations for monetary fields while migration `0032_fixed_precision_money.py` changed physical PostgreSQL types. No schema conclusion is promoted until actual ORM-to-schema consistency is verified.
 
 ### Phase 5 — inventory, fulfillment and delivery
 
@@ -150,10 +165,10 @@ Required launch-safe outcomes:
 
 Status: `PARTIAL`.
 
-Repository security automation is material and active, but launch still requires completion/verification of:
+Repository security automation is material and active. PR #212 also removed an accidental global-write permission escalation in CRM maintenance. Launch still requires completion/verification of:
 
-- admin/customer auth hardening;
-- named RBAC permissions and permission matrix;
+- remaining admin/customer auth hardening;
+- authoritative RBAC permission matrix and endpoint coverage;
 - PII classification/access/masking/retention controls;
 - distributed rate limiting where multiple replicas matter;
 - production secret management and rotation;
@@ -165,7 +180,7 @@ Repository security automation is material and active, but launch still requires
 
 Status: `PARTIAL`.
 
-Verify/finish durable webhook intake, outbox/background jobs, lease ownership, retry limits, dead-letter/review queues, manual replay, provider reconciliation and scheduler singleton/fencing behavior. Critical business effects must not exist only in process memory.
+Verify/finish durable webhook intake, outbox/background jobs, lease ownership, retry limits, dead-letter/review queues, manual replay, provider reconciliation and scheduler singleton/fencing behavior. Critical business effects must not exist only in process memory. MoySklad provider-command finalization after external I/O now uses a fresh DB transaction with lease-token revalidation after PR #214.
 
 ### Phase 8 — observability and operations
 
@@ -177,7 +192,7 @@ Launch-critical paths require structured logs/correlation IDs, metrics, actionab
 
 Status: `PARTIAL`.
 
-CI already exercises substantial Docker/Compose/restore/rollback safety. Remaining work is to prove production-like staging, immutable release artifacts/digests, production secret/infrastructure configuration, operational backup policy and recovery rehearsal.
+CI already exercises substantial Docker/Compose/restore/rollback safety. Exact-head CI #1400 again proved signed backup/restore, signed full release rollback and production Compose isolation. Remaining work is to prove production-like staging, immutable release artifacts/digests, production secret/infrastructure configuration, operational backup policy and recovery rehearsal.
 
 ### Phase 10 — launch gate
 
@@ -211,13 +226,13 @@ Launch-critical capabilities require at least `L5`; payment/refund/provider boun
 
 | Artifact | Status | Notes |
 |---|---|---|
-| `docs/PRODUCTION_READINESS_MASTER_PLAN.md` | IN_PROGRESS | Authoritative register exists from merged PR #203; current audit branch synchronizes it to pilot `35b3a2e...` and PR #207 evidence |
-| `docs/DATABASE_LOCK_ORDER.md` | IN_PROGRESS | Created in the current audit branch; first evidence-based matrix exists, but the repository-wide audit is not complete and this docs change is not merged yet |
+| `docs/PRODUCTION_READINESS_MASTER_PLAN.md` | IN_PROGRESS | Authoritative register exists from #203 and is being synchronized in this documentation-only change through pilot `2c3a18c6...` / PR #214 evidence |
+| `docs/DATABASE_LOCK_ORDER.md` | DONE | Created and merged through PR #208. The artifact exists and is authoritative; the repository-wide concurrency audit recorded inside it remains `IN_PROGRESS` |
 | `docs/IDEMPOTENCY_CONTRACTS.md` | MISSING | Must map checkout/payment/refund/cancellation/webhooks/notification/shipment semantics |
-| `docs/RBAC_MATRIX.md` | MISSING | Must be derived from actual named permissions/endpoints |
+| `docs/RBAC_MATRIX.md` | MISSING | Must be derived from actual named permissions/endpoints, including `crm.recompute` from PR #212 |
 | `docs/SLO.md` | MISSING | Define measurable production objectives and owners |
 | `docs/ERROR_CATALOG.md` | MISSING | Actionable validation/conflict/provider/security/integrity/retry/review taxonomy |
-| provider contract docs | PARTIAL | Audit existing provider documentation before claiming completeness |
+| provider contract docs | PARTIAL | Audit existing provider documentation before claiming completeness; MoySklad outbound boundary evidence now includes PR #214 |
 | operational runbooks | PARTIAL | DR documentation exists; complete money/provider/webhook/inventory/secret incident runbooks and evidence |
 | `docs/PRODUCTION_READINESS_FINAL_REPORT.md` | MISSING | Create only at final launch-readiness pass |
 
@@ -251,15 +266,13 @@ A PR must not be merged if required CI, Security, release rollback, restore or p
 
 ## Next execution sequence
 
-1. Merge the current database-lock-order/readiness documentation update only after fresh exact-head CI + Security gates.
-2. Close issue #206 only after the merged lock registry records the `CrmProfile -> LoyaltyRedemptionHold` contract; PR #207 and its exact green runs remain the implementation evidence.
-3. Continue the repository-wide inventory of every `FOR UPDATE` and relevant mutation path; classify each edge as hardened, observed one-way, potential cycle, or unverified.
-4. Prove or dismiss the current loyalty-refund `POTENTIAL_CYCLE` using the complete caller/root-lock graph and real PostgreSQL concurrency behavior.
-5. For each newly proven inversion, open an issue and a dedicated minimal branch/PR with regression + real PostgreSQL concurrency proof.
-6. After known lock cycles are closed, perform the repository-wide transaction-boundary audit and remove external I/O from long-lived DB lock scopes.
-7. Audit ORM money types against the actual migrated PostgreSQL schema before changing financial types; separate schema corrections into focused PRs.
-8. Continue P0 -> P1 through financial integrity, inventory/fulfillment, security, reliability, observability and release readiness.
-9. Keep #119 open until every real launch prerequisite is evidenced.
+1. Merge this readiness synchronization only after fresh exact-head CI + Security gates.
+2. Continue the repository-wide lock-order second pass; keep the remaining loyalty hold/profile edge as `POTENTIAL_CYCLE` until a real opposite same-row cycle is proven or dismissed.
+3. Continue the transaction-boundary audit with Telegram/notification transport, delivery provider, email, S3/CDN, Meilisearch/search and webhook dispatch; every proven network-under-transaction defect gets its own issue/branch/PR/tests.
+4. For every newly proven lock inversion or transaction-boundary defect, use a dedicated minimal PR with regression coverage and real PostgreSQL/provider-boundary proof where applicable.
+5. Audit ORM money types against the actual migrated PostgreSQL schema before changing financial types; separate schema corrections into focused PRs.
+6. Continue P0 -> P1 through financial integrity, cancellation, inventory/fulfillment, security, reliability, observability and release readiness.
+7. Keep #119 open until every real launch prerequisite is evidenced.
 
 ## Change-control rule for this document
 
