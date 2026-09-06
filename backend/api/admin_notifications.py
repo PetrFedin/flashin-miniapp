@@ -12,6 +12,8 @@ from ..services.rbac import require_permission
 
 router = APIRouter(prefix="/admin/notification-delivery", tags=["admin-notifications"])
 
+FILTERABLE_NOTIFICATION_STATUSES = {"pending", "sent", "failed", "review_required"}
+
 
 def _serialize(
     notification: Notification,
@@ -54,7 +56,7 @@ def list_notification_delivery(
     )
     if status:
         normalized_status = status.strip().lower()
-        if normalized_status not in {"pending", "sent", "failed"}:
+        if normalized_status not in FILTERABLE_NOTIFICATION_STATUSES:
             raise HTTPException(status_code=400, detail="Invalid notification status")
         query = query.filter(Notification.status == normalized_status)
 
