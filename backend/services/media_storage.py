@@ -1,3 +1,4 @@
+import asyncio
 import io
 import warnings
 import uuid
@@ -20,6 +21,9 @@ _MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 _MAX_IMAGE_PIXELS = 40_000_000
 _MAX_IMAGE_DIMENSION = 12_000
 _READ_CHUNK_BYTES = 1024 * 1024
+_S3_CONNECT_TIMEOUT_SECONDS = 5
+_S3_READ_TIMEOUT_SECONDS = 30
+_S3_MAX_ATTEMPTS = 3
 
 
 async def _read_limited(file: UploadFile) -> bytes:
@@ -103,6 +107,45 @@ def _sanitize_image(content: bytes, declared_content_type: str) -> tuple[bytes, 
         Image.MAX_IMAGE_PIXELS = previous_limit
 
 
+def _s3_client(settings):
+    import boto3
+    from botocore.config import Config
+
+    session = boto3.session.Session()
+    return session.client(
+        "s3",
+        region_name=settings.s3_region,
+        endpoint_url=settings.s3_endpoint_url or None,
+        aws_access_key_id=settings.s3_access_key_id,
+        aws_secret_access_key=settings.s3_secret_access_key,
+        config=Config(
+            connect_timeout=_S3_CONNECT_TIMEOUT_SECONDS,
+            read_timeout=_S3_READ_TIMEOUT_SECONDS,
+            retries={"max_attempts": _S3_MAX_ATTEMPTS, "mode": "standard"},
+        ),
+    )
+
+
+def _put_s3_object(settings, storage_key: str, content: bytes, content_type: str) -> None:
+    client = _s3_client(settings)
+    client.put_object(
+        Bucket=settings.s3_bucket,
+        Key=storage_key,
+        Body=content,
+        ContentType=content_type,
+        CacheControl="public, max-age=31536000, immutable",
+    )
+
+
+def _write_local_object(settings, storage_key: str, content: bytes) -> None:
+    media_dir = Path(settings.media_local_dir).resolve()
+    media_dir.mkdir(parents=True, exist_ok=True)
+    target = (media_dir / storage_key).resolve()
+    if target.parent != media_dir:
+        raise ValueError("Invalid media storage path")
+    target.write_bytes(content)
+
+
 async def save_media(file: UploadFile) -> dict:
     settings = get_settings()
     declared_content_type = (file.content_type or "").split(";", 1)[0].strip().lower()
@@ -111,33 +154,22 @@ async def save_media(file: UploadFile) -> dict:
     storage_key = f"{uuid.uuid4().hex}{extension}"
 
     if settings.media_storage in {"s3", "r2"}:
-        import boto3
-
-        session = boto3.session.Session()
-        client = session.client(
-            "s3",
-            region_name=settings.s3_region,
-            endpoint_url=settings.s3_endpoint_url or None,
-            aws_access_key_id=settings.s3_access_key_id,
-            aws_secret_access_key=settings.s3_secret_access_key,
+        # boto3 is synchronous. Run both client construction and the bounded
+        # provider request outside the FastAPI event-loop thread.
+        await asyncio.to_thread(
+            _put_s3_object,
+            settings,
+            storage_key,
+            sanitized,
+            content_type,
         )
-        client.put_object(
-            Bucket=settings.s3_bucket,
-            Key=storage_key,
-            Body=sanitized,
-            ContentType=content_type,
-            CacheControl="public, max-age=31536000, immutable",
-        )
-        url = f"{settings.media_public_base_url.rstrip('/')}/{storage_key}"
     else:
-        media_dir = Path(settings.media_local_dir).resolve()
-        media_dir.mkdir(parents=True, exist_ok=True)
-        target = (media_dir / storage_key).resolve()
-        if target.parent != media_dir:
-            raise ValueError("Invalid media storage path")
-        target.write_bytes(sanitized)
-        url = f"{settings.media_public_base_url.rstrip('/')}/{storage_key}"
+        # Local writes are also bounded by the 10 MB upload limit, but keeping
+        # blocking filesystem I/O off the event loop makes both storage modes
+        # obey the same async boundary.
+        await asyncio.to_thread(_write_local_object, settings, storage_key, sanitized)
 
+    url = f"{settings.media_public_base_url.rstrip('/')}/{storage_key}"
     return {
         "url": url,
         "storage_key": storage_key,
@@ -154,16 +186,7 @@ def delete_media(storage_key: str) -> None:
         return
 
     if settings.media_storage in {"s3", "r2"}:
-        import boto3
-
-        session = boto3.session.Session()
-        client = session.client(
-            "s3",
-            region_name=settings.s3_region,
-            endpoint_url=settings.s3_endpoint_url or None,
-            aws_access_key_id=settings.s3_access_key_id,
-            aws_secret_access_key=settings.s3_secret_access_key,
-        )
+        client = _s3_client(settings)
         client.delete_object(Bucket=settings.s3_bucket, Key=key)
         return
 
