@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Prove notification handoff and marketing-consent suppression at transport.
+"""Prove Telegram notification transport safety with real PostgreSQL state.
 
 PostgreSQL claim/lease/policy/finalize logic and
 bot.send_notifications.send_pending_batch are real. Only Telegram network I/O
-is replaced with a deterministic Bot-like transport. The smoke proves both a
-transactional delivery and grant -> enqueue -> revoke -> no-send behavior.
+is replaced with a deterministic Bot-like transport. The smoke proves:
+- transaction-clean handoff at the actual Telegram side-effect boundary;
+- successful transactional delivery;
+- ambiguous accepted-but-response-lost delivery parks in review_required and
+  is not automatically replayed;
+- grant -> enqueue -> revoke suppresses marketing before Telegram I/O.
 """
 
 from __future__ import annotations
@@ -39,11 +43,20 @@ from bot import send_notifications as worker
 
 
 class RecordingBot:
-    def __init__(self) -> None:
+    def __init__(self, db: Session) -> None:
+        self.db = db
         self.calls: list[dict] = []
+        self.failure: Exception | None = None
+        self.transaction_clean_checks = 0
 
     async def send_message(self, **kwargs):
+        # The exact transport boundary must never inherit a SQLAlchemy
+        # transaction from claim/lease/preflight work.
+        assert self.db.in_transaction() is False
+        self.transaction_clean_checks += 1
         self.calls.append(dict(kwargs))
+        if self.failure is not None:
+            raise self.failure
         return {"message_id": len(self.calls)}
 
 
@@ -53,6 +66,7 @@ def _empty_result() -> dict[str, int]:
         "sent": 0,
         "retry_scheduled": 0,
         "failed": 0,
+        "review_required": 0,
         "suppressed": 0,
         "ignored": 0,
     }
@@ -98,15 +112,16 @@ def main() -> int:
             )
         )
         worker._finish_delivery = (
-            lambda row_id, lease_token, error=None: finish_delivery(
+            lambda row_id, lease_token, error=None, delivery_outcome=None: finish_delivery(
                 db,
                 row_id,
                 lease_token,
                 error=error,
+                delivery_outcome=delivery_outcome,
             )
         )
 
-        bot = RecordingBot()
+        bot = RecordingBot(db)
         first = asyncio.run(worker.send_pending_batch(bot))
         expected_first = _empty_result()
         expected_first.update({"seen": 1, "sent": 1})
@@ -118,6 +133,7 @@ def main() -> int:
                 "disable_web_page_preview": True,
             }
         ]
+        assert bot.transaction_clean_checks == 1
 
         db.expire_all()
         persisted = db.query(Notification).filter(Notification.id == notification_id).one()
@@ -130,11 +146,56 @@ def main() -> int:
             .count()
             == 0
         )
+        db.rollback()
 
-        # Now prove the exact P1: consent was valid at enqueue, then withdrawn
-        # before the transport attempt. The worker must terminally suppress it
-        # without invoking Telegram.
-        marketing_telegram_id = str(int(token, 16) + 1)
+        # Prove the P1 recovery boundary: model Telegram accepting the side effect
+        # and then losing the response. A generic transport exception is therefore
+        # ambiguous and must never trigger a blind automatic resend.
+        ambiguous_notification = Notification(
+            telegram_id=str(int(token, 16) + 1),
+            message=f"FLASHIN ambiguous transport smoke {token}",
+            status="pending",
+        )
+        db.add(ambiguous_notification)
+        db.commit()
+        ambiguous_notification_id = int(ambiguous_notification.id)
+        bot.failure = RuntimeError("simulated response loss after provider acceptance")
+
+        ambiguous = asyncio.run(worker.send_pending_batch(bot))
+        expected_ambiguous = _empty_result()
+        expected_ambiguous.update({"seen": 1, "review_required": 1})
+        assert ambiguous == expected_ambiguous
+        assert len(bot.calls) == 2
+        assert bot.transaction_clean_checks == 2
+
+        db.expire_all()
+        ambiguous_persisted = (
+            db.query(Notification)
+            .filter(Notification.id == ambiguous_notification_id)
+            .one()
+        )
+        ambiguous_state = (
+            db.query(NotificationDeliveryState)
+            .filter(NotificationDeliveryState.notification_id == ambiguous_notification_id)
+            .one()
+        )
+        assert ambiguous_persisted.status == "review_required"
+        assert ambiguous_persisted.sent_at is None
+        assert "RuntimeError" in ambiguous_persisted.error
+        assert ambiguous_state.attempts == 1
+        assert ambiguous_state.next_attempt_at is None
+        assert ambiguous_state.lease_token is None
+        db.rollback()
+
+        bot.failure = None
+        replay_after_ambiguous = asyncio.run(worker.send_pending_batch(bot))
+        assert replay_after_ambiguous == _empty_result()
+        assert len(bot.calls) == 2
+
+        # Now prove consent was valid at enqueue, then withdrawn before the
+        # transport attempt. The worker must terminally suppress it without
+        # invoking Telegram.
+        marketing_telegram_id = str(int(token, 16) + 2)
         customer = Customer(telegram_id=marketing_telegram_id)
         db.add(customer)
         db.flush()
@@ -178,7 +239,7 @@ def main() -> int:
         expected_suppressed = _empty_result()
         expected_suppressed.update({"seen": 1, "suppressed": 1})
         assert suppressed == expected_suppressed
-        assert len(bot.calls) == 1
+        assert len(bot.calls) == 2
 
         db.expire_all()
         marketing_notification = (
@@ -195,10 +256,11 @@ def main() -> int:
             .count()
             == 0
         )
+        db.rollback()
 
         replay = asyncio.run(worker.send_pending_batch(bot))
         assert replay == _empty_result()
-        assert len(bot.calls) == 1
+        assert len(bot.calls) == 2
 
         print(
             json.dumps(
@@ -206,9 +268,13 @@ def main() -> int:
                     "status": "ok",
                     "transactional_notification_id": notification_id,
                     "transactional_final_status": persisted.status,
+                    "ambiguous_notification_id": ambiguous_notification_id,
+                    "ambiguous_final_status": ambiguous_persisted.status,
+                    "ambiguous_auto_replay_seen": replay_after_ambiguous["seen"],
                     "marketing_notification_id": marketing_notification_id,
                     "marketing_final_status": marketing_notification.status,
                     "telegram_send_calls": len(bot.calls),
+                    "transaction_clean_checks": bot.transaction_clean_checks,
                     "marketing_suppressed": suppressed["suppressed"],
                     "replay_seen": replay["seen"],
                 },
