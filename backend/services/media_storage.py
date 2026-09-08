@@ -103,6 +103,29 @@ def _sanitize_image(content: bytes, declared_content_type: str) -> tuple[bytes, 
         Image.MAX_IMAGE_PIXELS = previous_limit
 
 
+def _s3_client():
+    settings = get_settings()
+    import boto3
+    from botocore.config import Config
+
+    session = boto3.session.Session()
+    return session.client(
+        "s3",
+        region_name=settings.s3_region,
+        endpoint_url=settings.s3_endpoint_url or None,
+        aws_access_key_id=settings.s3_access_key_id,
+        aws_secret_access_key=settings.s3_secret_access_key,
+        config=Config(
+            connect_timeout=settings.s3_connect_timeout_seconds,
+            read_timeout=settings.s3_read_timeout_seconds,
+            retries={
+                "total_max_attempts": settings.s3_max_attempts,
+                "mode": "standard",
+            },
+        ),
+    )
+
+
 async def save_media(file: UploadFile) -> dict:
     settings = get_settings()
     declared_content_type = (file.content_type or "").split(";", 1)[0].strip().lower()
@@ -111,16 +134,7 @@ async def save_media(file: UploadFile) -> dict:
     storage_key = f"{uuid.uuid4().hex}{extension}"
 
     if settings.media_storage in {"s3", "r2"}:
-        import boto3
-
-        session = boto3.session.Session()
-        client = session.client(
-            "s3",
-            region_name=settings.s3_region,
-            endpoint_url=settings.s3_endpoint_url or None,
-            aws_access_key_id=settings.s3_access_key_id,
-            aws_secret_access_key=settings.s3_secret_access_key,
-        )
+        client = _s3_client()
         client.put_object(
             Bucket=settings.s3_bucket,
             Key=storage_key,
@@ -154,16 +168,7 @@ def delete_media(storage_key: str) -> None:
         return
 
     if settings.media_storage in {"s3", "r2"}:
-        import boto3
-
-        session = boto3.session.Session()
-        client = session.client(
-            "s3",
-            region_name=settings.s3_region,
-            endpoint_url=settings.s3_endpoint_url or None,
-            aws_access_key_id=settings.s3_access_key_id,
-            aws_secret_access_key=settings.s3_secret_access_key,
-        )
+        client = _s3_client()
         client.delete_object(Bucket=settings.s3_bucket, Key=key)
         return
 
