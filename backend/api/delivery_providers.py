@@ -8,6 +8,7 @@ from ..models import DeliveryProvider, DeliveryShipment, Order
 from ..schemas import DeliveryProviderIn, DeliveryProviderOut, DeliveryShipmentOut
 from ..security import get_current_admin
 from ..services.audit import log_admin_action
+from ..services.delivery_locking import lock_delivery_shipment_for_update
 from ..services.delivery_providers import ensure_ready_shipment, transition_shipment
 from ..services.rbac import DELIVERY_PROVIDERS_WRITE_PERMISSION, require_permission
 
@@ -182,17 +183,10 @@ def patch_shipment(
 ):
     require_permission(db, admin, "fulfillment.write")
     try:
-        shipment = (
-            db.query(DeliveryShipment)
-            .filter(DeliveryShipment.id == shipment_id)
-            .with_for_update()
-            .first()
-        )
-        if not shipment:
-            raise HTTPException(status_code=404, detail="Shipment not found")
+        order, shipment = lock_delivery_shipment_for_update(db, shipment_id)
         previous_status = shipment.status
         try:
-            order = transition_shipment(db, shipment, tracking_number, status)
+            transition_shipment(db, order, shipment, tracking_number, status)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         log_admin_action(
