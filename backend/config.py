@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     s3_region: str = "auto"
     s3_access_key_id: str = ""
     s3_secret_access_key: str = ""
+    s3_connect_timeout_seconds: int = 5
+    s3_read_timeout_seconds: int = 20
+    s3_max_attempts: int = 3
 
     feature_flags_enabled: bool = True
     scheduler_enabled: bool = False
@@ -123,6 +126,12 @@ class Settings(BaseSettings):
             raise ValueError("ADMIN_JWT_EXPIRE_MINUTES must be between 1 and 1440")
         if not 1 <= self.meilisearch_timeout_seconds <= 60:
             raise ValueError("MEILISEARCH_TIMEOUT_SECONDS must be between 1 and 60")
+        if not 1 <= self.s3_connect_timeout_seconds <= 60:
+            raise ValueError("S3_CONNECT_TIMEOUT_SECONDS must be between 1 and 60")
+        if not 1 <= self.s3_read_timeout_seconds <= 120:
+            raise ValueError("S3_READ_TIMEOUT_SECONDS must be between 1 and 120")
+        if not 1 <= self.s3_max_attempts <= 10:
+            raise ValueError("S3_MAX_ATTEMPTS must be between 1 and 10")
         if not 0 <= self.loyalty_max_redeem_percent <= 100:
             raise ValueError("LOYALTY_MAX_REDEEM_PERCENT must be between 0 and 100")
         if self.loyalty_point_value_rub <= 0 or self.loyalty_points_per_ruble < 0:
