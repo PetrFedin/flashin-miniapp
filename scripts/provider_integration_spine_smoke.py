@@ -236,8 +236,8 @@ def main() -> int:
 
         shipment, created = ensure_ready_shipment(db, paid_order, "pickup")
         assert created is True
-        transition_shipment(db, shipment, f"SPINE-{token}", "shipped")
-        transition_shipment(db, shipment, shipment.tracking_number, "delivered")
+        transition_shipment(db, paid_order, shipment, f"SPINE-{token}", "shipped")
+        transition_shipment(db, paid_order, shipment, shipment.tracking_number, "delivered")
         db.flush()
 
         ret = ReturnRequest(
