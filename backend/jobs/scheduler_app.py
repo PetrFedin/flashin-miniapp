@@ -6,6 +6,7 @@ from backend.config import get_settings
 from backend.database import utcnow_naive
 from backend.jobs.campaign_jobs import queue_due_campaigns
 from backend.jobs.event_jobs import run_event_dispatcher
+from backend.jobs.media_cleanup_jobs import process_media_cleanup_commands
 from backend.jobs.moysklad_jobs import run_moysklad_pipeline
 from backend.jobs.ops_jobs import create_inventory_snapshot, queue_abandoned_cart_notifications
 from backend.jobs.outbox_jobs import process_outbox
@@ -102,6 +103,12 @@ def main():
         "interval",
         minutes=5,
         id="sla",
+    )
+    scheduler.add_job(
+        lambda: _run_db_job("media-cleanup", process_media_cleanup_commands),
+        "interval",
+        minutes=1,
+        id="media-cleanup",
     )
     scheduler.add_job(
         lambda: _run_async_db_job("outbox", process_outbox),
