@@ -85,17 +85,24 @@ def update_tracking(
 
 def transition_shipment(
     db: Session,
+    order: Order,
     shipment: DeliveryShipment,
     tracking_number: str,
     status: str = "shipped",
 ) -> Order:
+    """Apply a shipment transition to an already Order-first locked root.
+
+    The caller must lock ``Order`` before ``DeliveryShipment``. This service
+    deliberately never re-queries or re-locks Order, preventing the historic
+    DeliveryShipment -> Order inversion from reappearing below the API layer.
+    """
+    if int(shipment.order_id) != int(order.id):
+        raise ValueError("Shipment changed while being updated")
+
     normalized_status = str(status or "").strip().lower()
     if normalized_status not in _SHIPMENT_TRANSITIONS:
         raise ValueError("Unsupported shipment status")
     if normalized_status == shipment.status:
-        order = db.query(Order).filter(Order.id == shipment.order_id).with_for_update().first()
-        if not order:
-            raise ValueError("Shipment is linked to a missing order")
         return order
 
     allowed = _SHIPMENT_TRANSITIONS.get(shipment.status, set())
@@ -103,15 +110,6 @@ def transition_shipment(
         raise ValueError(
             f"Shipment transition {shipment.status} -> {normalized_status} is not allowed"
         )
-
-    order = (
-        db.query(Order)
-        .filter(Order.id == shipment.order_id)
-        .with_for_update()
-        .first()
-    )
-    if not order:
-        raise ValueError("Shipment is linked to a missing order")
 
     if normalized_status == "shipped":
         normalized_tracking = str(tracking_number or "").strip()
