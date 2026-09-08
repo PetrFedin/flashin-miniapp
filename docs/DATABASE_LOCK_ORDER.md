@@ -2,7 +2,7 @@
 
 Status: IN_PROGRESS
 
-Audit baseline: `pilot/e2e-hardening-20260808` at `fee79ffbf4c8dbe3e0fa7c004b223842b664bf90` (merged PR #208).
+Audit baseline: `pilot/e2e-hardening-20260808` at `3b0ee1636f1e35e3433f725da9810966b879e8a5` (after merged PR #225).
 
 This document is the authoritative registry for database row-lock ordering discovered during the production concurrency audit. It records only orders that are supported by code and test evidence. It is intentionally **not** a global lock hierarchy yet.
 
@@ -24,6 +24,7 @@ A `PROVEN_HARDENED` edge may still be downgraded if later repository evidence re
 | `Order -> Payment` | `PROVEN_HARDENED` | `backend/services/payment_settlement.py` and payment finalization/reconciliation paths use the Order as the root before Payment state mutation | `backend/tests/test_payment_settlement_lock_order.py`; `scripts/checkout_settlement_lock_order_smoke.py`; reconciliation transaction-boundary regression coverage | PRs #194, #199 |
 | `Order -> ReturnRequest` | `PROVEN_HARDENED` | `backend/services/refund_locking.py`; return/refund API and webhook paths use Order-first root locking with relationship revalidation | `backend/tests/test_refund_return_lock_order.py`; `backend/tests/test_refund_terminal_state_integrity.py`; `scripts/refund_return_lock_order_smoke.py` | PR #200 |
 | `Order -> FulfillmentTask` | `PROVEN_HARDENED` | `backend/services/fulfillment_locking.py`; generic fulfillment update snapshots `task.order_id`, locks Order, then Task, then revalidates | `backend/tests/test_fulfillment_lock_order.py`; `scripts/fulfillment_lock_order_smoke.py`; provider integration spine | PR #205 / issue #204 |
+| `Order -> DeliveryShipment` | `PROVEN_HARDENED` on issue #226 hardening branch; merge remains gated | `backend/services/delivery_locking.py`; shipment PATCH snapshots `shipment.order_id`, locks Order, then DeliveryShipment, then revalidates; shipment create already locks Order before `ensure_ready_shipment` | `backend/tests/test_delivery_shipment_lock_order.py`; `scripts/delivery_shipment_lock_order_smoke.py` is mandatory CI evidence | issue #226 |
 | `CrmProfile -> LoyaltyRedemptionHold` | `PROVEN_HARDENED` | `backend/services/cart_adjustments.py`; `backend/services/loyalty.py::redeem_points` lock profile before reserved holds | `backend/tests/test_loyalty_lock_order.py`; `scripts/loyalty_lock_order_smoke.py` | PR #207 / issue #206 |
 | `ReferralAttribution -> ReferralCode -> CrmProfile(referrer)` | `PROVEN_HARDENED` | Payment settlement already uses attribution/code before referrer profile; `backend/services/refund_loyalty.py` now locks the rewarded-order referral root before any loyalty profile mutation | `backend/tests/test_referral_refund_lock_order.py`; `scripts/referral_refund_lock_order_smoke.py` through the mandatory PostgreSQL backend suite | PR #210 / issue #209 |
 
@@ -45,6 +46,7 @@ The table below is deliberately conservative. `UNVERIFIED` means no conclusion i
 | `Order <-> PaymentCreationAttempt` | `PROVEN_HARDENED` | `Order -> PaymentCreationAttempt` | payment creation | Keep invariant |
 | `Order <-> ReturnRequest` | `PROVEN_HARDENED` | `Order -> ReturnRequest` | approve/recovery/webhook/finalize | Keep invariant |
 | `Order <-> FulfillmentTask` | `PROVEN_HARDENED` | `Order -> FulfillmentTask` | fulfillment PATCH, payment settlement task creation | Keep invariant |
+| `Order <-> DeliveryShipment` | `PROVEN_HARDENED` on issue #226 branch; merge gate pending | `Order -> DeliveryShipment`; the old PATCH reverse edge was removed by root-first locking and relationship revalidation | delivery shipment create/idempotent ensure; shipment PATCH; cancellation/refund/fulfillment share the Order root but do not introduce a Shipment-first Order acquisition in the inspected delivery path | Require exact-head CI + Security before merge; preserve Order-first invariant |
 | `Order <-> SlaEvent` | `UNVERIFIED` | No safe conclusion yet | fulfillment SLA update, SLA jobs/admin | Trace locks and mutations |
 | `Order <-> OrderItem` | `UNVERIFIED` | No global conclusion yet | checkout creation, returns, fulfillment, cancellation | Trace all `OrderItem FOR UPDATE` sites |
 | `OrderItem <-> ProductVariant` | `UNVERIFIED` | No global conclusion yet | checkout reservation, fulfillment, returns, inventory | Verify deterministic variant ordering and reverse paths |
@@ -56,6 +58,19 @@ The table below is deliberately conservative. `UNVERIFIED` means no conclusion i
 | `Product <-> ProductVariant` | `UNVERIFIED` | No global conclusion yet | catalog admin, inventory, import/sync | Audit mutations and multi-row ordering |
 | `Product <-> pricing publication` | `UNVERIFIED` | No global conclusion yet | pricing publication/version services | Identify exact model/table and lock sites |
 | `Webhook outbox <-> domain rows` | `UNVERIFIED` | No global conclusion yet | payment/refund/domain event enqueue and workers | Audit producer/worker lock direction |
+
+## Confirmed cycle hardened by issue #226 branch
+
+### Delivery shipment create vs shipment transition
+
+The same `Order` and `DeliveryShipment` rows were reachable through opposite lock orders:
+
+- duplicate/idempotent shipment creation locks `Order` first and then checks the existing `DeliveryShipment FOR UPDATE` in `ensure_ready_shipment`;
+- shipment PATCH previously locked `DeliveryShipment` first and `transition_shipment` then locked its `Order`.
+
+This allowed transaction A to hold Order and wait on DeliveryShipment while transaction B held DeliveryShipment and waited on Order. The issue #226 branch changes PATCH to a non-locking `shipment.order_id` discovery followed by `Order FOR UPDATE -> DeliveryShipment FOR UPDATE` and relationship revalidation. `transition_shipment` consumes the already locked root and refuses a mismatched relationship instead of querying Order again.
+
+The PostgreSQL regression smoke holds the exact Order row, starts the real delivery lock helper, proves the worker blocks before entering the DeliveryShipment lock, and verifies a third NOWAIT acquisition of that Shipment succeeds. The old Shipment-first sequence would make the NOWAIT assertion fail. Merge remains forbidden until this smoke and the full exact-head CI/Security gates complete successfully.
 
 ## Confirmed cycle hardened by PR #210
 
@@ -94,7 +109,7 @@ The same principle applies to any multi-row lock set: derive a stable key set fi
 
 ## Failure semantics for root/child locking helpers
 
-For hardened root/child relationships such as Order/ReturnRequest and Order/FulfillmentTask:
+For hardened root/child relationships such as Order/ReturnRequest, Order/FulfillmentTask, and Order/DeliveryShipment:
 
 1. take a non-locking snapshot only to discover the root id when the child id is the API input;
 2. lock the root row first;
