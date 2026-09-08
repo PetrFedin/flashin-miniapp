@@ -146,12 +146,12 @@ def main() -> int:
                 AuditLog.admin_id == admin_id,
                 AuditLog.action == "media.upload",
                 AuditLog.entity_type == "media_asset",
-                AuditLog.entity_id == first_asset_id,
+                AuditLog.entity_id == str(first_asset_id),
             )
             .one()
         )
         assert persisted.storage_key == first_asset.storage_key
-        assert audit.entity_id == first_asset_id
+        assert audit.entity_id == str(first_asset_id)
         first_count = db.query(MediaAsset).count()
         db.rollback()
 
