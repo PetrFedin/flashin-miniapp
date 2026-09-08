@@ -22,6 +22,20 @@ _MAX_IMAGE_DIMENSION = 12_000
 _READ_CHUNK_BYTES = 1024 * 1024
 
 
+class MediaStorageWriteError(RuntimeError):
+    """Storage write failed after a generated object key existed.
+
+    A network/provider exception can be ambiguous: the provider may have
+    accepted the object even though the client did not receive the response.
+    Keeping the exact generated key lets the API create durable idempotent
+    cleanup work without accepting an operator-controlled delete target.
+    """
+
+    def __init__(self, storage_key: str, message: str = "media storage write failed"):
+        super().__init__(message)
+        self.storage_key = storage_key
+
+
 async def _read_limited(file: UploadFile) -> bytes:
     content = bytearray()
     while True:
@@ -135,13 +149,16 @@ async def save_media(file: UploadFile) -> dict:
 
     if settings.media_storage in {"s3", "r2"}:
         client = _s3_client()
-        client.put_object(
-            Bucket=settings.s3_bucket,
-            Key=storage_key,
-            Body=sanitized,
-            ContentType=content_type,
-            CacheControl="public, max-age=31536000, immutable",
-        )
+        try:
+            client.put_object(
+                Bucket=settings.s3_bucket,
+                Key=storage_key,
+                Body=sanitized,
+                ContentType=content_type,
+                CacheControl="public, max-age=31536000, immutable",
+            )
+        except Exception as exc:
+            raise MediaStorageWriteError(storage_key) from exc
         url = f"{settings.media_public_base_url.rstrip('/')}/{storage_key}"
     else:
         media_dir = Path(settings.media_local_dir).resolve()
