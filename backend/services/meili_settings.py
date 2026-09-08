@@ -1,12 +1,12 @@
 from ..config import get_settings
+from .meili import _client
 
 
 def configure_products_index() -> dict:
     settings = get_settings()
-    if not settings.meilisearch_enabled:
+    client = _client()
+    if not client:
         return {"enabled": False}
-    import meilisearch
-    client = meilisearch.Client(settings.meilisearch_url, settings.meilisearch_master_key)
     index = client.index(settings.meilisearch_products_index)
     index.update_searchable_attributes(["title", "sku", "brand", "category", "description"])
     index.update_filterable_attributes(["brand", "category", "gender", "active", "price"])
