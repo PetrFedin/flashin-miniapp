@@ -169,11 +169,12 @@ def test_s3_put_runs_after_request_transaction_ends_and_finalize_is_fresh(monkey
     assert upload.closed is True
 
 
-def test_storage_timeout_never_enters_db_finalize(monkeypatch):
+def test_storage_timeout_preserves_key_and_queues_cleanup_without_db_finalize(monkeypatch):
     initial_admin = SimpleNamespace(id=8)
     db = _Session(finalize_admin=SimpleNamespace(id=8, active=True))
     monkeypatch.setattr(media_api, "require_permission", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(media_storage, "get_settings", lambda: _s3_settings())
+    queued = []
 
     class _FailingS3:
         def put_object(self, **_kwargs):
@@ -181,11 +182,22 @@ def test_storage_timeout_never_enters_db_finalize(monkeypatch):
             raise TimeoutError("simulated object-store timeout")
 
     monkeypatch.setattr(media_storage, "_s3_client", lambda: _FailingS3())
+    monkeypatch.setattr(
+        media_api,
+        "enqueue_media_cleanup",
+        lambda _db, key, *, reason: queued.append((key, reason)),
+    )
     upload = _Upload(_png_bytes())
 
-    with pytest.raises(TimeoutError, match="object-store timeout"):
+    with pytest.raises(media_storage.MediaStorageWriteError) as exc_info:
         asyncio.run(media_api.upload_media(file=upload, admin=initial_admin, db=db))
 
+    assert isinstance(exc_info.value.__cause__, TimeoutError)
+    assert len(queued) == 1
+    cleanup_key, cleanup_reason = queued[0]
+    assert cleanup_key == exc_info.value.storage_key
+    assert len(cleanup_key.split(".", 1)[0]) == 32
+    assert cleanup_reason == "upload_finalize_failed"
     assert db.query_calls == 0
     assert db.commits == 0
     assert db.in_transaction() is False
