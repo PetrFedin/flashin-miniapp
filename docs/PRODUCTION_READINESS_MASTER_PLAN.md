@@ -2,7 +2,7 @@
 
 **Repository:** `PetrFedin/flashin-miniapp`  
 **Hardening baseline:** `pilot/e2e-hardening-20260808`  
-**Current verified pilot head:** `52454a34d0392005797208dce28d6f073510eeec`  
+**Current verified pilot head:** `cdfdc578dab4f1fb82b2d02e12730b03cb14ca25`  
 **Purpose:** authoritative, evidence-based launch-readiness register.  
 **Rule:** a capability is not `DONE` because code exists. `DONE` requires the evidence stated in this document. Unknown or externally unverifiable work is never promoted to `DONE`.
 
@@ -19,7 +19,7 @@
 
 **Current decision: NOT READY / NO-GO.**
 
-The hardening branch has dedicated concurrency proof for the known refund/return, fulfillment, checkout-loyalty and cross-order referral lock inversions, an evidence-based database lock-order registry, hardened CRM recompute authority, corrected MoySklad outbound database/provider transaction boundaries, and hardened Telegram notification delivery semantics for ambiguous provider outcomes. Material CI, Security, signed backup/restore, signed rollback and production Compose isolation automation is present. Launch remains forbidden until the remaining P0/P1 risks are audited and closed, issue #119 acceptance evidence is complete, production prerequisites are configured, protected-branch controls are enabled, and controlled external-live verification is complete.
+The hardening branch has dedicated concurrency proof for the known refund/return, fulfillment, checkout-loyalty and cross-order referral lock inversions, an evidence-based database lock-order registry, hardened CRM recompute authority, corrected MoySklad and Meilisearch database/provider boundaries, and hardened Telegram notification delivery semantics for ambiguous provider outcomes. Material CI, Security, signed backup/restore, signed rollback and production Compose isolation automation is present. Launch remains forbidden until the remaining P0/P1 risks are audited and closed, issue #119 acceptance evidence is complete, production prerequisites are configured, protected-branch controls are enabled, and controlled external-live verification is complete.
 
 ## Evidence discipline
 
@@ -48,11 +48,15 @@ If the evidence is only planned, the item remains `MISSING`, `PARTIAL`, `IN_PROG
 | P0 | CRM recompute authorization / loyalty balance ownership | DONE | Issue #211 fixed by PR #212. Exact head `771eceb1a6ebf4353d1fb7ccc1949e993d9bb595` passed CI #1396 and Security #260; merged as `e938bda53bbd2666b91f0a291712dda7d54ee488` | Keep global CRM mutation behind `crm.recompute`; loyalty balance remains ledger/service-owned |
 | P1 | MoySklad outbound DB/provider transaction boundary | DONE | Issue #213 fixed by PR #214. Exact head `4c89331769d6fdbbcdcf62287e6526e662d1413f` passed CI #1400 / `33980013694` and Security #265 / `33980013702`; merged as `2c3a18c618e19cec4420867ed16650a985652535` | Preserve snapshot -> end DB transaction -> provider HTTP -> fresh provider-command finalize boundary |
 | P1 | Telegram notification transaction/ambiguous-outcome safety | DONE | Issue #216 fixed by PR #217. Exact head `a406fb56faec4868a093e2fb45f78721c5fbdf8a` passed CI #1404 and Security #271; merged as `52454a34d0392005797208dce28d6f073510eeec`. PostgreSQL smoke asserts transaction-clean transport and ambiguous post-send failures enter `review_required` without automatic replay | Preserve sent/retryable/permanent/review-required classification, lease fencing and audited manual requeue |
-| P1 | Meilisearch admin DB/provider transaction boundary | IN_PROGRESS | Issue #219 is addressed by PR #220 from pilot `52454a34...`; branch materializes detached Product/Image documents, closes the read/request transaction before provider I/O, adds bounded SDK timeout, provider contract, runbook and regression tests | Exact PR-head CI + Security/release-safety must be green, then merge; only afterward promote to DONE |
+| P1 | Meilisearch admin DB/provider transaction boundary | DONE | Issue #219 fixed by PR #220. Exact head `5ccbca9c27ea938a08fb1619eb27d64cc5a44728` passed CI #1407 / `34262358911` and Security #275 / `34262359053`; CI included backend/full E2E, Docker build, signed backup/restore, signed full rollback and production Compose isolation. Merged as `cdfdc578dab4f1fb82b2d02e12730b03cb14ca25`; issue #219 closed completed | Preserve detached Product/Image snapshot -> end read transaction -> bounded Meilisearch I/O contract |
+| P1 | S3/R2 media DB/provider transaction boundary | IN_PROGRESS | Issue #221 is active in branch `fix/media-storage-transaction-boundary-20260908` from pilot `cdfdc578...`. The branch separates auth -> no-DB storage I/O -> fresh admin/permission revalidation/finalize, adds bounded Botocore policy, unit tests, real PostgreSQL smoke, provider contract and runbook | Open dedicated PR; exact-head full CI + Security/release-safety must be green before merge |
+| P1 | Media orphan/cleanup durability | MISSING | Issue #222 tracks durable recovery when post-upload DB finalize or compensating delete fails. Branch #221 removes the silent `except Exception: pass` behavior but does not claim durable retry/review/reconciliation | Dedicated issue/PR with durable cleanup state, replay/reconciliation, metrics and operator workflow |
+| P1 | S3/R2 async event-loop blocking | MISSING | Issue #223 proves synchronous boto3 `put_object`/`delete_object` still execute inside an async FastAPI path | Dedicated bounded offload/concurrency PR with event-loop progress test; do not mix into #221 |
+| P1 | Webhook outbox ambiguous post-send replay | MISSING | Issue #224: DB lease/HTTP boundary is transaction-clean, but any exception around `client.send` is retried and may redeliver an event already accepted by the receiver | Define receiver idempotency or quarantine ambiguous outcomes; preserve lease fencing/SSRF/signing/timeouts |
 | P1 | Systematic DB lock-order inventory | IN_PROGRESS | `docs/DATABASE_LOCK_ORDER.md` is merged and records proven, one-way, potential-cycle and unverified edges; repository-wide second pass is not complete | Audit every `FOR UPDATE` and relevant mutation path; every newly proven inversion gets a separate issue/PR/PostgreSQL smoke |
-| P1 | External-I/O transaction-boundary audit | PARTIAL | Payment creation, refund approval and MoySklad inbound paths were audited as transaction-safe; MoySklad outbound was fixed by #214; Telegram notification transport/ambiguous outcomes were hardened by #217; Meilisearch admin paths are under PR #220. Delivery, storage/email/webhook dispatch and remaining provider paths are not yet fully audited | Complete provider/network audit and eliminate long external I/O under DB transactions |
-| P0 | Main branch protection | BLOCKED_EXTERNAL | Fresh repository evidence still requires protected-main verification; launch policy treats `protected:false` as NO-GO | Admin enables PR requirement, required CI/Security, no force push/deletion; verify before launch |
-| P1 | Pilot/release branch protection | BLOCKED_EXTERNAL | Fresh pilot check at merge `52454a34...` reports `protected:false`; code policy is enforced by process/CI, not GitHub branch control | Add appropriate protected-branch/ruleset controls before this branch is used as a release authority |
+| P1 | External-I/O transaction-boundary audit | PARTIAL | Payment creation/refund and MoySklad inbound are audited safe; MoySklad outbound #214, Telegram #217 and Meilisearch #220 are hardened. Media storage #221 is in progress. Webhook outbox transaction boundary is clean but ambiguous replay remains #224. Delivery/email/CDN and remaining network paths are not yet fully certified | Continue provider/network audit and close each proven defect separately |
+| P0 | Main branch protection | BLOCKED_EXTERNAL | Launch policy treats unprotected main as NO-GO; repository administration is required | Admin enables PR requirement, required CI/Security, no force push/deletion; verify before launch |
+| P1 | Pilot/release branch protection | BLOCKED_EXTERNAL | Fresh pilot evidence at `cdfdc578...` reports `protected:false`; process/CI exists but GitHub branch control is not enabled | Add appropriate protected-branch/ruleset controls before this branch becomes release authority |
 | P1 | GitHub Dependency Graph | BLOCKED_EXTERNAL | Issue #196 remains open; Security fallback keeps Trivy vulnerability scanning mandatory | Enable Dependency Graph and prove differential dependency-review blocks a deliberately vulnerable dependency; retain Trivy defense in depth |
 | P0 | Launch gate #119 | IN_PROGRESS | Issue #119 remains open and is the authoritative real-launch gate | Close only after all live/provider/infrastructure/governance evidence is attached and independently verifiable |
 | P0 | Production domain/DNS/TLS/Telegram allowed domain | BLOCKED_EXTERNAL | Requires real deployment/domain ownership and provider configuration | Configure and verify public HTTPS, renewal, secure headers and Telegram allowed domain |
@@ -60,7 +64,7 @@ If the evidence is only planned, the item remains `MISSING`, `PARTIAL`, `IN_PROG
 | P0 | Production YooKassa credentials/callback | BLOCKED_EXTERNAL | Real financial-provider configuration cannot be proven with CI-only evidence | Configure secret backend/callback and perform explicitly approved controlled live smoke/reconciliation |
 | P0 | Production secret backend/rotation | BLOCKED_EXTERNAL | Requires deployment/admin secret-store configuration | Configure, document ownership/rotation and verify fail-closed production validation |
 | P0 | Controlled external-live smoke | BLOCKED_EXTERNAL | Real provider/domain action requires explicit approval; must not be simulated as proof | Execute only after infrastructure/provider prerequisites and record evidence in #119 |
-| P1 | CI backup/restore + release rollback automation | DONE | Exact-head CI #1400 proved signed PostgreSQL backup/restore, signed full release rollback and production Compose isolation; later full CI remains mandatory on every hardening PR | Do not equate CI drill with production DR; production restore evidence remains required |
+| P1 | CI backup/restore + release rollback automation | DONE | Exact-head CI #1407 again passed Docker build, signed PostgreSQL backup/restore, signed full release rollback and production Compose isolation | Do not equate CI drill with production DR; production restore evidence remains required |
 | P1 | Production DR operational proof | PARTIAL | DR documentation and CI drills exist; production RPO/RTO, off-host retention and production-like rehearsal are not yet fully evidenced | Define/approve RPO/RTO, retention/off-host storage and run production-like restore rehearsal |
 
 ## Proven lock-order baseline
@@ -94,7 +98,8 @@ This is **not** a complete global hierarchy. `docs/DATABASE_LOCK_ORDER.md` is th
 | #211/#212 CRM recompute authority | DONE | Dedicated mutation permission, loyalty ownership separation, atomic audit/commit + full gates |
 | #213/#214 MoySklad outbound transaction boundary | DONE | Provider boundary regression coverage + exact-head CI #1400 and Security #265 |
 | #216/#217 Telegram ambiguous delivery outcome hardening | DONE | Transaction-clean PostgreSQL transport smoke + fail-closed `review_required` outcome + exact-head CI #1404 and Security #271 |
-| #219/#220 Meilisearch admin transaction boundary | IN_PROGRESS | Detached primitive snapshots, bounded timeout, provider contract/runbook and regression coverage are in PR #220; merge evidence not yet complete |
+| #219/#220 Meilisearch admin transaction boundary | DONE | Detached primitive snapshots, bounded timeout, provider contract/runbook, regression coverage + exact-head CI #1407/Security #275; merged `cdfdc578...` |
+| #221 media S3/R2 transaction boundary | IN_PROGRESS | Prepare -> no-DB provider -> fresh finalize design plus PostgreSQL smoke is being completed in a dedicated branch |
 
 ### Phase 2 — database concurrency
 
@@ -120,22 +125,25 @@ Status: `PARTIAL`.
 
 Evidence completed so far:
 
-- payment creation path: DB prepare/commit -> provider I/O -> fresh finalize was audited as safe;
-- return approval/refund path: prepare is committed before provider refund call, then fresh `Order -> ReturnRequest` re-lock/revalidation;
-- MoySklad inbound synchronization commits before network page fetches / between durable writes;
-- MoySklad outbound `customerorder`, `demand` and `salesreturn` was corrected by PR #214 so all DB-derived state becomes a frozen snapshot and the read transaction ends before provider GET/POST;
-- Telegram notification transport was hardened by PR #217: provider I/O is transaction-clean and unknown/post-send ambiguous outcomes are quarantined as `review_required` rather than blindly replayed;
-- Meilisearch admin rebuild/configure boundary is `IN_PROGRESS` in PR #220 with detached primitive Product/Image snapshots, explicit transaction release and bounded SDK timeout.
+- payment creation: DB prepare/commit -> provider I/O -> fresh finalize audited safe;
+- return approval/refund: prepare committed before provider refund, followed by fresh `Order -> ReturnRequest` re-lock/revalidation;
+- MoySklad inbound: commits before network page fetches / between durable writes;
+- MoySklad outbound: PR #214 freezes DB-derived payload and ends the read transaction before provider GET/POST;
+- Telegram: PR #217 proves transaction-clean provider I/O and quarantines unknown/post-send outcomes as `review_required`;
+- Meilisearch: PR #220 proves detached Product/Image snapshot -> end DB read transaction -> bounded provider I/O;
+- webhook outbox: claim/lease commits before HTTP, so its DB/network boundary is clean; ambiguous post-send replay is separately tracked by #224;
+- S3/R2 media: issue #221 is the active boundary fix with bounded Botocore connect/read timeouts and total attempts plus real PostgreSQL smoke.
 
 Required work:
 
-- complete PR #220 through exact-head full CI + Security before merge;
-- audit delivery provider, email, S3/CDN/storage, external webhook dispatch and remaining network call sites;
-- prefer `prepare -> commit -> external call -> fresh-lock finalize` across provider boundaries;
-- define explicit connect/read/write/pool timeouts where the client supports distinct phases, otherwise use a documented bounded provider timeout;
-- bounded retry + backoff/jitter only for safe/idempotent operations;
-- provider idempotency keys and ambiguous-result reconciliation;
-- no row locks or implicit read transactions held while waiting seconds on external providers unless an audited exception is documented.
+- complete #221 through a dedicated PR and exact-head full CI + Security/release-safety;
+- close #222 durable orphan/cleanup recovery and #223 event-loop blocking separately;
+- resolve #224 webhook ambiguous-outcome semantics;
+- audit delivery provider, email, CDN purge and remaining network call sites;
+- prefer `prepare -> commit/end read transaction -> external call -> fresh-lock/fresh-auth finalize`;
+- use bounded retries only when replay is safe/idempotent;
+- define provider idempotency and ambiguous-result reconciliation;
+- never hold row locks or implicit DB read transactions while waiting on external providers unless a reviewed exception is documented.
 
 ### Phase 4 — financial integrity
 
@@ -152,7 +160,7 @@ Payment/refund/cancellation/promo/loyalty must prove:
 - operator-visible reason + immutable audit for manual financial resolution;
 - concurrency/failure tests for remaining critical races.
 
-CRM recompute no longer overwrites the loyalty balance after PR #212, but a separate schema/ORM audit remains required because current ORM models may still contain SQLAlchemy `Float` declarations for monetary fields while migration `0032_fixed_precision_money.py` changed physical PostgreSQL types. No schema conclusion is promoted until actual ORM-to-schema consistency is verified.
+CRM recompute no longer overwrites loyalty balance after PR #212, but a separate schema/ORM audit remains required because current ORM models still require verification against migration `0032_fixed_precision_money.py`. No ORM/schema money-type conclusion is promoted until actual consistency is proven.
 
 ### Phase 5 — inventory, fulfillment and delivery
 
@@ -172,7 +180,7 @@ Required launch-safe outcomes:
 
 Status: `PARTIAL`.
 
-Repository security automation is material and active. PR #212 also removed an accidental global-write permission escalation in CRM maintenance. Launch still requires completion/verification of:
+Repository security automation is material and active. Launch still requires completion/verification of:
 
 - remaining admin/customer auth hardening;
 - authoritative RBAC permission matrix and endpoint coverage;
@@ -187,19 +195,19 @@ Repository security automation is material and active. PR #212 also removed an a
 
 Status: `PARTIAL`.
 
-Verify/finish durable webhook intake, outbox/background jobs, lease ownership, retry limits, dead-letter/review queues, manual replay, provider reconciliation and scheduler singleton/fencing behavior. Critical business effects must not exist only in process memory. MoySklad provider-command finalization after external I/O now uses a fresh DB transaction with lease-token revalidation after PR #214. Telegram ambiguous outcomes now have an explicit operator review state and audited manual requeue after PR #217.
+Verify/finish durable webhook intake, outbox/background jobs, lease ownership, retry limits, dead-letter/review queues, manual replay, provider reconciliation and scheduler singleton/fencing behavior. Critical business effects must not exist only in process memory. MoySklad provider-command finalization uses a fresh DB transaction with lease-token revalidation after PR #214. Telegram ambiguous outcomes have an explicit operator review state after PR #217. Media orphan cleanup durability remains issue #222; webhook ambiguous delivery remains #224.
 
 ### Phase 8 — observability and operations
 
 Status: `PARTIAL`.
 
-Launch-critical paths require structured logs/correlation IDs, metrics, actionable operator errors, review queues, SLOs, alerts and runbooks. Raw log inspection alone is not an acceptable recovery interface for money/inventory failures. PR #220 adds a dedicated Meilisearch recovery runbook but does not by itself complete observability for all provider paths.
+Launch-critical paths require structured logs/correlation IDs, metrics, actionable operator errors, review queues, SLOs, alerts and runbooks. Raw log inspection alone is not an acceptable recovery interface for money/inventory failures. Meilisearch has a merged recovery runbook; the #221 branch adds an object-storage provider contract and media storage failure runbook, but #222 is still required for durable cleanup/review.
 
 ### Phase 9 — release/DR/staging
 
 Status: `PARTIAL`.
 
-CI already exercises substantial Docker/Compose/restore/rollback safety. Exact-head CI #1400 proved signed backup/restore, signed full release rollback and production Compose isolation, and later hardening PRs remain subject to the same workflow. Remaining work is to prove production-like staging, immutable release artifacts/digests, production secret/infrastructure configuration, operational backup policy and recovery rehearsal.
+CI exercises substantial Docker/Compose/restore/rollback safety. Exact-head CI #1407 again proved Docker build, signed backup/restore, signed full release rollback and production Compose isolation. Remaining work is to prove production-like staging, immutable release artifacts/digests, production secret/infrastructure configuration, operational backup policy and recovery rehearsal.
 
 ### Phase 10 — launch gate
 
@@ -233,14 +241,14 @@ Launch-critical capabilities require at least `L5`; payment/refund/provider boun
 
 | Artifact | Status | Notes |
 |---|---|---|
-| `docs/PRODUCTION_READINESS_MASTER_PLAN.md` | IN_PROGRESS | Authoritative register is synchronized through merged pilot `52454a34...` / PR #217 and records PR #220 as active evidence only |
+| `docs/PRODUCTION_READINESS_MASTER_PLAN.md` | IN_PROGRESS | Synchronized through merged pilot `cdfdc578...` / PR #220 and active media-storage risk #221 |
 | `docs/DATABASE_LOCK_ORDER.md` | DONE | Created and merged through PR #208. The artifact exists and is authoritative; the repository-wide concurrency audit recorded inside it remains `IN_PROGRESS` |
-| `docs/IDEMPOTENCY_CONTRACTS.md` | MISSING | Must map checkout/payment/refund/cancellation/webhooks/notification/shipment semantics |
+| `docs/IDEMPOTENCY_CONTRACTS.md` | MISSING | Must map checkout/payment/refund/cancellation/webhooks/notification/shipment semantics; issue #224 makes webhook receiver idempotency explicit priority |
 | `docs/RBAC_MATRIX.md` | MISSING | Must be derived from actual named permissions/endpoints, including `crm.recompute` from PR #212 |
 | `docs/SLO.md` | MISSING | Define measurable production objectives and owners |
 | `docs/ERROR_CATALOG.md` | MISSING | Actionable validation/conflict/provider/security/integrity/retry/review taxonomy |
-| provider contract docs | PARTIAL | MoySklad boundary evidence exists; PR #220 adds the Meilisearch contract. Audit/complete YooKassa, Telegram, delivery, storage/CDN and remaining providers before claiming completeness |
-| operational runbooks | PARTIAL | DR documentation exists; PR #220 adds Meilisearch recovery. Complete money/provider/webhook/inventory/secret incident runbooks and evidence |
+| provider contract docs | PARTIAL | Meilisearch contract is merged; #221 adds object-storage contract. YooKassa, Telegram, delivery, CDN and remaining provider contracts still require completion/verification |
+| operational runbooks | PARTIAL | DR and Meilisearch runbooks exist; #221 adds media storage failure guidance. Complete money/provider/webhook/inventory/secret incident runbooks and evidence |
 | `docs/PRODUCTION_READINESS_FINAL_REPORT.md` | MISSING | Create only at final launch-readiness pass |
 
 ## Pull-request gate
@@ -273,10 +281,10 @@ A PR must not be merged if required CI, Security, release rollback, restore or p
 
 ## Next execution sequence
 
-1. Complete PR #220 only after fresh exact-head CI + Security/release-safety gates; merge only when green, then promote Issue #219/Meilisearch boundary evidence to DONE in the next readiness synchronization.
-2. Continue the repository-wide lock-order second pass; keep the remaining loyalty hold/profile edge as `POTENTIAL_CYCLE` until a real opposite same-row cycle is proven or dismissed.
-3. Continue the transaction-boundary audit with delivery provider, email, S3/CDN/storage, webhook dispatch and remaining network paths; every proven network-under-transaction defect gets its own issue/branch/PR/tests.
-4. For every newly proven lock inversion or transaction-boundary defect, use a dedicated minimal PR with regression coverage and real PostgreSQL/provider-boundary proof where applicable.
+1. Open and complete the dedicated #221 media-storage transaction-boundary PR; merge only after exact-head CI + Security + PostgreSQL media smoke + Docker/release-safety are green.
+2. Continue the external-I/O audit. Prioritize issue #224 if webhook receiver idempotency is not contractually guaranteed; otherwise close media recovery #222 and event-loop blocking #223 in separate PRs by operational risk.
+3. Continue the repository-wide lock-order second pass; keep unproven candidate edges as `POTENTIAL_CYCLE`, not defects.
+4. For every newly proven lock inversion or provider-boundary defect, use a dedicated issue -> branch -> minimal PR -> regression/concurrency proof -> full gate.
 5. Audit ORM money types against the actual migrated PostgreSQL schema before changing financial types; separate schema corrections into focused PRs.
 6. Continue P0 -> P1 through financial integrity, cancellation, inventory/fulfillment, security, reliability, observability and release readiness.
 7. Keep #119 open until every real launch prerequisite is evidenced.
