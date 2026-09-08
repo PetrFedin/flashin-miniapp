@@ -41,6 +41,24 @@ def _reload_media_admin_for_finalize(db: Session, admin_id: int) -> AdminUser:
     return admin
 
 
+def _delete_uploaded_media_or_raise(storage_key: str) -> None:
+    """Compensate a failed DB finalize without hiding storage failure.
+
+    Durable retry/review for a failed compensation is tracked separately by
+    #222. Until that exists, a cleanup failure must remain an explicit error,
+    never a swallowed exception.
+    """
+
+    if not storage_key:
+        return
+    try:
+        delete_media(storage_key)
+    except Exception as cleanup_exc:
+        raise RuntimeError(
+            f"media cleanup failed for storage object {storage_key}"
+        ) from cleanup_exc
+
+
 @router.post("/upload", response_model=MediaOut)
 async def upload_media(
     file: UploadFile = File(...),
@@ -78,33 +96,15 @@ async def upload_media(
         return asset
     except ValueError as exc:
         db.rollback()
-        if storage_key:
-            try:
-                delete_media(storage_key)
-            except Exception:
-                # Durable cleanup/reconciliation is intentionally handled by
-                # the dedicated follow-up risk #222. Do not make the original
-                # request look successful when compensation itself fails.
-                pass
+        _delete_uploaded_media_or_raise(storage_key)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except HTTPException:
         db.rollback()
-        if storage_key:
-            try:
-                delete_media(storage_key)
-            except Exception:
-                # See #222: cleanup failure must become durable/observable in
-                # the dedicated recovery PR rather than being mixed into #221.
-                pass
+        _delete_uploaded_media_or_raise(storage_key)
         raise
     except Exception:
         db.rollback()
-        if storage_key:
-            try:
-                delete_media(storage_key)
-            except Exception:
-                # See #222. This PR changes only the DB/provider boundary.
-                pass
+        _delete_uploaded_media_or_raise(storage_key)
         raise
     finally:
         await file.close()
