@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     meilisearch_url: str = "http://meilisearch:7700"
     meilisearch_master_key: str = "change-me"
     meilisearch_products_index: str = "products"
+    meilisearch_timeout_seconds: int = 5
 
     referral_cookie_days: int = 30
     loyalty_max_redeem_percent: float = 30
@@ -120,6 +121,8 @@ class Settings(BaseSettings):
             raise ValueError("JWT_EXPIRE_MINUTES must be between 1 and 43200")
         if not 1 <= self.admin_jwt_expire_minutes <= 60 * 24:
             raise ValueError("ADMIN_JWT_EXPIRE_MINUTES must be between 1 and 1440")
+        if not 1 <= self.meilisearch_timeout_seconds <= 60:
+            raise ValueError("MEILISEARCH_TIMEOUT_SECONDS must be between 1 and 60")
         if not 0 <= self.loyalty_max_redeem_percent <= 100:
             raise ValueError("LOYALTY_MAX_REDEEM_PERCENT must be between 0 and 100")
         if self.loyalty_point_value_rub <= 0 or self.loyalty_points_per_ruble < 0:
