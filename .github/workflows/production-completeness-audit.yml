@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - audit/production-completeness-20260909
+  pull_request:
+    branches:
+      - pilot/e2e-hardening-20260808
   workflow_dispatch:
 
 permissions:
