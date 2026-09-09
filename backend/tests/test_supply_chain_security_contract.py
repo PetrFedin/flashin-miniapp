@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -11,12 +12,26 @@ def _text(relative_path: str) -> str:
 def test_security_workflow_uses_sha_pinned_actions_and_scans_every_release_image():
     security = _text(".github/workflows/security.yml")
 
-    assert "actions/checkout@" in security
-    assert "actions/setup-python@" in security
-    assert "actions/setup-node@" in security
-    assert "aquasecurity/trivy-action@" in security
-    assert "github/codeql-action/init@" in security
-    assert "github/codeql-action/analyze@" in security
+    # Assert the actions the Security workflow actually executes. Do not require
+    # setup-python/setup-node when the workflow has no runtime setup step; the
+    # supply-chain contract is that every external action reference is immutable.
+    for action in (
+        "actions/checkout@",
+        "actions/dependency-review-action@",
+        "github/codeql-action/init@",
+        "github/codeql-action/analyze@",
+        "aquasecurity/trivy-action@",
+        "actions/upload-artifact@",
+    ):
+        assert action in security
+
+    action_refs = re.findall(r"^\s*uses:\s*([^\s#]+)", security, flags=re.MULTILINE)
+    assert action_refs
+    for ref in action_refs:
+        if ref.startswith("./"):
+            continue
+        assert re.fullmatch(r"[^@\s]+@[0-9a-f]{40}", ref), f"Security action is not SHA-pinned: {ref}"
+
     assert "scanners: secret" in security
     assert "scanners: vuln" in security
     assert "severity: HIGH,CRITICAL" in security
