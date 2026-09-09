@@ -74,3 +74,13 @@ def test_caddy_publishes_one_authoritative_client_ip_to_backend():
 
     assert "header_up X-Forwarded-For {remote_host}" in caddyfile
     assert "header_up -X-Real-IP" in caddyfile
+
+
+def test_ingress_build_contract_requires_grpc_1_83_2_for_cve_2026_84445():
+    dockerfile = (ROOT / "Dockerfile.ingress").read_text(encoding="utf-8")
+
+    assert "google.golang.org/grpc@v1.83.2" in dockerfile
+    assert "google.golang.org/grpc v1.83.2" in dockerfile
+    assert "google.golang.org/grpc[[:space:]]+v1\\.83\\.2" in dockerfile
+    assert "google.golang.org/grpc@v1.83.1" not in dockerfile
+    assert "google.golang.org/grpc v1.83.1" not in dockerfile
