@@ -54,6 +54,7 @@ def test_scheduler_wraps_every_business_job_and_registers_one_logical_heartbeat(
         "abandoned-carts",
         "inventory-snapshot",
         "sla",
+        "media-cleanup",
     )
     async_jobs = (
         "outbox",
@@ -75,6 +76,7 @@ def test_scheduler_wraps_every_business_job_and_registers_one_logical_heartbeat(
     assert "seconds=30" in source
     assert "record_worker_heartbeat(SCHEDULER_WORKER)" in source
     assert source.count('id="payment-reconciliation"') == 1
+    assert source.count('id="media-cleanup"') == 1
     assert '"max_instances": 1' in source
 
 
