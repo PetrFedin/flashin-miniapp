@@ -25,7 +25,7 @@ from backend.customer_auth_models import CustomerSession, TelegramAuthConsumptio
 from backend.database import SessionLocal, engine
 from backend.models import Customer
 from backend.schemas import TelegramAuthIn
-from backend.security import get_current_customer, verify_telegram_init_data
+from backend.security import create_access_token, get_current_customer, verify_telegram_init_data
 from backend.services.customer_auth_security import (
     consume_telegram_assertion,
     is_customer_session_active,
@@ -88,9 +88,11 @@ def _bootstrap_once(token: str) -> dict:
         customer = get_current_customer(credentials=credentials, db=db)
         customer_id = int(customer.id)
 
-    replay_detail = _expect_unauthorized(
-        lambda: telegram_auth(TelegramAuthIn(init_data=raw), db=SessionLocal())
-    )
+    def replay() -> None:
+        with SessionLocal() as replay_db:
+            telegram_auth(TelegramAuthIn(init_data=raw), db=replay_db)
+
+    replay_detail = _expect_unauthorized(replay)
 
     with SessionLocal() as db:
         consumption = (
@@ -113,9 +115,21 @@ def _bootstrap_once(token: str) -> dict:
         assert result.access_token not in session.token_id_hash
         assert len(session.token_id_hash) == 64
 
+        # A cryptographically valid customer JWT that has no persisted session
+        # is not an authenticated session anymore.
+        unknown_token = create_access_token(customer_id)
+        unknown_credentials = HTTPAuthorizationCredentials(
+            scheme="Bearer",
+            credentials=unknown_token,
+        )
+        unknown_detail = _expect_unauthorized(
+            lambda: get_current_customer(credentials=unknown_credentials, db=db)
+        )
+
     return {
         "customer_id": customer_id,
         "replay_rejected": replay_detail,
+        "unknown_session_rejected": unknown_detail,
         "raw_credentials_persisted": False,
     }
 
@@ -165,16 +179,24 @@ def _session_revocation(token: str) -> dict:
         assert is_customer_session_active(db, customer_id, jti_one)
         assert is_customer_session_active(db, customer_id, jti_two)
 
+        credentials_one = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token_one)
+        credentials_two = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token_two)
+        assert get_current_customer(credentials=credentials_one, db=db).id == customer_id
+        assert get_current_customer(credentials=credentials_two, db=db).id == customer_id
+
         assert revoke_customer_session(db, customer_id, jti_one) == 1
         db.commit()
         assert not is_customer_session_active(db, customer_id, jti_one)
         assert is_customer_session_active(db, customer_id, jti_two)
+        _expect_unauthorized(lambda: get_current_customer(credentials=credentials_one, db=db))
+        assert get_current_customer(credentials=credentials_two, db=db).id == customer_id
         assert revoke_customer_session(db, customer_id, jti_one) == 0
 
         revoked = revoke_all_customer_sessions(db, customer_id)
         db.commit()
         assert revoked == 1
         assert not is_customer_session_active(db, customer_id, jti_two)
+        _expect_unauthorized(lambda: get_current_customer(credentials=credentials_two, db=db))
 
     return {"single_revoke_idempotent": True, "revoke_all_remaining": revoked}
 
