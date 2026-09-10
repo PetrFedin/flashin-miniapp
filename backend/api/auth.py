@@ -23,6 +23,16 @@ def _clean_profile_value(value: object, max_length: int) -> str:
     return str(value or "").strip()[:max_length]
 
 
+def _customer_id_from_token_payload(payload: dict) -> int:
+    try:
+        customer_id = int(payload.get("sub"))
+        if customer_id <= 0:
+            raise ValueError("invalid customer id")
+        return customer_id
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=401, detail="Invalid token") from exc
+
+
 def _ensure_crm_profile(db: Session, customer_id: int) -> CrmProfile:
     profile = (
         db.query(CrmProfile)
@@ -122,14 +132,18 @@ def me(customer: Customer = Depends(get_current_customer)):
 @router.post("/logout")
 def logout(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
-    customer: Customer = Depends(get_current_customer),
     db: Session = Depends(get_db),
 ):
-    if not credentials:
+    # Logout is intentionally idempotent for a cryptographically valid,
+    # unexpired customer JWT. It does not require the session to still be
+    # active, so retrying after a lost response returns success rather than
+    # turning a completed logout into a client-visible authentication error.
+    if not credentials or credentials.scheme.lower() != "bearer":
         raise HTTPException(status_code=401, detail="Bearer token required")
     payload = get_customer_token_payload(credentials.credentials)
+    customer_id = _customer_id_from_token_payload(payload)
     try:
-        revoke_customer_session(db, customer.id, str(payload.get("jti") or ""))
+        revoke_customer_session(db, customer_id, str(payload.get("jti") or ""))
         db.commit()
     except Exception:
         db.rollback()
