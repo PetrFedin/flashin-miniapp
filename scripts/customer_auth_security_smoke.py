@@ -20,7 +20,7 @@ if str(ROOT) not in sys.path:
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 
-from backend.api.auth import telegram_auth
+from backend.api.auth import logout, telegram_auth
 from backend.customer_auth_models import CustomerSession, TelegramAuthConsumption
 from backend.database import SessionLocal, engine
 from backend.models import Customer
@@ -31,7 +31,6 @@ from backend.services.customer_auth_security import (
     is_customer_session_active,
     issue_customer_session_token,
     revoke_all_customer_sessions,
-    revoke_customer_session,
 )
 
 BOT_TOKEN = "test-token"
@@ -115,13 +114,8 @@ def _bootstrap_once(token: str) -> dict:
         assert result.access_token not in session.token_id_hash
         assert len(session.token_id_hash) == 64
 
-        # A cryptographically valid customer JWT that has no persisted session
-        # is not an authenticated session anymore.
         unknown_token = create_access_token(customer_id)
-        unknown_credentials = HTTPAuthorizationCredentials(
-            scheme="Bearer",
-            credentials=unknown_token,
-        )
+        unknown_credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=unknown_token)
         unknown_detail = _expect_unauthorized(
             lambda: get_current_customer(credentials=unknown_credentials, db=db)
         )
@@ -184,13 +178,13 @@ def _session_revocation(token: str) -> dict:
         assert get_current_customer(credentials=credentials_one, db=db).id == customer_id
         assert get_current_customer(credentials=credentials_two, db=db).id == customer_id
 
-        assert revoke_customer_session(db, customer_id, jti_one) == 1
-        db.commit()
+        first_logout = logout(credentials=credentials_one, db=db)
+        second_logout = logout(credentials=credentials_one, db=db)
+        assert first_logout == {"ok": True}
+        assert second_logout == {"ok": True}
         assert not is_customer_session_active(db, customer_id, jti_one)
-        assert is_customer_session_active(db, customer_id, jti_two)
         _expect_unauthorized(lambda: get_current_customer(credentials=credentials_one, db=db))
         assert get_current_customer(credentials=credentials_two, db=db).id == customer_id
-        assert revoke_customer_session(db, customer_id, jti_one) == 0
 
         revoked = revoke_all_customer_sessions(db, customer_id)
         db.commit()
@@ -198,7 +192,7 @@ def _session_revocation(token: str) -> dict:
         assert not is_customer_session_active(db, customer_id, jti_two)
         _expect_unauthorized(lambda: get_current_customer(credentials=credentials_two, db=db))
 
-    return {"single_revoke_idempotent": True, "revoke_all_remaining": revoked}
+    return {"logout_retry_idempotent": True, "revoke_all_remaining": revoked}
 
 
 def _bootstrap_time_window(token: str) -> dict:
