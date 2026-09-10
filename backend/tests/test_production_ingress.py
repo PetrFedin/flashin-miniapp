@@ -74,3 +74,22 @@ def test_caddy_publishes_one_authoritative_client_ip_to_backend():
 
     assert "header_up X-Forwarded-For {remote_host}" in caddyfile
     assert "header_up -X-Real-IP" in caddyfile
+
+
+def test_ingress_build_contract_requires_patched_grpc_and_compatible_x_net():
+    dockerfile = (ROOT / "Dockerfile.ingress").read_text(encoding="utf-8")
+
+    assert "google.golang.org/grpc@v1.83.2" in dockerfile
+    assert "google.golang.org/grpc v1.83.2" in dockerfile
+    assert "google.golang.org/grpc[[:space:]]+v1\\.83\\.2" in dockerfile
+    assert "google.golang.org/grpc@v1.83.1" not in dockerfile
+    assert "google.golang.org/grpc v1.83.1" not in dockerfile
+
+    # grpc v1.83.2 requires x/net v0.58.0. Keep the module graph and built
+    # binary assertions aligned so a future downgrade fails repository tests
+    # before the image security scan has to rediscover it.
+    assert "golang.org/x/net@v0.58.0" in dockerfile
+    assert "golang.org/x/net v0.58.0" in dockerfile
+    assert "golang.org/x/net[[:space:]]+v0\\.58\\.0" in dockerfile
+    assert "golang.org/x/net@v0.57.0" not in dockerfile
+    assert "golang.org/x/net v0.57.0" not in dockerfile
