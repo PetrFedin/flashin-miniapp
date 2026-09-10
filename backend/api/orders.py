@@ -402,6 +402,7 @@ def checkout(
                 cart_item.quantity,
                 order_id=order.id,
                 source="checkout",
+                expected_product_id=int(cart_item.product_id),
             )
             product = cart_item.product
             quote = price_quotes.get(int(product.id))
