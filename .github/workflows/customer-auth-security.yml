@@ -63,3 +63,5 @@ jobs:
         run: alembic -c backend/alembic.ini upgrade head
       - name: Prove one-time Telegram bootstrap and revocable sessions
         run: python scripts/customer_auth_security_smoke.py
+      - name: Prove privacy deletion revokes every customer session
+        run: python scripts/privacy_session_revocation_smoke.py
