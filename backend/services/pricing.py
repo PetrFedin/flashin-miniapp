@@ -150,11 +150,16 @@ def load_product_price_quotes(
         return {}
 
     if lock:
+        # Products are commonly eager-loaded through CartItem before checkout
+        # reaches this lock. populate_existing is therefore part of the
+        # authoritative pricing contract: the row lock and the values used for
+        # the immutable order snapshot must describe the same committed state.
         locked_products = (
             db.query(Product)
             .filter(Product.id.in_(product_ids))
             .order_by(Product.id.asc())
             .with_for_update()
+            .populate_existing()
             .all()
         )
         supplied = {int(product.id): product for product in locked_products}
@@ -164,6 +169,12 @@ def load_product_price_quotes(
                 status_code=409,
                 detail={"message": "Product pricing changed during checkout", "product_ids": missing},
             )
+        inactive = [product_id for product_id in product_ids if not supplied[product_id].active]
+        if inactive:
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "Product is unavailable during checkout", "product_ids": inactive},
+            )
 
     merch_query = (
         db.query(ProductMerchandising)
@@ -171,7 +182,7 @@ def load_product_price_quotes(
         .order_by(ProductMerchandising.product_id.asc())
     )
     if lock:
-        merch_query = merch_query.with_for_update()
+        merch_query = merch_query.with_for_update().populate_existing()
     merch = {int(row.product_id): row for row in merch_query.all()}
 
     pricing_now = normalize_utc_naive(now) or utcnow_naive()
