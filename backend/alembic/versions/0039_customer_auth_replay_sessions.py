@@ -21,22 +21,10 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("assertion_digest", sa.String(length=64), nullable=False),
         sa.Column("query_id_digest", sa.String(length=64), nullable=True),
-        sa.Column("auth_date_epoch", sa.Integer(), nullable=False),
+        sa.Column("auth_date_epoch", sa.BigInteger(), nullable=False),
         sa.Column("consumed_at", sa.DateTime(), nullable=False),
         sa.UniqueConstraint("assertion_digest", name="uq_telegram_auth_consumptions_assertion_digest"),
         sa.UniqueConstraint("query_id_digest", name="uq_telegram_auth_consumptions_query_id_digest"),
-    )
-    op.create_index(
-        "ix_telegram_auth_consumptions_assertion_digest",
-        "telegram_auth_consumptions",
-        ["assertion_digest"],
-        unique=True,
-    )
-    op.create_index(
-        "ix_telegram_auth_consumptions_query_id_digest",
-        "telegram_auth_consumptions",
-        ["query_id_digest"],
-        unique=True,
     )
     op.create_index(
         "ix_telegram_auth_consumptions_auth_date_epoch",
@@ -65,12 +53,6 @@ def upgrade() -> None:
         sa.UniqueConstraint("token_id_hash", name="uq_customer_sessions_token_id_hash"),
     )
     op.create_index("ix_customer_sessions_customer_id", "customer_sessions", ["customer_id"])
-    op.create_index(
-        "ix_customer_sessions_token_id_hash",
-        "customer_sessions",
-        ["token_id_hash"],
-        unique=True,
-    )
     op.create_index("ix_customer_sessions_expires_at", "customer_sessions", ["expires_at"])
     op.create_index("ix_customer_sessions_revoked_at", "customer_sessions", ["revoked_at"])
     op.create_index("ix_customer_sessions_created_at", "customer_sessions", ["created_at"])
@@ -80,12 +62,9 @@ def downgrade() -> None:
     op.drop_index("ix_customer_sessions_created_at", table_name="customer_sessions")
     op.drop_index("ix_customer_sessions_revoked_at", table_name="customer_sessions")
     op.drop_index("ix_customer_sessions_expires_at", table_name="customer_sessions")
-    op.drop_index("ix_customer_sessions_token_id_hash", table_name="customer_sessions")
     op.drop_index("ix_customer_sessions_customer_id", table_name="customer_sessions")
     op.drop_table("customer_sessions")
 
     op.drop_index("ix_telegram_auth_consumptions_consumed_at", table_name="telegram_auth_consumptions")
     op.drop_index("ix_telegram_auth_consumptions_auth_date_epoch", table_name="telegram_auth_consumptions")
-    op.drop_index("ix_telegram_auth_consumptions_query_id_digest", table_name="telegram_auth_consumptions")
-    op.drop_index("ix_telegram_auth_consumptions_assertion_digest", table_name="telegram_auth_consumptions")
     op.drop_table("telegram_auth_consumptions")
