@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Prove checkout decisions use fresh authoritative PostgreSQL state.
 
-The smoke uses the real checkout handler and pricing/inventory services. A
-barrier is injected only after each concurrent checkout has loaded its cart so
-both SQLAlchemy Sessions hold the formerly-dangerous cached Product/Variant
-objects before authoritative locks are acquired. No payment/provider call is
-made.
+The smoke uses the real checkout handler and pricing/inventory services. The
+2-buyer case injects a barrier after each checkout has loaded its cart so both
+SQLAlchemy Sessions hold the formerly-dangerous cached Product/Variant objects
+before authoritative locks are acquired. The 10- and 20-buyer cases add
+contention coverage without requiring more simultaneous DB connections than the
+application pool. No payment/provider call is made.
 """
 
 from __future__ import annotations
@@ -63,13 +64,17 @@ def _product_fixture(token: str, suffix: str) -> tuple[int, int]:
         return int(product.id), int(variant.id)
 
 
-def _last_unit_race(token: str) -> dict:
-    product_id, variant_id = _product_fixture(token, "race")
+def _last_unit_race(token: str, buyer_count: int, *, synchronize_preload: bool) -> dict:
+    if buyer_count < 2:
+        raise ValueError("buyer_count must be at least 2")
+
+    race_token = f"{token}-{buyer_count}"
+    product_id, variant_id = _product_fixture(race_token, "race")
     customer_ids: list[int] = []
     with SessionLocal() as db:
-        for number in range(2):
+        for number in range(buyer_count):
             customer = Customer(
-                telegram_id=f"authoritative-{token}-{number}",
+                telegram_id=f"authoritative-{race_token}-{number}",
                 first_name="Authoritative",
             )
             db.add(customer)
@@ -88,23 +93,28 @@ def _last_unit_race(token: str) -> dict:
             customer_ids.append(int(customer.id))
         db.commit()
 
-    barrier = threading.Barrier(2, timeout=15)
+    # This barrier is reached before the first query, so even the 20-buyer case
+    # does not need 20 checked-out connections from SQLAlchemy's default pool.
+    start_barrier = threading.Barrier(buyer_count, timeout=20)
+    preload_barrier = threading.Barrier(buyer_count, timeout=20) if synchronize_preload else None
     original_loader = orders_api._load_locked_active_cart
 
     def synchronized_loader(db: Session, customer_id: int):
         cart = original_loader(db, customer_id)
-        barrier.wait()
+        if preload_barrier is not None:
+            preload_barrier.wait()
         return cart
 
     def checkout_customer(customer_id: int) -> dict:
         with SessionLocal() as db:
+            start_barrier.wait()
             customer = db.query(Customer).filter(Customer.id == customer_id).one()
             payload = CheckoutIn(
                 name="Authoritative Buyer",
                 phone="+79990000001",
                 delivery_type="pickup",
                 address="",
-                comment="authoritative-state-smoke",
+                comment=f"authoritative-state-smoke-{buyer_count}",
             )
             try:
                 order = orders_api.checkout(
@@ -122,8 +132,9 @@ def _last_unit_race(token: str) -> dict:
                     "detail": str(exc.detail),
                 }
 
-    with patch.object(orders_api, "_load_locked_active_cart", synchronized_loader):
-        with ThreadPoolExecutor(max_workers=2) as pool:
+    loader = synchronized_loader if synchronize_preload else original_loader
+    with patch.object(orders_api, "_load_locked_active_cart", loader):
+        with ThreadPoolExecutor(max_workers=buyer_count) as pool:
             outcomes = list(pool.map(checkout_customer, customer_ids))
 
     with SessionLocal() as db:
@@ -147,17 +158,20 @@ def _last_unit_race(token: str) -> dict:
         )
         ledger_quantity = sum(int(row.quantity) for row in reserve_movements)
         assert len(accepted) == 1, outcomes
-        assert len(rejected) == 1 and rejected[0]["status_code"] == 409, outcomes
+        assert len(rejected) == buyer_count - 1, outcomes
+        assert all(row["status_code"] == 409 for row in rejected), outcomes
         assert accepted_orders == 1
         assert int(variant.stock_qty) == 1
         assert int(variant.reserved_qty) == 1
         assert ledger_quantity == 1
         return {
+            "buyers": buyer_count,
             "accepted": len(accepted),
             "rejected": len(rejected),
             "stock_qty": int(variant.stock_qty),
             "reserved_qty": int(variant.reserved_qty),
             "reserve_ledger_quantity": ledger_quantity,
+            "forced_stale_preload": synchronize_preload,
         }
 
 
@@ -200,13 +214,17 @@ def main() -> int:
     if engine.dialect.name != "postgresql":
         raise RuntimeError("checkout authoritative-state smoke requires PostgreSQL")
     token = uuid.uuid4().hex[:16]
-    race = _last_unit_race(token)
+    races = {
+        2: _last_unit_race(token, 2, synchronize_preload=True),
+        10: _last_unit_race(token, 10, synchronize_preload=False),
+        20: _last_unit_race(token, 20, synchronize_preload=False),
+    }
     price = _price_refresh(token)
     inactive = _deactivation_refresh(token)
     print(
         {
             "status": "ok",
-            "last_unit_race": race,
+            "last_unit_races": races,
             "price_refresh": price,
             "deactivation_refresh": inactive,
             "provider_calls": 0,
