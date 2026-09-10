@@ -18,7 +18,10 @@ from .services.admin_security import is_admin_ip_allowed, is_admin_session_activ
 
 bearer = HTTPBearer(auto_error=False)
 
-_TELEGRAM_MAX_AGE_SECONDS = 60 * 60 * 24
+# Telegram bootstrap assertions are credentials, not long-lived sessions. Keep
+# their acceptance window short; the durable one-time consumption layer in
+# services.customer_auth_security prevents reuse even inside this window.
+_TELEGRAM_MAX_AGE_SECONDS = 10 * 60
 _TELEGRAM_CLOCK_SKEW_SECONDS = 5 * 60
 _PASSWORD_SCHEME = "pbkdf2_sha256"
 _PASSWORD_ITERATIONS = 310_000
@@ -80,7 +83,14 @@ def verify_telegram_init_data(init_data: str) -> dict:
     return parsed
 
 
-def _jwt_payload(subject: str, token_type: str, audience: str, expires_minutes: int) -> dict:
+def _jwt_payload(
+    subject: str,
+    token_type: str,
+    audience: str,
+    expires_minutes: int,
+    *,
+    token_id: str | None = None,
+) -> dict:
     if expires_minutes <= 0:
         raise ValueError("JWT expiration must be positive")
     now = datetime.now(timezone.utc)
@@ -89,7 +99,7 @@ def _jwt_payload(subject: str, token_type: str, audience: str, expires_minutes: 
         "type": token_type,
         "iss": _JWT_ISSUER,
         "aud": audience,
-        "jti": secrets.token_urlsafe(24),
+        "jti": token_id or secrets.token_urlsafe(24),
         "iat": now,
         "nbf": now,
         "exp": now + timedelta(minutes=expires_minutes),
@@ -125,7 +135,7 @@ def _decode_token(token: str, expected_type: str, audience: str) -> dict:
     return payload
 
 
-def create_access_token(customer_id: int) -> str:
+def create_access_token(customer_id: int, *, token_id: str | None = None) -> str:
     if customer_id <= 0:
         raise ValueError("Customer id must be positive")
     settings = get_settings()
@@ -134,8 +144,17 @@ def create_access_token(customer_id: int) -> str:
         "customer",
         _JWT_CUSTOMER_AUDIENCE,
         settings.jwt_expire_minutes,
+        token_id=token_id,
     )
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
+def get_customer_token_payload(token: str) -> dict:
+    return _decode_token(
+        token,
+        expected_type="customer",
+        audience=_JWT_CUSTOMER_AUDIENCE,
+    )
 
 
 def get_current_customer(
@@ -145,17 +164,18 @@ def get_current_customer(
     if not credentials or credentials.scheme.lower() != "bearer":
         raise HTTPException(status_code=401, detail="Bearer token required")
 
-    payload = _decode_token(
-        credentials.credentials,
-        expected_type="customer",
-        audience=_JWT_CUSTOMER_AUDIENCE,
-    )
+    payload = get_customer_token_payload(credentials.credentials)
     try:
         customer_id = int(payload.get("sub"))
         if customer_id <= 0:
             raise ValueError("invalid customer id")
     except (TypeError, ValueError):
         raise HTTPException(status_code=401, detail="Invalid token")
+
+    from .services.customer_auth_security import is_customer_session_active
+
+    if not is_customer_session_active(db, customer_id, str(payload.get("jti") or "")):
+        raise HTTPException(status_code=401, detail="Customer session is revoked or unknown")
 
     customer = db.query(Customer).filter(Customer.id == customer_id).first()
     if not customer or str(customer.telegram_id).startswith("deleted:"):
