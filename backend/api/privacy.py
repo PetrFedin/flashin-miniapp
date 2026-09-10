@@ -8,6 +8,7 @@ from ..models import ConsentRecord, Customer, PrivacyRequest
 from ..schemas import ConsentIn, PrivacyRequestCreate, PrivacyRequestOut
 from ..security import get_current_admin, get_current_customer
 from ..services.audit import log_admin_action
+from ..services.customer_auth_security import revoke_all_customer_sessions
 from ..services.privacy import (
     ALLOWED_CONSENT_TYPES,
     OPEN_PRIVACY_REQUEST_STATUSES,
@@ -191,6 +192,10 @@ def admin_process_privacy_request(
                 )
             }
         elif request.request_type == "delete":
+            # Privacy deletion is also an authentication boundary. Revoke all
+            # durable customer sessions in the same transaction before PII is
+            # anonymized so no previously-issued JWT remains usable.
+            revoke_all_customer_sessions(db, customer.id)
             result = anonymize_customer(db, customer)
         else:
             raise HTTPException(status_code=400, detail="Unsupported privacy request type")
