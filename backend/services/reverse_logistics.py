@@ -9,12 +9,9 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from ..database import utcnow_naive
-from ..models import InventoryMovement, Order, ProductVariant, ReturnRequest
-from ..reverse_logistics_models import (
-    ReturnLogisticsCase,
-    ReturnLogisticsEvent,
-    ReturnLogisticsItem,
-)
+from ..models import Order, ReturnRequest
+from ..reverse_logistics_models import ReturnLogisticsCase, ReturnLogisticsEvent, ReturnLogisticsItem
+from .inventory import _load_locked_variant, _record_movement
 
 _IDEMPOTENCY_RE = re.compile(r"^[A-Za-z0-9_.:-]{8,128}$")
 _DISPOSITIONS = frozenset({"resalable", "damaged", "quarantine"})
@@ -44,19 +41,10 @@ def _payload_hash(event_type: str, quantity: int, disposition: str = "") -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _existing_event(
-    db: Session,
-    *,
-    item_id: int,
-    idempotency_key: str,
-    expected_hash: str,
-) -> ReturnLogisticsEvent | None:
+def _existing_event(db: Session, *, item_id: int, idempotency_key: str, expected_hash: str) -> ReturnLogisticsEvent | None:
     event = (
         db.query(ReturnLogisticsEvent)
-        .filter(
-            ReturnLogisticsEvent.item_id == item_id,
-            ReturnLogisticsEvent.idempotency_key == idempotency_key,
-        )
+        .filter(ReturnLogisticsEvent.item_id == item_id, ReturnLogisticsEvent.idempotency_key == idempotency_key)
         .first()
     )
     if event is not None and event.payload_hash != expected_hash:
@@ -64,15 +52,9 @@ def _existing_event(
     return event
 
 
-def ensure_physical_case(
-    db: Session,
-    *,
-    ret: ReturnRequest,
-    order: Order,
-) -> ReturnLogisticsCase:
+def ensure_physical_case(db: Session, *, ret: ReturnRequest, order: Order) -> ReturnLogisticsCase:
     if int(ret.order_id) != int(order.id) or int(ret.customer_id) != int(order.customer_id):
         raise HTTPException(status_code=409, detail="Return request/order ownership mismatch")
-
     case = (
         db.query(ReturnLogisticsCase)
         .filter(ReturnLogisticsCase.return_request_id == ret.id)
@@ -83,7 +65,6 @@ def ensure_physical_case(
         return case
     if not order.items:
         raise HTTPException(status_code=409, detail="Order has no physical return items")
-
     case = ReturnLogisticsCase(
         return_request_id=ret.id,
         order_id=order.id,
@@ -97,14 +78,12 @@ def ensure_physical_case(
     for order_item in order.items:
         if int(order_item.quantity) <= 0:
             raise HTTPException(status_code=409, detail="Order item has invalid quantity")
-        db.add(
-            ReturnLogisticsItem(
-                case_id=case.id,
-                order_item_id=order_item.id,
-                variant_id=order_item.variant_id,
-                ordered_qty=int(order_item.quantity),
-            )
-        )
+        db.add(ReturnLogisticsItem(
+            case_id=case.id,
+            order_item_id=order_item.id,
+            variant_id=order_item.variant_id,
+            ordered_qty=int(order_item.quantity),
+        ))
     db.flush()
     return case
 
@@ -148,12 +127,7 @@ def _event(
 ) -> tuple[ReturnLogisticsEvent, bool]:
     key = _key(idempotency_key)
     digest = _payload_hash(event_type, quantity, disposition)
-    existing = _existing_event(
-        db,
-        item_id=item.id,
-        idempotency_key=key,
-        expected_hash=digest,
-    )
+    existing = _existing_event(db, item_id=item.id, idempotency_key=key, expected_hash=digest)
     if existing is not None:
         return existing, True
     event = ReturnLogisticsEvent(
@@ -174,9 +148,6 @@ def _event(
 
 
 def _refresh_case_from_db(db: Session, case: ReturnLogisticsCase) -> None:
-    # SessionLocal intentionally uses autoflush=False. Explicitly persist item
-    # counters before deriving case state from SQL so lifecycle projection and
-    # subsequent lock steps observe the same transaction truth.
     db.flush()
     items = db.query(ReturnLogisticsItem).filter(ReturnLogisticsItem.case_id == case.id).all()
     _refresh_case(case, items)
@@ -200,15 +171,8 @@ def authorize_item(
     if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity <= 0 or quantity > item.ordered_qty:
         raise HTTPException(status_code=409, detail="Authorized quantity is outside ordered quantity")
     event, idempotent = _event(
-        db,
-        case=case,
-        item=item,
-        event_type="authorized",
-        quantity=quantity,
-        disposition="",
-        idempotency_key=idempotency_key,
-        actor_admin_id=actor_admin_id,
-        reason=reason,
+        db, case=case, item=item, event_type="authorized", quantity=quantity, disposition="",
+        idempotency_key=idempotency_key, actor_admin_id=actor_admin_id, reason=reason,
     )
     if not idempotent:
         if item.authorized_qty:
@@ -253,15 +217,8 @@ def receive_item(
     if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity <= 0:
         raise HTTPException(status_code=400, detail="Received quantity must be positive")
     event, idempotent = _event(
-        db,
-        case=case,
-        item=item,
-        event_type="received",
-        quantity=quantity,
-        disposition="",
-        idempotency_key=idempotency_key,
-        actor_admin_id=actor_admin_id,
-        reason=reason,
+        db, case=case, item=item, event_type="received", quantity=quantity, disposition="",
+        idempotency_key=idempotency_key, actor_admin_id=actor_admin_id, reason=reason,
     )
     if not idempotent:
         if item.authorized_qty <= 0 or item.received_qty + quantity > item.authorized_qty:
@@ -292,15 +249,9 @@ def inspect_item(
     if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity <= 0:
         raise HTTPException(status_code=400, detail="Inspected quantity must be positive")
     event, idempotent = _event(
-        db,
-        case=case,
-        item=item,
-        event_type="inspected",
-        quantity=quantity,
-        disposition=normalized_disposition,
-        idempotency_key=idempotency_key,
-        actor_admin_id=actor_admin_id,
-        reason=reason,
+        db, case=case, item=item, event_type="inspected", quantity=quantity,
+        disposition=normalized_disposition, idempotency_key=idempotency_key,
+        actor_admin_id=actor_admin_id, reason=reason,
     )
     if not idempotent:
         if item.inspected_qty + quantity > item.received_qty:
@@ -308,23 +259,19 @@ def inspect_item(
         item.inspected_qty += quantity
         if normalized_disposition == "resalable":
             item.resalable_qty += quantity
-            variant = (
-                db.query(ProductVariant)
-                .filter(ProductVariant.id == item.variant_id)
-                .with_for_update()
-                .first()
-            )
-            if variant is None:
-                raise HTTPException(status_code=409, detail="Physical return variant no longer exists")
+            variant = _load_locked_variant(db, item.variant_id)
+            stock_before = int(variant.stock_qty)
+            reserved_before = int(variant.reserved_qty)
             variant.stock_qty += quantity
-            db.add(
-                InventoryMovement(
-                    variant_id=item.variant_id,
-                    order_id=case.order_id,
-                    kind="return",
-                    quantity=quantity,
-                    source=f"reverse_logistics_event:{event.id}",
-                )
+            _record_movement(
+                db,
+                order_id=int(case.order_id),
+                variant=variant,
+                kind="return",
+                quantity=quantity,
+                stock_before=stock_before,
+                reserved_before=reserved_before,
+                source=f"reverse_logistics_event:{event.id}",
             )
         elif normalized_disposition == "damaged":
             item.damaged_qty += quantity
