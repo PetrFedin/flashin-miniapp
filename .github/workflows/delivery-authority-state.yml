@@ -61,3 +61,5 @@ jobs:
         run: alembic -c backend/alembic.ini upgrade head
       - name: Prove delivery commercial authority
         run: python scripts/delivery_authority_state_smoke.py
+      - name: Prove durable provider booking lifecycle
+        run: python scripts/delivery_provider_booking_smoke.py
