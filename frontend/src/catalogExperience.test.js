@@ -73,8 +73,11 @@ test("Catalog+ overlays canonical scheduled pricing for products and recommendat
 });
 
 
-test("catalog API uses the authenticated FLASHIN session and canonical product share endpoint", () => {
-  assert.match(apiSource, /flashin_token/);
+test("catalog API uses the canonical revocable customer session and product share endpoint", () => {
+  assert.match(apiSource, /from "\.\/authSession\.js"/);
+  assert.match(apiSource, /getCustomerToken\(\)/);
+  assert.match(apiSource, /clearCustomerToken\(\)/);
+  assert.doesNotMatch(apiSource, /localStorage\.getItem\(["']flashin_token["']\)/);
   assert.match(apiSource, /Authorization/);
   assert.match(apiSource, /\/api\/catalog\/products/);
   assert.match(apiSource, /\/api\/catalog\/products\/\$\{Number\(productId\)\}\/share/);
