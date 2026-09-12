@@ -48,6 +48,30 @@ def test_semantically_identical_checkout_data_has_stable_fingerprint():
         comment="note",
     )
 
-    assert _checkout_request_fingerprint(**first.__dict__) == _checkout_request_fingerprint(
-        **second.__dict__
+    assert _checkout_request_fingerprint(
+        **first.__dict__,
+        delivery_quote_id="",
+    ) == _checkout_request_fingerprint(
+        **second.__dict__,
+        delivery_quote_id="",
     )
+
+
+def test_delivery_quote_identity_changes_checkout_fingerprint():
+    normalized = normalize_checkout_input(
+        name="Petr Fedin",
+        phone="+46 70 123 45 67",
+        delivery_type="courier",
+        address="Москва, Тверская улица, 1",
+        comment="",
+    )
+
+    first = _checkout_request_fingerprint(
+        **normalized.__dict__,
+        delivery_quote_id="dq-first",
+    )
+    second = _checkout_request_fingerprint(
+        **normalized.__dict__,
+        delivery_quote_id="dq-requote",
+    )
+    assert first != second
