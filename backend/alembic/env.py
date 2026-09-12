@@ -15,6 +15,7 @@ from backend import delivery_models  # noqa: F401
 from backend import payment_attempt_models  # noqa: F401
 from backend import pilot_models  # noqa: F401
 from backend import provider_models  # noqa: F401
+from backend import reverse_logistics_models  # noqa: F401
 from backend import (  # noqa: F401
     business_event_models,
     model_constraints,
