@@ -70,8 +70,15 @@ def delivery_provider_accepts_quotes(
     db: Session,
     provider_code: str,
     *,
-    lock: bool = False,
+    lock: bool = True,
 ) -> bool:
+    """Return whether a provider may back a customer quote.
+
+    Availability checks are serialized by default. Quote creation/acceptance and
+    tariff activation therefore cannot observe a provider half-way through an
+    administrative mode/active-state mutation. Callers that only need an
+    advisory, non-transactional view may opt out explicitly with ``lock=False``.
+    """
     try:
         return resolve_delivery_provider_mode(
             db,
