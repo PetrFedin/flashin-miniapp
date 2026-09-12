@@ -60,4 +60,4 @@ jobs:
       - name: Apply migrations
         run: alembic -c backend/alembic.ini upgrade head
       - name: Prove one-time Telegram bootstrap and revocable customer sessions
-        run: python scripts/customer_auth_state_smoke.py
+        run: PYTHONPATH=. python scripts/customer_auth_state_smoke.py
