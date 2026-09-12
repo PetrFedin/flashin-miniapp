@@ -1,7 +1,9 @@
+import { clearCustomerToken, getCustomerToken } from "./authSession.js";
+
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
 function authHeaders() {
-  const token = localStorage.getItem("flashin_token");
+  const token = getCustomerToken();
   return {
     "Content-Type": "application/json",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -22,7 +24,7 @@ async function catalogRequest(path, options = {}) {
     } catch {
       // Keep the bounded raw response as diagnostic text.
     }
-    if (response.status === 401) localStorage.removeItem("flashin_token");
+    if (response.status === 401) clearCustomerToken();
     throw new Error(detail || `Catalog request failed: ${response.status}`);
   }
   if (response.status === 204) return null;
