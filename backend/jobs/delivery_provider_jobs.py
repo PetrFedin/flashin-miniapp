@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import inspect
+import asyncio
 import json
 from typing import Any, Awaitable, Callable
 
@@ -16,7 +16,8 @@ from ..services.provider_commands import (
     finish_provider_command,
 )
 
-DeliveryBookingAdapter = Callable[[dict[str, Any]], Awaitable[str] | str]
+DELIVERY_BOOKING_TIMEOUT_SECONDS = 15
+DeliveryBookingAdapter = Callable[[dict[str, Any]], Awaitable[str]]
 
 
 class DeliveryBookingReviewRequired(RuntimeError):
@@ -47,13 +48,15 @@ async def _book(
         )
 
     try:
-        result = live_adapter(payload)
-        if inspect.isawaitable(result):
-            result = await result
+        # Carrier calls are async by contract and strictly bounded. Once a live
+        # booking request has been handed to the adapter, a timeout is ambiguous:
+        # the carrier may have accepted it even though FLASHIN did not receive
+        # the response. Never blind-retry that state and risk a duplicate booking.
+        result = await asyncio.wait_for(
+            live_adapter(payload),
+            timeout=DELIVERY_BOOKING_TIMEOUT_SECONDS,
+        )
     except TimeoutError as exc:
-        # A carrier may have accepted the request before the connection timed
-        # out. Blind retry could create a duplicate shipment, so stop for
-        # reconciliation rather than claiming failure or success.
         raise DeliveryBookingReviewRequired(
             "Live delivery booking timed out with an ambiguous provider outcome"
         ) from exc
