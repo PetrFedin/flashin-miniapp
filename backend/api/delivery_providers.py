@@ -118,13 +118,17 @@ def _validated_provider_config(config: dict) -> str:
             ),
         )
     normalized = dict(config)
-    mode = str(normalized.get("mode") or "manual").strip().lower()
-    if mode not in DELIVERY_PROVIDER_MODES:
-        raise HTTPException(
-            status_code=400,
-            detail="Delivery provider mode must be disabled, manual, sandbox or live",
-        )
-    normalized["mode"] = mode
+    # Historical provider metadata had no mode field. Absence already means
+    # manual at runtime, so do not mutate a safe legacy config merely to make
+    # that implicit default explicit. Normalize only an operator-supplied mode.
+    if "mode" in normalized:
+        mode = str(normalized.get("mode") or "manual").strip().lower()
+        if mode not in DELIVERY_PROVIDER_MODES:
+            raise HTTPException(
+                status_code=400,
+                detail="Delivery provider mode must be disabled, manual, sandbox or live",
+            )
+        normalized["mode"] = mode
     encoded = json.dumps(normalized, ensure_ascii=False, sort_keys=True)
     if len(encoded.encode("utf-8")) > _PROVIDER_CONFIG_MAX_BYTES:
         raise HTTPException(status_code=413, detail="Delivery provider config_json is too large")
