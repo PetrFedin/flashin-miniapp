@@ -257,9 +257,16 @@ def get_current_customer_context(
 
 
 def get_current_customer(
-    context: CustomerAuthContext = Depends(get_current_customer_context),
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    db: Session = Depends(get_db),
 ) -> Customer:
-    return context.customer
+    """Return the current customer while preserving the historic dependency API.
+
+    Direct callers and FastAPI routes keep the established
+    ``credentials=..., db=...`` contract; all access is nevertheless resolved
+    through the new persisted, revocable CustomerSession state.
+    """
+    return get_current_customer_context(credentials=credentials, db=db).customer
 
 
 def _legacy_password_hash(password: str) -> str:
