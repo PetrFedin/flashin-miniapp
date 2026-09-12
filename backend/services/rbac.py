@@ -5,6 +5,7 @@ from ..models import AdminRolePermission, AdminUser
 
 
 REFUNDS_WRITE_PERMISSION = "refunds.write"
+RETURNS_PHYSICAL_WRITE_PERMISSION = "returns.physical.write"
 DELIVERY_PROVIDERS_WRITE_PERMISSION = "delivery.providers.write"
 DELIVERY_TARIFFS_WRITE_PERMISSION = "delivery.tariffs.write"
 PAYMENT_RECONCILIATION_READ_PERMISSION = "payments.reconciliation.read"
@@ -25,6 +26,7 @@ DEFAULT_PERMISSIONS = {
         "orders.write",
         FULFILLMENT_READ_PERMISSION,
         "fulfillment.write",
+        RETURNS_PHYSICAL_WRITE_PERMISSION,
         "promo.write",
         "support.write",
         "showroom.read",
@@ -55,6 +57,7 @@ DEFAULT_PERMISSIONS = {
         "orders.read",
         FULFILLMENT_READ_PERMISSION,
         "fulfillment.write",
+        RETURNS_PHYSICAL_WRITE_PERMISSION,
         "media.write",
     },
 }
