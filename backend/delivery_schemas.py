@@ -44,6 +44,25 @@ class DeliveryQuoteOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class DeliveryBookingReconcileIn(BaseModel):
+    decision: str = Field(min_length=3, max_length=32)
+    external_id: str = Field(default="", max_length=255)
+    reason: str = Field(min_length=5, max_length=500)
+
+    @field_validator("decision")
+    @classmethod
+    def normalize_decision(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in {"confirmed", "not_booked"}:
+            raise ValueError("decision must be confirmed or not_booked")
+        return normalized
+
+    @field_validator("external_id", "reason")
+    @classmethod
+    def normalize_text(cls, value: str) -> str:
+        return " ".join(str(value or "").strip().split())
+
+
 class DeliveryZoneAuthorityCreate(BaseModel):
     name: str = Field(min_length=2, max_length=255)
     delivery_type: str = Field(default="courier", max_length=64)
