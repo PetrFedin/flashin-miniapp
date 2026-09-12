@@ -66,9 +66,18 @@ def resolve_delivery_provider_mode(
     return configured_delivery_provider_mode(provider)
 
 
-def delivery_provider_accepts_quotes(db: Session, provider_code: str) -> bool:
+def delivery_provider_accepts_quotes(
+    db: Session,
+    provider_code: str,
+    *,
+    lock: bool = False,
+) -> bool:
     try:
-        return resolve_delivery_provider_mode(db, provider_code) != "disabled"
+        return resolve_delivery_provider_mode(
+            db,
+            provider_code,
+            lock=lock,
+        ) != "disabled"
     except DeliveryProviderConfigurationError:
         return False
 
