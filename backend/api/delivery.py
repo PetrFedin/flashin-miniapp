@@ -8,6 +8,7 @@ from ..delivery_schemas import DeliveryZoneAuthorityCreate, DeliveryZoneAuthorit
 from ..models import DeliveryProvider, DeliveryZone
 from ..security import get_current_admin
 from ..services.audit import log_admin_action
+from ..services.delivery_provider_runtime import delivery_provider_accepts_quotes
 from ..services.rbac import DELIVERY_TARIFFS_WRITE_PERMISSION, require_permission
 
 router = APIRouter(prefix="/delivery", tags=["delivery"])
@@ -18,11 +19,34 @@ def _provider_exists(db: Session, code: str) -> bool:
     if normalized == "pickup":
         return True
     return (
-        db.query(DeliveryProvider)
-        .filter(DeliveryProvider.code == normalized, DeliveryProvider.active.is_(True))
+        db.query(DeliveryProvider.id)
+        .filter(DeliveryProvider.code == normalized)
         .first()
         is not None
     )
+
+
+def _provider_is_available(db: Session, code: str) -> bool:
+    normalized = str(code or "").strip().lower()
+    return delivery_provider_accepts_quotes(db, normalized)
+
+
+def _validate_provider_for_tariff(
+    db: Session,
+    *,
+    provider_code: str,
+    tariff_active: bool,
+) -> None:
+    if not _provider_exists(db, provider_code):
+        raise HTTPException(
+            status_code=409,
+            detail="Delivery provider must exist before it can be referenced by a tariff",
+        )
+    if tariff_active and not _provider_is_available(db, provider_code):
+        raise HTTPException(
+            status_code=409,
+            detail="Active delivery tariff requires an available provider mode",
+        )
 
 
 def _zone_payload(zone: DeliveryZone, rule: DeliveryZoneRule | None) -> dict:
@@ -73,8 +97,11 @@ def create_delivery_zone(
         raise HTTPException(status_code=400, detail="Pickup is a built-in service; configured zones are courier-only")
     provider_code = str(payload.provider_code or "").strip().lower()
     service_code = str(payload.service_code or "").strip().lower()
-    if not _provider_exists(db, provider_code):
-        raise HTTPException(status_code=409, detail="Delivery provider must exist and be active before tariff activation")
+    _validate_provider_for_tariff(
+        db,
+        provider_code=provider_code,
+        tariff_active=bool(payload.active),
+    )
 
     try:
         zone = DeliveryZone(
@@ -152,8 +179,12 @@ def update_delivery_zone(
 
         changes = payload.model_dump(exclude_unset=True)
         provider_code = str(changes.get("provider_code", rule.provider_code)).strip().lower()
-        if not _provider_exists(db, provider_code):
-            raise HTTPException(status_code=409, detail="Delivery provider must exist and be active before tariff activation")
+        target_active = bool(changes.get("active", zone.active))
+        _validate_provider_for_tariff(
+            db,
+            provider_code=provider_code,
+            tariff_active=target_active,
+        )
 
         before = _zone_payload(zone, rule)
         if "name" in changes:
