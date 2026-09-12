@@ -10,7 +10,8 @@ from sqlalchemy.orm import Session
 
 from ..database import utcnow_naive
 from ..delivery_models import DeliveryQuote, DeliveryShipmentAuthority, DeliveryZoneRule
-from ..models import DeliveryProvider, DeliveryShipment, DeliveryZone, Order
+from ..models import DeliveryShipment, DeliveryZone, Order
+from .delivery_provider_runtime import delivery_provider_accepts_quotes
 
 _MONEY_STEP = Decimal("0.01")
 _QUOTE_TTL_MINUTES = 30
@@ -40,14 +41,7 @@ def _money(value: object) -> Decimal:
 
 
 def _provider_is_active(db: Session, provider_code: str) -> bool:
-    if provider_code == "pickup":
-        return True
-    row = (
-        db.query(DeliveryProvider)
-        .filter(DeliveryProvider.code == provider_code, DeliveryProvider.active.is_(True))
-        .first()
-    )
-    return row is not None
+    return delivery_provider_accepts_quotes(db, provider_code)
 
 
 def _address_snapshot(*, country_code: str, region: str, city: str, postal_code: str, address_line: str) -> str:
