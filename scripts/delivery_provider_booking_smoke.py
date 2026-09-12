@@ -24,10 +24,11 @@ from backend.services.delivery_authority import (
     accept_quote_for_order,
     create_delivery_quote,
 )
+from backend.services.delivery_provider_runtime import reconcile_delivery_booking
 from backend.services.delivery_providers import ensure_ready_shipment, transition_shipment
 
 
-def _fixture(db, token: str, suffix: str, mode: str):
+def _fixture(db, token: str, suffix: str, mode: str, *, priority: int):
     provider_code = f"{suffix}-{token}"
     provider = DeliveryProvider(
         code=provider_code,
@@ -55,7 +56,7 @@ def _fixture(db, token: str, suffix: str, mode: str):
         DeliveryZoneRule(
             zone_id=zone.id,
             delivery_type="courier",
-            priority={"manual": 710001, "sandbox": 710002, "live": 710003, "disabled": 710004}[mode],
+            priority=priority,
             country_code="RU",
             region="",
             city=f"Тест-{suffix}-{token}",
@@ -114,13 +115,38 @@ def _booking_commands(db, shipment_id: int):
     )
 
 
+def _run_ambiguous_worker(db):
+    async def ambiguous_adapter(_payload):
+        await asyncio.sleep(0.05)
+        return "late-provider-success-must-not-be-recorded"
+
+    original_timeout = delivery_provider_jobs.DELIVERY_BOOKING_TIMEOUT_SECONDS
+    delivery_provider_jobs.DELIVERY_BOOKING_TIMEOUT_SECONDS = 0.01
+    try:
+        return asyncio.run(
+            delivery_provider_jobs.process_delivery_provider_commands(
+                db,
+                limit=20,
+                live_adapter=ambiguous_adapter,
+            )
+        )
+    finally:
+        delivery_provider_jobs.DELIVERY_BOOKING_TIMEOUT_SECONDS = original_timeout
+
+
 def main() -> int:
     if engine.dialect.name != "postgresql":
         raise RuntimeError("delivery provider booking smoke requires PostgreSQL")
 
     token = uuid.uuid4().hex[:10]
     with SessionLocal() as db:
-        manual_provider, manual_customer = _fixture(db, token, "manual", "manual")
+        manual_provider, manual_customer = _fixture(
+            db,
+            token,
+            "manual",
+            "manual",
+            priority=710001,
+        )
         manual_order, _ = _ready_order(
             db,
             manual_customer,
@@ -137,7 +163,13 @@ def main() -> int:
         assert manual_shipment.status == "shipped"
         db.commit()
 
-        sandbox_provider, sandbox_customer = _fixture(db, token, "sandbox", "sandbox")
+        sandbox_provider, sandbox_customer = _fixture(
+            db,
+            token,
+            "sandbox",
+            "sandbox",
+            priority=710002,
+        )
         sandbox_order, _ = _ready_order(
             db,
             sandbox_customer,
@@ -196,35 +228,30 @@ def main() -> int:
         assert sandbox_shipment.status == "shipped"
         db.commit()
 
-        live_provider, live_customer = _fixture(db, token, "live", "live")
+        # Ambiguous live timeout: operator confirms that the carrier did create
+        # the booking. Reconciliation updates the same durable command and only
+        # then may the shipment leave FLASHIN.
+        live_provider, live_customer = _fixture(
+            db,
+            token,
+            "live-confirm",
+            "live",
+            priority=710003,
+        )
         live_order, _ = _ready_order(
             db,
             live_customer,
-            city=f"Тест-live-{token}",
+            city=f"Тест-live-confirm-{token}",
         )
         live_shipment, _ = ensure_ready_shipment(db, live_order, live_provider.code)
         db.commit()
 
-        async def ambiguous_adapter(_payload):
-            await asyncio.sleep(0.05)
-            return "late-provider-success-must-not-be-recorded"
-
-        original_timeout = delivery_provider_jobs.DELIVERY_BOOKING_TIMEOUT_SECONDS
-        delivery_provider_jobs.DELIVERY_BOOKING_TIMEOUT_SECONDS = 0.01
-        try:
-            live_result = asyncio.run(
-                delivery_provider_jobs.process_delivery_provider_commands(
-                    db,
-                    limit=20,
-                    live_adapter=ambiguous_adapter,
-                )
-            )
-        finally:
-            delivery_provider_jobs.DELIVERY_BOOKING_TIMEOUT_SECONDS = original_timeout
-
+        live_result = _run_ambiguous_worker(db)
         assert live_result["claimed"] == 1
         assert live_result["review_required"] == 1
         live_command = _booking_commands(db, live_shipment.id)[0]
+        live_command_id = int(live_command.id)
+        live_idempotency_key = str(live_command.idempotency_key)
         assert live_command.status == "review_required"
         assert not live_command.external_id
         assert "ambiguous" in live_command.last_error.lower()
@@ -243,7 +270,105 @@ def main() -> int:
         else:
             raise AssertionError("Ambiguous live booking must block shipment")
 
-        disabled_provider, disabled_customer = _fixture(db, token, "disabled", "disabled")
+        confirmed_external_id = f"carrier-confirmed-{token}"
+        reconciled = reconcile_delivery_booking(
+            db,
+            shipment_id=live_shipment.id,
+            decision="confirmed",
+            external_id=confirmed_external_id,
+        )
+        assert int(reconciled.id) == live_command_id
+        assert reconciled.idempotency_key == live_idempotency_key
+        assert reconciled.status == "sent"
+        assert reconciled.external_id == confirmed_external_id
+        assert len(_booking_commands(db, live_shipment.id)) == 1
+        transition_shipment(
+            db,
+            live_order,
+            live_shipment,
+            f"LIVE-{token}",
+            "shipped",
+        )
+        assert live_shipment.status == "shipped"
+        db.commit()
+
+        # Second ambiguous booking: operator proves no carrier booking exists.
+        # FLASHIN may retry, but only by returning the SAME durable command to
+        # pending. A second booking command/idempotency identity is forbidden.
+        retry_provider, retry_customer = _fixture(
+            db,
+            token,
+            "live-retry",
+            "live",
+            priority=710004,
+        )
+        retry_order, _ = _ready_order(
+            db,
+            retry_customer,
+            city=f"Тест-live-retry-{token}",
+        )
+        retry_shipment, _ = ensure_ready_shipment(db, retry_order, retry_provider.code)
+        db.commit()
+
+        retry_result = _run_ambiguous_worker(db)
+        assert retry_result["claimed"] == 1
+        assert retry_result["review_required"] == 1
+        retry_command = _booking_commands(db, retry_shipment.id)[0]
+        retry_command_id = int(retry_command.id)
+        retry_idempotency_key = str(retry_command.idempotency_key)
+        retry_attempts_before = int(retry_command.attempts)
+        assert retry_command.status == "review_required"
+
+        reconciled_retry = reconcile_delivery_booking(
+            db,
+            shipment_id=retry_shipment.id,
+            decision="not_booked",
+        )
+        assert int(reconciled_retry.id) == retry_command_id
+        assert reconciled_retry.idempotency_key == retry_idempotency_key
+        assert reconciled_retry.status == "pending"
+        assert int(reconciled_retry.attempts) == retry_attempts_before
+        assert len(_booking_commands(db, retry_shipment.id)) == 1
+        db.commit()
+
+        async def successful_live_adapter(_payload):
+            return f"carrier-retry-success-{token}"
+
+        retry_after_reconciliation = asyncio.run(
+            delivery_provider_jobs.process_delivery_provider_commands(
+                db,
+                limit=20,
+                live_adapter=successful_live_adapter,
+            )
+        )
+        assert retry_after_reconciliation["claimed"] == 1
+        assert retry_after_reconciliation["sent"] == 1
+        db.expire_all()
+        retry_command = _booking_commands(db, retry_shipment.id)[0]
+        assert int(retry_command.id) == retry_command_id
+        assert retry_command.idempotency_key == retry_idempotency_key
+        assert retry_command.status == "sent"
+        assert retry_command.external_id == f"carrier-retry-success-{token}"
+        assert len(_booking_commands(db, retry_shipment.id)) == 1
+        retry_order = db.query(Order).filter(Order.id == retry_order.id).one()
+        retry_shipment = db.query(type(retry_shipment)).filter(type(retry_shipment).id == retry_shipment.id).one()
+        transition_shipment(
+            db,
+            retry_order,
+            retry_shipment,
+            f"RETRY-{token}",
+            "shipped",
+        )
+        assert retry_shipment.status == "shipped"
+        db.commit()
+
+        disabled_provider, disabled_customer = _fixture(
+            db,
+            token,
+            "disabled",
+            "disabled",
+            priority=710005,
+        )
         try:
             create_delivery_quote(
                 db,
@@ -268,6 +393,8 @@ def main() -> int:
                 "sandbox_commands": 1,
                 "sandbox_external_id": sandbox_external_id,
                 "live_timeout": "review_required",
+                "confirmed_reconciliation": confirmed_external_id,
+                "not_booked_reconciliation": "same_command_retried",
                 "disabled_provider": disabled_state,
                 "fake_live_success": False,
             },
