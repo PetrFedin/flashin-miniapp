@@ -53,6 +53,7 @@ async function mockApi(page) {
       body: JSON.stringify(body),
     });
     if (path === "/api/auth/telegram" && method === "POST") return json({ access_token: "startapp-token" });
+    if (path === "/api/auth/me" && method === "GET") return json({ id: 101, telegram_id: "101", first_name: "Pilot", username: "" });
     if (path === "/api/catalog/products/41" && method === "GET") return json(product);
     if (path === "/api/catalog/pricing" && method === "GET") return json([pricing]);
     if (path === "/api/products" && method === "GET") return json([product]);
