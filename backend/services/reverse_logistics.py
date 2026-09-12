@@ -173,6 +173,16 @@ def _event(
     return event, False
 
 
+def _refresh_case_from_db(db: Session, case: ReturnLogisticsCase) -> None:
+    # SessionLocal intentionally uses autoflush=False. Explicitly persist item
+    # counters before deriving case state from SQL so lifecycle projection and
+    # subsequent lock steps observe the same transaction truth.
+    db.flush()
+    items = db.query(ReturnLogisticsItem).filter(ReturnLogisticsItem.case_id == case.id).all()
+    _refresh_case(case, items)
+    db.flush()
+
+
 def authorize_item(
     db: Session,
     *,
@@ -204,12 +214,12 @@ def authorize_item(
         if item.authorized_qty:
             raise HTTPException(status_code=409, detail="Physical return item is already authorized")
         item.authorized_qty = quantity
-        items = db.query(ReturnLogisticsItem).filter(ReturnLogisticsItem.case_id == case.id).all()
-        _refresh_case(case, items)
+        _refresh_case_from_db(db, case)
     return PhysicalMutationResult(case, item, event, idempotent)
 
 
 def mark_in_transit(db: Session, *, case_id: int) -> ReturnLogisticsCase:
+    db.flush()
     case = db.query(ReturnLogisticsCase).filter(ReturnLogisticsCase.id == case_id).with_for_update().first()
     if case is None:
         raise HTTPException(status_code=404, detail="Physical return case not found")
@@ -222,6 +232,7 @@ def mark_in_transit(db: Session, *, case_id: int) -> ReturnLogisticsCase:
         raise HTTPException(status_code=409, detail="Only an authorized physical return can enter transit")
     case.status = "in_transit"
     case.updated_at = utcnow_naive()
+    db.flush()
     return case
 
 
@@ -256,8 +267,7 @@ def receive_item(
         if item.authorized_qty <= 0 or item.received_qty + quantity > item.authorized_qty:
             raise HTTPException(status_code=409, detail="Received quantity exceeds authorized physical return")
         item.received_qty += quantity
-        items = db.query(ReturnLogisticsItem).filter(ReturnLogisticsItem.case_id == case.id).all()
-        _refresh_case(case, items)
+        _refresh_case_from_db(db, case)
     return PhysicalMutationResult(case, item, event, idempotent)
 
 
@@ -320,12 +330,12 @@ def inspect_item(
             item.damaged_qty += quantity
         else:
             item.quarantine_qty += quantity
-        items = db.query(ReturnLogisticsItem).filter(ReturnLogisticsItem.case_id == case.id).all()
-        _refresh_case(case, items)
+        _refresh_case_from_db(db, case)
     return PhysicalMutationResult(case, item, event, idempotent)
 
 
 def physical_case_summary(db: Session, case: ReturnLogisticsCase) -> dict[str, object]:
+    db.flush()
     items = (
         db.query(ReturnLogisticsItem)
         .filter(ReturnLogisticsItem.case_id == case.id)
