@@ -9,6 +9,11 @@ from ..schemas import DeliveryProviderIn, DeliveryProviderOut, DeliveryShipmentO
 from ..security import get_current_admin
 from ..services.audit import log_admin_action
 from ..services.delivery_locking import lock_delivery_shipment_for_update
+from ..services.delivery_provider_runtime import (
+    DELIVERY_PROVIDER_MODES,
+    DeliveryProviderConfigurationError,
+    configured_delivery_provider_mode,
+)
 from ..services.delivery_providers import ensure_ready_shipment, transition_shipment
 from ..services.rbac import DELIVERY_PROVIDERS_WRITE_PERMISSION, require_permission
 
@@ -42,12 +47,18 @@ _SENSITIVE_PROVIDER_CONFIG_SUFFIXES = (
 
 
 def _public_provider(provider: DeliveryProvider) -> dict:
+    try:
+        mode = configured_delivery_provider_mode(provider)
+    except DeliveryProviderConfigurationError:
+        mode = "invalid"
     return {
         "id": provider.id,
         "code": provider.code,
         "name": provider.name,
         "active": provider.active,
-        "config_json": "{}",
+        # Secrets are forbidden in config_json; expose only the operational mode
+        # so operators can distinguish disabled/manual/sandbox/live safely.
+        "config_json": json.dumps({"mode": mode}, sort_keys=True),
     }
 
 
@@ -80,7 +91,15 @@ def _validated_provider_config(config: dict) -> str:
                 "use secret-managed provider configuration"
             ),
         )
-    encoded = json.dumps(config, ensure_ascii=False, sort_keys=True)
+    normalized = dict(config)
+    mode = str(normalized.get("mode") or "manual").strip().lower()
+    if mode not in DELIVERY_PROVIDER_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail="Delivery provider mode must be disabled, manual, sandbox or live",
+        )
+    normalized["mode"] = mode
+    encoded = json.dumps(normalized, ensure_ascii=False, sort_keys=True)
     if len(encoded.encode("utf-8")) > _PROVIDER_CONFIG_MAX_BYTES:
         raise HTTPException(status_code=413, detail="Delivery provider config_json is too large")
     return encoded
@@ -119,6 +138,7 @@ def upsert_provider(
             "code": row.code,
             "name": row.name,
             "active": row.active,
+            "provider_mode": configured_delivery_provider_mode(row),
             "config_changed": True,
         },
     )
