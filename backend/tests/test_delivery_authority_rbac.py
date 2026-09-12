@@ -4,8 +4,12 @@ import pytest
 from fastapi import HTTPException
 
 from backend.api.delivery import create_delivery_zone, update_delivery_zone
-from backend.api.delivery_providers import upsert_provider
-from backend.delivery_schemas import DeliveryZoneAuthorityCreate, DeliveryZoneAuthorityUpdate
+from backend.api.delivery_providers import reconcile_shipment_booking, upsert_provider
+from backend.delivery_schemas import (
+    DeliveryBookingReconcileIn,
+    DeliveryZoneAuthorityCreate,
+    DeliveryZoneAuthorityUpdate,
+)
 from backend.models import AdminRolePermission
 from backend.schemas import DeliveryProviderIn
 from backend.services.rbac import (
@@ -73,5 +77,21 @@ def test_low_privilege_admin_cannot_mutate_delivery_provider_config(role):
 
     with pytest.raises(HTTPException) as error:
         upsert_provider(payload, admin=admin, db=db)
+    assert error.value.status_code == 403
+    assert DELIVERY_PROVIDERS_WRITE_PERMISSION in str(error.value.detail)
+
+
+@pytest.mark.parametrize("role", ["manager", "support", "warehouse"])
+def test_low_privilege_admin_cannot_reconcile_ambiguous_delivery_booking(role):
+    db = _PermissionOnlyDb()
+    admin = SimpleNamespace(role=role)
+    payload = DeliveryBookingReconcileIn(
+        decision="confirmed",
+        external_id="carrier-booking-123",
+        reason="Verified directly in carrier portal",
+    )
+
+    with pytest.raises(HTTPException) as error:
+        reconcile_shipment_booking(123, payload, admin=admin, db=db)
     assert error.value.status_code == 403
     assert DELIVERY_PROVIDERS_WRITE_PERMISSION in str(error.value.detail)
