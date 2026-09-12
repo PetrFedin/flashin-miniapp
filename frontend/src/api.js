@@ -153,9 +153,12 @@ export async function telegramAuth(initData) {
       }
     }
 
+    // /auth/telegram is itself the authoritative transaction that verifies the
+    // Telegram assertion, persists CustomerSession and returns its bearer. Do
+    // not add a redundant /auth/me round-trip here. /auth/me is the authority
+    // for restoring an already-issued session on reload/provider return.
     const data = await exchangeTelegramInitData(initData);
-    const customer = await getCurrentCustomer();
-    return { ...data, customer, restored: false };
+    return { ...data, customer: null, restored: false };
   })();
 
   customerAuthInFlight = operation;
