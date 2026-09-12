@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, joinedload
 from ..checkout_models import CheckoutAttempt
 from ..config import get_settings
 from ..database import get_db
+from ..delivery_schemas import DeliveryCheckoutIn
 from ..models import (
     Cart,
     CartItem,
@@ -20,10 +21,15 @@ from ..models import (
     OrderItem,
     PromoCode,
 )
-from ..schemas import CheckoutIn, OrderOut
+from ..schemas import OrderOut
 from ..security import get_current_customer
 from ..services.checkout_validation import normalize_checkout_input
-from ..services.delivery import calculate_delivery_price
+from ..services.delivery_authority import (
+    DeliveryAuthorityError,
+    accept_quote_for_order,
+    create_delivery_quote,
+    lock_checkout_quote,
+)
 from ..services.inventory import reserve_variant
 from ..services.pilot_runtime import acquire_pilot_checkout, record_pilot_order
 from ..services.pricing import load_product_price_quotes
@@ -73,11 +79,13 @@ def _checkout_request_fingerprint(
     delivery_type: str,
     address: str,
     comment: str,
+    delivery_quote_id: str,
 ) -> str:
     canonical = json.dumps(
         {
             "address": address,
             "comment": comment,
+            "delivery_quote_id": delivery_quote_id,
             "delivery_type": delivery_type,
             "name": name,
             "phone": phone,
@@ -272,9 +280,50 @@ def _lock_and_validate_loyalty(
     return requested_points, loyalty_discount, current_hold
 
 
+def _checkout_delivery_quote(
+    db: Session,
+    *,
+    customer_id: int,
+    quote_public_id: str,
+    delivery_type: str,
+    address: str,
+):
+    try:
+        if quote_public_id:
+            quote = lock_checkout_quote(
+                db,
+                customer_id=customer_id,
+                quote_public_id=quote_public_id,
+                delivery_type=delivery_type,
+                submitted_address=address,
+            )
+        elif delivery_type == "pickup":
+            quote = create_delivery_quote(
+                db,
+                customer_id=customer_id,
+                delivery_type="pickup",
+            )
+        else:
+            raise DeliveryAuthorityError(
+                "A current delivery quote is required for courier checkout",
+                code="quote_required",
+            )
+    except DeliveryAuthorityError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    if quote.currency != "RUB":
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "quote_currency_unsupported", "message": "Checkout currently requires a RUB delivery quote"},
+        )
+    return quote
+
+
 @router.post("/checkout", response_model=OrderOut)
 def checkout(
-    payload: CheckoutIn,
+    payload: DeliveryCheckoutIn,
     idempotency_key_header: str = Header(alias="Idempotency-Key"),
     customer: Customer = Depends(get_current_customer),
     db: Session = Depends(get_db),
@@ -292,6 +341,7 @@ def checkout(
     delivery_type = checkout_input.delivery_type
     address = checkout_input.address
     comment = checkout_input.comment
+    delivery_quote_id = str(payload.delivery_quote_id or "").strip()
 
     request_fingerprint = _checkout_request_fingerprint(
         name=name,
@@ -299,6 +349,7 @@ def checkout(
         delivery_type=delivery_type,
         address=address,
         comment=comment,
+        delivery_quote_id=delivery_quote_id,
     )
 
     try:
@@ -317,6 +368,15 @@ def checkout(
             customer=locked_customer,
             settings=get_settings(),
         )
+        delivery_quote = _checkout_delivery_quote(
+            db,
+            customer_id=customer.id,
+            quote_public_id=delivery_quote_id,
+            delivery_type=delivery_type,
+            address=address,
+        )
+        authoritative_address = delivery_quote.address_snapshot if delivery_type == "courier" else ""
+
         cart = _load_locked_active_cart(db, customer.id)
         if not cart:
             raise HTTPException(status_code=409, detail="No active cart available for checkout")
@@ -354,10 +414,7 @@ def checkout(
             subtotal,
             discount,
         )
-        delivery_price = _money(
-            calculate_delivery_price(db, delivery_type, address),
-            "delivery price",
-        )
+        delivery_price = _money(delivery_quote.price, "delivery quote price")
         if delivery_price < 0:
             raise HTTPException(status_code=409, detail="Delivery price cannot be negative")
 
@@ -375,7 +432,7 @@ def checkout(
             payment_status="pending",
             delivery_status="not_started",
             delivery_type=delivery_type,
-            address=address,
+            address=authoritative_address,
             comment=comment,
             currency="RUB",
             discount_amount=discount,
@@ -387,6 +444,13 @@ def checkout(
         )
         db.add(order)
         db.flush()
+        try:
+            accept_quote_for_order(delivery_quote, order)
+        except DeliveryAuthorityError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
         attempt.order_id = order.id
         record_pilot_order(
             db,

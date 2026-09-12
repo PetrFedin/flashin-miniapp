@@ -4,58 +4,90 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 
 from ..database import utcnow_naive
+from ..delivery_models import DeliveryShipmentAuthority
 from ..models import DeliveryShipment, Order
+from .delivery_authority import (
+    DeliveryAuthorityError,
+    accepted_quote_for_order,
+    bind_shipment_commercial_authority,
+)
 from .moysklad_outbound import enqueue_moysklad_demand
 from .notifications import queue_order_status
 
 _SHIPMENT_TRANSITIONS = {
     "created": {"shipped"},
-    "shipped": {"delivered"},
+    "shipped": {"delivered", "delivery_failed"},
+    "delivery_failed": {"shipped", "returning"},
+    "returning": {"returned_to_sender"},
     "delivered": set(),
+    "returned_to_sender": set(),
 }
 
 
-def calculate_delivery_price(provider_code: str, zone: str = "default") -> Decimal:
-    base = {
-        "courier": Decimal("500.00"),
-        "cdek": Decimal("700.00"),
-        "boxberry": Decimal("650.00"),
-        "pickup": Decimal("0.00"),
-    }
-    return base.get(provider_code, Decimal("500.00"))
+def calculate_delivery_price(*_args, **_kwargs) -> Decimal:
+    """Hard fail for the retired second tariff source.
 
-
-def create_shipment(db: Session, order: Order, provider_code: str = "courier") -> DeliveryShipment:
-    """Create one shipment row without applying the HTTP workflow boundary.
-
-    Kept as a low-level compatibility helper for internal callers. Production
-    routes use ``ensure_ready_shipment`` so readiness and idempotency are always
-    enforced at the external mutation boundary.
+    Commercial delivery price is created by DeliveryQuote and accepted by the
+    Order. Shipment code must never recompute a tariff from provider defaults.
     """
-    normalized_provider = str(provider_code or "courier").strip().lower()
-    price = calculate_delivery_price(normalized_provider)
+    raise RuntimeError("Delivery price is quote-authoritative; request a DeliveryQuote")
+
+
+def create_shipment(
+    db: Session,
+    order: Order,
+    provider_code: str = "",
+) -> DeliveryShipment:
+    quote = accepted_quote_for_order(db, order.id, lock=True)
+    requested_provider = str(provider_code or "").strip().lower()
+    if requested_provider and requested_provider != quote.provider_code:
+        raise ValueError("Shipment provider must match the accepted delivery quote")
+
     shipment = DeliveryShipment(
         order_id=order.id,
-        provider_code=normalized_provider,
+        provider_code=quote.provider_code,
         tracking_number="",
         status="created",
-        price=price,
-        raw_payload=json.dumps({"provider": normalized_provider}, ensure_ascii=False),
+        price=quote.price,
+        raw_payload=json.dumps(
+            {
+                "quote_public_id": quote.public_id,
+                "provider": quote.provider_code,
+                "service": quote.service_code,
+                "currency": quote.currency,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
     )
     db.add(shipment)
+    db.flush()
+    try:
+        bind_shipment_commercial_authority(
+            db,
+            shipment=shipment,
+            order=order,
+            quote=quote,
+        )
+    except DeliveryAuthorityError as exc:
+        raise ValueError(str(exc)) from exc
     return shipment
 
 
 def ensure_ready_shipment(
     db: Session,
     order: Order,
-    provider_code: str = "courier",
+    provider_code: str = "",
 ) -> tuple[DeliveryShipment, bool]:
-    normalized_provider = str(provider_code or "courier").strip().lower()
-    if not normalized_provider or len(normalized_provider) > 64:
+    requested_provider = str(provider_code or "").strip().lower()
+    if requested_provider and len(requested_provider) > 64:
         raise ValueError("Delivery provider code is invalid")
     if order.status != "ready" or order.delivery_status != "ready":
         raise ValueError("Only a ready order can be transferred to delivery")
+
+    quote = accepted_quote_for_order(db, order.id, lock=True)
+    if requested_provider and requested_provider != quote.provider_code:
+        raise ValueError("Shipment provider must match the accepted delivery quote")
 
     existing = (
         db.query(DeliveryShipment)
@@ -65,10 +97,22 @@ def ensure_ready_shipment(
         .first()
     )
     if existing:
+        authority = (
+            db.query(DeliveryShipmentAuthority)
+            .filter(
+                DeliveryShipmentAuthority.shipment_id == existing.id,
+                DeliveryShipmentAuthority.order_id == order.id,
+                DeliveryShipmentAuthority.quote_id == quote.id,
+            )
+            .first()
+        )
+        if authority is None:
+            raise ValueError("Existing shipment lacks accepted quote commercial authority")
+        if Decimal(str(existing.price)).quantize(Decimal("0.01")) != Decimal(str(quote.price)).quantize(Decimal("0.01")):
+            raise ValueError("Existing shipment price differs from accepted delivery quote")
         return existing, False
 
-    shipment = create_shipment(db, order, normalized_provider)
-    db.flush()
+    shipment = create_shipment(db, order, requested_provider)
     return shipment, True
 
 
@@ -90,12 +134,7 @@ def transition_shipment(
     tracking_number: str,
     status: str = "shipped",
 ) -> Order:
-    """Apply a shipment transition to an already Order-first locked root.
-
-    The caller must lock ``Order`` before ``DeliveryShipment``. This service
-    deliberately never re-queries or re-locks Order, preventing the historic
-    DeliveryShipment -> Order inversion from reappearing below the API layer.
-    """
+    """Apply a shipment transition to an already Order-first locked root."""
     if int(shipment.order_id) != int(order.id):
         raise ValueError("Shipment changed while being updated")
 
@@ -112,12 +151,12 @@ def transition_shipment(
         )
 
     if normalized_status == "shipped":
-        normalized_tracking = str(tracking_number or "").strip()
+        normalized_tracking = str(tracking_number or shipment.tracking_number or "").strip()
         if len(normalized_tracking) < 3:
             raise ValueError("Tracking number is required before shipment")
         if len(normalized_tracking) > 255:
             raise ValueError("Tracking number is too long")
-        if order.status != "ready" or order.delivery_status != "ready":
+        if shipment.status == "created" and (order.status != "ready" or order.delivery_status != "ready"):
             raise ValueError("Only a ready order can be shipped")
         update_tracking(shipment, normalized_tracking, "shipped")
         order.status = "shipped"
@@ -133,6 +172,21 @@ def transition_shipment(
         order.status = "completed"
         order.delivery_status = "delivered"
         order.tracking_number = shipment.tracking_number
+    elif normalized_status == "delivery_failed":
+        if shipment.status != "shipped":
+            raise ValueError("Only a shipped order can record delivery failure")
+        update_tracking(shipment, shipment.tracking_number, "delivery_failed")
+        order.delivery_status = "delivery_failed"
+    elif normalized_status == "returning":
+        if shipment.status != "delivery_failed":
+            raise ValueError("Only a failed delivery can return to sender")
+        update_tracking(shipment, shipment.tracking_number, "returning")
+        order.delivery_status = "returning"
+    elif normalized_status == "returned_to_sender":
+        if shipment.status != "returning":
+            raise ValueError("Only a returning shipment can be received by sender")
+        update_tracking(shipment, shipment.tracking_number, "returned_to_sender")
+        order.delivery_status = "returned_to_sender"
 
     queue_order_status(db, order)
     return order
