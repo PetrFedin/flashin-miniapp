@@ -143,9 +143,11 @@ test("preorder intent crosses real Admin, PostgreSQL and Mini App without creati
 
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Каталог" })).toBeVisible();
-  await expect.poll(() => page.evaluate(() => localStorage.getItem("flashin_token"))).not.toBeNull();
-  const token = await page.evaluate(() => localStorage.getItem("flashin_token"));
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem("flashin_customer_session_token"))).not.toBeNull();
+  const token = await page.evaluate(() => sessionStorage.getItem("flashin_customer_session_token"));
   expect(token).toBeTruthy();
+  expect(await page.evaluate(() => localStorage.getItem("flashin_token"))).toBe("session");
+  expect(await page.evaluate(() => localStorage.getItem("flashin_token"))).not.toBe(token);
 
   const cartBefore = await customerGet(page, token, "/api/cart");
   const ordersBefore = await customerGet(page, token, "/api/orders");
