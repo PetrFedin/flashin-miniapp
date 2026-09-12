@@ -50,6 +50,7 @@ async function mockSharedProduct(page) {
     const json = (body, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 
     if (path === "/api/auth/telegram" && method === "POST") return json({ access_token: "share-token" });
+    if (path === "/api/auth/me" && method === "GET") return json({ id: 101, telegram_id: "101", first_name: "Pilot", username: "" });
     if (path === "/api/products" && method === "GET") return json([product]);
     if (path === "/api/looks" && method === "GET") return json([]);
     if (path === "/api/cart" && method === "GET") return json({ id: 77, items: [], total_amount: 0, final_amount: 0 });
