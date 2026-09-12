@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from backend.api import orders as orders_api
 from backend.database import SessionLocal, engine
+from backend.delivery_schemas import DeliveryCheckoutIn
 from backend.models import (
     Cart,
     CartItem,
@@ -37,7 +38,6 @@ from backend.models import (
     Product,
     ProductVariant,
 )
-from backend.schemas import CheckoutIn
 from backend.services.pricing import load_product_price_quotes
 
 
@@ -109,7 +109,7 @@ def _last_unit_race(token: str, buyer_count: int, *, synchronize_preload: bool) 
         with SessionLocal() as db:
             start_barrier.wait()
             customer = db.query(Customer).filter(Customer.id == customer_id).one()
-            payload = CheckoutIn(
+            payload = DeliveryCheckoutIn(
                 name="Authoritative Buyer",
                 phone="+79990000001",
                 delivery_type="pickup",
