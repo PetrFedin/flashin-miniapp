@@ -5,6 +5,7 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from backend.config import get_settings
 from backend.database import utcnow_naive
 from backend.jobs.campaign_jobs import queue_due_campaigns
+from backend.jobs.delivery_provider_jobs import process_delivery_provider_commands
 from backend.jobs.event_jobs import run_event_dispatcher
 from backend.jobs.moysklad_jobs import run_moysklad_pipeline
 from backend.jobs.ops_jobs import create_inventory_snapshot, queue_abandoned_cart_notifications
@@ -114,6 +115,15 @@ def main():
         "interval",
         minutes=1,
         id="provider-commands",
+    )
+    scheduler.add_job(
+        lambda: _run_async_db_job(
+            "delivery-provider-commands",
+            process_delivery_provider_commands,
+        ),
+        "interval",
+        minutes=1,
+        id="delivery-provider-commands",
     )
     scheduler.add_job(
         lambda: _run_async_db_job(
