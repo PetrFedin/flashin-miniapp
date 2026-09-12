@@ -42,8 +42,6 @@ _SENSITIVE_PROVIDER_CONFIG_SUFFIXES = (
 
 
 def _public_provider(provider: DeliveryProvider) -> dict:
-    """Never expose provider configuration through operational read APIs."""
-
     return {
         "id": provider.id,
         "code": provider.code,
@@ -132,7 +130,7 @@ def upsert_provider(
 @router.post("/orders/{order_id}/shipment", response_model=DeliveryShipmentOut)
 def create_order_shipment(
     order_id: int,
-    provider_code: str = "courier",
+    provider_code: str = "",
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
@@ -160,6 +158,7 @@ def create_order_shipment(
                 {
                     "order_id": order.id,
                     "provider_code": shipment.provider_code,
+                    "commercial_basis": "accepted_delivery_quote",
                 },
             )
         db.commit()
