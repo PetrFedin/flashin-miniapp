@@ -183,8 +183,9 @@ def main() -> int:
         sandbox_command = _booking_commands(db, sandbox_shipment.id)[0]
         assert sandbox_command.status == "sent"
         assert sandbox_command.external_id.startswith("sandbox-delivery-")
+        sandbox_external_id = str(sandbox_command.external_id)
         sandbox_order = db.query(Order).filter(Order.id == sandbox_order.id).one()
-        sandbox_shipment = same_shipment = db.query(type(sandbox_shipment)).filter(type(sandbox_shipment).id == sandbox_shipment.id).one()
+        sandbox_shipment = db.query(type(sandbox_shipment)).filter(type(sandbox_shipment).id == sandbox_shipment.id).one()
         transition_shipment(
             db,
             sandbox_order,
@@ -257,7 +258,7 @@ def main() -> int:
                 "status": "ok",
                 "manual_booking": "not_applicable",
                 "sandbox_commands": 1,
-                "sandbox_external_id": sandbox_command.external_id,
+                "sandbox_external_id": sandbox_external_id,
                 "live_timeout": "review_required",
                 "disabled_provider": disabled_state,
                 "fake_live_success": False,
