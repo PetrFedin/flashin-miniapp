@@ -56,6 +56,7 @@ async function installIntentMocks(page) {
     }
 
     if (path === "/api/auth/telegram" && method === "POST") return json({ access_token: "intent-token" });
+    if (path === "/api/auth/me" && method === "GET") return json({ id: 51001, telegram_id: "51001", first_name: "Intent", username: "" });
     if (path === "/api/products" && method === "GET") return json([]);
     if (path === "/api/looks" && method === "GET") return json([]);
     if (path === "/api/cart" && method === "GET") {
@@ -108,7 +109,8 @@ test("customer creates zero-stock preorder intent without checkout or payment mu
   const state = await installIntentMocks(page);
   await page.goto("/");
 
-  await expect.poll(() => page.evaluate(() => localStorage.getItem("flashin_token"))).toBe("intent-token");
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem("flashin_customer_session_token"))).toBe("intent-token");
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("flashin_token"))).toBe("session");
   await page.getByRole("button", { name: "Предзаказ / под заказ" }).click();
 
   const dialog = page.getByRole("dialog", { name: "Предзаказ и индивидуальный заказ" });
