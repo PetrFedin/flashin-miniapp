@@ -9,8 +9,8 @@ from ..services.moysklad_outbound import (
     MoySkladReviewRequired,
     export_customer_order,
     export_demand,
-    export_sales_return,
 )
+from ..services.moysklad_reverse_return import export_physical_sales_return
 from ..services.provider_command_safety import (
     enforce_terminal_provider_command_pilot_stop,
 )
@@ -32,25 +32,28 @@ async def _demand(db: Session, payload: dict[str, Any]) -> str:
     return await export_demand(db, int(payload["order_id"]))
 
 
-async def _sales_return(db: Session, payload: dict[str, Any]) -> str:
-    return await export_sales_return(
-        db,
-        int(payload["order_id"]),
-        int(payload["return_id"]),
+async def _legacy_financial_sales_return(_db: Session, _payload: dict[str, Any]) -> str:
+    # Commands created by the retired financial-refund path are intentionally
+    # not replayed. An operator must establish physical-return truth instead of
+    # letting a money event manufacture a stock-return document.
+    raise MoySkladReviewRequired(
+        "Legacy financial-refund sales return requires physical return reconciliation"
     )
+
+
+async def _physical_sales_return(db: Session, payload: dict[str, Any]) -> str:
+    return await export_physical_sales_return(db, int(payload["case_id"]))
 
 
 _HANDLERS: dict[str, _Handler] = {
     "moysklad.customer_order.create": _customer_order,
     "moysklad.demand.create": _demand,
-    "moysklad.sales_return.create": _sales_return,
+    "moysklad.sales_return.create": _legacy_financial_sales_return,
+    "moysklad.physical_sales_return.create": _physical_sales_return,
 }
 
 
 async def process_provider_commands(db: Session, limit: int = 50) -> dict[str, int]:
-    # Recover a missed pilot stop before taking more work. This also covers the
-    # case where a prior worker process persisted a terminal command and died
-    # before it could persist the circuit-breaker transition.
     enforce_terminal_provider_command_pilot_stop(db)
 
     claimed = claim_provider_commands(db, provider="moysklad", limit=limit)
