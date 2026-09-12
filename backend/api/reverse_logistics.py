@@ -9,6 +9,7 @@ from ..models import Order, ReturnRequest
 from ..reverse_logistics_models import ReturnLogisticsCase, ReturnLogisticsItem
 from ..security import get_current_admin, get_current_customer
 from ..services.audit import log_admin_action
+from ..services.moysklad_reverse_return import enqueue_moysklad_physical_sales_return
 from ..services.rbac import RETURNS_PHYSICAL_WRITE_PERMISSION, require_permission
 from ..services.reverse_logistics import (
     authorize_item,
@@ -243,12 +244,16 @@ def inspect_physical_return_item(
             actor_admin_id=admin.id,
             reason=payload.reason,
         )
+        provider_command = None
+        if case.status == "inspected":
+            provider_command = enqueue_moysklad_physical_sales_return(db, case.id)
         log_admin_action(db, admin, "return.physical.inspect", "return_request", ret.id, {
             "case_id": case.id,
             "order_item_id": payload.order_item_id,
             "quantity": payload.quantity,
             "disposition": payload.disposition,
             "idempotent": result.idempotent,
+            "moysklad_sales_return_queued": provider_command is not None,
         })
         db.commit()
         return {"idempotent": result.idempotent, **physical_case_summary(db, case)}
