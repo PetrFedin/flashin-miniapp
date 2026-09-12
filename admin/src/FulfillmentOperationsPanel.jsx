@@ -187,7 +187,7 @@ export default function FulfillmentOperationsPanel({ onUnauthorized, session }) 
     const shipment = await run(
       `shipment-create-${task.order_id}`,
       () => adminJson(
-        `/api/delivery-providers/orders/${task.order_id}/shipment?provider_code=courier`,
+        `/api/delivery-providers/orders/${task.order_id}/shipment`,
         { method: "POST" },
       ),
       `Отгрузка заказа #${task.order_id} создана.`,
