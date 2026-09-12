@@ -7,6 +7,7 @@ import {
   applyReferral,
   cancelOrder,
   checkout,
+  createDeliveryQuote,
   createPayment,
   createPrivacyRequest,
   createReturn,
@@ -35,6 +36,7 @@ import {
   updateCartItem,
 } from "./api";
 import ErrorBoundary from "./ErrorBoundary";
+import DeliveryQuoteFields from "./components/DeliveryQuoteFields";
 import SkeletonCard from "./components/SkeletonCard";
 import { useTelegram } from "./hooks/useTelegram";
 import { parseLoyaltyPoints, validateCheckoutForm, validateSizeForm } from "./inputRules.js";
@@ -49,6 +51,14 @@ import {
 } from "./orderRules.js";
 import { loadProfileSections, loadStorefrontBootstrap } from "./storefrontLoaders.js";
 import { useActionLocks } from "./useActionLocks.js";
+
+const DELIVERY_REQUOTE_CODES = new Set([
+  "quote_expired",
+  "quote_stale",
+  "quote_mismatch",
+  "quote_consumed",
+  "provider_unavailable",
+]);
 
 function money(value, currency = "RUB") {
   return new Intl.NumberFormat("ru-RU", {
@@ -137,6 +147,9 @@ export default function App() {
   const [sizeForm, setSizeForm] = useState({ height_cm: "", weight_kg: "", usual_size: "", fit_preference: "regular" });
   const [sizeResult, setSizeResult] = useState(null);
   const [checkoutForm, setCheckoutForm] = useState({ name: "", phone: "", delivery_type: "pickup", address: "", comment: "" });
+  const [deliveryAddress, setDeliveryAddress] = useState({ country_code: "RU", region: "", city: "", postal_code: "", address_line: "" });
+  const [deliveryQuote, setDeliveryQuote] = useState(null);
+  const [deliveryQuoteStatus, setDeliveryQuoteStatus] = useState("idle");
 
   const selectedVariant = useMemo(
     () => selected?.variants?.find((variant) => variant.id === selectedVariantId) || null,
@@ -151,7 +164,11 @@ export default function App() {
     [cart],
   );
   const checkoutBusy = isBusy("checkout");
+  const deliveryQuoteBusy = isBusy("delivery-quote");
   const addToCartBusy = isBusy("add-to-cart");
+  const courierQuoteReady = checkoutForm.delivery_type !== "courier"
+    || (deliveryQuoteStatus === "ready" && Boolean(deliveryQuote));
+  const checkoutActionReady = !checkoutBusy && !deliveryQuoteBusy && courierQuoteReady;
 
   function clearMessages() {
     setError("");
@@ -279,13 +296,13 @@ export default function App() {
       mainButton.onClick?.(handler);
       handlers.push(handler);
     };
-    if (view === "checkout") bind("Перейти к оплате", handleCheckout, !checkoutBusy);
+    if (view === "checkout") bind("Перейти к оплате", handleCheckout, checkoutActionReady);
     else if (view === "cart" && cartCount > 0) bind("Оформить заказ", () => setView("checkout"));
     else if (view === "product" && selectedVariant?.available_qty > 0) bind("Добавить в корзину", handleAddSelected, !addToCartBusy);
     else if (view !== "cart" && cartCount > 0) bind(`Корзина · ${cartCount}`, () => setView("cart"));
     else mainButton.hide?.();
     return () => handlers.forEach((handler) => mainButton.offClick?.(handler));
-  }, [tg, view, cartCount, selectedVariant, checkoutForm, checkoutBusy, addToCartBusy]);
+  }, [tg, view, cartCount, selectedVariant, checkoutForm, checkoutActionReady, addToCartBusy]);
 
   async function loadProfileData() {
     const { data, warnings } = await loadProfileSections({
@@ -422,14 +439,80 @@ export default function App() {
     }
   }
 
+  function invalidateDeliveryQuote(nextStatus = "idle") {
+    setDeliveryQuote(null);
+    setDeliveryQuoteStatus(nextStatus);
+    setCheckoutForm((current) => ({ ...current, address: "" }));
+  }
+
+  function handleDeliveryTypeChange(deliveryType) {
+    const normalized = deliveryType === "courier" ? "courier" : "pickup";
+    setCheckoutForm((current) => ({ ...current, delivery_type: normalized, address: "" }));
+    setDeliveryQuote(null);
+    setDeliveryQuoteStatus("idle");
+  }
+
+  function handleDeliveryAddressChange(field, value) {
+    setDeliveryAddress((current) => ({ ...current, [field]: value }));
+    invalidateDeliveryQuote(deliveryQuote ? "stale" : "idle");
+  }
+
+  async function handleDeliveryQuote() {
+    const city = deliveryAddress.city.trim();
+    const addressLine = deliveryAddress.address_line.trim();
+    if (city.length < 2) {
+      setError("Укажите город для расчёта доставки.");
+      return;
+    }
+    if (addressLine.length < 5) {
+      setError("Укажите улицу, дом и при необходимости квартиру.");
+      return;
+    }
+    setDeliveryQuoteStatus("loading");
+    const quote = await act("delivery-quote", () => createDeliveryQuote({
+      delivery_type: "courier",
+      address: {
+        country_code: "RU",
+        region: deliveryAddress.region.trim(),
+        city,
+        postal_code: deliveryAddress.postal_code.trim(),
+        address_line: addressLine,
+      },
+    }));
+    if (!quote) {
+      setDeliveryQuoteStatus("error");
+      return;
+    }
+    setDeliveryQuote(quote);
+    setDeliveryQuoteStatus("ready");
+    setCheckoutForm((current) => ({ ...current, address: quote.address_snapshot }));
+    setNotice(`Доставка подтверждена: ${money(quote.price, quote.currency)}.`);
+  }
+
   async function handleCheckout() {
+    if (checkoutForm.delivery_type === "courier" && !courierQuoteReady) {
+      setError("Сначала рассчитайте и подтвердите курьерскую доставку.");
+      return;
+    }
     const validation = validateCheckoutForm(checkoutForm);
     if (validation.error) {
       setError(validation.error);
       return;
     }
     await act("checkout", async () => {
-      const order = await checkout(validation.value);
+      let order;
+      try {
+        order = await checkout({
+          ...validation.value,
+          delivery_quote_id: checkoutForm.delivery_type === "courier" ? deliveryQuote.public_id : "",
+        });
+      } catch (checkoutError) {
+        if (DELIVERY_REQUOTE_CODES.has(checkoutError?.code)) {
+          invalidateDeliveryQuote("stale");
+          throw new Error("Условия доставки изменились. Пересчитайте доставку и подтвердите заказ ещё раз.");
+        }
+        throw checkoutError;
+      }
       try {
         setCart(await getCart());
       } catch {
@@ -637,14 +720,15 @@ export default function App() {
         )}
 
         {!loading && view === "checkout" && (
-          <main aria-busy={checkoutBusy}>
-            <button className="link" onClick={() => setView("cart")} disabled={checkoutBusy}>← Корзина</button><h1>Получатель и доставка</h1><p className="lead">Перед созданием заказа повторно проверим цены, скидки, остатки и баллы.</p>
+          <main aria-busy={checkoutBusy || deliveryQuoteBusy}>
+            <button className="link" onClick={() => setView("cart")} disabled={checkoutBusy || deliveryQuoteBusy}>← Корзина</button><h1>Получатель и доставка</h1><p className="lead">Перед созданием заказа фиксируем доставку и повторно проверяем цены, скидки, остатки и баллы.</p>
             <label>Имя<input autoComplete="name" placeholder="Имя получателя" value={checkoutForm.name} onChange={(event) => setCheckoutForm({ ...checkoutForm, name: event.target.value })} disabled={checkoutBusy} /></label>
             <label>Телефон<input autoComplete="tel" inputMode="tel" placeholder="+7 999 000-00-00" value={checkoutForm.phone} onChange={(event) => setCheckoutForm({ ...checkoutForm, phone: event.target.value })} disabled={checkoutBusy} /></label>
-            <label>Способ получения<select value={checkoutForm.delivery_type} onChange={(event) => setCheckoutForm({ ...checkoutForm, delivery_type: event.target.value, address: event.target.value === "pickup" ? "" : checkoutForm.address })} disabled={checkoutBusy}><option value="pickup">Самовывоз</option><option value="courier">Курьер</option></select></label>
-            {checkoutForm.delivery_type === "courier" && <label>Адрес<textarea placeholder="Город, улица, дом, квартира" value={checkoutForm.address} onChange={(event) => setCheckoutForm({ ...checkoutForm, address: event.target.value })} disabled={checkoutBusy} /></label>}
+            <label>Способ получения<select value={checkoutForm.delivery_type} onChange={(event) => handleDeliveryTypeChange(event.target.value)} disabled={checkoutBusy || deliveryQuoteBusy}><option value="pickup">Самовывоз</option><option value="courier">Курьер</option></select></label>
+            {checkoutForm.delivery_type === "courier" && <DeliveryQuoteFields address={deliveryAddress} quote={deliveryQuote} status={deliveryQuoteStatus} disabled={checkoutBusy} onAddressChange={handleDeliveryAddressChange} onQuote={handleDeliveryQuote} />}
+            {checkoutForm.delivery_type === "pickup" && <div className="delivery-quote-card ready"><div className="delivery-quote-heading"><div><span className="meta">Стоимость доставки</span><strong>{money(0)}</strong></div><span className="status success">Самовывоз</span></div><p>Пункт выдачи будет подтверждён в заказе. Внешний carrier не требуется.</p></div>}
             <label>Комментарий<textarea placeholder="Необязательный комментарий" value={checkoutForm.comment} onChange={(event) => setCheckoutForm({ ...checkoutForm, comment: event.target.value })} disabled={checkoutBusy} /></label>
-            <button className="primary" onClick={handleCheckout} disabled={checkoutBusy}>{checkoutBusy ? "Создаём заказ…" : "Создать заказ и перейти к оплате"}</button>
+            <button className="primary" onClick={handleCheckout} disabled={!checkoutActionReady}>{checkoutBusy ? "Создаём заказ…" : checkoutForm.delivery_type === "courier" && !courierQuoteReady ? "Сначала рассчитайте доставку" : "Создать заказ и перейти к оплате"}</button>
           </main>
         )}
 
