@@ -51,18 +51,15 @@ _SENSITIVE_PROVIDER_CONFIG_SUFFIXES = (
 
 
 def _public_provider(provider: DeliveryProvider) -> dict:
-    try:
-        mode = configured_delivery_provider_mode(provider)
-    except DeliveryProviderConfigurationError:
-        mode = "invalid"
     return {
         "id": provider.id,
         "code": provider.code,
         "name": provider.name,
         "active": provider.active,
-        # Secrets are forbidden in config_json; expose only the operational mode
-        # so operators can distinguish disabled/manual/sandbox/live safely.
-        "config_json": json.dumps({"mode": mode}, sort_keys=True),
+        # Provider configuration is write-only through this API. Even an
+        # allow-listed subset risks turning the response into a second config
+        # surface, so operational reads expose no stored config at all.
+        "config_json": "{}",
     }
 
 
