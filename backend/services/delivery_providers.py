@@ -116,7 +116,6 @@ def create_shipment(
                 "service": quote.service_code,
                 "currency": quote.currency,
                 "provider_mode": provider_mode,
-                "booking_state": "not_applicable" if provider_mode == "manual" else "pending",
             },
             ensure_ascii=False,
             sort_keys=True,
