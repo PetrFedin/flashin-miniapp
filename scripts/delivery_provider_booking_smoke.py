@@ -16,7 +16,7 @@ if str(ROOT) not in sys.path:
 
 from backend.database import SessionLocal, engine
 from backend.delivery_models import DeliveryZoneRule
-from backend.jobs.delivery_provider_jobs import process_delivery_provider_commands
+from backend.jobs import delivery_provider_jobs
 from backend.models import Customer, DeliveryProvider, DeliveryZone, Order
 from backend.provider_models import ProviderCommand
 from backend.services.delivery_authority import (
@@ -176,7 +176,7 @@ def main() -> int:
             raise AssertionError("Sandbox shipment must wait for durable booking confirmation")
         db.commit()
 
-        sandbox_result = asyncio.run(process_delivery_provider_commands(db, limit=20))
+        sandbox_result = asyncio.run(delivery_provider_jobs.process_delivery_provider_commands(db, limit=20))
         assert sandbox_result["claimed"] == 1
         assert sandbox_result["sent"] == 1
         db.expire_all()
@@ -206,19 +206,27 @@ def main() -> int:
         db.commit()
 
         async def ambiguous_adapter(_payload):
-            raise TimeoutError("simulated carrier timeout after request write")
+            await asyncio.sleep(0.05)
+            return "late-provider-success-must-not-be-recorded"
 
-        live_result = asyncio.run(
-            process_delivery_provider_commands(
-                db,
-                limit=20,
-                live_adapter=ambiguous_adapter,
+        original_timeout = delivery_provider_jobs.DELIVERY_BOOKING_TIMEOUT_SECONDS
+        delivery_provider_jobs.DELIVERY_BOOKING_TIMEOUT_SECONDS = 0.01
+        try:
+            live_result = asyncio.run(
+                delivery_provider_jobs.process_delivery_provider_commands(
+                    db,
+                    limit=20,
+                    live_adapter=ambiguous_adapter,
+                )
             )
-        )
+        finally:
+            delivery_provider_jobs.DELIVERY_BOOKING_TIMEOUT_SECONDS = original_timeout
+
         assert live_result["claimed"] == 1
         assert live_result["review_required"] == 1
         live_command = _booking_commands(db, live_shipment.id)[0]
         assert live_command.status == "review_required"
+        assert not live_command.external_id
         assert "ambiguous" in live_command.last_error.lower()
         live_order = db.query(Order).filter(Order.id == live_order.id).one()
         live_shipment = db.query(type(live_shipment)).filter(type(live_shipment).id == live_shipment.id).one()
