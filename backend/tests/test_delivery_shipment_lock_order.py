@@ -200,6 +200,10 @@ def test_shipped_transition_uses_prelocked_order_without_requery(monkeypatch):
         status="created",
         tracking_number="",
         updated_at=None,
+        # The lock-order unit fixture models an internal/manual shipment. That
+        # provider mode has no external booking command, so the transition can
+        # prove the Order-first invariant without querying provider state.
+        raw_payload='{"provider_mode":"manual"}',
     )
 
     returned = delivery_service.transition_shipment(

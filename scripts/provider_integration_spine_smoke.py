@@ -38,6 +38,7 @@ from backend.models import (
 )
 from backend.provider_models import ProviderCommand
 from backend.services import moysklad_outbound
+from backend.services.delivery_authority import accept_quote_for_order, create_delivery_quote
 from backend.services.delivery_providers import ensure_ready_shipment, transition_shipment
 from backend.services.fulfillment import update_fulfillment_status
 from backend.services.fulfillment_locking import lock_fulfillment_task_for_update
@@ -153,6 +154,12 @@ def main() -> int:
         )
         db.add(order)
         db.flush()
+        quote = create_delivery_quote(
+            db,
+            customer_id=int(customer.id),
+            delivery_type="pickup",
+        )
+        accept_quote_for_order(quote, order)
         db.add(
             OrderItem(
                 order_id=order.id,
