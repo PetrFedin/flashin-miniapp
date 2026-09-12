@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..database import get_db
+from ..delivery_schemas import DeliveryBookingReconcileIn
 from ..models import DeliveryProvider, DeliveryShipment, Order
 from ..schemas import DeliveryProviderIn, DeliveryProviderOut, DeliveryShipmentOut
 from ..security import get_current_admin
@@ -13,6 +14,9 @@ from ..services.delivery_provider_runtime import (
     DELIVERY_PROVIDER_MODES,
     DeliveryProviderConfigurationError,
     configured_delivery_provider_mode,
+    delivery_booking_command,
+    reconcile_delivery_booking,
+    shipment_provider_mode,
 )
 from ..services.delivery_providers import ensure_ready_shipment, transition_shipment
 from ..services.rbac import DELIVERY_PROVIDERS_WRITE_PERMISSION, require_permission
@@ -59,6 +63,31 @@ def _public_provider(provider: DeliveryProvider) -> dict:
         # Secrets are forbidden in config_json; expose only the operational mode
         # so operators can distinguish disabled/manual/sandbox/live safely.
         "config_json": json.dumps({"mode": mode}, sort_keys=True),
+    }
+
+
+def _booking_status(db: Session, shipment: DeliveryShipment) -> dict[str, object]:
+    try:
+        mode = shipment_provider_mode(shipment)
+    except DeliveryProviderConfigurationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    command = delivery_booking_command(db, shipment.id)
+    if mode == "manual":
+        status = "not_applicable"
+    elif command is None:
+        status = "missing"
+    else:
+        status = str(command.status)
+    return {
+        "shipment_id": int(shipment.id),
+        "provider_code": str(shipment.provider_code),
+        "provider_mode": mode,
+        "status": status,
+        "attempts": int(command.attempts) if command else 0,
+        "external_id": str(command.external_id or "") if command else "",
+        "requires_review": bool(command and command.status == "review_required"),
+        "completed_at": command.completed_at.isoformat() if command and command.completed_at else None,
     }
 
 
@@ -184,6 +213,70 @@ def create_order_shipment(
         db.commit()
         db.refresh(shipment)
         return shipment
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.get("/shipments/{shipment_id}/booking")
+def shipment_booking_status(
+    shipment_id: int,
+    admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    require_permission(db, admin, "orders.read")
+    shipment = db.query(DeliveryShipment).filter(DeliveryShipment.id == shipment_id).first()
+    if shipment is None:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+    return _booking_status(db, shipment)
+
+
+@router.post("/shipments/{shipment_id}/booking/reconcile")
+def reconcile_shipment_booking(
+    shipment_id: int,
+    payload: DeliveryBookingReconcileIn,
+    admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    require_permission(db, admin, DELIVERY_PROVIDERS_WRITE_PERMISSION)
+    try:
+        shipment = (
+            db.query(DeliveryShipment)
+            .filter(DeliveryShipment.id == shipment_id)
+            .with_for_update()
+            .first()
+        )
+        if shipment is None:
+            raise HTTPException(status_code=404, detail="Shipment not found")
+        try:
+            command = reconcile_delivery_booking(
+                db,
+                shipment_id=shipment.id,
+                decision=payload.decision,
+                external_id=payload.external_id,
+            )
+        except DeliveryProviderConfigurationError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        log_admin_action(
+            db,
+            admin,
+            "delivery.booking.reconcile",
+            "delivery_shipment",
+            shipment.id,
+            {
+                "provider_code": shipment.provider_code,
+                "decision": payload.decision,
+                "reason": payload.reason,
+                "external_id_recorded": bool(command.external_id),
+                "command_status": command.status,
+            },
+        )
+        db.commit()
+        db.refresh(shipment)
+        return _booking_status(db, shipment)
     except HTTPException:
         db.rollback()
         raise
