@@ -5,6 +5,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from ..database import utcnow_naive
 from ..delivery_models import DeliveryQuote
 from ..models import DeliveryProvider, DeliveryShipment, Order
 from ..provider_models import ProviderCommand
@@ -13,6 +14,7 @@ from .provider_commands import enqueue_provider_command
 DELIVERY_PROVIDER_MODES = frozenset({"disabled", "manual", "sandbox", "live"})
 DELIVERY_BOOKING_COMMAND = "delivery.shipment.book"
 DELIVERY_COMMAND_PROVIDER = "delivery"
+DELIVERY_BOOKING_RECONCILIATION_DECISIONS = frozenset({"confirmed", "not_booked"})
 
 
 class DeliveryProviderConfigurationError(ValueError):
@@ -147,3 +149,53 @@ def delivery_booking_command(
     if lock:
         query = query.with_for_update()
     return query.first()
+
+
+def reconcile_delivery_booking(
+    db: Session,
+    *,
+    shipment_id: int,
+    decision: str,
+    external_id: str = "",
+) -> ProviderCommand:
+    normalized_decision = str(decision or "").strip().lower()
+    if normalized_decision not in DELIVERY_BOOKING_RECONCILIATION_DECISIONS:
+        raise DeliveryProviderConfigurationError(
+            "Delivery booking reconciliation decision must be confirmed or not_booked"
+        )
+
+    command = delivery_booking_command(db, shipment_id, lock=True)
+    if command is None:
+        raise DeliveryProviderConfigurationError(
+            "Delivery booking command does not exist"
+        )
+    if command.status != "review_required":
+        raise DeliveryProviderConfigurationError(
+            "Only review_required delivery booking can be reconciled"
+        )
+
+    command.lease_token = None
+    command.next_attempt_at = None
+    command.completed_at = None
+
+    if normalized_decision == "confirmed":
+        provider_booking_id = str(external_id or "").strip()
+        if len(provider_booking_id) < 3 or len(provider_booking_id) > 255:
+            raise DeliveryProviderConfigurationError(
+                "Confirmed delivery booking requires a valid provider booking id"
+            )
+        command.status = "sent"
+        command.external_id = provider_booking_id
+        command.last_error = ""
+        command.completed_at = utcnow_naive()
+    else:
+        # An operator has established that the carrier did not create a booking.
+        # Only then is an automatic retry safe; keep the same durable idempotency
+        # key and attempt history rather than minting a second command.
+        command.status = "pending"
+        command.external_id = ""
+        command.last_error = ""
+        command.next_attempt_at = utcnow_naive()
+
+    db.flush()
+    return command
