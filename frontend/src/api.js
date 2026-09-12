@@ -47,22 +47,30 @@ function checkoutKeyForActiveCart() {
 
 async function errorDetail(response) {
   const text = await response.text();
-  if (!text) return "";
+  if (!text) return { message: "", code: "" };
   try {
     const data = JSON.parse(text);
-    if (typeof data.detail === "string") return data.detail;
-    if (data.detail !== undefined) return JSON.stringify(data.detail);
-    return text;
+    if (typeof data.detail === "string") {
+      return { message: data.detail, code: "" };
+    }
+    if (data.detail && typeof data.detail === "object") {
+      return {
+        message: String(data.detail.message || JSON.stringify(data.detail)),
+        code: String(data.detail.code || ""),
+      };
+    }
+    return { message: text, code: "" };
   } catch {
-    return text;
+    return { message: text, code: "" };
   }
 }
 
 class ApiRequestError extends Error {
-  constructor(message, status) {
+  constructor(message, status, code = "") {
     super(message);
     this.name = "ApiRequestError";
     this.status = Number(status || 0);
+    this.code = String(code || "");
   }
 }
 
@@ -108,9 +116,11 @@ async function request(path, options = {}) {
       if (response.status === 401 && auth) {
         clearCustomerToken();
       }
+      const detail = await errorDetail(response);
       throw new ApiRequestError(
-        (await errorDetail(response)) || `Request failed: ${response.status}`,
+        detail.message || `Request failed: ${response.status}`,
         response.status,
+        detail.code,
       );
     }
     if (response.status === 204) return null;
@@ -222,6 +232,13 @@ export async function applyReferral(code) {
   return request("/api/cart/referral", {
     method: "POST",
     body: JSON.stringify({ code }),
+  });
+}
+
+export async function createDeliveryQuote(payload) {
+  return request("/api/delivery-quotes", {
+    method: "POST",
+    body: JSON.stringify(payload),
   });
 }
 
@@ -345,9 +362,11 @@ export async function downloadPrivacyData() {
   });
   if (!response.ok) {
     if (response.status === 401) clearCustomerToken();
+    const detail = await errorDetail(response);
     throw new ApiRequestError(
-      (await errorDetail(response)) || "Не удалось экспортировать данные",
+      detail.message || "Не удалось экспортировать данные",
       response.status,
+      detail.code,
     );
   }
   const blob = await response.blob();
