@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import CheckConstraint, create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Mapper, sessionmaker
 
 from .config import get_settings
@@ -19,6 +19,32 @@ def utcnow_naive(_context=None) -> datetime:
     unsafe in-place type migration of every timestamp column.
     """
     return datetime.now(UTC).replace(tzinfo=None)
+
+
+@event.listens_for(Mapper, "after_mapper_constructed")
+def _upgrade_legacy_inventory_movement_constraint(mapper: Mapper, _class) -> None:
+    """Keep legacy ORM metadata aligned with Alembic migration 0026."""
+    table = mapper.local_table
+    if getattr(table, "name", "") != "inventory_movements":
+        return
+    constraint = next(
+        (
+            item
+            for item in list(table.constraints)
+            if isinstance(item, CheckConstraint)
+            and item.name == "ck_inventory_movements_kind"
+        ),
+        None,
+    )
+    if constraint is None or "'return'" in str(constraint.sqltext):
+        return
+    table.constraints.remove(constraint)
+    table.append_constraint(
+        CheckConstraint(
+            "kind IN ('reserve', 'release', 'commit', 'return')",
+            name="ck_inventory_movements_kind",
+        )
+    )
 
 
 @event.listens_for(Mapper, "mapper_configured")

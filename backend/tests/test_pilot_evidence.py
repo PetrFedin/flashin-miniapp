@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+import os
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -9,6 +10,7 @@ from pilot_evidence import (  # noqa: E402
     build_rollback_drill_report,
     configuration_fingerprint,
     release_binding,
+    sha256_file,
     sign_payload,
     utc_timestamp,
     validate_provider_report,
@@ -63,6 +65,34 @@ def provider_report(now: datetime, values: dict[str, str], current: dict[str, st
         "results": results,
     }
     return sign_payload(payload, values["PILOT_EVIDENCE_SIGNING_SECRET"])
+
+
+def backup_manifest(
+    backup: Path,
+    values: dict[str, str],
+    created_at: datetime,
+) -> Path:
+    payload = {
+        "schema_version": 1,
+        "kind": "postgres_backup_manifest",
+        "created_at": utc_timestamp(created_at),
+        "source_database": "flashin",
+        "backup": {
+            "sha256": sha256_file(backup),
+            "size_bytes": backup.stat().st_size,
+        },
+        "database_snapshot": {
+            "alembic_revision": "test-revision",
+            "public_table_count": 1,
+            "public_tables_sha256": "1" * 64,
+            "schema_sha256": "2" * 64,
+            "critical_tables": {},
+        },
+    }
+    path = Path(f"{backup}.manifest.json")
+    signed = sign_payload(payload, values["PILOT_EVIDENCE_SIGNING_SECRET"])
+    path.write_text(__import__("json").dumps(signed), encoding="utf-8")
+    return path
 
 
 def test_signature_detects_tampering():
@@ -155,6 +185,7 @@ def test_rollback_drill_evidence_detects_backup_tampering(tmp_path: Path):
         completed_at=now,
         max_age_days=30,
     )
+    assert report["recovery"]["scope"] == "ci"
     assert not validate_rollback_drill_report(
         report, env=values, now=now, max_age_days=30
     )
@@ -163,3 +194,183 @@ def test_rollback_drill_evidence_detects_backup_tampering(tmp_path: Path):
         report, env=values, now=now, max_age_days=30
     )
     assert any("checksum" in item or "size" in item for item in errors)
+
+
+def test_ci_and_legacy_recovery_evidence_cannot_satisfy_pilot_host_gate(tmp_path: Path):
+    values = env()
+    backup = tmp_path / "backup.sql.gz"
+    backup.write_bytes(b"backup")
+    now = datetime(2026, 8, 3, 18, 0, tzinfo=UTC)
+    report = build_rollback_drill_report(
+        from_release=release("from", "a" * 64),
+        to_release=release("to", "b" * 64),
+        backup_path=backup,
+        env=values,
+        completed_at=now,
+    )
+    assert validate_rollback_drill_report(report, env=values, now=now) == []
+    errors = validate_rollback_drill_report(
+        report,
+        env=values,
+        now=now,
+        required_scope="pilot_host",
+        expected_host_id="pilot-host-a",
+        expected_rto_target_seconds=120,
+        expected_rpo_target_seconds=3600,
+    )
+    assert any("scope must be pilot_host" in item for item in errors)
+
+    legacy = dict(report)
+    legacy.pop("signature", None)
+    legacy.pop("recovery", None)
+    legacy = sign_payload(legacy, values["PILOT_EVIDENCE_SIGNING_SECRET"])
+    assert validate_rollback_drill_report(legacy, env=values, now=now) == []
+    errors = validate_rollback_drill_report(
+        legacy,
+        env=values,
+        now=now,
+        required_scope="pilot_host",
+        expected_host_id="pilot-host-a",
+        expected_rto_target_seconds=120,
+        expected_rpo_target_seconds=3600,
+    )
+    assert any("missing required pilot_host" in item for item in errors)
+
+
+def test_pilot_host_recovery_binds_host_targets_and_signed_backup_age(tmp_path: Path):
+    values = env()
+    backup = tmp_path / "backup.sql.gz"
+    backup.write_bytes(b"backup")
+    now = datetime(2026, 8, 3, 18, 0, tzinfo=UTC)
+    manifest = backup_manifest(backup, values, now - timedelta(minutes=10))
+    report = build_rollback_drill_report(
+        from_release=release("from", "a" * 64),
+        to_release=release("to", "b" * 64),
+        backup_path=backup,
+        env=values,
+        started_at=now - timedelta(seconds=30),
+        completed_at=now,
+        recovery_scope="pilot_host",
+        recovery_host_id="pilot-host-a",
+        rto_target_seconds=120,
+        rpo_target_seconds=3600,
+        backup_manifest_path=manifest,
+    )
+    assert report["result"] == "GO"
+    assert report["recovery"]["rto_met"] is True
+    assert report["recovery"]["rpo_met"] is True
+    assert validate_rollback_drill_report(
+        report,
+        env=values,
+        now=now,
+        required_scope="pilot_host",
+        expected_host_id="pilot-host-a",
+        expected_rto_target_seconds=120,
+        expected_rpo_target_seconds=3600,
+    ) == []
+
+    errors = validate_rollback_drill_report(
+        report,
+        env=values,
+        now=now,
+        required_scope="pilot_host",
+        expected_host_id="different-host",
+        expected_rto_target_seconds=120,
+        expected_rpo_target_seconds=3600,
+    )
+    assert any("fingerprint does not match" in item for item in errors)
+
+
+def test_pilot_host_recovery_misses_rto_and_rpo_fail_closed(tmp_path: Path):
+    values = env()
+    now = datetime(2026, 8, 3, 18, 0, tzinfo=UTC)
+
+    rto_backup = tmp_path / "rto.sql.gz"
+    rto_backup.write_bytes(b"rto-backup")
+    rto_manifest = backup_manifest(rto_backup, values, now - timedelta(minutes=5))
+    rto_report = build_rollback_drill_report(
+        from_release=release("from", "a" * 64),
+        to_release=release("to", "b" * 64),
+        backup_path=rto_backup,
+        env=values,
+        started_at=now - timedelta(seconds=121),
+        completed_at=now,
+        recovery_scope="pilot_host",
+        recovery_host_id="pilot-host-a",
+        rto_target_seconds=120,
+        rpo_target_seconds=3600,
+        backup_manifest_path=rto_manifest,
+    )
+    assert rto_report["result"] == "NO-GO"
+    errors = validate_rollback_drill_report(
+        rto_report,
+        env=values,
+        now=now,
+        required_scope="pilot_host",
+        expected_host_id="pilot-host-a",
+        expected_rto_target_seconds=120,
+        expected_rpo_target_seconds=3600,
+    )
+    assert any("RTO target was missed" in item for item in errors)
+
+    rpo_backup = tmp_path / "rpo.sql.gz"
+    rpo_backup.write_bytes(b"rpo-backup")
+    rpo_manifest = backup_manifest(rpo_backup, values, now - timedelta(hours=2))
+    os.utime(rpo_backup, None)
+    os.utime(rpo_manifest, None)
+    rpo_report = build_rollback_drill_report(
+        from_release=release("from", "a" * 64),
+        to_release=release("to", "b" * 64),
+        backup_path=rpo_backup,
+        env=values,
+        started_at=now - timedelta(seconds=10),
+        completed_at=now,
+        recovery_scope="pilot_host",
+        recovery_host_id="pilot-host-a",
+        rto_target_seconds=120,
+        rpo_target_seconds=3600,
+        backup_manifest_path=rpo_manifest,
+    )
+    assert rpo_report["result"] == "NO-GO"
+    errors = validate_rollback_drill_report(
+        rpo_report,
+        env=values,
+        now=now,
+        required_scope="pilot_host",
+        expected_host_id="pilot-host-a",
+        expected_rto_target_seconds=120,
+        expected_rpo_target_seconds=3600,
+    )
+    assert any("RPO target was missed" in item for item in errors)
+
+
+def test_pilot_host_recovery_tampering_breaks_signature(tmp_path: Path):
+    values = env()
+    backup = tmp_path / "backup.sql.gz"
+    backup.write_bytes(b"backup")
+    now = datetime(2026, 8, 3, 18, 0, tzinfo=UTC)
+    manifest = backup_manifest(backup, values, now - timedelta(minutes=5))
+    report = build_rollback_drill_report(
+        from_release=release("from", "a" * 64),
+        to_release=release("to", "b" * 64),
+        backup_path=backup,
+        env=values,
+        started_at=now - timedelta(seconds=20),
+        completed_at=now,
+        recovery_scope="pilot_host",
+        recovery_host_id="pilot-host-a",
+        rto_target_seconds=120,
+        rpo_target_seconds=3600,
+        backup_manifest_path=manifest,
+    )
+    report["recovery"]["rto_target_seconds"] = 999
+    errors = validate_rollback_drill_report(
+        report,
+        env=values,
+        now=now,
+        required_scope="pilot_host",
+        expected_host_id="pilot-host-a",
+        expected_rto_target_seconds=120,
+        expected_rpo_target_seconds=3600,
+    )
+    assert any("signature is invalid" in item for item in errors)

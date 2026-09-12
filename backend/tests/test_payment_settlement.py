@@ -29,6 +29,12 @@ def patch_side_effects(monkeypatch):
 
     monkeypatch.setattr(
         payment_settlement,
+        "_lock_settlement_customer",
+        lambda db, customer_id: calls.append(("customer_lock", customer_id))
+        or SimpleNamespace(id=customer_id),
+    )
+    monkeypatch.setattr(
+        payment_settlement,
         "commit_reservations_to_sold",
         lambda db, quantities, **kwargs: calls.append(
             ("inventory", quantities, kwargs)
@@ -102,6 +108,7 @@ def test_paid_order_settlement_applies_all_side_effects_once(monkeypatch):
 
     assert order.status == "paid"
     assert order.payment_status == "paid"
+    assert calls[0] == ("customer_lock", 3)
     assert (
         "inventory",
         {11: 3, 12: 4},
@@ -122,6 +129,7 @@ def test_settlement_without_redeemed_points_skips_redemption_side_effects(monkey
     order = make_order(loyalty_points_redeemed=0)
 
     assert payment_settlement.settle_paid_order(object(), order) is True
+    assert calls[0] == ("customer_lock", 3)
     assert not any(call[0] == "redemption" for call in calls)
     assert not any(call[0] == "points" and call[3] == "loyalty_redeemed" for call in calls)
     assert any(call[0] == "points" and call[3] == "order_paid" for call in calls)

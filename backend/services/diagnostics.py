@@ -8,6 +8,7 @@ from ..config import get_settings
 from ..database import utcnow_naive
 from ..models import MoySkladSyncLog, Notification, WebhookOutbox
 from ..notification_models import NotificationDeliveryState
+from .database_readiness import migrations_are_current
 
 
 def _error_name(exc: Exception) -> str:
@@ -23,6 +24,11 @@ def run_diagnostics(db: Session) -> dict:
         checks["database"] = {"ok": True}
     except Exception as exc:
         checks["database"] = {"ok": False, "error": _error_name(exc)}
+
+    try:
+        checks["migrations"] = {"ok": migrations_are_current(db)}
+    except Exception as exc:
+        checks["migrations"] = {"ok": False, "error": _error_name(exc)}
 
     required_env = [
         "telegram_bot_token",

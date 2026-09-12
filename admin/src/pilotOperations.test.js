@@ -32,6 +32,7 @@ function healthyPayload() {
     },
     database_integrity: { healthy: true, codes: [] },
     artifact_integrity: { applicable: true, healthy: true, codes: [] },
+    continuation: { applicable: true, ready: true, next_sequence: 4 },
     money_attention: {
       payment_review_orders: 0,
       refund_attention_orders: 0,
@@ -53,10 +54,54 @@ test("healthy backend contract remains GO and exposes only selected fields", () 
   assert.equal(status.contractValid, true);
   assert.equal(status.runtime.runRef, "abcdef123456");
   assert.equal(status.runtime.acceptedOrders, 3);
+  assert.deepEqual(status.continuation, {
+    applicable: true,
+    ready: true,
+    nextSequence: 4,
+  });
   const serialized = JSON.stringify(status);
   assert.doesNotMatch(serialized, /123456789/);
   assert.doesNotMatch(serialized, /pilot-run-private/);
   assert.doesNotMatch(serialized, /private admission manifest/);
+});
+
+test("pending prior scenario forces NO-GO even if backend decision is incoherently GO", () => {
+  const payload = healthyPayload();
+  payload.continuation.ready = false;
+
+  const status = normalizePilotOperationsStatus(payload);
+
+  assert.equal(status.contractValid, true);
+  assert.equal(status.decision, "NO-GO");
+  assert.equal(status.continuation.ready, false);
+});
+
+test("continuation sequence must match accepted orders plus one", () => {
+  const payload = healthyPayload();
+  payload.continuation.next_sequence = 9;
+
+  const status = normalizePilotOperationsStatus(payload);
+
+  assert.equal(status.decision, "NO-GO");
+  assert.equal(status.contractValid, false);
+  assert.ok(status.databaseIntegrity.codes.includes("response_contract_invalid"));
+});
+
+test("bounded database evidence code is rendered without raw evidence", () => {
+  const payload = healthyPayload();
+  payload.checkout_decision = "NO-GO";
+  payload.database_integrity = {
+    healthy: false,
+    codes: ["pilot_database_evidence_invalid"],
+  };
+  payload.continuation.ready = null;
+
+  const status = normalizePilotOperationsStatus(payload);
+  const labels = pilotIntegrityLabels(status.databaseIntegrity.codes);
+
+  assert.equal(status.decision, "NO-GO");
+  assert.equal(status.contractValid, false);
+  assert.ok(labels.includes("Подписанные результаты пилота не сходятся с PostgreSQL"));
 });
 
 test("malformed response is forced to NO-GO", () => {
@@ -89,6 +134,7 @@ test("GO is downgraded when any safety condition is not confirmed", () => {
       payload.money_attention.attention_required = true;
       payload.money_attention.payment_review_orders = 1;
     },
+    (payload) => { payload.continuation.ready = false; },
     (payload) => { payload.runtime.remaining_orders = 16; },
     (payload) => { payload.runtime.slot_count = 2; },
   ];
@@ -100,7 +146,7 @@ test("GO is downgraded when any safety condition is not confirmed", () => {
   }
 });
 
-test("invalid numeric, timestamp, run and stop fields invalidate the contract", () => {
+test("invalid numeric, timestamp, run, continuation and stop fields invalidate the contract", () => {
   const cases = [
     (payload) => { payload.runtime.accepted_orders = "3"; },
     (payload) => { payload.money_attention.refund_attention_orders = -1; },
@@ -109,6 +155,8 @@ test("invalid numeric, timestamp, run and stop fields invalidate the contract", 
     (payload) => { payload.runtime.run_ref = "raw-run-id"; },
     (payload) => { payload.runtime.stop_reason = "customer 123456789"; },
     (payload) => { payload.database_integrity.codes = ["unknown_private_code"]; },
+    (payload) => { payload.continuation.ready = "private-ready"; },
+    (payload) => { payload.continuation.next_sequence = "4"; },
   ];
 
   for (const mutate of cases) {
@@ -119,7 +167,7 @@ test("invalid numeric, timestamp, run and stop fields invalidate the contract", 
     assert.equal(status.contractValid, false);
     assert.ok(status.databaseIntegrity.codes.includes("response_contract_invalid"));
     assert.equal(status.moneyAttention.attentionRequired, true);
-    assert.doesNotMatch(JSON.stringify(status), /123456789|raw-run-id|unknown_private_code/);
+    assert.doesNotMatch(JSON.stringify(status), /123456789|raw-run-id|unknown_private_code|private-ready/);
   }
 });
 
@@ -132,6 +180,7 @@ test("unknown integrity codes and stop reasons never render raw text", () => {
     healthy: false,
     codes: ["secret_path_/srv/private/evidence.json"],
   };
+  payload.continuation = { applicable: false, ready: null, next_sequence: null };
 
   const status = normalizePilotOperationsStatus(payload);
   const labels = pilotIntegrityLabels(status.databaseIntegrity.codes);

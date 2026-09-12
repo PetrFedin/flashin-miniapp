@@ -100,7 +100,7 @@ def main() -> int:
         admin = AdminUser(
             email=f"refund-{token}@test.local",
             password_hash="not-used-by-dependency-override",
-            role="manager",
+            role="owner",
             active=True,
         )
         product = Product(

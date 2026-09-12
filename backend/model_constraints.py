@@ -5,8 +5,19 @@ metadata prevents local/test databases created with ``Base.metadata.create_all``
 from being weaker than PostgreSQL production.
 """
 
-from sqlalchemy import CheckConstraint, Index, UniqueConstraint, text
+from sqlalchemy import (
+    CheckConstraint,
+    DDL,
+    ForeignKeyConstraint,
+    Index,
+    UniqueConstraint,
+    event,
+    text,
+)
+from sqlalchemy.orm import configure_mappers
 
+from .checkout_models import CheckoutAttempt
+from .money_model_types import apply_money_model_types
 from .models import (
     AdminPasswordReset,
     AdminRolePermission,
@@ -15,6 +26,7 @@ from .models import (
     CartItem,
     CrmProfile,
     FulfillmentTask,
+    FulfillmentTaskItem,
     InventoryMovement,
     LoyaltyRedemptionHold,
     LoyaltyTransaction,
@@ -22,13 +34,17 @@ from .models import (
     OrderItem,
     Payment,
     PaymentEvent,
+    PaymentReconciliation,
     ProductVariant,
     PromoCode,
+    ReferralAttribution,
     ReferralCode,
     ReturnRequest,
+    SupportTicket,
     WebhookDestination,
     WebhookOutbox,
 )
+from .pilot_models import PilotOrderSlot
 
 
 def _constraint_names(table) -> set[str]:
@@ -54,6 +70,25 @@ def _replace_check(table, name: str, expression: str) -> None:
 def _unique(table, name: str, *columns: str) -> None:
     if name not in _constraint_names(table):
         table.append_constraint(UniqueConstraint(*columns, name=name))
+
+
+def _foreign_key(
+    table,
+    name: str,
+    local_columns: tuple[str, ...],
+    remote_columns: tuple[str, ...],
+    *,
+    ondelete: str | None = None,
+) -> None:
+    if name not in _constraint_names(table):
+        table.append_constraint(
+            ForeignKeyConstraint(
+                local_columns,
+                remote_columns,
+                name=name,
+                ondelete=ondelete,
+            )
+        )
 
 
 def _index(table, name: str, columns: list) -> None:
@@ -143,6 +178,15 @@ def apply_model_constraints() -> None:
         "url",
         "event_type",
     )
+    _unique(Order.__table__, "uq_orders_id_customer_id", "id", "customer_id")
+    _unique(Cart.__table__, "uq_carts_id_customer_id", "id", "customer_id")
+    _unique(
+        ProductVariant.__table__,
+        "uq_product_variants_id_product_id",
+        "id",
+        "product_id",
+    )
+    _unique(Payment.__table__, "uq_payments_id_order_id", "id", "order_id")
 
     _index(
         WebhookOutbox.__table__,
@@ -221,4 +265,199 @@ def apply_model_constraints() -> None:
     )
 
 
+def apply_customer_owned_reference_constraints() -> None:
+    """Add true customer-owned cross-table invariants after ORM joins are configured.
+
+    Existing relationships intentionally continue to use their original
+    single-column foreign keys. Configuring the mappers before these composite
+    constraints are attached prevents the additional database-level path from
+    making relationship inference ambiguous while keeping create_all metadata
+    as strict as production Alembic migrations.
+
+    ``LoyaltyTransaction.order_id`` is deliberately excluded: referral reward
+    and referral refund rows credit/debit the referrer while pointing at the
+    invited customer's source order, so that column is provenance rather than
+    an ownership relation.
+    """
+
+    order_target = ("orders.id", "orders.customer_id")
+    cart_target = ("carts.id", "carts.customer_id")
+
+    _foreign_key(
+        ReturnRequest.__table__,
+        "fk_return_requests_order_customer",
+        ("order_id", "customer_id"),
+        order_target,
+    )
+    _foreign_key(
+        SupportTicket.__table__,
+        "fk_support_tickets_order_customer",
+        ("order_id", "customer_id"),
+        order_target,
+    )
+    _foreign_key(
+        LoyaltyRedemptionHold.__table__,
+        "fk_loyalty_redemption_holds_order_customer",
+        ("order_id", "customer_id"),
+        order_target,
+    )
+    _foreign_key(
+        LoyaltyRedemptionHold.__table__,
+        "fk_loyalty_redemption_holds_cart_customer",
+        ("cart_id", "customer_id"),
+        cart_target,
+    )
+    _foreign_key(
+        CheckoutAttempt.__table__,
+        "fk_checkout_attempts_order_customer",
+        ("order_id", "customer_id"),
+        order_target,
+    )
+    _foreign_key(
+        CheckoutAttempt.__table__,
+        "fk_checkout_attempts_cart_customer",
+        ("cart_id", "customer_id"),
+        cart_target,
+    )
+    _foreign_key(
+        PilotOrderSlot.__table__,
+        "fk_pilot_order_slots_order_customer",
+        ("order_id", "customer_id"),
+        order_target,
+        ondelete="CASCADE",
+    )
+    _foreign_key(
+        ReferralAttribution.__table__,
+        "fk_referral_attributions_rewarded_order_invited_customer",
+        ("rewarded_order_id", "invited_customer_id"),
+        order_target,
+    )
+
+
+def apply_product_variant_reference_constraints() -> None:
+    """Keep denormalized product/variant pairs internally consistent."""
+
+    variant_target = ("product_variants.id", "product_variants.product_id")
+    _foreign_key(
+        CartItem.__table__,
+        "fk_cart_items_variant_product",
+        ("variant_id", "product_id"),
+        variant_target,
+    )
+    _foreign_key(
+        OrderItem.__table__,
+        "fk_order_items_variant_product",
+        ("variant_id", "product_id"),
+        variant_target,
+    )
+
+
+def apply_payment_reconciliation_reference_constraints() -> None:
+    """Bind local reconciliation references without constraining provider evidence."""
+
+    _foreign_key(
+        PaymentReconciliation.__table__,
+        "fk_payment_reconciliations_payment_order",
+        ("payment_id", "order_id"),
+        ("payments.id", "payments.order_id"),
+    )
+
+
+def register_fulfillment_task_item_order_triggers() -> None:
+    """Make create_all databases enforce the same same-order rule as Alembic.
+
+    ``FulfillmentTaskItem`` does not duplicate ``order_id``, so this invariant
+    cannot be represented as a normal composite foreign key without changing
+    the data model. Production uses a PostgreSQL trigger. Tests/local SQLite
+    receive an equivalent trigger through SQLAlchemy DDL events.
+    """
+
+    table = FulfillmentTaskItem.__table__
+    marker = "fulfillment_task_item_same_order_triggers_registered"
+    if table.info.get(marker):
+        return
+    table.info[marker] = True
+
+    sqlite_insert = DDL(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_fulfillment_task_items_same_order_insert
+        BEFORE INSERT ON fulfillment_task_items
+        FOR EACH ROW
+        WHEN NOT EXISTS (
+            SELECT 1
+            FROM fulfillment_tasks AS task
+            JOIN order_items AS order_item
+              ON order_item.id = NEW.order_item_id
+            WHERE task.id = NEW.task_id
+              AND task.order_id = order_item.order_id
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'fulfillment task item must reference an order item from the same order');
+        END
+        """
+    ).execute_if(dialect="sqlite")
+    sqlite_update = DDL(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_fulfillment_task_items_same_order_update
+        BEFORE UPDATE OF task_id, order_item_id ON fulfillment_task_items
+        FOR EACH ROW
+        WHEN NOT EXISTS (
+            SELECT 1
+            FROM fulfillment_tasks AS task
+            JOIN order_items AS order_item
+              ON order_item.id = NEW.order_item_id
+            WHERE task.id = NEW.task_id
+              AND task.order_id = order_item.order_id
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'fulfillment task item must reference an order item from the same order');
+        END
+        """
+    ).execute_if(dialect="sqlite")
+    postgres_function = DDL(
+        """
+        CREATE OR REPLACE FUNCTION enforce_fulfillment_task_item_same_order()
+        RETURNS trigger AS $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM fulfillment_tasks AS task
+                JOIN order_items AS order_item
+                  ON order_item.id = NEW.order_item_id
+                WHERE task.id = NEW.task_id
+                  AND task.order_id = order_item.order_id
+            ) THEN
+                RAISE EXCEPTION 'fulfillment task item must reference an order item from the same order';
+            END IF;
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql
+        """
+    ).execute_if(dialect="postgresql")
+    postgres_trigger = DDL(
+        """
+        CREATE TRIGGER trg_fulfillment_task_items_same_order
+        BEFORE INSERT OR UPDATE OF task_id, order_item_id
+        ON fulfillment_task_items
+        FOR EACH ROW
+        EXECUTE FUNCTION enforce_fulfillment_task_item_same_order()
+        """
+    ).execute_if(dialect="postgresql")
+    postgres_drop_function = DDL(
+        "DROP FUNCTION IF EXISTS enforce_fulfillment_task_item_same_order()"
+    ).execute_if(dialect="postgresql")
+
+    event.listen(table, "after_create", sqlite_insert)
+    event.listen(table, "after_create", sqlite_update)
+    event.listen(table, "after_create", postgres_function)
+    event.listen(table, "after_create", postgres_trigger)
+    event.listen(table, "after_drop", postgres_drop_function)
+
+
+apply_money_model_types()
 apply_model_constraints()
+configure_mappers()
+apply_customer_owned_reference_constraints()
+apply_product_variant_reference_constraints()
+apply_payment_reconciliation_reference_constraints()
+register_fulfillment_task_item_order_triggers()

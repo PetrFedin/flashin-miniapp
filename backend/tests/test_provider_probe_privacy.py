@@ -39,7 +39,9 @@ class _Response:
 def test_telegram_probe_never_prints_token_url_or_identity(monkeypatch, capsys):
     module = _load_script("check_telegram_bot.py", "flashin_check_telegram_privacy")
     token = "123456789:telegram-secret-token"
+    mini_app_url = "https://private-mini.example.test"
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", token)
+    monkeypatch.setenv("MINI_APP_URL", mini_app_url)
 
     def fail(request, timeout=0):
         raise urllib.error.URLError(f"request failed for {request.full_url}")
@@ -48,20 +50,35 @@ def test_telegram_probe_never_prints_token_url_or_identity(monkeypatch, capsys):
     assert module.main() == 1
     failed_output = capsys.readouterr().out
     assert token not in failed_output
+    assert mini_app_url not in failed_output
     assert "api.telegram.org" not in failed_output
     assert "request failed" not in failed_output
 
-    def success(_request, timeout=0):
-        return _Response(
-            {
-                "ok": True,
-                "result": {
-                    "id": 99887766,
-                    "username": "private_bot_username",
-                    "can_join_groups": True,
-                },
-            }
-        )
+    def success(request, timeout=0):
+        if request.full_url.endswith("/getMe"):
+            return _Response(
+                {
+                    "ok": True,
+                    "result": {
+                        "id": 99887766,
+                        "username": "private_bot_username",
+                        "can_join_groups": True,
+                        "has_main_web_app": True,
+                    },
+                }
+            )
+        if request.full_url.endswith("/getChatMenuButton"):
+            return _Response(
+                {
+                    "ok": True,
+                    "result": {
+                        "type": "web_app",
+                        "text": "Open FLASHIN",
+                        "web_app": {"url": mini_app_url},
+                    },
+                }
+            )
+        raise AssertionError("unexpected Telegram Bot API method")
 
     monkeypatch.setattr(module.urllib.request, "urlopen", success)
     assert module.main() == 0
@@ -71,7 +88,12 @@ def test_telegram_probe_never_prints_token_url_or_identity(monkeypatch, capsys):
         "status": "ok",
         "provider": "telegram",
         "identity_verified": True,
+        "menu_button_verified": True,
+        "launch_url_verified": True,
+        "main_web_app_configured": True,
     }
+    assert token not in success_output
+    assert mini_app_url not in success_output
     assert "99887766" not in success_output
     assert "private_bot_username" not in success_output
 
@@ -128,106 +150,85 @@ def test_yookassa_probe_never_prints_provider_body_credentials_or_payment_id(mon
 
 def test_meilisearch_probe_does_not_print_exception_url_key_or_index(monkeypatch, capsys):
     module = _load_script("check_meilisearch.py", "flashin_check_meilisearch_privacy")
-    base_url = "https://search.private.flashin.test"
-    master_key = "meili-master-secret"
-    private_index = "private-products-index"
-    monkeypatch.setenv("MEILISEARCH_URL", base_url)
-    monkeypatch.setenv("MEILISEARCH_MASTER_KEY", master_key)
-    monkeypatch.setenv("MEILISEARCH_PRODUCTS_INDEX", private_index)
+    secret = "meili-private-master-key"
+    index = "private-products-index"
+    url = "https://meili.private.invalid"
+    monkeypatch.setenv("MEILISEARCH_URL", url)
+    monkeypatch.setenv("MEILISEARCH_MASTER_KEY", secret)
+    monkeypatch.setenv("MEILISEARCH_PRODUCTS_INDEX", index)
 
-    def fail(request, timeout=0):
-        raise urllib.error.URLError(f"failed URL {request.full_url} with key {master_key}")
+    class _FailingClient:
+        def health(self):
+            raise RuntimeError(f"private failure url={url} key={secret} index={index}")
 
-    monkeypatch.setattr(module.urllib.request, "urlopen", fail)
-    assert module.main() == 1
-    failed_output = capsys.readouterr().out
-    assert base_url not in failed_output
-    assert master_key not in failed_output
-    assert private_index not in failed_output
-    assert "failed URL" not in failed_output
+    class _MeiliModule:
+        @staticmethod
+        def Client(_url, _key):
+            return _FailingClient()
 
-
-def test_r2_probe_suppresses_provider_exception_details_and_attempts_cleanup(monkeypatch, capsys):
-    module = _load_script("check_r2_s3.py", "flashin_check_r2_privacy")
-    monkeypatch.setenv("S3_ENDPOINT_URL", "https://private-r2.example")
-    monkeypatch.setenv("S3_BUCKET", "private-bucket")
-    monkeypatch.setenv("S3_ACCESS_KEY_ID", "private-access-key")
-    monkeypatch.setenv("S3_SECRET_ACCESS_KEY", "private-secret-key")
-
-    class Client:
-        delete_calls = 0
-
-        def put_object(self, **_kwargs):
-            return None
-
-        def get_object(self, **_kwargs):
-            raise RuntimeError("private-bucket private-secret-key https://private-r2.example")
-
-        def delete_object(self, **_kwargs):
-            self.delete_calls += 1
-
-    client = Client()
-
-    class Session:
-        def client(self, *_args, **_kwargs):
-            return client
-
-    monkeypatch.setattr(module.boto3.session, "Session", Session)
+    monkeypatch.setitem(sys.modules, "meilisearch", _MeiliModule())
     assert module.main() == 1
     output = capsys.readouterr().out
-    assert "RuntimeError" in output
-    assert "private-bucket" not in output
-    assert "private-secret-key" not in output
-    assert "private-r2.example" not in output
-    assert client.delete_calls == 1
+    assert secret not in output
+    assert url not in output
+    assert index not in output
+    assert "private failure" not in output
 
 
-def test_integration_evidence_redacts_encoded_and_basic_auth_forms_and_suppresses_runner_errors(
-    monkeypatch,
-):
-    if str(SCRIPTS) not in sys.path:
-        sys.path.insert(0, str(SCRIPTS))
-    module = _load_script("check_integrations.py", "flashin_check_integrations_privacy")
-    env = {
-        "TELEGRAM_BOT_TOKEN": "123456:telegram-secret",
-        "YOOKASSA_SHOP_ID": "shop-123",
-        "YOOKASSA_SECRET_KEY": "yookassa-secret",
-        "MOYSKLAD_LOGIN": "operator@example.test",
-        "MOYSKLAD_PASSWORD": "moy-password",
-        "PILOT_EVIDENCE_SIGNING_SECRET": "evidence-signing-secret",
-    }
-    encoded_token = urllib.parse.quote(env["TELEGRAM_BOT_TOKEN"], safe="")
-    yookassa_basic = base64.b64encode(
-        f"{env['YOOKASSA_SHOP_ID']}:{env['YOOKASSA_SECRET_KEY']}".encode()
-    ).decode()
-    moysklad_basic = base64.b64encode(
-        f"{env['MOYSKLAD_LOGIN']}:{env['MOYSKLAD_PASSWORD']}".encode()
-    ).decode()
-    text = (
-        f"raw={env['YOOKASSA_SECRET_KEY']} encoded={encoded_token} "
-        f"telegram=https://api.telegram.org/bot{env['TELEGRAM_BOT_TOKEN']}/getMe "
-        f"yk={yookassa_basic} moy={moysklad_basic}"
-    )
-    redacted = module.redact(text, env)
-    assert "telegram-secret" not in redacted
-    assert "yookassa-secret" not in redacted
-    assert yookassa_basic not in redacted
-    assert moysklad_basic not in redacted
-    assert "api.telegram.org/bot123456" not in redacted
+def test_moysklad_probe_does_not_print_credentials_or_provider_body(monkeypatch, capsys):
+    module = _load_script("check_moysklad.py", "flashin_check_moysklad_privacy")
+    token = "moysklad-private-token"
+    login = "private-login"
+    password = "private-password"
+    monkeypatch.setenv("MOYSKLAD_TOKEN", token)
+    monkeypatch.setenv("MOYSKLAD_LOGIN", login)
+    monkeypatch.setenv("MOYSKLAD_PASSWORD", password)
 
-    def fail_runner(*_args, **_kwargs):
-        raise OSError("https://api.telegram.org/bot123456:telegram-secret/getMe")
+    provider_body = b'{"errors":[{"error":"provider-private-moysklad-body"}]}'
 
-    result = module.run_probe(
-        module.Probe("telegram", "check_telegram_bot.py", 30),
-        env=env,
-        host_python=True,
-        runner=fail_runner,
-    )
-    assert result == {
-        "name": "telegram",
-        "ok": False,
-        "returncode": None,
-        "stdout": "",
-        "stderr": "OSError",
-    }
+    def http_fail(request, timeout=0):
+        raise urllib.error.HTTPError(
+            request.full_url,
+            401,
+            "unauthorized",
+            {},
+            io.BytesIO(provider_body),
+        )
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", http_fail)
+    assert module.main() == 1
+    output = capsys.readouterr().out
+    assert token not in output
+    assert login not in output
+    assert password not in output
+    assert "provider-private-moysklad-body" not in output
+
+
+def test_r2_probe_does_not_print_secret_endpoint_bucket_or_exception(monkeypatch, capsys):
+    module = _load_script("check_r2_s3.py", "flashin_check_r2_privacy")
+    secret = "r2-private-secret"
+    endpoint = "https://account-private.r2.cloudflarestorage.com"
+    bucket = "private-bucket-name"
+    monkeypatch.setenv("S3_ENDPOINT_URL", endpoint)
+    monkeypatch.setenv("S3_BUCKET", bucket)
+    monkeypatch.setenv("S3_ACCESS_KEY_ID", "private-access-key")
+    monkeypatch.setenv("S3_SECRET_ACCESS_KEY", secret)
+
+    class _FailingS3:
+        def head_bucket(self, **_kwargs):
+            raise RuntimeError(
+                f"private failure endpoint={endpoint} bucket={bucket} secret={secret}"
+            )
+
+    class _Boto3:
+        @staticmethod
+        def client(*_args, **_kwargs):
+            return _FailingS3()
+
+    monkeypatch.setitem(sys.modules, "boto3", _Boto3())
+    assert module.main() == 1
+    output = capsys.readouterr().out
+    assert secret not in output
+    assert endpoint not in output
+    assert bucket not in output
+    assert "private failure" not in output

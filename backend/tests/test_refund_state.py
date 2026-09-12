@@ -136,3 +136,80 @@ def test_canceled_and_pending_refunds_preserve_reconcilable_states(monkeypatch):
     assert pending_return.status == "refund_pending"
     assert pending_order.status == "refund_requested"
     assert pending_order.payment_status == "refund_pending"
+
+
+@pytest.mark.parametrize(
+    (
+        "return_status",
+        "order_status",
+        "payment_status",
+        "provider_status",
+        "completed_total",
+        "remaining_total",
+    ),
+    [
+        ("approved", "refunded", "refunded", "pending", "1000.00", 0.0),
+        ("approved", "refunded", "refunded", "canceled", "1000.00", 0.0),
+        ("approved", "refunded", "refunded", "succeeded", "1000.00", 0.0),
+        (
+            "approved_partial",
+            "partially_refunded",
+            "partially_refunded",
+            "pending",
+            "250.00",
+            750.0,
+        ),
+        (
+            "approved_partial",
+            "partially_refunded",
+            "partially_refunded",
+            "canceled",
+            "250.00",
+            750.0,
+        ),
+    ],
+)
+def test_final_refund_state_ignores_stale_provider_observations(
+    monkeypatch,
+    return_status,
+    order_status,
+    payment_status,
+    provider_status,
+    completed_total,
+    remaining_total,
+):
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("terminal refund must not replay side effects")
+
+    monkeypatch.setattr(
+        refund_state,
+        "completed_refund_total",
+        lambda *args, **kwargs: Decimal(completed_total),
+    )
+    monkeypatch.setattr(refund_state, "apply_full_refund_loyalty", fail_if_called)
+    monkeypatch.setattr(refund_state, "restore_sold_variants", fail_if_called)
+    monkeypatch.setattr(refund_state, "enqueue_moysklad_sales_return", fail_if_called)
+    monkeypatch.setattr(refund_state, "queue_order_refund", fail_if_called)
+
+    order = _order()
+    order.status = order_status
+    order.payment_status = payment_status
+    ret = _return(1000.0 if return_status == "approved" else 250.0)
+    ret.status = return_status
+
+    result = refund_state.apply_provider_refund_status(
+        object(),
+        ret,
+        order,
+        provider_status,
+    )
+
+    assert ret.status == return_status
+    assert order.status == order_status
+    assert order.payment_status == payment_status
+    assert result == {
+        "cumulative_refund_amount": float(Decimal(completed_total)),
+        "remaining_refundable_amount": remaining_total,
+        "idempotent": True,
+        "return_status": return_status,
+    }

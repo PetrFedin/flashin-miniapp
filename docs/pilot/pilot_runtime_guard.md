@@ -15,8 +15,8 @@
 
 - `closed` — пилот ещё не открывался; новые checkout запрещены;
 - `active` — разрешены только allowlisted участники и только пока есть свободные слоты;
-- `stopped` — новые checkout запрещены после STOP, deploy, rollback или команды оператора;
-- `completed` — принято 20 новых заказов; двадцать первый checkout невозможен.
+- `stopped` — новые checkout и новые внешние payment attempts запрещены после STOP, deploy, rollback или circuit-breaker;
+- `completed` — принято 20 новых заказов; двадцать первый checkout невозможен, но уже принятые заказы могут завершить свой payment/fulfillment/refund lifecycle при сохранённой runtime safety.
 
 Состояние хранится в singleton-строке `pilot_runtime_state`. Каждый допущенный заказ получает неизменяемый слот в `pilot_order_slots` с номером 1–20, order ID, customer ID, run ID и хэшем admission.
 
@@ -36,12 +36,36 @@
 - provider, live-gate и rollback evidence имеют прежние SHA-256;
 - pilot state не был заменён после arm;
 - решение pilot state не равно `STOP`;
+- database evidence и operational queues/workers остаются безопасными;
 - число строк `pilot_order_slots` совпадает со счётчиком БД;
 - остаётся свободный слот.
 
 Слот создаётся после `Order` flush, но до резервирования остатков. Слот, заказ, stock reservation, promo и loyalty изменения входят в одну DB-транзакцию. Любая последующая ошибка откатывает весь набор изменений.
 
 Повтор запроса с уже обработанным `Idempotency-Key` возвращает существующий заказ до runtime-проверки и не занимает второй слот. Это позволяет безопасно получить результат после сетевого таймаута, даже если пилот уже остановлен или завершён.
+
+## Fresh payment guard
+
+Создание заказа и создание YooKassa payment — два разных API-шага. Поэтому runtime safety проверяется повторно непосредственно перед **новым** `POST /payments` в YooKassa.
+
+Для fresh provider payment backend требует:
+
+- `PILOT_RUNTIME_ENFORCED=true` order должен иметь неизменяемый `pilot_order_slots` slot;
+- slot должен относиться к тому же `run_id` и admission, что и текущий runtime;
+- runtime должен быть `active` или `completed`; `stopped`/`closed` запрещают новый provider payment;
+- slot sequence должен уже входить в `accepted_orders` и не выходить за лимит 20;
+- signed admission/release/pilot-state binding, database evidence и operational safety должны пройти ту же fail-closed runtime-проверку, что и новый checkout.
+
+Safety-транзакция захватывает `pilot_runtime_state` через row lock **до внешнего YooKassa create и удерживает lock до завершения этого HTTP create**. Поэтому STOP и fresh payment сериализованы без TOCTOU-окна: если STOP получил lock первым, provider create не выполняется; если payment guard получил lock первым, уже авторизованный create завершается до того, как STOP сможет зафиксироваться.
+
+При этом recovery не блокируется:
+
+- уже существующий YooKassa payment сначала fetch/reconcile/reuse и может быть завершён даже после STOP;
+- provider webhooks продолжают обрабатываться;
+- refunds намеренно остаются доступны, чтобы остановленный пилот мог вернуть деньги;
+- fulfillment, reconciliation и уведомления продолжают штатно разбирать уже принятые заказы.
+
+Это различает «не создавать новый финансовый риск» и «безопасно завершить/размотать уже начатый финансовый lifecycle».
 
 ## Подготовка
 
@@ -115,7 +139,7 @@ make pilot-runtime-stop REASON='payment amount mismatch'
 make pilot-runtime-status
 ```
 
-Команда не удаляет заказы и слоты. Она только запрещает новые checkout. Уже созданные заказы продолжают проходить payment, fulfillment, refund и reconciliation по штатным процессам.
+Команда не удаляет заказы и слоты. Она запрещает новые checkout и fresh YooKassa payment attempts. Уже созданные provider payments можно reconcile/reuse; webhooks, fulfillment, refund, notification и reconciliation продолжают безопасно завершать или разматывать уже начатые операции.
 
 Кроме ручной команды, runtime автоматически останавливается перед:
 
@@ -123,7 +147,7 @@ make pilot-runtime-status
 - `make rollback`;
 - `make rollback-drill`.
 
-Rollback повторно принудительно переводит восстановленную БД в `stopped` **до запуска публичного backend**, поэтому backup с историческим `active` не создаёт даже короткого окна для нового заказа.
+Rollback повторно принудительно переводит восстановленную БД в `stopped` **до запуска публичного backend**, поэтому backup с историческим `active` не создаёт даже короткого окна для нового заказа или fresh payment attempt.
 
 Если backend не может подтвердить остановку существующего active runtime, deploy/rollback завершается ошибкой.
 
@@ -147,11 +171,13 @@ Resume сохраняет тот же run ID, уже занятые слоты �
 
 ## Реакция API
 
-- HTTP `423` — runtime закрыт, остановлен, завершён, клиент не в allowlist или pilot state имеет STOP;
-- HTTP `503` — нарушена целостность доказательств, release capability, release binding, счётчика или файлов;
-- успешный idempotent retry ранее созданного заказа возвращает прежний `Order` и не расходует слот.
+- HTTP `423` на checkout — runtime закрыт, остановлен, завершён, клиент не в allowlist или pilot state имеет STOP;
+- HTTP `423` на fresh payment — runtime остановлен/закрыт, order не имеет admitted pilot slot либо runtime safety временно не допускает новый денежный side effect;
+- HTTP `503` — нарушена целостность evidence/release/runtime/slot binding либо safety state невозможно надёжно проверить;
+- успешный idempotent retry ранее созданного заказа возвращает прежний `Order` и не расходует слот;
+- существующая provider payment attempt сначала reconciles/reuses и не считается fresh create.
 
-Клиент получает только общий безопасный текст. Конкретная причина доступна оператору через `make pilot-runtime-status`; Telegram ID и секреты в ответ API не включаются.
+Клиент получает только общий безопасный текст. Конкретная причина доступна оператору через `make pilot-runtime-status` и readiness/incident views; Telegram ID и секреты в ответ API не включаются.
 
 ## Запреты
 
@@ -162,5 +188,6 @@ Resume сохраняет тот же run ID, уже занятые слоты �
 - открывать пилот, если current или previous не имеют валидной подписанной capability;
 - редактировать release capability, runtime-счётчик или slot rows вручную;
 - заменять pilot state после первого arm;
+- создавать fresh provider payment после STOP в обход guard;
 - продолжать после STOP без нового admission;
 - публиковать allowlist, admission/evidence или реальные идентификаторы заказов в GitHub.

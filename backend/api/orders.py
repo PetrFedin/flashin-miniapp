@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, joinedload
 from ..checkout_models import CheckoutAttempt
 from ..config import get_settings
 from ..database import get_db
+from ..delivery_schemas import DeliveryCheckoutIn
 from ..models import (
     Cart,
     CartItem,
@@ -20,28 +21,43 @@ from ..models import (
     OrderItem,
     PromoCode,
 )
-from ..schemas import CheckoutIn, OrderOut
+from ..schemas import OrderOut
 from ..security import get_current_customer
 from ..services.checkout_validation import normalize_checkout_input
-from ..services.delivery import calculate_delivery_price
+from ..services.delivery_authority import (
+    DeliveryAuthorityError,
+    accept_quote_for_order,
+    create_delivery_quote,
+    lock_checkout_quote,
+)
 from ..services.inventory import reserve_variant
 from ..services.pilot_runtime import acquire_pilot_checkout, record_pilot_order
+from ..services.pricing import load_product_price_quotes
 from ..services.promos import calculate_discount
 
 router = APIRouter(prefix="/orders", tags=["orders"])
 
 _MONEY_STEP = Decimal("0.01")
+_POINTS_STEP = Decimal("0.0001")
 _IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{16,128}$")
 
 
-def _money(value: object, field: str) -> Decimal:
+def _decimal_value(value: object, field: str) -> Decimal:
     try:
-        amount = Decimal(str(value)).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
-    except (InvalidOperation, TypeError, ValueError):
-        raise HTTPException(status_code=409, detail=f"Invalid {field}")
+        amount = value if isinstance(value, Decimal) else Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=f"Invalid {field}") from exc
     if not amount.is_finite():
         raise HTTPException(status_code=409, detail=f"Invalid {field}")
     return amount
+
+
+def _money(value: object, field: str) -> Decimal:
+    return _decimal_value(value, field).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
+
+
+def _points(value: object, field: str) -> Decimal:
+    return _decimal_value(value, field).quantize(_POINTS_STEP, rounding=ROUND_HALF_UP)
 
 
 def _normalize_idempotency_key(value: str | None) -> str:
@@ -63,11 +79,13 @@ def _checkout_request_fingerprint(
     delivery_type: str,
     address: str,
     comment: str,
+    delivery_quote_id: str,
 ) -> str:
     canonical = json.dumps(
         {
             "address": address,
             "comment": comment,
+            "delivery_quote_id": delivery_quote_id,
             "delivery_type": delivery_type,
             "name": name,
             "phone": phone,
@@ -190,7 +208,7 @@ def _lock_and_calculate_promo(
         .with_for_update()
         .first()
     )
-    discount = _money(calculate_discount(promo, float(subtotal)), "promo discount")
+    discount = _money(calculate_discount(promo, subtotal), "promo discount")
     if discount < 0 or discount > subtotal:
         raise HTTPException(status_code=409, detail="Promo discount is invalid")
     return promo, discount
@@ -203,11 +221,11 @@ def _lock_and_validate_loyalty(
     subtotal: Decimal,
     promo_discount: Decimal,
 ) -> tuple[Decimal, Decimal, LoyaltyRedemptionHold | None]:
-    requested_points = _money(cart.loyalty_points_to_redeem or 0, "loyalty points")
+    requested_points = _points(cart.loyalty_points_to_redeem or 0, "loyalty points")
     if requested_points < 0:
         raise HTTPException(status_code=409, detail="Loyalty points cannot be negative")
     if requested_points == 0:
-        return Decimal("0.00"), Decimal("0.00"), None
+        return Decimal("0.0000"), Decimal("0.00"), None
 
     profile = (
         db.query(CrmProfile)
@@ -229,10 +247,12 @@ def _lock_and_validate_loyalty(
     )
     current_hold = next((hold for hold in holds if hold.cart_id == cart.id), None)
     other_reserved_points = sum(
-        (_money(hold.points, "reserved loyalty points") for hold in holds if hold.cart_id != cart.id),
-        Decimal("0.00"),
+        (_points(hold.points, "reserved loyalty points") for hold in holds if hold.cart_id != cart.id),
+        Decimal("0.0000"),
     )
-    available_points = _money(profile.loyalty_points, "loyalty balance") - other_reserved_points
+    available_points = (
+        _points(profile.loyalty_points, "loyalty balance") - other_reserved_points
+    ).quantize(_POINTS_STEP, rounding=ROUND_HALF_UP)
     if requested_points > available_points:
         raise HTTPException(status_code=409, detail="Not enough available loyalty points")
 
@@ -240,19 +260,19 @@ def _lock_and_validate_loyalty(
     point_value = _money(settings.loyalty_point_value_rub, "loyalty point value")
     loyalty_discount = (requested_points * point_value).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
     maximum_discount = (
-        subtotal * Decimal(str(settings.loyalty_max_redeem_percent)) / Decimal("100")
+        subtotal * _decimal_value(settings.loyalty_max_redeem_percent, "loyalty redeem percent") / Decimal("100")
     ).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
     payable_before_loyalty = subtotal - promo_discount
     if loyalty_discount > maximum_discount or loyalty_discount > payable_before_loyalty:
         raise HTTPException(status_code=409, detail="Loyalty redemption exceeds the allowed limit")
 
     if current_hold:
-        current_hold.points = float(requested_points)
+        current_hold.points = requested_points
     else:
         current_hold = LoyaltyRedemptionHold(
             customer_id=customer_id,
             cart_id=cart.id,
-            points=float(requested_points),
+            points=requested_points,
             status="reserved",
         )
         db.add(current_hold)
@@ -260,9 +280,50 @@ def _lock_and_validate_loyalty(
     return requested_points, loyalty_discount, current_hold
 
 
+def _checkout_delivery_quote(
+    db: Session,
+    *,
+    customer_id: int,
+    quote_public_id: str,
+    delivery_type: str,
+    address: str,
+):
+    try:
+        if quote_public_id:
+            quote = lock_checkout_quote(
+                db,
+                customer_id=customer_id,
+                quote_public_id=quote_public_id,
+                delivery_type=delivery_type,
+                submitted_address=address,
+            )
+        elif delivery_type == "pickup":
+            quote = create_delivery_quote(
+                db,
+                customer_id=customer_id,
+                delivery_type="pickup",
+            )
+        else:
+            raise DeliveryAuthorityError(
+                "A current delivery quote is required for courier checkout",
+                code="quote_required",
+            )
+    except DeliveryAuthorityError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    if quote.currency != "RUB":
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "quote_currency_unsupported", "message": "Checkout currently requires a RUB delivery quote"},
+        )
+    return quote
+
+
 @router.post("/checkout", response_model=OrderOut)
 def checkout(
-    payload: CheckoutIn,
+    payload: DeliveryCheckoutIn,
     idempotency_key_header: str = Header(alias="Idempotency-Key"),
     customer: Customer = Depends(get_current_customer),
     db: Session = Depends(get_db),
@@ -280,6 +341,7 @@ def checkout(
     delivery_type = checkout_input.delivery_type
     address = checkout_input.address
     comment = checkout_input.comment
+    delivery_quote_id = str(payload.delivery_quote_id or "").strip()
 
     request_fingerprint = _checkout_request_fingerprint(
         name=name,
@@ -287,6 +349,7 @@ def checkout(
         delivery_type=delivery_type,
         address=address,
         comment=comment,
+        delivery_quote_id=delivery_quote_id,
     )
 
     try:
@@ -305,10 +368,24 @@ def checkout(
             customer=locked_customer,
             settings=get_settings(),
         )
+        delivery_quote = _checkout_delivery_quote(
+            db,
+            customer_id=customer.id,
+            quote_public_id=delivery_quote_id,
+            delivery_type=delivery_type,
+            address=address,
+        )
+        authoritative_address = delivery_quote.address_snapshot if delivery_type == "courier" else ""
+
         cart = _load_locked_active_cart(db, customer.id)
         if not cart:
             raise HTTPException(status_code=409, detail="No active cart available for checkout")
         _validate_cart_for_checkout(cart)
+        price_quotes = load_product_price_quotes(
+            db,
+            [item.product for item in cart.items],
+            lock=True,
+        )
 
         attempt = CheckoutAttempt(
             customer_id=customer.id,
@@ -323,7 +400,7 @@ def checkout(
         locked_customer.phone = phone
 
         subtotal = sum(
-            (_money(item.product.price, "product price") * item.quantity for item in cart.items),
+            (price_quotes[int(item.product_id)].effective_price * item.quantity for item in cart.items),
             Decimal("0.00"),
         ).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
         if subtotal <= 0:
@@ -337,10 +414,7 @@ def checkout(
             subtotal,
             discount,
         )
-        delivery_price = _money(
-            calculate_delivery_price(db, delivery_type, address),
-            "delivery price",
-        )
+        delivery_price = _money(delivery_quote.price, "delivery quote price")
         if delivery_price < 0:
             raise HTTPException(status_code=409, detail="Delivery price cannot be negative")
 
@@ -358,18 +432,25 @@ def checkout(
             payment_status="pending",
             delivery_status="not_started",
             delivery_type=delivery_type,
-            address=address,
+            address=authoritative_address,
             comment=comment,
             currency="RUB",
-            discount_amount=float(discount),
-            loyalty_points_redeemed=float(loyalty_points),
-            loyalty_discount_amount=float(loyalty_discount),
+            discount_amount=discount,
+            loyalty_points_redeemed=loyalty_points,
+            loyalty_discount_amount=loyalty_discount,
             referral_code=(cart.referral_code or "").strip().upper()[:64],
-            delivery_price=float(delivery_price),
-            total_amount=float(final_amount),
+            delivery_price=delivery_price,
+            total_amount=final_amount,
         )
         db.add(order)
         db.flush()
+        try:
+            accept_quote_for_order(delivery_quote, order)
+        except DeliveryAuthorityError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
         attempt.order_id = order.id
         record_pilot_order(
             db,
@@ -385,8 +466,12 @@ def checkout(
                 cart_item.quantity,
                 order_id=order.id,
                 source="checkout",
+                expected_product_id=int(cart_item.product_id),
             )
             product = cart_item.product
+            quote = price_quotes.get(int(product.id))
+            if quote is None:
+                raise HTTPException(status_code=409, detail=f"Missing checkout price for product {product.id}")
             db.add(
                 OrderItem(
                     order_id=order.id,
@@ -395,7 +480,7 @@ def checkout(
                     title=product.title,
                     size=variant.size,
                     quantity=cart_item.quantity,
-                    price=float(_money(product.price, "product price")),
+                    price=quote.effective_price,
                 )
             )
 

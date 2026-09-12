@@ -18,6 +18,7 @@ def _safe_config() -> dict:
         "notification_worker",
         "ops_jobs",
         "outbox_jobs",
+        "provider_command_jobs",
         "moysklad_sync",
         "campaign_jobs",
         "sla_jobs",
@@ -55,11 +56,33 @@ def _safe_config() -> dict:
     for worker_name in worker_names:
         services[worker_name]["depends_on"] = {"db": {"condition": "service_healthy"}}
 
+    services["alertmanager"] = {
+        "restart": "unless-stopped",
+        "image": "prom/alertmanager:v0.33.1",
+        "command": [
+            "--config.file=/run/secrets/alertmanager.yml",
+            "--storage.path=/alertmanager",
+        ],
+        "healthcheck": {"test": ["CMD-SHELL", "wget -qO- http://localhost:9093/-/ready"]},
+        "secrets": [
+            {"source": "alertmanager_config", "target": "alertmanager.yml"},
+        ],
+        "volumes": [
+            {
+                "type": "volume",
+                "source": "alertmanager_data",
+                "target": "/alertmanager",
+            }
+        ],
+    }
     services["prometheus"] = {
         "restart": "unless-stopped",
         "image": "prom/prometheus:v3.5.0",
         "healthcheck": {"test": ["CMD-SHELL", "wget -qO- http://localhost:9090/-/ready"]},
-        "depends_on": {"backend": {"condition": "service_healthy"}},
+        "depends_on": {
+            "backend": {"condition": "service_healthy"},
+            "alertmanager": {"condition": "service_healthy"},
+        },
         "volumes": [
             {
                 "type": "bind",
@@ -99,7 +122,14 @@ def _safe_config() -> dict:
             "backend": {"condition": "service_started"},
         },
     }
-    return {"services": services}
+    return {
+        "services": services,
+        "secrets": {
+            "alertmanager_config": {
+                "file": "./deploy/runtime/alertmanager.yml",
+            }
+        },
+    }
 
 
 def test_safe_production_config_passes():
@@ -163,3 +193,33 @@ def test_required_service_restart_policy_is_enforced():
     errors = module.validate_config(config)
 
     assert "Service scheduler must use restart: unless-stopped" in errors
+
+
+def test_alertmanager_must_use_runtime_secret_and_non_public_storage():
+    module = _load_module()
+    config = _safe_config()
+    config["secrets"].pop("alertmanager_config")
+    config["services"]["alertmanager"]["secrets"] = []
+    config["services"]["alertmanager"]["volumes"] = [
+        {
+            "type": "bind",
+            "source": "./alertmanager-data",
+            "target": "/alertmanager",
+        }
+    ]
+
+    errors = module.validate_config(config)
+
+    assert "Alertmanager must consume the rendered config as a Compose secret" in errors
+    assert "Compose must define the alertmanager_config secret" in errors
+    assert "Alertmanager /alertmanager storage must be a named volume" in errors
+
+
+def test_prometheus_must_wait_for_alertmanager_health():
+    module = _load_module()
+    config = _safe_config()
+    config["services"]["prometheus"]["depends_on"].pop("alertmanager")
+
+    errors = module.validate_config(config)
+
+    assert "Prometheus must wait for healthy Alertmanager" in errors

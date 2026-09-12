@@ -34,9 +34,16 @@ def test_promo_migration_repairs_data_before_constraints():
     assert 'down_revision = "0016_one_active_cart"' in source
 
 
-def test_monolithic_admin_routes_are_removed_before_registration():
-    source = (ROOT / "backend/main.py").read_text(encoding="utf-8")
+def test_canonical_promo_route_is_physical_not_runtime_surgery():
+    main = (ROOT / "backend/main.py").read_text(encoding="utf-8")
+    monolith = (ROOT / "backend/api/admin.py").read_text(encoding="utf-8")
+    canonical = (ROOT / "backend/api/admin_promos.py").read_text(encoding="utf-8")
 
-    assert '("/admin/promocodes", "POST")' in source
-    assert "admin_promos_router" in source
-    assert source.index("admin_router.routes[:]") < source.index("app = FastAPI(")
+    assert '("/admin/promocodes", "POST")' not in main
+    assert "_REMOVED_MONOLITH_ADMIN_ROUTES" not in main
+    assert "admin_router.routes[:]" not in main
+    assert "admin_promos_router" in main
+    assert '@router.post("/promocodes")' not in monolith
+    assert "def admin_create_promo(" not in monolith
+    assert '@router.post("/promocodes")' in canonical
+    assert "normalize_promo_definition" in canonical

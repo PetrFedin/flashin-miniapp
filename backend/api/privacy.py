@@ -8,6 +8,7 @@ from ..models import ConsentRecord, Customer, PrivacyRequest
 from ..schemas import ConsentIn, PrivacyRequestCreate, PrivacyRequestOut
 from ..security import get_current_admin, get_current_customer
 from ..services.audit import log_admin_action
+from ..services.customer_auth import revoke_customer_sessions
 from ..services.privacy import (
     ALLOWED_CONSENT_TYPES,
     OPEN_PRIVACY_REQUEST_STATUSES,
@@ -191,7 +192,13 @@ def admin_process_privacy_request(
                 )
             }
         elif request.request_type == "delete":
+            sessions_revoked = revoke_customer_sessions(
+                db,
+                customer_id=customer.id,
+                reason="privacy_deletion",
+            )
             result = anonymize_customer(db, customer)
+            result["sessions_revoked"] = sessions_revoked
         else:
             raise HTTPException(status_code=400, detail="Unsupported privacy request type")
 

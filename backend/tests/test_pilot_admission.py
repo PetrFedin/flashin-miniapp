@@ -17,6 +17,7 @@ from pilot_evidence import (  # noqa: E402
     build_rollback_drill_report,
     configuration_fingerprint,
     release_binding,
+    sha256_file,
     sign_payload,
     utc_timestamp,
 )
@@ -36,6 +37,10 @@ def env():
         "S3_SECRET_ACCESS_KEY": "secret",
         "MEILISEARCH_ENABLED": "true",
         "MEILISEARCH_MASTER_KEY": "meili",
+        "PILOT_RECOVERY_SCOPE": "pilot_host",
+        "PILOT_RECOVERY_HOST_ID": "pilot-host-test",
+        "PILOT_RECOVERY_RTO_SECONDS": "600",
+        "PILOT_RECOVERY_RPO_SECONDS": "3600",
     }
 
 
@@ -97,6 +102,56 @@ def write_json(path: Path, payload):
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def signed_backup_manifest(backup: Path, values, created_at: datetime) -> Path:
+    payload = {
+        "schema_version": 1,
+        "kind": "postgres_backup_manifest",
+        "created_at": utc_timestamp(created_at),
+        "source_database": "flashin",
+        "backup": {
+            "sha256": sha256_file(backup),
+            "size_bytes": backup.stat().st_size,
+        },
+        "database_snapshot": {
+            "alembic_revision": "test-revision",
+            "public_table_count": 1,
+            "public_tables_sha256": "1" * 64,
+            "schema_sha256": "2" * 64,
+            "critical_tables": {},
+        },
+    }
+    manifest = Path(f"{backup}.manifest.json")
+    write_json(manifest, sign_payload(payload, values["PILOT_EVIDENCE_SIGNING_SECRET"]))
+    return manifest
+
+
+def pilot_rollback_report(
+    tmp_path: Path,
+    values,
+    from_release,
+    to_release,
+    now: datetime,
+    name: str = "backup",
+):
+    backup = tmp_path / f"{name}.sql.gz"
+    backup.write_bytes(f"{name}-backup".encode("utf-8"))
+    manifest = signed_backup_manifest(backup, values, now - timedelta(minutes=5))
+    return build_rollback_drill_report(
+        from_release=from_release,
+        to_release=to_release,
+        backup_path=backup,
+        env=values,
+        started_at=now - timedelta(seconds=30),
+        completed_at=now,
+        recovery_scope="pilot_host",
+        recovery_host_id=values["PILOT_RECOVERY_HOST_ID"],
+        rto_target_seconds=values["PILOT_RECOVERY_RTO_SECONDS"],
+        rpo_target_seconds=values["PILOT_RECOVERY_RPO_SECONDS"],
+        backup_manifest_path=manifest,
+        max_age_days=30,
+    )
+
+
 def test_admission_manifest_binds_all_evidence_and_approvals(tmp_path: Path):
     values = env()
     current = release("current", "a")
@@ -105,20 +160,11 @@ def test_admission_manifest_binds_all_evidence_and_approvals(tmp_path: Path):
     provider_path = tmp_path / "provider.json"
     live_path = tmp_path / "live.json"
     rollback_path = tmp_path / "rollback.json"
-    backup = tmp_path / "backup.sql.gz"
-    backup.write_bytes(b"backup")
     write_json(provider_path, provider_report(now, values, current))
     write_json(live_path, live_report(now, values, current))
     write_json(
         rollback_path,
-        build_rollback_drill_report(
-            from_release=current,
-            to_release=previous,
-            backup_path=backup,
-            env=values,
-            completed_at=now,
-            max_age_days=30,
-        ),
+        pilot_rollback_report(tmp_path, values, current, previous, now),
     )
     manifest = build_manifest(
         env=values,
@@ -197,20 +243,11 @@ def test_admission_rejects_rollback_drill_for_unrelated_releases(tmp_path: Path)
     provider_path = tmp_path / "provider.json"
     live_path = tmp_path / "live.json"
     rollback_path = tmp_path / "rollback.json"
-    backup = tmp_path / "backup.sql.gz"
-    backup.write_bytes(b"backup")
     write_json(provider_path, provider_report(now, values, current))
     write_json(live_path, live_report(now, values, current))
     write_json(
         rollback_path,
-        build_rollback_drill_report(
-            from_release=unrelated,
-            to_release=previous,
-            backup_path=backup,
-            env=values,
-            completed_at=now,
-            max_age_days=30,
-        ),
+        pilot_rollback_report(tmp_path, values, unrelated, previous, now),
     )
     manifest = build_manifest(
         env=values,
@@ -281,18 +318,9 @@ def test_admission_create_preflight_binds_live_gate_to_current_release(tmp_path:
     previous = release("previous", "b")
     unrelated = release("unrelated", "c")
     now = datetime.now(UTC)
-    backup = tmp_path / "backup.sql.gz"
-    backup.write_bytes(b"backup")
     provider = provider_report(now, values, current)
     live = live_report(now, values, current)
-    rollback = build_rollback_drill_report(
-        from_release=current,
-        to_release=previous,
-        backup_path=backup,
-        env=values,
-        completed_at=now,
-        max_age_days=30,
-    )
+    rollback = pilot_rollback_report(tmp_path, values, current, previous, now)
 
     assert validate_admission_evidence_inputs(
         provider,
@@ -330,16 +358,7 @@ def test_admission_preflight_rejects_resigned_provider_output(tmp_path: Path):
     provider["results"][0]["provider_reference"] = "private-provider-id"
     provider = sign_payload(provider, values["PILOT_EVIDENCE_SIGNING_SECRET"])
     live = live_report(now, values, current)
-    backup = tmp_path / "backup.sql.gz"
-    backup.write_bytes(b"backup")
-    rollback = build_rollback_drill_report(
-        from_release=current,
-        to_release=previous,
-        backup_path=backup,
-        env=values,
-        completed_at=now,
-        max_age_days=30,
-    )
+    rollback = pilot_rollback_report(tmp_path, values, current, previous, now)
 
     errors = validate_admission_evidence_inputs(
         provider,
@@ -354,3 +373,64 @@ def test_admission_preflight_rejects_resigned_provider_output(tmp_path: Path):
 
     assert "provider evidence must not retain probe stdout/stderr" in errors
     assert "provider evidence result contains unsupported fields" in errors
+
+
+def test_admission_rejects_ci_recovery_evidence(tmp_path: Path):
+    values = env()
+    current = release("current", "a")
+    previous = release("previous", "b")
+    now = datetime.now(UTC)
+    provider = provider_report(now, values, current)
+    live = live_report(now, values, current)
+    backup = tmp_path / "ci-backup.sql.gz"
+    backup.write_bytes(b"ci-backup")
+    rollback = build_rollback_drill_report(
+        from_release=current,
+        to_release=previous,
+        backup_path=backup,
+        env=values,
+        completed_at=now,
+        recovery_scope="ci",
+    )
+
+    errors = validate_admission_evidence_inputs(
+        provider,
+        live,
+        rollback,
+        env=values,
+        current_release=current,
+        provider_max_age_minutes=60,
+        live_max_age_minutes=30,
+        rollback_max_age_days=30,
+    )
+    assert any("scope must be pilot_host" in item for item in errors)
+
+
+def test_admission_requires_explicit_recovery_host_and_targets(tmp_path: Path):
+    values = env()
+    current = release("current", "a")
+    previous = release("previous", "b")
+    now = datetime.now(UTC)
+    provider = provider_report(now, values, current)
+    live = live_report(now, values, current)
+    rollback = pilot_rollback_report(tmp_path, values, current, previous, now)
+
+    missing = dict(values)
+    missing["PILOT_RECOVERY_SCOPE"] = "ci"
+    missing["PILOT_RECOVERY_HOST_ID"] = ""
+    missing["PILOT_RECOVERY_RTO_SECONDS"] = "0"
+    missing["PILOT_RECOVERY_RPO_SECONDS"] = "not-a-number"
+    errors = validate_admission_evidence_inputs(
+        provider,
+        live,
+        rollback,
+        env=missing,
+        current_release=current,
+        provider_max_age_minutes=60,
+        live_max_age_minutes=30,
+        rollback_max_age_days=30,
+    )
+    assert "PILOT_RECOVERY_SCOPE must be pilot_host for pilot admission" in errors
+    assert "PILOT_RECOVERY_HOST_ID is required for pilot admission" in errors
+    assert "PILOT_RECOVERY_RTO_SECONDS must be a positive integer" in errors
+    assert "PILOT_RECOVERY_RPO_SECONDS must be a positive integer" in errors

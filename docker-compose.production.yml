@@ -76,6 +76,11 @@ services:
     restart: unless-stopped
     ports: !reset []
 
+  alertmanager:
+    restart: unless-stopped
+    ports: !reset []
+    stop_grace_period: 30s
+
   prometheus:
     restart: unless-stopped
     ports: !reset []

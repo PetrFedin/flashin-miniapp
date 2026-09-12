@@ -16,6 +16,9 @@ class FakeQuery:
     def filter(self, *args, **kwargs):
         return self
 
+    def order_by(self, *args, **kwargs):
+        return self
+
     def with_for_update(self):
         return self
 
@@ -56,10 +59,12 @@ def settings(point_value=1, max_percent=30):
 
 
 def item(price, quantity=1, item_id=1):
+    product_id = item_id
     return SimpleNamespace(
         id=item_id,
+        product_id=product_id,
         quantity=quantity,
-        product=SimpleNamespace(price=price),
+        product=SimpleNamespace(id=product_id, price=price, old_price=None),
     )
 
 

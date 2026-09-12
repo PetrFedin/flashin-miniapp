@@ -28,6 +28,18 @@ def _validate_variant_state(variant: ProductVariant) -> None:
         raise HTTPException(status_code=409, detail="Reserved quantity exceeds stock")
 
 
+def _validate_expected_product(variant: ProductVariant, expected_product_id: int | None) -> None:
+    if expected_product_id is None:
+        return
+    if isinstance(expected_product_id, bool) or not isinstance(expected_product_id, int) or expected_product_id <= 0:
+        raise HTTPException(status_code=400, detail="Expected product id must be a positive integer")
+    if int(variant.product_id) != int(expected_product_id):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Variant {variant.id} changed product binding during inventory operation",
+        )
+
+
 def _normalize_quantities(quantities: Mapping[int, int]) -> dict[int, int]:
     normalized: dict[int, int] = {}
     for variant_id, quantity in quantities.items():
@@ -41,10 +53,15 @@ def _normalize_quantities(quantities: Mapping[int, int]) -> dict[int, int]:
 
 
 def _load_locked_variant(db: Session, variant_id: int) -> ProductVariant:
+    # ProductVariant is frequently eager-loaded earlier in the request. A later
+    # FOR UPDATE query must overwrite that identity-map state; otherwise the DB
+    # lock can be correct while stock/reserved decisions still use stale values.
     variant = (
         db.query(ProductVariant)
         .filter(ProductVariant.id == variant_id)
+        .order_by(ProductVariant.id.asc())
         .with_for_update()
+        .populate_existing()
         .first()
     )
     if not variant:
@@ -63,6 +80,7 @@ def _load_locked_variants(
         .filter(ProductVariant.id.in_(sorted(normalized)))
         .order_by(ProductVariant.id.asc())
         .with_for_update()
+        .populate_existing()
         .all()
     )
     by_id = {variant.id: variant for variant in variants}
@@ -117,9 +135,11 @@ def reserve_variant(
     *,
     order_id: int | None = None,
     source: str = "reserve",
+    expected_product_id: int | None = None,
 ) -> ProductVariant:
     _validate_positive_quantity(quantity)
     variant = _load_locked_variant(db, variant_id)
+    _validate_expected_product(variant, expected_product_id)
     available_qty = variant.stock_qty - variant.reserved_qty
     if available_qty < quantity:
         raise HTTPException(status_code=409, detail=f"Size {variant.size} is out of stock")

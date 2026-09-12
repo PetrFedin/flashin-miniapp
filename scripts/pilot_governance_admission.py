@@ -18,6 +18,7 @@ from pilot_evidence import (
     sha256_file,
     sign_payload,
 )
+from pilot_governance_policy import report_trust_anchor_errors
 from pilot_governance_release_guard import require_current_governance_release
 from pilot_lifecycle_admission import validate_attached_lifecycle
 from pilot_readiness import read_env
@@ -120,6 +121,7 @@ def validate_attached_governance(
     except ValueError as exc:
         return list(dict.fromkeys(errors + [str(exc)]))
 
+    errors.extend(report_trust_anchor_errors(report))
     errors.extend(_mandatory_check_errors(report))
     release = manifest.get("release")
     if not isinstance(release, Mapping):
@@ -217,7 +219,8 @@ def attach_governance_report(
         for key in ("release_id", "git_commit", "sha256")
     ):
         raise ValueError("Pilot admission release does not match current governance-capable release")
-    governance_errors = _mandatory_check_errors(report)
+    governance_errors = report_trust_anchor_errors(report)
+    governance_errors.extend(_mandatory_check_errors(report))
     governance_errors.extend(
         validate_report(
             report,

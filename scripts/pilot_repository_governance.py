@@ -33,7 +33,14 @@ from pilot_readiness import read_env
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_REPORT = ROOT / "docs/pilot/repository_governance_report.json"
 API_VERSION = "2026-03-10"
-DEFAULT_REQUIRED_CHECKS = ("backend", "frontend", "admin", "browser-e2e", "docker")
+DEFAULT_REQUIRED_CHECKS = (
+    "backend",
+    "frontend",
+    "admin",
+    "browser-e2e",
+    "integrated-e2e",
+    "docker",
+)
 DEFAULT_WORKFLOW_NAME = "CI"
 DEFAULT_WORKFLOW_PATH = "ci.yml"
 DEFAULT_GITHUB_ACTIONS_APP_ID = 15368

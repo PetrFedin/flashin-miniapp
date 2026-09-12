@@ -31,6 +31,11 @@ from ..services.rbac import require_permission
 
 router = APIRouter(prefix="/platform", tags=["platform"])
 _EVENT_STATUSES = {"pending", "processed", "failed"}
+_PLATFORM_WRITE_PERMISSION = "platform.write"
+_EVENT_READ_PERMISSION = "events.read"
+_EVENT_REPLAY_PERMISSION = "events.replay"
+_AUDIT_READ_PERMISSION = "audit.read"
+_PUBLIC_REMOTE_CONFIG_PREFIX = "public."
 
 
 class BusinessEventReplayIn(BaseModel):
@@ -78,6 +83,22 @@ def _serialize_event(
     return result
 
 
+def _is_public_remote_config_key(key: str) -> bool:
+    return (
+        isinstance(key, str)
+        and key.startswith(_PUBLIC_REMOTE_CONFIG_PREFIX)
+        and len(key) > len(_PUBLIC_REMOTE_CONFIG_PREFIX)
+    )
+
+
+def _decode_public_remote_config_value(value_json: str | None) -> dict | None:
+    try:
+        value = json.loads(value_json or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
 @router.get("/features")
 def public_features(db: Session = Depends(get_db)):
     return {f.key: f.enabled for f in db.query(FeatureFlag).all()}
@@ -89,21 +110,54 @@ def upsert_feature(
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    require_permission(db, admin, "orders.write")
-    row = db.query(FeatureFlag).filter(FeatureFlag.key == payload.key).first()
-    if not row:
-        row = FeatureFlag(key=payload.key)
-        db.add(row)
-    row.enabled = payload.enabled
-    row.description = payload.description
-    db.commit()
-    db.refresh(row)
-    return row
+    require_permission(db, admin, _PLATFORM_WRITE_PERMISSION)
+    try:
+        row = (
+            db.query(FeatureFlag)
+            .filter(FeatureFlag.key == payload.key)
+            .with_for_update()
+            .first()
+        )
+        if not row:
+            row = FeatureFlag(key=payload.key)
+            db.add(row)
+            db.flush()
+        row.enabled = payload.enabled
+        row.description = payload.description
+        log_admin_action(
+            db,
+            admin,
+            "platform.feature_flag.upsert",
+            "feature_flag",
+            row.id,
+            {"key": row.key, "enabled": row.enabled},
+        )
+        db.commit()
+        db.refresh(row)
+        return row
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.get("/remote-config")
 def public_remote_config(db: Session = Depends(get_db)):
-    return {r.key: json.loads(r.value_json or "{}") for r in db.query(RemoteConfig).all()}
+    # RemoteConfig is also used for operational values that can be sensitive.
+    # Anonymous clients only receive entries deliberately placed in the public.*
+    # namespace; everything else is private by default.
+    rows = (
+        db.query(RemoteConfig)
+        .filter(RemoteConfig.key.like(f"{_PUBLIC_REMOTE_CONFIG_PREFIX}%"))
+        .all()
+    )
+    result = {}
+    for row in rows:
+        if not _is_public_remote_config_key(row.key):
+            continue
+        value = _decode_public_remote_config_value(row.value_json)
+        if value is not None:
+            result[row.key] = value
+    return result
 
 
 @router.post("/admin/remote-config", response_model=RemoteConfigOut)
@@ -112,16 +166,36 @@ def upsert_remote_config(
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    require_permission(db, admin, "orders.write")
-    row = db.query(RemoteConfig).filter(RemoteConfig.key == payload.key).first()
-    if not row:
-        row = RemoteConfig(key=payload.key)
-        db.add(row)
-    row.value_json = json.dumps(payload.value_json, ensure_ascii=False)
-    row.description = payload.description
-    db.commit()
-    db.refresh(row)
-    return row
+    require_permission(db, admin, _PLATFORM_WRITE_PERMISSION)
+    try:
+        row = (
+            db.query(RemoteConfig)
+            .filter(RemoteConfig.key == payload.key)
+            .with_for_update()
+            .first()
+        )
+        if not row:
+            row = RemoteConfig(key=payload.key)
+            db.add(row)
+            db.flush()
+        row.value_json = json.dumps(payload.value_json, ensure_ascii=False)
+        row.description = payload.description
+        # Deliberately do not duplicate remote-config values into the audit trail;
+        # configuration may contain operationally sensitive data.
+        log_admin_action(
+            db,
+            admin,
+            "platform.remote_config.upsert",
+            "remote_config",
+            row.id,
+            {"key": row.key},
+        )
+        db.commit()
+        db.refresh(row)
+        return row
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.get("/cms/pages/{slug}", response_model=CmsPageOut)
@@ -188,7 +262,7 @@ def event_summary(
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    require_permission(db, admin, "orders.read")
+    require_permission(db, admin, _EVENT_READ_PERMISSION)
     counts = {status: 0 for status in _EVENT_STATUSES}
     for status, count in (
         db.query(BusinessEvent.status, func.count(BusinessEvent.id))
@@ -218,7 +292,7 @@ def list_events(
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    require_permission(db, admin, "orders.read")
+    require_permission(db, admin, _EVENT_READ_PERMISSION)
     query = db.query(BusinessEvent, BusinessEventRecoveryState).outerjoin(
         BusinessEventRecoveryState,
         BusinessEventRecoveryState.business_event_id == BusinessEvent.id,
@@ -249,7 +323,7 @@ def get_event(
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    require_permission(db, admin, "orders.read")
+    require_permission(db, admin, _EVENT_READ_PERMISSION)
     row = (
         db.query(BusinessEvent, BusinessEventRecoveryState)
         .outerjoin(
@@ -271,7 +345,7 @@ def replay_event(
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    require_permission(db, admin, "orders.write")
+    require_permission(db, admin, _EVENT_REPLAY_PERMISSION)
     reason = payload.reason.strip()
     if len(reason) < 5:
         raise HTTPException(status_code=422, detail="Replay reason is too short")
@@ -325,7 +399,7 @@ def list_audit_trail(
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    require_permission(db, admin, "orders.read")
+    require_permission(db, admin, _AUDIT_READ_PERMISSION)
     return (
         db.query(AuditTrail)
         .order_by(AuditTrail.created_at.desc())

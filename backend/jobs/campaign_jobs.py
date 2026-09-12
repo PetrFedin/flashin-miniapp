@@ -14,9 +14,10 @@ def queue_due_campaigns(db: Session) -> int:
         )
         .all()
     )
-    count = 0
+    changed = 0
     for campaign in due:
-        queue_campaign(db, campaign)
-        count += 1
+        result = queue_campaign(db, campaign)
+        if result.changed:
+            changed += 1
     db.commit()
-    return count
+    return changed

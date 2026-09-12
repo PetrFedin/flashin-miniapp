@@ -7,14 +7,17 @@ from ..schemas import FulfillmentTaskOut, FulfillmentUpdateIn, SlaEventOut
 from ..security import get_current_admin
 from ..services.audit import log_admin_action
 from ..services.fulfillment import update_fulfillment_status
-from ..services.rbac import require_permission
+from ..services.fulfillment_locking import lock_fulfillment_task_for_update
+from ..services.rbac import FULFILLMENT_READ_PERMISSION, require_permission
 
 router = APIRouter(prefix="/fulfillment", tags=["fulfillment"])
+
+_PICKLIST_EDITABLE_TASK_STATUSES = frozenset({"new", "picking", "blocked"})
 
 
 @router.get("/tasks", response_model=list[FulfillmentTaskOut])
 def list_tasks(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
-    require_permission(db, admin, "orders.read")
+    require_permission(db, admin, FULFILLMENT_READ_PERMISSION)
     return (
         db.query(FulfillmentTask)
         .order_by(FulfillmentTask.created_at.desc(), FulfillmentTask.id.desc())
@@ -30,19 +33,12 @@ def update_task(
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    require_permission(db, admin, "orders.write")
+    require_permission(db, admin, "fulfillment.write")
     try:
-        task = (
-            db.query(FulfillmentTask)
-            .filter(FulfillmentTask.id == task_id)
-            .with_for_update()
-            .first()
-        )
-        if not task:
-            raise HTTPException(status_code=404, detail="Fulfillment task not found")
+        order, task = lock_fulfillment_task_for_update(db, task_id)
         previous_status = task.status
         try:
-            update_fulfillment_status(db, task, payload.status, payload.comment)
+            update_fulfillment_status(db, order, task, payload.status, payload.comment)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         if task.assigned_admin_id is None:
@@ -74,7 +70,7 @@ def update_task(
 
 @router.get("/sla", response_model=list[SlaEventOut])
 def list_sla(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
-    require_permission(db, admin, "orders.read")
+    require_permission(db, admin, FULFILLMENT_READ_PERMISSION)
     return db.query(SlaEvent).order_by(SlaEvent.due_at.asc()).limit(200).all()
 
 
@@ -84,7 +80,7 @@ def task_picklist(
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    require_permission(db, admin, "orders.read")
+    require_permission(db, admin, FULFILLMENT_READ_PERMISSION)
     task = db.query(FulfillmentTask).filter(FulfillmentTask.id == task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Fulfillment task not found")
@@ -124,7 +120,7 @@ def update_task_item(
     admin=Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    require_permission(db, admin, "orders.write")
+    require_permission(db, admin, "fulfillment.write")
     normalized_status = status.strip().lower()
     if normalized_status not in {"to_pick", "picked", "issue"}:
         raise HTTPException(status_code=400, detail="Unsupported picklist item status")
@@ -132,14 +128,53 @@ def update_task_item(
         raise HTTPException(status_code=400, detail="Picklist issue requires a meaningful comment")
 
     try:
+        # Discover the parent without taking a child lock. Picklist mutation
+        # then serializes task -> task item -> order item. It does not acquire
+        # the Order root; order-changing task transitions use the separate
+        # canonical Order -> FulfillmentTask root sequence.
+        task_id = (
+            db.query(FulfillmentTaskItem.task_id)
+            .filter(FulfillmentTaskItem.id == task_item_id)
+            .scalar()
+        )
+        if task_id is None:
+            raise HTTPException(status_code=404, detail="Fulfillment task item not found")
+
+        task = (
+            db.query(FulfillmentTask)
+            .filter(FulfillmentTask.id == task_id)
+            .with_for_update()
+            .first()
+        )
+        if not task:
+            raise HTTPException(
+                status_code=409,
+                detail="Picklist item is linked to a missing fulfillment task",
+            )
+        task_status = str(task.status or "").strip().lower()
+        if task_status not in _PICKLIST_EDITABLE_TASK_STATUSES:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Picklist cannot be edited while fulfillment task is {task_status}",
+            )
+
+        # Re-read and lock the child under the locked parent. If a legacy/direct
+        # writer re-parented the row between discovery and the parent lock, fail
+        # closed rather than mutating under the wrong task lock.
         item = (
             db.query(FulfillmentTaskItem)
-            .filter(FulfillmentTaskItem.id == task_item_id)
+            .filter(
+                FulfillmentTaskItem.id == task_item_id,
+                FulfillmentTaskItem.task_id == task.id,
+            )
             .with_for_update()
             .first()
         )
         if not item:
-            raise HTTPException(status_code=404, detail="Fulfillment task item not found")
+            raise HTTPException(
+                status_code=409,
+                detail="Fulfillment task item changed while being updated",
+            )
         order_item = (
             db.query(OrderItem)
             .filter(OrderItem.id == item.order_item_id)

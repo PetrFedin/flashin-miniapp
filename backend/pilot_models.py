@@ -75,3 +75,20 @@ class PilotOrderSlot(Base):
     )
     admission_sha256: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
+
+
+class PilotWorkerHeartbeat(Base):
+    __tablename__ = "pilot_worker_heartbeats"
+    __table_args__ = (
+        CheckConstraint(
+            "worker_name IN ('scheduler', 'notification_worker')",
+            name="ck_pilot_worker_heartbeat_name",
+        ),
+    )
+
+    worker_name: Mapped[str] = mapped_column(String(32), primary_key=True)
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        default=utcnow_naive,
+    )

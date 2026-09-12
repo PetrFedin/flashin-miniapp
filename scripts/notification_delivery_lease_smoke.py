@@ -19,6 +19,7 @@ from backend.database import engine, utcnow_naive
 from backend.models import Notification
 from backend.notification_models import NotificationDeliveryState
 from backend.services.notification_delivery import (
+    DELIVERY_OUTCOME_RETRYABLE_FAILURE,
     claim_pending_batch as _claim_pending_batch_db,
     finish_delivery as _finish_delivery_db,
     renew_delivery_lease as _renew_delivery_lease_db,
@@ -133,6 +134,7 @@ def main() -> int:
                 notification_id,
                 second_token,
                 error=RuntimeError("active worker transient failure"),
+                delivery_outcome=DELIVERY_OUTCOME_RETRYABLE_FAILURE,
             )
             == "retry_scheduled"
         )

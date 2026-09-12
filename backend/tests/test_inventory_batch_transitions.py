@@ -9,6 +9,7 @@ from backend.services.inventory import commit_reservations_to_sold, release_vari
 class FakeQuery:
     def __init__(self, variants):
         self.variants = variants
+        self.populate_existing_requested = False
 
     def filter(self, *args, **kwargs):
         return self
@@ -19,7 +20,16 @@ class FakeQuery:
     def with_for_update(self):
         return self
 
+    def populate_existing(self):
+        # Production uses this at the authoritative lock boundary so an
+        # already-loaded ProductVariant cannot supply stale stock/reserved
+        # values. The unit fake must preserve that query contract even though
+        # its in-memory rows have no separate identity map to refresh.
+        self.populate_existing_requested = True
+        return self
+
     def all(self):
+        assert self.populate_existing_requested is True
         return sorted(self.variants, key=lambda variant: variant.id)
 
 

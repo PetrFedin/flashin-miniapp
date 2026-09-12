@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from ..config import get_settings
 from ..database import utcnow_naive
 from ..models import MoySkladSyncLog, Product, ProductVariant
+from .inventory import adjust_stock
 from .moysklad_mapping import apply_mapping, log_conflict
 
 
@@ -180,7 +181,31 @@ def _unique_slug(db: Session, sku: str, moysklad_id: str) -> str:
     return candidate
 
 
-async def sync_assortment_to_catalog(db: Session, sync_type: str = "manual") -> MoySkladSyncLog:
+def _apply_synced_stock(
+    db: Session,
+    variant: ProductVariant,
+    external_stock: int,
+    *,
+    sync_type: str,
+    admin_id: int | None,
+) -> ProductVariant:
+    target_stock = max(external_stock, int(variant.reserved_qty or 0))
+    if target_stock == variant.stock_qty:
+        return variant
+    return adjust_stock(
+        db,
+        variant.id,
+        target_stock,
+        reason=f"MoySklad {sync_type} sync",
+        admin_id=admin_id,
+    )
+
+
+async def sync_assortment_to_catalog(
+    db: Session,
+    sync_type: str = "manual",
+    admin_id: int | None = None,
+) -> MoySkladSyncLog:
     settings = get_settings()
     log = MoySkladSyncLog(sync_type=sync_type, status="started")
     db.add(log)
@@ -349,10 +374,19 @@ async def sync_assortment_to_catalog(db: Session, sync_type: str = "manual") -> 
                         color=str(color)[:64],
                         sku=sku,
                         moysklad_id=moysklad_id,
-                        stock_qty=external_stock if external_stock is not None else 0,
+                        stock_qty=0,
                         reserved_qty=0,
                     )
                     db.add(variant)
+                    db.flush()
+                    if external_stock is not None:
+                        variant = _apply_synced_stock(
+                            db,
+                            variant,
+                            external_stock,
+                            sync_type=sync_type,
+                            admin_id=admin_id,
+                        )
                     upserted_variants += 1
                 else:
                     variant.moysklad_id = moysklad_id
@@ -367,7 +401,13 @@ async def sync_assortment_to_catalog(db: Session, sync_type: str = "manual") -> 
                                 "stock_below_reserved",
                                 "External stock is below the local reserved quantity; reservation preserved",
                             )
-                        variant.stock_qty = max(external_stock, variant.reserved_qty)
+                        variant = _apply_synced_stock(
+                            db,
+                            variant,
+                            external_stock,
+                            sync_type=sync_type,
+                            admin_id=admin_id,
+                        )
                         upserted_variants += 1
 
             db.commit()

@@ -15,7 +15,6 @@ def test_production_fastapi_disables_documentation_routes():
             "TELEGRAM_BOT_TOKEN": "1234567890:production-test-token-value",
             "JWT_SECRET": "j" * 48,
             "ADMIN_EMAIL": "admin@test.local",
-            "ADMIN_PASSWORD": "admin-password-2026",
             "ADMIN_TOTP_ENCRYPTION_KEY": "t" * 48,
             "OUTBOX_SIGNING_SECRET": "o" * 48,
             "PILOT_EVIDENCE_SIGNING_SECRET": "p" * 48,
@@ -34,16 +33,28 @@ def test_production_fastapi_disables_documentation_routes():
             "METRICS_ENABLED": "false",
         }
     )
-    for key in ("MOYSKLAD_TOKEN", "MOYSKLAD_LOGIN", "MOYSKLAD_PASSWORD"):
+    # The backend CI job intentionally carries a development ADMIN_PASSWORD.
+    # A production subprocess must prove it can start only after that value is removed.
+    for key in (
+        "ADMIN_PASSWORD",
+        "MOYSKLAD_TOKEN",
+        "MOYSKLAD_LOGIN",
+        "MOYSKLAD_PASSWORD",
+    ):
         env.pop(key, None)
 
     code = """
+from starlette.routing import NoMatchFound
 from backend.main import app
 assert app.docs_url is None
 assert app.redoc_url is None
 assert app.openapi_url is None
-paths = {route.path for route in app.routes}
-assert '/metrics' not in paths
+try:
+    app.url_path_for('metrics')
+except NoMatchFound:
+    pass
+else:
+    raise AssertionError('/metrics must not be registered when metrics are disabled')
 """
 
     result = subprocess.run(
@@ -56,3 +67,29 @@ assert '/metrics' not in paths
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_caddy_publishes_one_authoritative_client_ip_to_backend():
+    caddyfile = (ROOT / "deploy" / "Caddyfile").read_text(encoding="utf-8")
+
+    assert "header_up X-Forwarded-For {remote_host}" in caddyfile
+    assert "header_up -X-Real-IP" in caddyfile
+
+
+def test_ingress_build_contract_requires_patched_grpc_and_compatible_x_net():
+    dockerfile = (ROOT / "Dockerfile.ingress").read_text(encoding="utf-8")
+
+    assert "google.golang.org/grpc@v1.83.2" in dockerfile
+    assert "google.golang.org/grpc v1.83.2" in dockerfile
+    assert "google.golang.org/grpc[[:space:]]+v1\\.83\\.2" in dockerfile
+    assert "google.golang.org/grpc@v1.83.1" not in dockerfile
+    assert "google.golang.org/grpc v1.83.1" not in dockerfile
+
+    # grpc v1.83.2 requires x/net v0.58.0. Keep the module graph and built
+    # binary assertions aligned so a future downgrade fails repository tests
+    # before the image security scan has to rediscover it.
+    assert "golang.org/x/net@v0.58.0" in dockerfile
+    assert "golang.org/x/net v0.58.0" in dockerfile
+    assert "golang.org/x/net[[:space:]]+v0\\.58\\.0" in dockerfile
+    assert "golang.org/x/net@v0.57.0" not in dockerfile
+    assert "golang.org/x/net v0.57.0" not in dockerfile

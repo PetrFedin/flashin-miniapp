@@ -17,7 +17,9 @@ class Settings(BaseSettings):
     admin_jwt_expire_minutes: int = 8 * 60
 
     admin_email: str = "admin@flashin.store"
-    admin_password: str = "change-me-now"
+    # Local-development compatibility only. Production bootstrap reads a
+    # one-time password from a hidden interactive prompt and forbids this env.
+    admin_password: str = ""
     admin_totp_encryption_key: str = ""
 
     payment_provider: str = "yookassa"
@@ -36,6 +38,9 @@ class Settings(BaseSettings):
     s3_region: str = "auto"
     s3_access_key_id: str = ""
     s3_secret_access_key: str = ""
+    s3_connect_timeout_seconds: int = 5
+    s3_read_timeout_seconds: int = 20
+    s3_max_attempts: int = 3
 
     feature_flags_enabled: bool = True
     scheduler_enabled: bool = False
@@ -54,6 +59,7 @@ class Settings(BaseSettings):
     meilisearch_url: str = "http://meilisearch:7700"
     meilisearch_master_key: str = "change-me"
     meilisearch_products_index: str = "products"
+    meilisearch_timeout_seconds: int = 5
 
     referral_cookie_days: int = 30
     loyalty_max_redeem_percent: float = 30
@@ -118,6 +124,14 @@ class Settings(BaseSettings):
             raise ValueError("JWT_EXPIRE_MINUTES must be between 1 and 43200")
         if not 1 <= self.admin_jwt_expire_minutes <= 60 * 24:
             raise ValueError("ADMIN_JWT_EXPIRE_MINUTES must be between 1 and 1440")
+        if not 1 <= self.meilisearch_timeout_seconds <= 60:
+            raise ValueError("MEILISEARCH_TIMEOUT_SECONDS must be between 1 and 60")
+        if not 1 <= self.s3_connect_timeout_seconds <= 60:
+            raise ValueError("S3_CONNECT_TIMEOUT_SECONDS must be between 1 and 60")
+        if not 1 <= self.s3_read_timeout_seconds <= 120:
+            raise ValueError("S3_READ_TIMEOUT_SECONDS must be between 1 and 120")
+        if not 1 <= self.s3_max_attempts <= 10:
+            raise ValueError("S3_MAX_ATTEMPTS must be between 1 and 10")
         if not 0 <= self.loyalty_max_redeem_percent <= 100:
             raise ValueError("LOYALTY_MAX_REDEEM_PERCENT must be between 0 and 100")
         if self.loyalty_point_value_rub <= 0 or self.loyalty_points_per_ruble < 0:
@@ -145,7 +159,13 @@ class Settings(BaseSettings):
         if not 1 <= self.pilot_runtime_max_orders <= 20:
             raise ValueError("PILOT_RUNTIME_MAX_ORDERS must be between 1 and 20")
 
-        if self.app_env.strip().lower() != "production":
+        normalized_app_env = self.app_env.strip().lower()
+        if self.pilot_runtime_enforced and normalized_app_env != "production":
+            raise ValueError(
+                "PILOT_RUNTIME_ENFORCED may only be true when APP_ENV=production"
+            )
+
+        if normalized_app_env != "production":
             return self
 
         errors: list[str] = []
@@ -162,8 +182,10 @@ class Settings(BaseSettings):
 
         if len(self.jwt_secret) < 32 or self.jwt_secret.strip().lower() in weak_values:
             errors.append("JWT_SECRET must be a unique secret of at least 32 characters")
-        if len(self.admin_password) < 12 or self.admin_password.strip().lower() in weak_values:
-            errors.append("ADMIN_PASSWORD must be a strong non-default password")
+        if self.admin_password:
+            errors.append(
+                "ADMIN_PASSWORD must not be configured in production; use the interactive first-admin bootstrap"
+            )
         if (
             len(self.admin_totp_encryption_key) < 32
             or self.admin_totp_encryption_key.strip().lower() in weak_values

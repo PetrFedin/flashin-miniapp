@@ -2,7 +2,6 @@ import json
 from decimal import Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -18,6 +17,14 @@ from ..services.payment_attempts import (
     is_stale_cancellation,
     resolve_provider_payment_attempt,
 )
+from ..services.payment_creation import (
+    begin_payment_creation,
+    complete_payment_creation_from_provider,
+    finalize_payment_creation,
+    load_claim_payment,
+    mark_payment_creation_retry_required,
+    mark_payment_creation_review_required,
+)
 from ..services.payment_settlement import (
     SETTLED_ORDER_PAYMENT_STATUSES,
     settle_paid_order,
@@ -28,18 +35,18 @@ from ..services.pilot_circuit_breaker import (
     stop_pilot_for_order,
     trip_pilot_circuit_breaker,
 )
+from ..services.provider_failures import is_retryable_yookassa_error, yookassa_error_reason
 
 router = APIRouter(prefix="/payments", tags=["payments"])
 
 _PROVIDER = "yookassa"
 _RECONCILABLE_PAYMENT_STATUSES = {"pending", "waiting_for_capture", "succeeded"}
-_PAYMENT_CREATION_ORDER_STATUSES = {"created", "payment_created"}
-_PAYMENT_CREATION_PAYMENT_STATUSES = {"pending", "payment_created"}
 _SUPPORTED_WEBHOOK_EVENTS = {
     "payment.waiting_for_capture",
     "payment.succeeded",
     "payment.canceled",
 }
+_REVIEW_PAYMENT_STATUSES = {"payment_review_required", "paid_review_required"}
 _MAX_WEBHOOK_BYTES = 64 * 1024
 
 
@@ -76,28 +83,102 @@ def _provider_order_id(provider_payment: dict) -> int:
     return order_id
 
 
-def _validate_provider_amount(provider_payment: dict, order: Order) -> None:
+def _provider_payment_id(provider_payment: dict) -> str:
+    payment_id = str(provider_payment.get("id") or "").strip()
+    if not payment_id or len(payment_id) > 255:
+        raise ProviderPaymentIntegrityError(
+            "provider_payment_id_invalid",
+            "Payment provider returned an invalid payment id",
+            status_code=502,
+        )
+    return payment_id
+
+
+def _provider_payment_status(provider_payment: dict) -> str:
+    status = str(provider_payment.get("status") or "").strip().lower()
+    if not status or len(status) > 64:
+        raise ProviderPaymentIntegrityError(
+            "provider_payment_status_invalid",
+            "Payment provider returned an invalid payment status",
+            status_code=502,
+        )
+    return status
+
+
+def _validate_provider_amount_values(
+    provider_payment: dict,
+    expected_amount: float,
+    expected_currency: str,
+) -> None:
     amount = provider_payment.get("amount") or {}
     provider_currency = str(amount.get("currency") or "").upper()
     try:
         provider_amount = Decimal(str(amount.get("value"))).quantize(Decimal("0.01"))
-        order_amount = Decimal(str(order.total_amount)).quantize(Decimal("0.01"))
+        expected = Decimal(str(expected_amount)).quantize(Decimal("0.01"))
     except (InvalidOperation, TypeError, ValueError) as exc:
         raise ProviderPaymentIntegrityError(
             "provider_payment_amount_invalid",
             "Provider payment amount is invalid",
         ) from exc
 
-    if not provider_amount.is_finite() or not order_amount.is_finite():
+    if not provider_amount.is_finite() or not expected.is_finite():
         raise ProviderPaymentIntegrityError(
             "provider_payment_amount_invalid",
             "Provider payment amount is invalid",
         )
-    if provider_amount != order_amount or provider_currency != str(order.currency).upper():
+    if provider_amount != expected or provider_currency != str(expected_currency).upper():
         raise ProviderPaymentIntegrityError(
             "provider_payment_amount_or_currency_mismatch",
             "Provider payment amount or currency does not match order",
         )
+
+
+def _validate_provider_amount(provider_payment: dict, order: Order) -> None:
+    _validate_provider_amount_values(provider_payment, order.total_amount, order.currency)
+
+
+def _validate_created_provider_payment(
+    provider_payment: dict,
+    *,
+    order_id: int,
+    amount: float,
+    currency: str,
+    stored_confirmation_url: str = "",
+) -> tuple[str, str, str]:
+    provider_payment_id = _provider_payment_id(provider_payment)
+    _provider_payment_status(provider_payment)
+    try:
+        provider_order_id = _provider_order_id(provider_payment)
+    except HTTPException as exc:
+        raise ProviderPaymentIntegrityError(
+            "provider_payment_order_reference_invalid",
+            "Provider payment has no valid order reference",
+            status_code=502,
+        ) from exc
+    if provider_order_id != order_id:
+        raise ProviderPaymentIntegrityError(
+            "provider_payment_order_reference_mismatch",
+            "Provider payment belongs to another order",
+        )
+    _validate_provider_amount_values(provider_payment, amount, currency)
+
+    resolution = resolve_provider_payment_attempt(
+        provider_payment,
+        stored_confirmation_url=stored_confirmation_url,
+    )
+    if resolution.outcome == "unavailable":
+        raise ProviderPaymentIntegrityError(
+            "provider_payment_confirmation_missing",
+            "Payment is active but has no confirmation URL",
+            status_code=502,
+        )
+    if resolution.outcome == "review":
+        raise ProviderPaymentIntegrityError(
+            "provider_payment_status_requires_review",
+            f"Provider payment status requires review: {resolution.status}",
+            status_code=502,
+        )
+    return provider_payment_id, resolution.status, resolution.confirmation_url
 
 
 def _trip_after_rollback(order_id: int, error: ProviderPaymentIntegrityError) -> HTTPException:
@@ -111,23 +192,11 @@ def _trip_after_rollback(order_id: int, error: ProviderPaymentIntegrityError) ->
     return HTTPException(status_code=error.status_code, detail=error.detail)
 
 
-async def _reconcile_existing_payment(order: Order, payment: Payment) -> Payment | None:
-    provider_payment_id = str(payment.provider_payment_id or "").strip()
-    if not provider_payment_id:
-        payment.status = "invalid"
-        payment.confirmation_url = ""
-        return None
-
-    try:
-        provider_payment = await fetch_yookassa_payment(provider_payment_id)
-    except HTTPException as exc:
-        if exc.status_code == 502 and can_fallback_to_stored_attempt(
-            payment.status,
-            payment.confirmation_url,
-        ):
-            return payment
-        raise
-
+def _apply_provider_reconciliation(
+    order: Order,
+    payment: Payment,
+    provider_payment: dict,
+) -> Payment | None:
     if _provider_order_id(provider_payment) != order.id:
         raise ProviderPaymentIntegrityError(
             "provider_payment_order_reference_mismatch",
@@ -202,6 +271,117 @@ def _queue_payment_review(db: Session, order: Order, payment_id: str, reason: st
     )
 
 
+def _persist_creation_review(
+    db: Session,
+    *,
+    attempt_id: int,
+    order_id: int,
+    provider_payment_id: str,
+    provider_status: str,
+    reason: str,
+) -> None:
+    mark_payment_creation_review_required(
+        db,
+        attempt_id,
+        reason,
+        provider_payment_id=provider_payment_id,
+    )
+    order = db.query(Order).filter(Order.id == order_id).with_for_update().first()
+    if order:
+        paid_like = provider_status == "succeeded" or order.payment_status in SETTLED_ORDER_PAYMENT_STATUSES
+        order.status = "payment_review_required"
+        order.payment_status = "paid_review_required" if paid_like else "payment_review_required"
+        _queue_payment_review(db, order, provider_payment_id, reason)
+    db.commit()
+
+
+def _persist_creation_review_fail_closed(
+    db: Session,
+    *,
+    attempt_id: int,
+    order_id: int,
+    provider_payment_id: str,
+    provider_status: str,
+    reason: str,
+) -> None:
+    try:
+        _persist_creation_review(
+            db,
+            attempt_id=attempt_id,
+            order_id=order_id,
+            provider_payment_id=provider_payment_id,
+            provider_status=provider_status,
+            reason=reason,
+        )
+    except Exception as exc:
+        db.rollback()
+        try:
+            trip_pilot_circuit_breaker(order_id=order_id, reason=f"payment_review_persist_failed:{reason}")
+        except PilotCircuitBreakerError as circuit_exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Payment state is uncertain and the pilot safety circuit could not be persisted",
+            ) from circuit_exc
+        raise HTTPException(
+            status_code=503,
+            detail="Payment state is uncertain; the pilot was stopped for manual reconciliation",
+        ) from exc
+
+
+async def _reconcile_claimed_existing_payment(
+    db: Session,
+    claim,
+) -> PaymentOut | None:
+    order, payment = load_claim_payment(db, claim)
+    payment_id = str(payment.provider_payment_id or "").strip()
+    stored_status = str(payment.status or "")
+    stored_confirmation_url = str(payment.confirmation_url or "")
+    order_id = order.id
+    payment_db_id = payment.id
+    db.commit()
+
+    if not payment_id:
+        error = ProviderPaymentIntegrityError(
+            "provider_payment_id_invalid",
+            "Stored payment has no provider payment id",
+        )
+        raise _trip_after_rollback(order_id, error)
+
+    try:
+        provider_payment = await fetch_yookassa_payment(payment_id)
+    except HTTPException as exc:
+        if exc.status_code == 502 and can_fallback_to_stored_attempt(
+            stored_status,
+            stored_confirmation_url,
+        ):
+            order = db.query(Order).filter(Order.id == order_id).first()
+            payment = db.query(Payment).filter(Payment.id == payment_db_id).first()
+            if order and payment:
+                return _payment_out(order, payment)
+        raise
+
+    try:
+        order = db.query(Order).filter(Order.id == order_id).with_for_update().first()
+        payment = db.query(Payment).filter(Payment.id == payment_db_id).with_for_update().first()
+        if not order or not payment or payment.order_id != order.id:
+            raise ProviderPaymentIntegrityError(
+                "stored_payment_order_mismatch",
+                "Stored payment no longer matches the order",
+            )
+        reusable_payment = _apply_provider_reconciliation(order, payment, provider_payment)
+        if reusable_payment:
+            if reusable_payment.status == "succeeded":
+                settle_paid_order(db, order)
+            complete_payment_creation_from_provider(db, order.id, reusable_payment.provider_payment_id)
+            db.commit()
+            return _payment_out(order, reusable_payment)
+        db.commit()
+        return None
+    except ProviderPaymentIntegrityError as exc:
+        db.rollback()
+        raise _trip_after_rollback(order_id, exc)
+
+
 @router.post("", response_model=PaymentOut)
 async def create_payment(
     payload: PaymentCreate,
@@ -209,79 +389,226 @@ async def create_payment(
     db: Session = Depends(get_db),
 ):
     provider_payment_id = ""
-    order_id_for_integrity = payload.order_id
+    provider_status = ""
+    attempt_id: int | None = None
+    order_id = payload.order_id
+
     try:
-        order = (
-            db.query(Order)
-            .filter(Order.id == payload.order_id, Order.customer_id == customer.id)
-            .with_for_update()
-            .first()
-        )
-        if not order:
-            raise HTTPException(status_code=404, detail="Order not found")
-        if order.status == "cancelled" or order.payment_status == "cancelled":
-            raise HTTPException(status_code=409, detail="Order cancelled")
-        if (
-            order.status not in _PAYMENT_CREATION_ORDER_STATUSES
-            or order.payment_status not in _PAYMENT_CREATION_PAYMENT_STATUSES
-        ):
-            raise HTTPException(status_code=409, detail="Order is not eligible for a new payment")
-        if order.total_amount <= 0:
-            raise HTTPException(status_code=409, detail="Order total must be positive")
+        claim = begin_payment_creation(db, payload.order_id, customer.id)
+        if claim.is_existing:
+            existing_result = await _reconcile_claimed_existing_payment(db, claim)
+            if existing_result is not None:
+                return existing_result
+            claim = begin_payment_creation(db, payload.order_id, customer.id)
 
-        latest_payment = (
-            db.query(Payment)
-            .filter(Payment.order_id == order.id, Payment.provider == _PROVIDER)
-            .order_by(Payment.id.desc())
-            .with_for_update()
-            .first()
-        )
-        if latest_payment and latest_payment.status in _RECONCILABLE_PAYMENT_STATUSES:
-            reusable_payment = await _reconcile_existing_payment(order, latest_payment)
-            if reusable_payment:
-                if reusable_payment.status == "succeeded":
-                    settle_paid_order(db, order)
+        if not claim.attempt_id or not claim.attempt_number:
+            raise HTTPException(status_code=500, detail="Payment creation claim is incomplete")
+
+        attempt_id = claim.attempt_id
+        attempt_number = claim.attempt_number
+        amount = claim.amount
+        currency = claim.currency
+        order_id = claim.order_id
+
+        # Persist the claim and release all order/payment row locks before the provider side effect.
+        db.commit()
+
+        try:
+            data = await create_yookassa_payment(
+                order_id,
+                amount,
+                currency,
+                attempt=attempt_number,
+            )
+        except HTTPException as exc:
+            reason = yookassa_error_reason(exc)
+            db.rollback()
+            if is_retryable_yookassa_error(exc):
+                mark_payment_creation_retry_required(db, attempt_id, reason)
                 db.commit()
-                return _payment_out(order, reusable_payment)
+                raise
+            _persist_creation_review_fail_closed(
+                db,
+                attempt_id=attempt_id,
+                order_id=order_id,
+                provider_payment_id="",
+                provider_status="",
+                reason=reason,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Payment provider rejected the request; manual review is required",
+            ) from exc
+        except Exception as exc:
+            db.rollback()
+            reason = yookassa_error_reason(exc)
+            _persist_creation_review_fail_closed(
+                db,
+                attempt_id=attempt_id,
+                order_id=order_id,
+                provider_payment_id="",
+                provider_status="",
+                reason=reason,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Payment provider response is uncertain; manual review is required",
+            ) from exc
 
-        attempt = (
-            db.query(func.count(Payment.id))
-            .filter(Payment.order_id == order.id, Payment.provider == _PROVIDER)
-            .scalar()
-            or 0
-        ) + 1
-        data = await create_yookassa_payment(
-            order.id,
-            order.total_amount,
-            order.currency,
-            attempt=attempt,
-        )
         provider_payment_id = str(data.get("provider_payment_id") or "").strip()
+        provider_status = str(data.get("status") or "").strip().lower()
+        confirmation_url = str(data.get("confirmation_url") or "").strip()[:2048]
         if not provider_payment_id or len(provider_payment_id) > 255:
-            raise ProviderPaymentIntegrityError(
-                "provider_payment_id_invalid",
-                "Payment provider returned an invalid payment id",
-                status_code=502,
+            db.rollback()
+            _persist_creation_review_fail_closed(
+                db,
+                attempt_id=attempt_id,
+                order_id=order_id,
+                provider_payment_id="",
+                provider_status=provider_status,
+                reason="provider_payment_id_invalid",
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Payment provider returned an invalid payment id; manual review is required",
             )
 
-        payment = Payment(
-            order_id=order.id,
-            provider=_PROVIDER,
-            provider_payment_id=provider_payment_id,
-            status=str(data.get("status") or "pending")[:64],
-            amount=order.total_amount,
-            confirmation_url=str(data.get("confirmation_url") or "")[:2048],
-        )
-        db.add(payment)
-        order.payment_status = "payment_created"
-        order.status = "payment_created"
-        if payment.status == "succeeded":
-            settle_paid_order(db, order)
-        db.commit()
-        return _payment_out(order, payment)
-    except ProviderPaymentIntegrityError as exc:
-        db.rollback()
-        raise _trip_after_rollback(order_id_for_integrity, exc)
+        try:
+            provider_payment = await fetch_yookassa_payment(provider_payment_id)
+            validated_payment_id, validated_status, validated_confirmation_url = _validate_created_provider_payment(
+                provider_payment,
+                order_id=order_id,
+                amount=amount,
+                currency=currency,
+                stored_confirmation_url=confirmation_url,
+            )
+            if provider_payment_id != validated_payment_id:
+                raise ProviderPaymentIntegrityError(
+                    "provider_payment_id_mismatch",
+                    "Payment provider returned inconsistent payment ids",
+                    status_code=502,
+                )
+            if provider_status and provider_status != validated_status:
+                raise ProviderPaymentIntegrityError(
+                    "provider_payment_status_mismatch",
+                    "Payment provider returned inconsistent payment statuses",
+                    status_code=502,
+                )
+            provider_status = validated_status
+            confirmation_url = validated_confirmation_url
+        except ProviderPaymentIntegrityError as exc:
+            db.rollback()
+            _persist_creation_review_fail_closed(
+                db,
+                attempt_id=attempt_id,
+                order_id=order_id,
+                provider_payment_id=provider_payment_id,
+                provider_status=provider_status,
+                reason=exc.reason,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Payment provider response failed integrity validation; manual review is required",
+            ) from exc
+        except HTTPException as exc:
+            db.rollback()
+            _persist_creation_review_fail_closed(
+                db,
+                attempt_id=attempt_id,
+                order_id=order_id,
+                provider_payment_id=provider_payment_id,
+                provider_status=provider_status,
+                reason=f"provider_payment_verification_failed:{exc.status_code}",
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Payment was created but could not be verified; manual review is required",
+            ) from exc
+
+        try:
+            order, payment = finalize_payment_creation(
+                db,
+                attempt_id,
+                provider_payment_id,
+                provider_status,
+                confirmation_url,
+            )
+            review_required = (
+                order.status == "payment_review_required"
+                or order.payment_status in _REVIEW_PAYMENT_STATUSES
+            )
+            if review_required:
+                stop_pilot_for_order(
+                    db,
+                    order_id=order.id,
+                    reason="payment_review:payment_creation_finalize_review",
+                )
+            elif payment.status == "succeeded":
+                settle_paid_order(db, order)
+            db.commit()
+            if review_required:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Payment was created but requires manual reconciliation",
+                )
+            return _payment_out(order, payment)
+        except IntegrityError:
+            db.rollback()
+            existing = (
+                db.query(Payment)
+                .filter(Payment.provider == _PROVIDER, Payment.provider_payment_id == provider_payment_id)
+                .first()
+            )
+            if existing and existing.order_id == order_id:
+                order = db.query(Order).filter(Order.id == order_id).with_for_update().first()
+                if order:
+                    complete_payment_creation_from_provider(db, order_id, provider_payment_id)
+                    if existing.status == "succeeded":
+                        settle_paid_order(db, order)
+                    db.commit()
+                    return _payment_out(order, existing)
+            _persist_creation_review_fail_closed(
+                db,
+                attempt_id=attempt_id,
+                order_id=order_id,
+                provider_payment_id=provider_payment_id,
+                provider_status=provider_status,
+                reason="payment_finalize_integrity_error",
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Payment creation requires manual reconciliation",
+            )
+        except HTTPException as exc:
+            db.rollback()
+            if exc.status_code == 503 and "manual reconciliation" in str(exc.detail).lower():
+                raise
+            _persist_creation_review_fail_closed(
+                db,
+                attempt_id=attempt_id,
+                order_id=order_id,
+                provider_payment_id=provider_payment_id,
+                provider_status=provider_status,
+                reason=f"payment_finalize_failed:{exc.status_code}",
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Payment creation requires manual reconciliation",
+            ) from exc
+        except Exception as exc:
+            db.rollback()
+            _persist_creation_review_fail_closed(
+                db,
+                attempt_id=attempt_id,
+                order_id=order_id,
+                provider_payment_id=provider_payment_id,
+                provider_status=provider_status,
+                reason=f"payment_finalize_failed:{exc.__class__.__name__}",
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Payment creation requires manual reconciliation",
+            ) from exc
     except PilotCircuitBreakerError as exc:
         db.rollback()
         raise HTTPException(
@@ -293,17 +620,7 @@ async def create_payment(
         raise
     except IntegrityError:
         db.rollback()
-        if provider_payment_id:
-            existing = (
-                db.query(Payment)
-                .filter(Payment.provider == _PROVIDER, Payment.provider_payment_id == provider_payment_id)
-                .first()
-            )
-            if existing and existing.order_id == payload.order_id:
-                order = db.query(Order).filter(Order.id == payload.order_id).first()
-                if order:
-                    return _payment_out(order, existing)
-        raise HTTPException(status_code=409, detail="Payment request was already created")
+        raise HTTPException(status_code=409, detail="Payment request is already being processed")
     except Exception:
         db.rollback()
         raise
@@ -398,6 +715,8 @@ async def yookassa_webhook(request: Request, db: Session = Depends(get_db)):
             db.add(payment)
         else:
             payment.status = provider_status
+
+        complete_payment_creation_from_provider(db, order.id, payment_id)
 
         if event == "payment.succeeded" and provider_status == "succeeded":
             if order.status == "cancelled" or order.payment_status == "cancelled":

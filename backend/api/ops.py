@@ -1,6 +1,6 @@
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
@@ -9,7 +9,13 @@ from ..models import Cart, Notification, ProductVariant
 from ..schemas import AbandonedCartOut, InventorySnapshotOut
 from ..security import get_current_admin
 from ..services.inventory import snapshot_inventory
+from ..services.order_lifecycle_moysklad_contract import enforce_moysklad_lifecycle_contract
+from ..services.order_lifecycle_payment_state_contract import enforce_settled_order_payment_state_contract
+from ..services.order_lifecycle_reconciliation import evaluate_order_lifecycle
+from ..services.order_lifecycle_signals import apply_operational_signals
+from ..services.order_operations_trace import build_order_operations_trace
 from ..services.pilot_observability import build_pilot_operations_status
+from ..services.pilot_readiness import build_pilot_readiness
 from ..services.rbac import require_permission
 
 router = APIRouter(prefix="/ops", tags=["ops"])
@@ -27,8 +33,53 @@ def pilot_runtime_status(
     return build_pilot_operations_status(db, get_settings())
 
 
+@router.get("/pilot-readiness")
+def pilot_readiness_status(
+    request: Request,
+    response: Response,
+    admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """Sanitized, read-only verdict for accepting the next controlled pilot order."""
+
+    require_permission(db, admin, "security.read")
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    readiness = build_pilot_readiness(db, get_settings())
+    readiness["request_id"] = getattr(request.state, "request_id", "")
+    return readiness
+
+
+@router.get("/orders/{order_id}/trace")
+def order_operations_trace(
+    order_id: int,
+    request: Request,
+    response: Response,
+    admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """Sanitized, read-only incident trace plus deterministic lifecycle verdicts."""
+
+    require_permission(db, admin, "orders.read")
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    trace = build_order_operations_trace(db, order_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    trace["schema_version"] = 3
+    reconciliation = enforce_settled_order_payment_state_contract(
+        evaluate_order_lifecycle(trace),
+        trace,
+    )
+    reconciliation = enforce_moysklad_lifecycle_contract(reconciliation, trace)
+    trace["reconciliation"] = apply_operational_signals(reconciliation, trace)
+    trace["request_id"] = getattr(request.state, "request_id", "")
+    return trace
+
+
 @router.get("/abandoned-carts", response_model=list[AbandonedCartOut])
 def abandoned_carts(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    require_permission(db, admin, "customers.read")
     settings = get_settings()
     cutoff = utcnow_naive() - timedelta(minutes=settings.abandoned_cart_minutes)
     carts = (
@@ -51,6 +102,8 @@ def abandoned_carts(admin=Depends(get_current_admin), db: Session = Depends(get_
 
 @router.post("/abandoned-carts/queue-notifications")
 def queue_abandoned_cart_notifications(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    require_permission(db, admin, "customers.read")
+    require_permission(db, admin, "notifications.retry")
     settings = get_settings()
     now = utcnow_naive()
     cutoff = now - timedelta(minutes=settings.abandoned_cart_minutes)
@@ -76,6 +129,7 @@ def queue_abandoned_cart_notifications(admin=Depends(get_current_admin), db: Ses
 
 @router.get("/inventory/low-stock", response_model=list[InventorySnapshotOut])
 def low_stock(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    require_permission(db, admin, "products.read")
     settings = get_settings()
     variants = db.query(ProductVariant).all()
     result = []
@@ -94,6 +148,7 @@ def low_stock(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
 
 @router.post("/inventory/snapshot")
 def inventory_snapshot(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    require_permission(db, admin, "inventory.write")
     count = snapshot_inventory(db, source="admin")
     db.commit()
     return {"ok": True, "snapshotted": count}

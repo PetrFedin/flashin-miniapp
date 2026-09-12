@@ -1,3 +1,4 @@
+import { clearCustomerToken, getCustomerToken, setCustomerToken } from "./authSession.js";
 import { normalizePaymentContinuation } from "./paymentFlow.js";
 import {
   DEFAULT_REQUEST_TIMEOUT_MS,
@@ -14,9 +15,10 @@ const REQUEST_TIMEOUT_MS = Number.isFinite(configuredTimeout) && configuredTimeo
   ? Math.min(Math.max(configuredTimeout, 3_000), 120_000)
   : DEFAULT_REQUEST_TIMEOUT_MS;
 const requestCoordinator = createRequestCoordinator();
+let customerAuthInFlight = null;
 
 function getToken() {
-  return localStorage.getItem("flashin_token");
+  return getCustomerToken();
 }
 
 function headers(auth = true) {
@@ -45,14 +47,30 @@ function checkoutKeyForActiveCart() {
 
 async function errorDetail(response) {
   const text = await response.text();
-  if (!text) return "";
+  if (!text) return { message: "", code: "" };
   try {
     const data = JSON.parse(text);
-    if (typeof data.detail === "string") return data.detail;
-    if (data.detail !== undefined) return JSON.stringify(data.detail);
-    return text;
+    if (typeof data.detail === "string") {
+      return { message: data.detail, code: "" };
+    }
+    if (data.detail && typeof data.detail === "object") {
+      return {
+        message: String(data.detail.message || JSON.stringify(data.detail)),
+        code: String(data.detail.code || ""),
+      };
+    }
+    return { message: text, code: "" };
   } catch {
-    return text;
+    return { message: text, code: "" };
+  }
+}
+
+class ApiRequestError extends Error {
+  constructor(message, status, code = "") {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = Number(status || 0);
+    this.code = String(code || "");
   }
 }
 
@@ -96,23 +114,69 @@ async function request(path, options = {}) {
     });
     if (!response.ok) {
       if (response.status === 401 && auth) {
-        localStorage.removeItem("flashin_token");
+        clearCustomerToken();
       }
-      throw new Error((await errorDetail(response)) || `Request failed: ${response.status}`);
+      const detail = await errorDetail(response);
+      throw new ApiRequestError(
+        detail.message || `Request failed: ${response.status}`,
+        response.status,
+        detail.code,
+      );
     }
     if (response.status === 204) return null;
     return response.json();
   });
 }
 
-export async function telegramAuth(initData) {
+async function exchangeTelegramInitData(initData) {
+  const normalized = String(initData || "").trim();
+  if (!normalized) {
+    throw new Error("Telegram авторизация ещё не готова. Закройте и снова откройте Mini App из Telegram.");
+  }
   const data = await request("/api/auth/telegram", {
     method: "POST",
     auth: false,
-    body: JSON.stringify({ init_data: initData }),
+    body: JSON.stringify({ init_data: normalized }),
   });
-  localStorage.setItem("flashin_token", data.access_token);
+  setCustomerToken(data.access_token);
   return data;
+}
+
+export async function getCurrentCustomer() {
+  return request("/api/auth/me");
+}
+
+export async function telegramAuth(initData) {
+  if (customerAuthInFlight) return customerAuthInFlight;
+
+  const operation = (async () => {
+    const existingToken = getCustomerToken();
+    if (existingToken) {
+      try {
+        const customer = await getCurrentCustomer();
+        return { access_token: existingToken, customer, restored: true };
+      } catch (error) {
+        // Only an authoritative 401 may discard the persisted session and fall
+        // through to a fresh Telegram bootstrap. Network/5xx failures must not
+        // burn a one-time Telegram assertion merely because /auth/me is unavailable.
+        if (error?.status !== 401) throw error;
+      }
+    }
+
+    // /auth/telegram is itself the authoritative transaction that verifies the
+    // Telegram assertion, persists CustomerSession and returns its bearer. Do
+    // not add a redundant /auth/me round-trip here. /auth/me is the authority
+    // for restoring an already-issued session on reload/provider return.
+    const data = await exchangeTelegramInitData(initData);
+    return { ...data, customer: null, restored: false };
+  })();
+
+  customerAuthInFlight = operation;
+  try {
+    return await operation;
+  } finally {
+    if (customerAuthInFlight === operation) customerAuthInFlight = null;
+  }
 }
 
 export async function listProducts() {
@@ -168,6 +232,13 @@ export async function applyReferral(code) {
   return request("/api/cart/referral", {
     method: "POST",
     body: JSON.stringify({ code }),
+  });
+}
+
+export async function createDeliveryQuote(payload) {
+  return request("/api/delivery-quotes", {
+    method: "POST",
+    body: JSON.stringify(payload),
   });
 }
 
@@ -290,7 +361,13 @@ export async function downloadPrivacyData() {
     headers: { Authorization: `Bearer ${getToken()}` },
   });
   if (!response.ok) {
-    throw new Error((await errorDetail(response)) || "Не удалось экспортировать данные");
+    if (response.status === 401) clearCustomerToken();
+    const detail = await errorDetail(response);
+    throw new ApiRequestError(
+      detail.message || "Не удалось экспортировать данные",
+      response.status,
+      detail.code,
+    );
   }
   const blob = await response.blob();
   const disposition = response.headers.get("content-disposition") || "";

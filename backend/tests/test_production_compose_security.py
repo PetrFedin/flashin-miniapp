@@ -9,6 +9,7 @@ def _safe_config():
         "notification_worker",
         "ops_jobs",
         "outbox_jobs",
+        "provider_command_jobs",
         "moysklad_sync",
         "campaign_jobs",
         "sla_jobs",
@@ -55,13 +56,37 @@ def _safe_config():
             "db": {"condition": "service_healthy"}
         }
 
+    services["alertmanager"] = {
+        "restart": "unless-stopped",
+        "image": "prom/alertmanager:v0.33.1",
+        "command": [
+            "--config.file=/run/secrets/alertmanager.yml",
+            "--storage.path=/alertmanager",
+        ],
+        "healthcheck": {
+            "test": ["CMD-SHELL", "wget -qO- http://localhost:9093/-/ready"]
+        },
+        "secrets": [
+            {"source": "alertmanager_config", "target": "alertmanager.yml"}
+        ],
+        "volumes": [
+            {
+                "type": "volume",
+                "source": "alertmanager_data",
+                "target": "/alertmanager",
+            }
+        ],
+    }
     services["prometheus"] = {
         "restart": "unless-stopped",
         "image": "prom/prometheus:v3.5.0",
         "healthcheck": {
             "test": ["CMD-SHELL", "wget -qO- http://localhost:9090/-/ready"]
         },
-        "depends_on": {"backend": {"condition": "service_healthy"}},
+        "depends_on": {
+            "backend": {"condition": "service_healthy"},
+            "alertmanager": {"condition": "service_healthy"},
+        },
         "volumes": [
             {
                 "type": "bind",
@@ -103,7 +128,14 @@ def _safe_config():
             "backend": {"condition": "service_started"},
         },
     }
-    return {"services": services}
+    return {
+        "services": services,
+        "secrets": {
+            "alertmanager_config": {
+                "file": "./deploy/runtime/alertmanager.yml",
+            }
+        },
+    }
 
 
 def test_safe_production_graph_passes():
@@ -121,9 +153,24 @@ def test_internal_host_port_is_rejected():
     assert any("Internal service backend publishes host ports" in error for error in errors)
 
 
+def test_monitoring_services_must_remain_internal():
+    config = _safe_config()
+    config["services"]["alertmanager"]["ports"] = [
+        {"published": "9093", "target": 9093, "protocol": "tcp"}
+    ]
+
+    errors = check_production_compose.validate_config(config)
+
+    assert any(
+        "Internal service alertmanager publishes host ports" in error for error in errors
+    )
+
+
 def test_loader_resolves_both_files_and_all_production_profiles(monkeypatch, tmp_path):
     (tmp_path / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
-    (tmp_path / "docker-compose.production.yml").write_text("services: {}\n", encoding="utf-8")
+    (tmp_path / "docker-compose.production.yml").write_text(
+        "services: {}\n", encoding="utf-8"
+    )
     observed = {}
 
     def fake_run(command, **kwargs):

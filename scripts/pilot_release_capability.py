@@ -54,6 +54,7 @@ REQUIRED_FILES = {
     "backend/tests/test_support_admin_schema.py",
     "backend/tests/test_referral_attribution.py",
     "backend/tests/test_backup_integrity.py",
+    "backend/tests/test_deploy_release_gate.py",
     "backend/main.py",
     "backend/middleware/metrics.py",
     "deploy/grafana/dashboards/flashin_operations.json",
@@ -102,6 +103,7 @@ REQUIRED_FILES = {
     "scripts/pilot_release_capability.py",
     "scripts/pilot_release_contract.py",
     "scripts/check_production_compose.py",
+    "scripts/deploy_release_gate.py",
     "docker-compose.yml",
     "docker-compose.production.yml",
     "scripts/deploy_production.sh",
@@ -168,7 +170,7 @@ def inspect_runtime_guard(archive: Path) -> list[str]:
                 errors.append("Release is missing pilot runtime files: " + ", ".join(missing))
 
             _require_markers(bundle, files, "backend/api/orders.py", ("acquire_pilot_checkout(", "record_pilot_order("), errors)
-            _require_markers(bundle, files, "scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 17",), errors)
+            _require_markers(bundle, files, "scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 18",), errors)
             _require_markers(bundle, files, "scripts/pilot_release_capability.py", ("from pilot_release_contract import CAPABILITY_VERSION",), errors)
             _require_markers(bundle, files, "backend/services/pilot_runtime.py", ("from scripts.pilot_release_contract import CAPABILITY_VERSION", '"version": CAPABILITY_VERSION'), errors)
             _require_markers(bundle, files, "backend/services/pilot_database_evidence.py", ("def validate_pilot_database_evidence(", "pilot slot order_id", "PostgreSQL payment", "PostgreSQL refund", "final GO scenario order IDs"), errors)
@@ -245,6 +247,9 @@ def inspect_runtime_guard(archive: Path) -> list[str]:
             _require_markers(bundle, files, "scripts/backup_restore_smoke.sh", ("tampered_archive_rejected", "mutated_database_rejected", "restored_value_verified", "verify-live", "restore_postgres.sh --yes"), errors)
             _require_markers(bundle, files, "scripts/release_rollback_smoke.sh", ("ROLLBACK_DRILL=1", "PREVIOUS_MARKER=", "CURRENT_MARKER=", "container_marker=", "restored_name=", "verify-live", "verify --slot both", "verify-rollback", "runtime_image_rebuilt", "release_pointer_promoted", "signed_evidence_verified"), errors)
             _require_markers(bundle, files, "backend/tests/test_backup_integrity.py", ("test_signed_manifest_binds_exact_archive_and_snapshot", "test_archive_byte_or_size_change_is_rejected", "test_snapshot_comparison_detects_schema_revision_and_ledger_changes", "test_database_identifiers_fail_closed"), errors)
+            _require_markers(bundle, files, "scripts/deploy_release_gate.py", ("deployment release archive must be retained under deploy/release/builds", "--untracked-files=all", "release manifest git_commit does not match checkout HEAD", "release manifest file set does not match deploy checkout", "deploy checkout file differs from release artifact", "deploy checkout executable mode differs from release artifact"), errors)
+            _require_markers(bundle, files, "backend/tests/test_deploy_release_gate.py", ("test_exact_retained_release_and_clean_checkout_are_accepted", "test_nonignored_untracked_build_context_is_rejected", "test_archive_from_other_commit_is_rejected", "test_non_executable_permission_differences_are_tolerated", "test_executable_mode_drift_is_rejected", "test_deploy_verifies_release_before_runtime_stop_and_builds_from_extracted_artifact"), errors)
+            _require_markers(bundle, files, "scripts/deploy_production.sh", ("Verifying retained immutable Release artifact before any runtime mutation", "deploy_release_gate.py --archive", "release_control.py extract", 'cd "$release_source_dir"', "Building images from verified immutable Release artifact", "RELEASE=deploy/release/builds/flashin_<release>.zip make deploy-prod"), errors)
             _require_markers(bundle, files, "docs/pilot/end_to_end_coverage_matrix.md", ("## Browser journeys", "Nine stateful Playwright journeys", "accountable active Admin ID", "Admin service operations", "full picklist", "## Transactional referral evidence", "first paid order -> one inviter reward", "## Signed backup and restore evidence", "Backup/restore integrity", "Release rollback", "## Evidence boundary"), errors)
 
             if "docker-compose.production.yml" in files:

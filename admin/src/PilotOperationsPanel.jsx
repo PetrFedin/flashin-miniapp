@@ -8,6 +8,11 @@ import {
   pilotStatusLabel,
   pilotStopLabel,
 } from "./pilotOperations.js";
+import {
+  normalizePilotReadiness,
+  pilotDiagnosticLabel,
+  pilotReadinessCodeLabel,
+} from "./pilotReadiness.js";
 
 const REFRESH_INTERVAL_MS = 30_000;
 
@@ -51,8 +56,54 @@ function MoneyAttention({ status }) {
   );
 }
 
+function ReadinessSignals({ readiness }) {
+  const criticalEntries = Object.entries(readiness.critical);
+  const criticalHealthy = criticalEntries.every(([, value]) => value === true);
+  return (
+    <>
+      <article className={`pilot-integrity-card ${criticalHealthy ? "healthy" : "failed"}`}>
+        <div className="pilot-card-heading">
+          <h3>Next-order readiness</h3>
+          <span className={`pilot-badge ${criticalHealthy ? "healthy" : "failed"}`}>
+            {criticalHealthy ? "Критические сервисы OK" : "Есть блокирующий сигнал"}
+          </span>
+        </div>
+        <dl className="pilot-metrics-list">
+          {criticalEntries.map(([name, value]) => (
+            <div key={name}>
+              <dt>{pilotDiagnosticLabel(name)}</dt>
+              <dd>{value === true ? "OK" : value === false ? "NO-GO" : "Нет сигнала"}</dd>
+            </div>
+          ))}
+        </dl>
+      </article>
+
+      {readiness.warningCodes.length > 0 && (
+        <article className="pilot-integrity-card not-applicable">
+          <div className="pilot-card-heading">
+            <h3>Advisory</h3>
+            <span className="pilot-badge not-applicable">Не блокирует деньги</span>
+          </div>
+          <ul>
+            {readiness.warningCodes.map((code) => (
+              <li key={code}>{pilotReadinessCodeLabel(code)}</li>
+            ))}
+          </ul>
+        </article>
+      )}
+    </>
+  );
+}
+
+function nextScenarioLabel(continuation) {
+  if (!continuation.applicable || !Number.isSafeInteger(continuation.nextSequence)) return "—";
+  const number = String(continuation.nextSequence).padStart(2, "0");
+  return `P${number} · ${continuation.ready ? "готов" : "ожидает evidence"}`;
+}
+
 export default function PilotOperationsPanel({ onUnauthorized }) {
   const [status, setStatus] = useState(null);
+  const [readiness, setReadiness] = useState(null);
   const [loading, setLoading] = useState(true);
   const [accessDenied, setAccessDenied] = useState(false);
   const [loadError, setLoadError] = useState("");
@@ -64,6 +115,12 @@ export default function PilotOperationsPanel({ onUnauthorized }) {
     unauthorizedHandler.current = onUnauthorized;
   }, [onUnauthorized]);
 
+  const clearSnapshot = useCallback(() => {
+    if (!mounted.current) return;
+    setStatus(null);
+    setReadiness(null);
+  }, []);
+
   const loadStatus = useCallback(async () => {
     if (inFlight.current) return;
     inFlight.current = true;
@@ -72,30 +129,36 @@ export default function PilotOperationsPanel({ onUnauthorized }) {
       setLoadError("");
     }
     try {
-      const payload = await adminJson("/api/ops/pilot-runtime", {
-        headers: { "Cache-Control": "no-cache" },
-      });
+      const [readinessPayload, runtimePayload] = await Promise.all([
+        adminJson("/api/ops/pilot-readiness", {
+          headers: { "Cache-Control": "no-cache" },
+        }),
+        adminJson("/api/ops/pilot-runtime", {
+          headers: { "Cache-Control": "no-cache" },
+        }),
+      ]);
       if (!mounted.current) return;
-      setStatus(normalizePilotOperationsStatus(payload));
+      setReadiness(normalizePilotReadiness(readinessPayload));
+      setStatus(normalizePilotOperationsStatus(runtimePayload));
       setAccessDenied(false);
     } catch (error) {
       if (!mounted.current) return;
+      clearSnapshot();
       if (error instanceof AdminApiError && error.status === 401) {
         unauthorizedHandler.current?.("Сессия администратора истекла. Войдите снова.");
         return;
       }
       if (error instanceof AdminApiError && error.status === 403) {
         setAccessDenied(true);
-        setStatus(null);
         setLoadError("");
         return;
       }
-      setLoadError("Не удалось получить безопасный статус пилота.");
+      setLoadError("Не удалось обновить readiness. Предыдущий статус сброшен в NO-GO.");
     } finally {
       inFlight.current = false;
       if (mounted.current) setLoading(false);
     }
-  }, []);
+  }, [clearSnapshot]);
 
   useEffect(() => {
     mounted.current = true;
@@ -123,12 +186,18 @@ export default function PilotOperationsPanel({ onUnauthorized }) {
     );
   }
 
+  const combinedDecision = !loading
+    && readiness?.decision === "GO"
+    && status?.decision === "GO"
+    ? "GO"
+    : "NO-GO";
+
   return (
     <section className="pilot-panel" aria-live="polite">
       <div className="section-heading">
         <div>
           <h2>Контролируемый пилот</h2>
-          <p>Read-only статус первых 20 заказов. Управление runtime здесь недоступно.</p>
+          <p>Read-only cockpit первых 20 заказов. Любая потеря свежего сигнала трактуется как NO-GO.</p>
         </div>
         <button type="button" onClick={loadStatus} disabled={loading}>
           {loading ? "Проверка…" : "Обновить статус"}
@@ -136,14 +205,16 @@ export default function PilotOperationsPanel({ onUnauthorized }) {
       </div>
 
       {loadError && <div className="pilot-inline-error" role="alert">{loadError}</div>}
-      {!status && !loadError && loading && <p>Проверяем runtime, release capability и денежные сигналы…</p>}
+      {!status && !readiness && !loadError && loading && (
+        <p>Проверяем diagnostics, migrations, runtime, release capability и денежные сигналы…</p>
+      )}
 
-      {status && (
+      {status && readiness && (
         <>
-          <div className={`pilot-decision ${status.decision === "GO" ? "go" : "no-go"}`}>
+          <div className={`pilot-decision ${combinedDecision === "GO" ? "go" : "no-go"}`}>
             <div>
               <span className="pilot-decision-label">Решение для следующего checkout</span>
-              <strong>{status.decision}</strong>
+              <strong>{combinedDecision}</strong>
             </div>
             <div className="pilot-decision-meta">
               <span>Runtime: {pilotStatusLabel(status.runtime.status)}</span>
@@ -152,8 +223,20 @@ export default function PilotOperationsPanel({ onUnauthorized }) {
             </div>
           </div>
 
+          {readiness.blockingCodes.length > 0 && (
+            <div className="pilot-inline-error" role="alert">
+              <strong>Следующий пилотный заказ заблокирован:</strong>
+              <ul>
+                {readiness.blockingCodes.map((code) => (
+                  <li key={code}>{pilotReadinessCodeLabel(code)}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           <div className="pilot-kpis">
             <article><span>Принято заказов</span><strong>{status.runtime.acceptedOrders} / {status.runtime.maxOrders}</strong></article>
+            <article><span>Следующий сценарий</span><strong>{nextScenarioLabel(status.continuation)}</strong></article>
             <article><span>Осталось слотов</span><strong>{status.runtime.remainingOrders}</strong></article>
             <article><span>Фактические slots</span><strong>{status.runtime.slotCount}</strong></article>
             <article><span>Пользователи allowlist</span><strong>{status.runtime.allowlistCount}</strong></article>
@@ -167,6 +250,7 @@ export default function PilotOperationsPanel({ onUnauthorized }) {
           </div>
 
           <div className="pilot-integrity-grid">
+            <ReadinessSignals readiness={readiness} />
             <IntegrityCard
               title="Целостность БД"
               healthy={status.databaseIntegrity.healthy}
@@ -181,9 +265,9 @@ export default function PilotOperationsPanel({ onUnauthorized }) {
             <MoneyAttention status={status} />
           </div>
 
-          {!status.contractValid && (
+          {(!status.contractValid || !readiness.contractValid) && (
             <div className="pilot-inline-error" role="alert">
-              Контракт ответа не подтверждён. Панель принудительно показывает NO-GO.
+              Контракт одного из safety-ответов не подтверждён. Панель принудительно показывает NO-GO.
             </div>
           )}
         </>
