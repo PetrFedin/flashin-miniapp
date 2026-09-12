@@ -148,12 +148,14 @@ def upsert_provider(
     db: Session = Depends(get_db),
 ):
     require_permission(db, admin, DELIVERY_PROVIDERS_WRITE_PERMISSION)
+    provider_code = str(payload.code or "").strip().lower()
+    provider_name = str(payload.name or "").strip()
     config_json = _validated_provider_config(dict(payload.config_json or {}))
-    row = db.query(DeliveryProvider).filter(DeliveryProvider.code == payload.code).first()
+    row = db.query(DeliveryProvider).filter(DeliveryProvider.code == provider_code).first()
     if not row:
-        row = DeliveryProvider(code=payload.code)
+        row = DeliveryProvider(code=provider_code)
         db.add(row)
-    row.name = payload.name
+    row.name = provider_name
     row.active = payload.active
     row.config_json = config_json
     db.flush()
