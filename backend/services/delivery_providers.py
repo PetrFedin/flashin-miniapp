@@ -11,6 +11,13 @@ from .delivery_authority import (
     accepted_quote_for_order,
     bind_shipment_commercial_authority,
 )
+from .delivery_provider_runtime import (
+    DeliveryProviderConfigurationError,
+    delivery_booking_command,
+    enqueue_delivery_booking,
+    resolve_delivery_provider_mode,
+    shipment_provider_mode,
+)
 from .moysklad_outbound import enqueue_moysklad_demand
 from .notifications import queue_order_status
 
@@ -33,6 +40,58 @@ def calculate_delivery_price(*_args, **_kwargs) -> Decimal:
     raise RuntimeError("Delivery price is quote-authoritative; request a DeliveryQuote")
 
 
+def _provider_mode_for_new_shipment(db: Session, provider_code: str) -> str:
+    try:
+        mode = resolve_delivery_provider_mode(db, provider_code, lock=True)
+    except DeliveryProviderConfigurationError as exc:
+        raise ValueError(str(exc)) from exc
+    if mode == "disabled":
+        raise ValueError("Delivery provider is disabled or unavailable")
+    return mode
+
+
+def _ensure_booking_command(
+    db: Session,
+    *,
+    shipment: DeliveryShipment,
+    order: Order,
+    quote,
+) -> None:
+    try:
+        mode = shipment_provider_mode(shipment)
+        enqueue_delivery_booking(
+            db,
+            shipment=shipment,
+            order=order,
+            quote=quote,
+            provider_mode=mode,
+        )
+    except DeliveryProviderConfigurationError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+def _require_booking_ready(db: Session, shipment: DeliveryShipment) -> None:
+    try:
+        mode = shipment_provider_mode(shipment)
+    except DeliveryProviderConfigurationError as exc:
+        raise ValueError(str(exc)) from exc
+    if mode == "manual":
+        return
+    if mode == "disabled":
+        raise ValueError("Disabled delivery provider cannot ship an order")
+
+    command = delivery_booking_command(db, shipment.id, lock=True)
+    if command is None:
+        raise ValueError("Delivery provider booking command is missing")
+    if command.status == "sent" and str(command.external_id or "").strip():
+        return
+    if command.status == "review_required":
+        raise ValueError("Delivery provider booking requires operator reconciliation")
+    if command.status == "failed":
+        raise ValueError("Delivery provider booking failed")
+    raise ValueError("Delivery provider booking is not confirmed yet")
+
+
 def create_shipment(
     db: Session,
     order: Order,
@@ -43,6 +102,7 @@ def create_shipment(
     if requested_provider and requested_provider != quote.provider_code:
         raise ValueError("Shipment provider must match the accepted delivery quote")
 
+    provider_mode = _provider_mode_for_new_shipment(db, quote.provider_code)
     shipment = DeliveryShipment(
         order_id=order.id,
         provider_code=quote.provider_code,
@@ -55,6 +115,8 @@ def create_shipment(
                 "provider": quote.provider_code,
                 "service": quote.service_code,
                 "currency": quote.currency,
+                "provider_mode": provider_mode,
+                "booking_state": "not_applicable" if provider_mode == "manual" else "pending",
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -69,7 +131,14 @@ def create_shipment(
             order=order,
             quote=quote,
         )
-    except DeliveryAuthorityError as exc:
+        enqueue_delivery_booking(
+            db,
+            shipment=shipment,
+            order=order,
+            quote=quote,
+            provider_mode=provider_mode,
+        )
+    except (DeliveryAuthorityError, DeliveryProviderConfigurationError) as exc:
         raise ValueError(str(exc)) from exc
     return shipment
 
@@ -110,6 +179,12 @@ def ensure_ready_shipment(
             raise ValueError("Existing shipment lacks accepted quote commercial authority")
         if Decimal(str(existing.price)).quantize(Decimal("0.01")) != Decimal(str(quote.price)).quantize(Decimal("0.01")):
             raise ValueError("Existing shipment price differs from accepted delivery quote")
+        _ensure_booking_command(
+            db,
+            shipment=existing,
+            order=order,
+            quote=quote,
+        )
         return existing, False
 
     shipment = create_shipment(db, order, requested_provider)
@@ -151,6 +226,7 @@ def transition_shipment(
         )
 
     if normalized_status == "shipped":
+        _require_booking_ready(db, shipment)
         normalized_tracking = str(tracking_number or shipment.tracking_number or "").strip()
         if len(normalized_tracking) < 3:
             raise ValueError("Tracking number is required before shipment")
