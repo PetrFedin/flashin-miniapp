@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from backend.api import health
 
 
-CURRENT_HEAD = "0040_delivery_authority"
+CURRENT_HEAD = "0041_reverse_logistics_authority"
 
 
 class ScalarResult:
