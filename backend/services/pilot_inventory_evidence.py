@@ -45,6 +45,10 @@ def _describe_chain_failure(
         ),
         "core_quantity_mismatch": "commercial movement quantity does not match the order item",
         "movement_transition_invalid": "inventory movement transition is invalid",
+        "reserve_transition_invalid": "reserve inventory transition is invalid",
+        "release_transition_invalid": "release inventory transition is invalid",
+        "commit_transition_invalid": "commit inventory transition is invalid",
+        "return_transition_invalid": "return inventory transition is invalid",
         "return_source_duplicate": "physical return movement source is duplicated",
         "physical_return_evidence_mismatch": (
             "sellable return movements do not exactly match resalable physical inspection evidence"
