@@ -14,6 +14,11 @@ down_revision = "0040_delivery_authority"
 branch_labels = None
 depends_on = None
 
+_DOWNGRADE_BLOCKED = (
+    "0041 downgrade blocked: reverse-logistics evidence exists; restore a verified "
+    "pre-0041 backup or reconcile the physical-return ledger before using legacy schema"
+)
+
 
 def upgrade() -> None:
     op.create_table(
@@ -119,12 +124,35 @@ def upgrade() -> None:
     )
 
 
+def _physical_evidence_count() -> int:
+    bind = op.get_bind()
+    return int(
+        bind.execute(
+            sa.text(
+                """
+                SELECT
+                    (SELECT count(*) FROM return_logistics_cases)
+                  + (SELECT count(*) FROM return_logistics_items)
+                  + (SELECT count(*) FROM return_logistics_events)
+                  + (SELECT count(*) FROM inventory_movements
+                     WHERE kind = 'return'
+                       AND source LIKE 'reverse_logistics_event:%')
+                """
+            )
+        ).scalar_one()
+    )
+
+
 def downgrade() -> None:
+    # Legacy schema cannot preserve the item-level physical-return authority.
+    # Refuse before any destructive DDL whenever this revision has accepted
+    # evidence. Production rollback must restore a verified backup from the
+    # target release rather than silently discarding post-0041 state.
+    if _physical_evidence_count() > 0:
+        raise RuntimeError(_DOWNGRADE_BLOCKED)
+
     op.drop_index("uq_inventory_movement_reverse_event_source", table_name="inventory_movements")
     op.drop_index("uq_inventory_movement_core_kind", table_name="inventory_movements")
-    # This succeeds for pre-feature/empty rollback drills. A database that has
-    # already accepted multiple physical return events must be reconciled before
-    # downgrading to the legacy one-return-per-order/variant model.
     op.create_unique_constraint(
         "uq_inventory_movement_order_variant_kind",
         "inventory_movements",
