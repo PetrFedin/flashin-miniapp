@@ -4,17 +4,13 @@ from types import SimpleNamespace
 import pytest
 
 from backend.jobs import provider_command_jobs
-from backend.models import ReturnRequest
-from backend.provider_models import ProviderCommand
 from backend.services import moysklad_outbound
 
 
 class _SnapshotSession:
-    def __init__(self, *, return_request=None, demand_command=None):
+    def __init__(self):
         self.active = False
         self.rollbacks = 0
-        self.return_request = return_request
-        self.demand_command = demand_command
 
     def in_transaction(self):
         return self.active
@@ -22,25 +18,6 @@ class _SnapshotSession:
     def rollback(self):
         self.rollbacks += 1
         self.active = False
-
-    def query(self, entity):
-        self.active = True
-        if entity is ReturnRequest:
-            return _Query(self.return_request)
-        if entity is ProviderCommand:
-            return _Query(self.demand_command)
-        raise AssertionError(f"unexpected entity: {entity!r}")
-
-
-class _Query:
-    def __init__(self, value):
-        self.value = value
-
-    def filter(self, *args, **kwargs):
-        return self
-
-    def first(self):
-        return self.value
 
 
 def _order(*, payment_status="paid", delivery_status="pending"):
@@ -147,43 +124,34 @@ def test_demand_has_no_open_db_transaction_during_provider_http(monkeypatch):
     assert db.in_transaction() is False
 
 
-def test_sales_return_has_no_open_db_transaction_during_provider_http(monkeypatch):
-    ret = SimpleNamespace(
-        id=17,
-        order_id=42,
-        status="approved",
-        provider_refund_id="refund-1",
-    )
-    demand = SimpleNamespace(external_id="demand-provider-id")
-    db = _SnapshotSession(return_request=ret, demand_command=demand)
-    _install_order_loader(monkeypatch, db, _order(payment_status="refunded"))
-    calls = _install_provider_probe(monkeypatch, db, "entity/salesreturn")
-    monkeypatch.setattr(moysklad_outbound, "_require_export_configuration", lambda: None)
+def test_legacy_financial_sales_return_direct_export_fails_closed_before_provider_io(monkeypatch):
+    async def forbidden_request(*_args, **_kwargs):
+        raise AssertionError("legacy financial return must never reach provider I/O")
 
-    external_id = asyncio.run(moysklad_outbound.export_sales_return(db, 42, 17))
+    monkeypatch.setattr(moysklad_outbound, "_request_json", forbidden_request)
 
-    assert external_id == "provider-document-id"
-    assert calls == [("GET", "entity/assortment"), ("POST", "entity/salesreturn")]
-    assert db.rollbacks == 1
-    assert db.in_transaction() is False
+    with pytest.raises(
+        moysklad_outbound.MoySkladReviewRequired,
+        match="physical reverse-logistics evidence",
+    ):
+        asyncio.run(moysklad_outbound.export_sales_return(object(), 42, 17))
 
 
-def test_missing_demand_dependency_is_retryable_and_snapshot_transaction_is_closed(monkeypatch):
-    ret = SimpleNamespace(
-        id=17,
-        order_id=42,
-        status="approved",
-        provider_refund_id="refund-1",
-    )
-    db = _SnapshotSession(return_request=ret, demand_command=None)
-    _install_order_loader(monkeypatch, db, _order(payment_status="refunded"))
-    monkeypatch.setattr(moysklad_outbound, "_require_export_configuration", lambda: None)
+def test_legacy_financial_sales_return_worker_fails_closed_without_db_query():
+    class _NoQuerySession:
+        def query(self, *_args, **_kwargs):
+            raise AssertionError("legacy financial return must not query before failing closed")
 
-    with pytest.raises(moysklad_outbound.MoySkladDependencyPending):
-        asyncio.run(moysklad_outbound.export_sales_return(db, 42, 17))
-
-    assert db.rollbacks == 1
-    assert db.in_transaction() is False
+    with pytest.raises(
+        moysklad_outbound.MoySkladReviewRequired,
+        match="physical return reconciliation",
+    ):
+        asyncio.run(
+            provider_command_jobs._legacy_financial_sales_return(
+                _NoQuerySession(),
+                {"order_id": 42, "return_id": 17},
+            )
+        )
 
 
 def test_export_rejects_preexisting_transaction_without_ending_callers_transaction(monkeypatch):
@@ -201,38 +169,41 @@ def test_export_rejects_preexisting_transaction_without_ending_callers_transacti
     assert db.in_transaction() is True
 
 
-def test_sales_return_worker_handler_does_not_open_dependency_transaction(monkeypatch):
+def test_physical_sales_return_worker_handler_does_not_open_dependency_transaction(monkeypatch):
     class _NoQuerySession:
         def query(self, *_args, **_kwargs):
             raise AssertionError("worker handler must not query before exporter snapshot")
 
-    async def export_sales_return(db, order_id, return_id):
+    async def export_physical_sales_return(db, case_id):
         assert isinstance(db, _NoQuerySession)
-        assert order_id == 42
-        assert return_id == 17
-        return "sales-return-id"
+        assert case_id == 17
+        return "physical-sales-return-id"
 
-    monkeypatch.setattr(provider_command_jobs, "export_sales_return", export_sales_return)
+    monkeypatch.setattr(
+        provider_command_jobs,
+        "export_physical_sales_return",
+        export_physical_sales_return,
+    )
 
     result = asyncio.run(
-        provider_command_jobs._sales_return(
+        provider_command_jobs._physical_sales_return(
             _NoQuerySession(),
-            {"order_id": 42, "return_id": 17},
+            {"case_id": 17},
         )
     )
 
-    assert result == "sales-return-id"
+    assert result == "physical-sales-return-id"
 
 
-def test_sales_return_dependency_pending_is_scheduled_for_retry_not_review(monkeypatch):
+def test_physical_sales_return_dependency_pending_is_scheduled_for_retry_not_review(monkeypatch):
     command = {
         "id": 91,
         "provider": "moysklad",
-        "command_type": "moysklad.sales_return.create",
-        "idempotency_key": "return:17:sales_return:v1",
-        "aggregate_type": "return",
+        "command_type": "moysklad.physical_sales_return.create",
+        "idempotency_key": "physical-return:17:sales_return:v1",
+        "aggregate_type": "return_logistics_case",
         "aggregate_id": "17",
-        "payload_json": '{"order_id":42,"return_id":17}',
+        "payload_json": '{"case_id":17}',
         "lease_token": "lease-token",
     }
     captured = {}
@@ -248,9 +219,8 @@ def test_sales_return_dependency_pending_is_scheduled_for_retry_not_review(monke
         lambda _db, *, provider, limit: [command],
     )
 
-    async def export_sales_return(_db, order_id, return_id):
-        assert order_id == 42
-        assert return_id == 17
+    async def export_physical_sales_return(_db, case_id):
+        assert case_id == 17
         raise moysklad_outbound.MoySkladDependencyPending(
             "MoySklad demand dependency is not completed yet"
         )
@@ -269,7 +239,11 @@ def test_sales_return_dependency_pending_is_scheduled_for_retry_not_review(monke
         captured["review_required"] = review_required
         return "retry_scheduled"
 
-    monkeypatch.setattr(provider_command_jobs, "export_sales_return", export_sales_return)
+    monkeypatch.setattr(
+        provider_command_jobs,
+        "export_physical_sales_return",
+        export_physical_sales_return,
+    )
     monkeypatch.setattr(provider_command_jobs, "fail_provider_command", fail_provider_command)
 
     result = asyncio.run(provider_command_jobs.process_provider_commands(object(), limit=1))
