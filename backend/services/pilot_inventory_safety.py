@@ -13,58 +13,11 @@ from ..models import (
     ProductVariant,
     StockReconciliationLog,
 )
-
-_COMMITTED_ORDER_STATUSES = {
-    "paid",
-    "picking",
-    "packed",
-    "ready",
-    "shipped",
-    "completed",
-    "refund_pending",
-    "partially_refunded",
-    "refund_retry_required",
-    "refund_review_required",
-}
-_CANCELLED_ORDER_STATUSES = {"cancelled", "expired"}
-_REFUNDED_ORDER_STATUSES = {"refunded"}
-
-
-def _movement_transition_valid(movement: InventoryMovement) -> bool:
-    quantity = int(movement.quantity)
-    stock_before = int(movement.stock_before)
-    stock_after = int(movement.stock_after)
-    reserved_before = int(movement.reserved_before)
-    reserved_after = int(movement.reserved_after)
-    if quantity <= 0 or min(stock_before, stock_after, reserved_before, reserved_after) < 0:
-        return False
-    if reserved_before > stock_before or reserved_after > stock_after:
-        return False
-    if movement.kind == "reserve":
-        return stock_after == stock_before and reserved_after == reserved_before + quantity
-    if movement.kind == "release":
-        return stock_after == stock_before and reserved_after == reserved_before - quantity
-    if movement.kind == "commit":
-        return (
-            stock_after == stock_before - quantity
-            and reserved_after == reserved_before - quantity
-        )
-    if movement.kind == "return":
-        return stock_after == stock_before + quantity and reserved_after == reserved_before
-    return False
-
-
-def _expected_chain(order_status: str) -> tuple[str, ...] | None:
-    status = str(order_status or "").strip().lower()
-    if status in _CANCELLED_ORDER_STATUSES:
-        return ("reserve", "release")
-    if status in _REFUNDED_ORDER_STATUSES:
-        return ("reserve", "commit", "return")
-    if status in _COMMITTED_ORDER_STATUSES:
-        return ("reserve", "commit")
-    if status in {"created", "pending", "pending_payment", "payment_pending"}:
-        return ("reserve",)
-    return None
+from .inventory_movement_contract import (
+    expected_core_chain,
+    load_resalable_return_evidence,
+    validate_variant_movement_chain,
+)
 
 
 def _latest_reconciliation_by_variant(
@@ -94,6 +47,10 @@ def build_pilot_inventory_safety(
     order_ids: Iterable[int],
 ) -> dict[str, Any]:
     """Evaluate inventory invariants for the exact accepted pilot orders.
+
+    Financial refund state has no authority over sellable-return stock. Any
+    ledger `return` must instead match a durable resalable physical-inspection
+    event by order, variant, source and quantity.
 
     The result intentionally contains only bounded codes and aggregate counts.
     It never exposes order IDs, variant IDs, SKUs, provider values or raw errors.
@@ -166,13 +123,20 @@ def build_pilot_inventory_safety(
     movements = (
         db.query(InventoryMovement)
         .filter(InventoryMovement.order_id.in_(normalized_order_ids))
-        .order_by(InventoryMovement.order_id.asc(), InventoryMovement.variant_id.asc(), InventoryMovement.id.asc())
+        .order_by(
+            InventoryMovement.order_id.asc(),
+            InventoryMovement.variant_id.asc(),
+            InventoryMovement.id.asc(),
+        )
         .all()
     )
-    movements_by_order: dict[int, dict[int, list[InventoryMovement]]] = defaultdict(lambda: defaultdict(list))
+    movements_by_order: dict[int, dict[int, list[InventoryMovement]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
     for movement in movements:
         movements_by_order[int(movement.order_id)][int(movement.variant_id)].append(movement)
 
+    physical_returns = load_resalable_return_evidence(db, normalized_order_ids)
     for order in orders:
         order_id = int(order.id)
         expected = expected_by_order.get(order_id, {})
@@ -180,20 +144,24 @@ def build_pilot_inventory_safety(
         if set(actual) != set(expected):
             blocking_codes.append("inventory_movement_variant_mismatch")
             chain_failures += 1
-        expected_chain = _expected_chain(str(order.status))
-        if expected_chain is None:
+
+        core_chain = expected_core_chain(str(order.status))
+        if core_chain is None:
             blocking_codes.append("inventory_order_status_unsupported")
             chain_failures += 1
         for variant_id, expected_quantity in expected.items():
-            chain = actual.get(variant_id, [])
-            kinds = tuple(str(movement.kind) for movement in chain)
-            valid = bool(chain) and expected_chain is not None and kinds == expected_chain
-            if any(int(movement.quantity) != expected_quantity for movement in chain):
-                valid = False
-            if any(not _movement_transition_valid(movement) for movement in chain):
-                valid = False
-            if not valid:
+            failures = validate_variant_movement_chain(
+                actual.get(variant_id, []),
+                order_quantity=expected_quantity,
+                core_chain=core_chain,
+                physical_returns=physical_returns.get((order_id, variant_id), ()),
+            )
+            if failures:
                 blocking_codes.append("inventory_movement_chain_invalid")
+                if "physical_return_evidence_mismatch" in failures:
+                    blocking_codes.append("inventory_physical_return_evidence_mismatch")
+                if "return_quantity_exceeds_commit" in failures:
+                    blocking_codes.append("inventory_physical_return_over_commit")
                 chain_failures += 1
 
     latest_reconciliation = _latest_reconciliation_by_variant(db, variant_ids)
