@@ -257,6 +257,11 @@ def receive_item(
         idempotency_key=idempotency_key, actor_admin_id=actor_admin_id, reason=reason,
     )
     if not idempotent:
+        if case.status not in {"in_transit", "received"}:
+            raise HTTPException(
+                status_code=409,
+                detail="Physical return must be in transit before receipt",
+            )
         if item.authorized_qty <= 0 or item.received_qty + quantity > item.authorized_qty:
             raise HTTPException(status_code=409, detail="Received quantity exceeds authorized physical return")
         item.received_qty += quantity
@@ -290,6 +295,11 @@ def inspect_item(
         actor_admin_id=actor_admin_id, reason=reason,
     )
     if not idempotent:
+        if case.status not in {"received", "inspected"}:
+            raise HTTPException(
+                status_code=409,
+                detail="Physical return must be fully received before inspection",
+            )
         if item.inspected_qty + quantity > item.received_qty:
             raise HTTPException(status_code=409, detail="Inspected quantity exceeds physically received quantity")
         item.inspected_qty += quantity
