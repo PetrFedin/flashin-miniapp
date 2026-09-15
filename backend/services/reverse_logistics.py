@@ -252,13 +252,10 @@ def authorize_item(
     item = _locked_item(db, case.id, item_id)
     if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity <= 0 or quantity > item.ordered_qty:
         raise HTTPException(status_code=409, detail="Authorized quantity is outside ordered quantity")
-    if case.status not in {"requested", "authorized"}:
-        # Validate lifecycle before creating an event row. Invalid attempts must
-        # never look like accepted operational evidence, even transiently.
-        raise HTTPException(
-            status_code=409,
-            detail="Physical return authorization is frozen after transit starts",
-        )
+
+    # An exact retry must remain successful even if the case advanced after the
+    # first committed response (for example authorize -> in_transit). Check the
+    # durable event identity before applying current-state lifecycle rejection.
     event_key = _key(idempotency_key)
     clean_reason = _reason(reason)
     digest = _payload_hash(item.id, "authorized", quantity, "", clean_reason)
@@ -270,6 +267,12 @@ def authorize_item(
     )
     if existing is not None:
         return PhysicalMutationResult(case, item, existing, True)
+
+    if case.status not in {"requested", "authorized"}:
+        raise HTTPException(
+            status_code=409,
+            detail="Physical return authorization is frozen after transit starts",
+        )
     if item.authorized_qty:
         raise HTTPException(status_code=409, detail="Physical return item is already authorized")
     already_claimed = _authorized_elsewhere(db, case=case, item=item)
