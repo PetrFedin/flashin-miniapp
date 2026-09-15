@@ -38,13 +38,17 @@ export default function PhysicalReturnPanel({ returnItem, canWrite, onChanged, o
   const lock = useRef(new Set());
 
   function draftFor(item) {
-    return drafts[item.order_item_id] || defaultDraft(item);
+    return { ...defaultDraft(item), ...(drafts[item.order_item_id] || {}) };
   }
 
-  function setDraft(orderItemId, patch) {
+  function setDraft(item, patch) {
     setDrafts((current) => ({
       ...current,
-      [orderItemId]: { ...(current[orderItemId] || {}), ...patch },
+      [item.order_item_id]: {
+        ...defaultDraft(item),
+        ...(current[item.order_item_id] || {}),
+        ...patch,
+      },
     }));
   }
 
@@ -234,8 +238,8 @@ export default function PhysicalReturnPanel({ returnItem, canWrite, onChanged, o
                         max={authorizeRemaining}
                         step="1"
                         value={draft.authorizeQty ?? ""}
-                        onChange={(event) => setDraft(item.order_item_id, { authorizeQty: event.target.value })}
-                        disabled={busy === `physical-authorize-${returnItem.id}-${item.order_item_id}`}
+                        onChange={(event) => setDraft(item, { authorizeQty: event.target.value })}
+                        disabled={Boolean(busy)}
                       />
                     </label>
                     <label>
@@ -243,13 +247,14 @@ export default function PhysicalReturnPanel({ returnItem, canWrite, onChanged, o
                       <input
                         value={draft.reason ?? ""}
                         maxLength={2000}
-                        onChange={(event) => setDraft(item.order_item_id, { reason: event.target.value })}
+                        onChange={(event) => setDraft(item, { reason: event.target.value })}
+                        disabled={Boolean(busy)}
                       />
                     </label>
                     <button
                       type="button"
                       onClick={() => mutateItem(item, "authorize")}
-                      disabled={busy === `physical-authorize-${returnItem.id}-${item.order_item_id}`}
+                      disabled={Boolean(busy)}
                     >
                       Авторизовать позицию
                     </button>
@@ -266,8 +271,8 @@ export default function PhysicalReturnPanel({ returnItem, canWrite, onChanged, o
                         max={receiveRemaining}
                         step="1"
                         value={draft.receiveQty ?? ""}
-                        onChange={(event) => setDraft(item.order_item_id, { receiveQty: event.target.value })}
-                        disabled={busy === `physical-receive-${returnItem.id}-${item.order_item_id}`}
+                        onChange={(event) => setDraft(item, { receiveQty: event.target.value })}
+                        disabled={Boolean(busy)}
                       />
                     </label>
                     <label>
@@ -275,13 +280,14 @@ export default function PhysicalReturnPanel({ returnItem, canWrite, onChanged, o
                       <input
                         value={draft.reason ?? ""}
                         maxLength={2000}
-                        onChange={(event) => setDraft(item.order_item_id, { reason: event.target.value })}
+                        onChange={(event) => setDraft(item, { reason: event.target.value })}
+                        disabled={Boolean(busy)}
                       />
                     </label>
                     <button
                       type="button"
                       onClick={() => mutateItem(item, "receive")}
-                      disabled={busy === `physical-receive-${returnItem.id}-${item.order_item_id}`}
+                      disabled={Boolean(busy)}
                     >
                       Зафиксировать приёмку
                     </button>
@@ -298,15 +304,16 @@ export default function PhysicalReturnPanel({ returnItem, canWrite, onChanged, o
                         max={inspectRemaining}
                         step="1"
                         value={draft.inspectQty ?? ""}
-                        onChange={(event) => setDraft(item.order_item_id, { inspectQty: event.target.value })}
-                        disabled={busy === `physical-inspect-${returnItem.id}-${item.order_item_id}`}
+                        onChange={(event) => setDraft(item, { inspectQty: event.target.value })}
+                        disabled={Boolean(busy)}
                       />
                     </label>
                     <label>
                       Disposition
                       <select
                         value={draft.disposition || "resalable"}
-                        onChange={(event) => setDraft(item.order_item_id, { disposition: event.target.value })}
+                        onChange={(event) => setDraft(item, { disposition: event.target.value })}
+                        disabled={Boolean(busy)}
                       >
                         {Object.entries(PHYSICAL_DISPOSITION_LABELS).map(([value, label]) => (
                           <option value={value} key={value}>{label}</option>
@@ -318,13 +325,14 @@ export default function PhysicalReturnPanel({ returnItem, canWrite, onChanged, o
                       <input
                         value={draft.reason ?? ""}
                         maxLength={2000}
-                        onChange={(event) => setDraft(item.order_item_id, { reason: event.target.value })}
+                        onChange={(event) => setDraft(item, { reason: event.target.value })}
+                        disabled={Boolean(busy)}
                       />
                     </label>
                     <button
                       type="button"
                       onClick={() => mutateItem(item, "inspect")}
-                      disabled={busy === `physical-inspect-${returnItem.id}-${item.order_item_id}`}
+                      disabled={Boolean(busy)}
                     >
                       Зафиксировать disposition
                     </button>
@@ -338,7 +346,7 @@ export default function PhysicalReturnPanel({ returnItem, canWrite, onChanged, o
             <button
               type="button"
               onClick={markTransit}
-              disabled={busy === `physical-transit-${returnItem.id}`}
+              disabled={Boolean(busy)}
             >
               Зафиксировать передачу в пути
             </button>
