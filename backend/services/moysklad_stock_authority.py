@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from sqlalchemy.orm import Session
 
-from ..models import MoySkladConflict, ProductVariant
-from ..provider_models import ProviderCommand
-from ..reverse_logistics_models import ReturnLogisticsCase, ReturnLogisticsItem
+from ..models import MoySkladConflict, ProductVariant, StockReconciliationLog
+from ..reverse_logistics_models import ReturnLogisticsEvent, ReturnLogisticsItem
 
 _STALE_PHYSICAL_RETURN_CONFLICT = "stale_stock_pending_physical_return"
-_PHYSICAL_RETURN_COMMAND = "moysklad.physical_sales_return.create"
+_BLOCKED_RECONCILIATION_ACTION = "blocked_physical_return"
+_CATCHUP_RECONCILIATION_ACTION = "physical_return_catchup"
 
 
 @dataclass(frozen=True)
@@ -18,7 +19,7 @@ class MoySkladStockDecision:
 
     target_stock: int
     blocked: bool
-    pending_case_ids: tuple[int, ...] = ()
+    pending_event_ids: tuple[int, ...] = ()
 
 
 def _provider_identity(variant: ProductVariant) -> str:
@@ -26,57 +27,69 @@ def _provider_identity(variant: ProductVariant) -> str:
     return external_id or f"local-variant:{int(variant.id)}"
 
 
-def _pending_physical_return_case_ids(db: Session, variant_id: int) -> tuple[int, ...]:
-    """Physical resalable cases not yet acknowledged by a MoySklad SalesReturn.
+def _latest_resalable_event(
+    db: Session,
+    variant_id: int,
+) -> tuple[int, datetime] | None:
+    row = (
+        db.query(ReturnLogisticsEvent.id, ReturnLogisticsEvent.created_at)
+        .join(
+            ReturnLogisticsItem,
+            ReturnLogisticsItem.id == ReturnLogisticsEvent.item_id,
+        )
+        .filter(
+            ReturnLogisticsItem.variant_id == int(variant_id),
+            ReturnLogisticsEvent.event_type == "inspected",
+            ReturnLogisticsEvent.disposition == "resalable",
+            ReturnLogisticsEvent.quantity > 0,
+        )
+        .order_by(
+            ReturnLogisticsEvent.created_at.desc(),
+            ReturnLogisticsEvent.id.desc(),
+        )
+        .first()
+    )
+    if row is None:
+        return None
+    return int(row[0]), row[1]
 
-    A warehouse inspection is authoritative locally before the asynchronous
-    provider command completes. While that command is absent, pending,
-    processing, failed or review-required, a lower inbound provider snapshot is
-    stale with respect to the verified warehouse receipt and must not erase it.
+
+def _latest_catchup(
+    db: Session,
+    variant_id: int,
+) -> StockReconciliationLog | None:
+    return (
+        db.query(StockReconciliationLog)
+        .filter(
+            StockReconciliationLog.variant_id == int(variant_id),
+            StockReconciliationLog.action == _CATCHUP_RECONCILIATION_ACTION,
+            StockReconciliationLog.status == "resolved",
+        )
+        .order_by(
+            StockReconciliationLog.created_at.desc(),
+            StockReconciliationLog.id.desc(),
+        )
+        .first()
+    )
+
+
+def _pending_resalable_event_ids(db: Session, variant_id: int) -> tuple[int, ...]:
+    """Return latest physical evidence still awaiting an observed provider catch-up.
+
+    A successfully sent SalesReturn is not enough: MoySklad's inbound stock
+    endpoint may still expose an older snapshot. The authority boundary is
+    released only after a later inbound snapshot is observed at or above the
+    then-current verified local stock.
     """
 
-    case_ids = [
-        int(row[0])
-        for row in (
-            db.query(ReturnLogisticsItem.case_id)
-            .join(
-                ReturnLogisticsCase,
-                ReturnLogisticsCase.id == ReturnLogisticsItem.case_id,
-            )
-            .filter(
-                ReturnLogisticsItem.variant_id == int(variant_id),
-                ReturnLogisticsItem.resalable_qty > 0,
-                ReturnLogisticsCase.status == "inspected",
-            )
-            .distinct()
-            .order_by(ReturnLogisticsItem.case_id.asc())
-            .all()
-        )
-    ]
-    if not case_ids:
+    latest_event = _latest_resalable_event(db, variant_id)
+    if latest_event is None:
         return ()
-
-    commands = (
-        db.query(ProviderCommand)
-        .filter(
-            ProviderCommand.provider == "moysklad",
-            ProviderCommand.command_type == _PHYSICAL_RETURN_COMMAND,
-            ProviderCommand.aggregate_type == "return_logistics_case",
-            ProviderCommand.aggregate_id.in_([str(case_id) for case_id in case_ids]),
-        )
-        .order_by(ProviderCommand.id.asc())
-        .all()
-    )
-    acknowledged: set[int] = set()
-    for command in commands:
-        if command.status != "sent" or not str(command.external_id or "").strip():
-            continue
-        try:
-            acknowledged.add(int(command.aggregate_id))
-        except (TypeError, ValueError):
-            continue
-
-    return tuple(case_id for case_id in case_ids if case_id not in acknowledged)
+    event_id, event_created_at = latest_event
+    catchup = _latest_catchup(db, variant_id)
+    if catchup is not None and catchup.created_at >= event_created_at:
+        return ()
+    return (event_id,)
 
 
 def _open_or_refresh_conflict(
@@ -84,9 +97,15 @@ def _open_or_refresh_conflict(
     *,
     variant: ProductVariant,
     external_stock: int,
-    pending_case_ids: tuple[int, ...],
+    pending_event_ids: tuple[int, ...],
 ) -> None:
     provider_id = _provider_identity(variant)
+    event_text = ",".join(str(event_id) for event_id in pending_event_ids)
+    message = (
+        f"Provider stock {int(external_stock)} would lower verified local stock "
+        f"{int(variant.stock_qty)} while resalable inspection event(s) {event_text} "
+        "have not been observed in an inbound MoySklad stock snapshot; snapshot was not applied"
+    )
     existing = (
         db.query(MoySkladConflict)
         .filter(
@@ -96,25 +115,47 @@ def _open_or_refresh_conflict(
         )
         .first()
     )
-    case_text = ",".join(str(case_id) for case_id in pending_case_ids)
-    message = (
-        f"Provider stock {int(external_stock)} would lower verified local stock "
-        f"{int(variant.stock_qty)} while physical return case(s) {case_text} "
-        "are not acknowledged by MoySklad; snapshot was not applied"
-    )
     if existing is not None:
         existing.sku = str(variant.sku or "")[:120]
         existing.message = message
-        return
-    db.add(
-        MoySkladConflict(
-            moysklad_id=provider_id,
-            sku=str(variant.sku or "")[:120],
-            conflict_type=_STALE_PHYSICAL_RETURN_CONFLICT,
-            message=message,
-            status="open",
+    else:
+        db.add(
+            MoySkladConflict(
+                moysklad_id=provider_id,
+                sku=str(variant.sku or "")[:120],
+                conflict_type=_STALE_PHYSICAL_RETURN_CONFLICT,
+                message=message,
+                status="open",
+            )
         )
+
+    reconciliation = (
+        db.query(StockReconciliationLog)
+        .filter(
+            StockReconciliationLog.variant_id == int(variant.id),
+            StockReconciliationLog.action == _BLOCKED_RECONCILIATION_ACTION,
+            StockReconciliationLog.status == "open",
+        )
+        .order_by(StockReconciliationLog.id.desc())
+        .first()
     )
+    if reconciliation is None:
+        reconciliation = StockReconciliationLog(
+            variant_id=int(variant.id),
+            sku=str(variant.sku or "")[:120],
+            local_stock_qty=int(variant.stock_qty),
+            external_stock_qty=int(external_stock),
+            local_reserved_qty=int(variant.reserved_qty or 0),
+            action=_BLOCKED_RECONCILIATION_ACTION,
+            status="open",
+            message=message,
+        )
+        db.add(reconciliation)
+    else:
+        reconciliation.local_stock_qty = int(variant.stock_qty)
+        reconciliation.external_stock_qty = int(external_stock)
+        reconciliation.local_reserved_qty = int(variant.reserved_qty or 0)
+        reconciliation.message = message
 
 
 def _resolve_stale_conflicts(db: Session, variant: ProductVariant) -> None:
@@ -132,6 +173,41 @@ def _resolve_stale_conflicts(db: Session, variant: ProductVariant) -> None:
         row.status = "resolved"
 
 
+def _record_catchup(
+    db: Session,
+    *,
+    variant: ProductVariant,
+    external_stock: int,
+    pending_event_ids: tuple[int, ...],
+) -> None:
+    event_text = ",".join(str(event_id) for event_id in pending_event_ids)
+    db.add(
+        StockReconciliationLog(
+            variant_id=int(variant.id),
+            sku=str(variant.sku or "")[:120],
+            local_stock_qty=int(variant.stock_qty),
+            external_stock_qty=int(external_stock),
+            local_reserved_qty=int(variant.reserved_qty or 0),
+            action=_CATCHUP_RECONCILIATION_ACTION,
+            status="resolved",
+            message=(
+                f"Inbound MoySklad stock caught up after resalable inspection event(s) {event_text}"
+            ),
+        )
+    )
+    open_reconciliations = (
+        db.query(StockReconciliationLog)
+        .filter(
+            StockReconciliationLog.variant_id == int(variant.id),
+            StockReconciliationLog.action == _BLOCKED_RECONCILIATION_ACTION,
+            StockReconciliationLog.status == "open",
+        )
+        .all()
+    )
+    for row in open_reconciliations:
+        row.status = "resolved"
+
+
 def evaluate_moysklad_stock_snapshot(
     db: Session,
     variant: ProductVariant,
@@ -139,11 +215,10 @@ def evaluate_moysklad_stock_snapshot(
 ) -> MoySkladStockDecision:
     """Protect verified warehouse truth from a stale downward provider snapshot.
 
-    Upward/equal snapshots are always safe. A downward snapshot is blocked only
-    while at least one inspected resalable physical return for this variant has
-    not reached a successful MoySklad physical SalesReturn command. This keeps
-    the protection scoped to the asynchronous/review window rather than turning
-    historical returns into a permanent stock floor.
+    The protection is scoped to a variant and to resalable physical inspection
+    evidence. Financial refunds and damaged/quarantine inspection never create
+    it. A provider command being sent does not clear it: only an actually
+    observed inbound stock snapshot at or above current local stock does.
     """
 
     normalized_external = int(external_stock)
@@ -152,13 +227,21 @@ def evaluate_moysklad_stock_snapshot(
     current_stock = int(variant.stock_qty or 0)
     reserved_qty = int(variant.reserved_qty or 0)
     target_stock = max(normalized_external, reserved_qty)
+    pending_event_ids = _pending_resalable_event_ids(db, int(variant.id))
 
-    if target_stock >= current_stock:
+    if not pending_event_ids:
         _resolve_stale_conflicts(db, variant)
         return MoySkladStockDecision(target_stock=target_stock, blocked=False)
 
-    pending_case_ids = _pending_physical_return_case_ids(db, int(variant.id))
-    if not pending_case_ids:
+    # Catch-up is proved by the provider's raw stock value, never by the local
+    # reserved-quantity floor applied to a lower provider number.
+    if normalized_external >= current_stock:
+        _record_catchup(
+            db,
+            variant=variant,
+            external_stock=normalized_external,
+            pending_event_ids=pending_event_ids,
+        )
         _resolve_stale_conflicts(db, variant)
         return MoySkladStockDecision(target_stock=target_stock, blocked=False)
 
@@ -166,10 +249,10 @@ def evaluate_moysklad_stock_snapshot(
         db,
         variant=variant,
         external_stock=normalized_external,
-        pending_case_ids=pending_case_ids,
+        pending_event_ids=pending_event_ids,
     )
     return MoySkladStockDecision(
         target_stock=current_stock,
         blocked=True,
-        pending_case_ids=pending_case_ids,
+        pending_event_ids=pending_event_ids,
     )
