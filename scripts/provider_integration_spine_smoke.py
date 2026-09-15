@@ -4,6 +4,12 @@
 The application/domain/database path is real. Only the external MoySklad HTTP
 boundary is replaced with a deterministic local fake. This is a CI contract
 smoke, not live Telegram/YooKassa/MoySklad evidence.
+
+The smoke deliberately proves two distinct authorities:
+1. a completed financial refund changes money/loyalty state but does not restore
+   inventory or create a MoySklad SalesReturn;
+2. a received + inspected + resalable physical return restores inventory once
+   and is the only authority that creates the MoySklad SalesReturn.
 """
 
 from __future__ import annotations
@@ -37,14 +43,23 @@ from backend.models import (
     ReturnRequest,
 )
 from backend.provider_models import ProviderCommand
-from backend.services import moysklad_outbound
+from backend.reverse_logistics_models import ReturnLogisticsItem
+from backend.services import moysklad_outbound, moysklad_reverse_return
 from backend.services.delivery_authority import accept_quote_for_order, create_delivery_quote
 from backend.services.delivery_providers import ensure_ready_shipment, transition_shipment
 from backend.services.fulfillment import update_fulfillment_status
 from backend.services.fulfillment_locking import lock_fulfillment_task_for_update
 from backend.services.inventory import reserve_variant
+from backend.services.moysklad_reverse_return import enqueue_moysklad_physical_sales_return
 from backend.services.payment_settlement import settle_paid_order
 from backend.services.refund_state import apply_provider_refund_status
+from backend.services.reverse_logistics import (
+    authorize_item,
+    ensure_physical_case,
+    inspect_item,
+    mark_in_transit,
+    receive_item,
+)
 
 
 def main() -> int:
@@ -56,8 +71,10 @@ def main() -> int:
         expire_on_commit=False,
         join_transaction_mode="create_savepoint",
     )
-    original_get_settings = moysklad_outbound.get_settings
-    original_request_json = moysklad_outbound._request_json
+    original_outbound_get_settings = moysklad_outbound.get_settings
+    original_outbound_request_json = moysklad_outbound._request_json
+    original_reverse_get_settings = moysklad_reverse_return.get_settings
+    original_reverse_request_json = moysklad_reverse_return._request_json
     provider_posts: list[tuple[str, dict]] = []
 
     fake_settings = SimpleNamespace(
@@ -107,6 +124,8 @@ def main() -> int:
     try:
         moysklad_outbound.get_settings = lambda: fake_settings
         moysklad_outbound._request_json = fake_request_json
+        moysklad_reverse_return.get_settings = lambda: fake_settings
+        moysklad_reverse_return._request_json = fake_request_json
 
         customer = Customer(
             telegram_id=str(int(token, 16)),
@@ -250,7 +269,7 @@ def main() -> int:
         ret = ReturnRequest(
             order_id=order_id,
             customer_id=customer.id,
-            reason="Provider spine full refund",
+            reason="Provider spine full financial refund",
             status="processing",
             provider_refund_id=f"refund-{token}",
             refund_amount=18000,
@@ -258,7 +277,8 @@ def main() -> int:
         db.add(ret)
         db.flush()
         result = apply_provider_refund_status(db, ret, paid_order, "succeeded")
-        assert result["inventory_restored"] is True
+        assert result["inventory_effect"] == "none_financial_refund_is_not_physical_return"
+        assert result["physical_return_required_for_stock"] is True
         db.commit()
 
         db.expire_all()
@@ -271,9 +291,12 @@ def main() -> int:
         persisted_variant = db.query(ProductVariant).filter(ProductVariant.id == variant.id).one()
         persisted_return = db.query(ReturnRequest).filter(ReturnRequest.id == ret.id).one()
         persisted_shipment = db.query(DeliveryShipment).filter(DeliveryShipment.order_id == order_id).one()
-        commands = (
+        financial_commands = (
             db.query(ProviderCommand)
-            .filter(ProviderCommand.aggregate_id.in_([str(order_id), str(ret.id)]))
+            .filter(
+                ProviderCommand.aggregate_type == "order",
+                ProviderCommand.aggregate_id == str(order_id),
+            )
             .order_by(ProviderCommand.id.asc())
             .all()
         )
@@ -283,34 +306,128 @@ def main() -> int:
         assert refunded_order.delivery_status == "delivered"
         assert persisted_shipment.status == "delivered"
         assert persisted_return.status == "approved"
-        assert persisted_variant.stock_qty == 5
+        assert persisted_variant.stock_qty == 3
         assert persisted_variant.reserved_qty == 0
-        assert [command.command_type for command in commands] == [
+        assert [command.command_type for command in financial_commands] == [
             "moysklad.customer_order.create",
             "moysklad.demand.create",
-            "moysklad.sales_return.create",
         ]
-        assert all(command.status == "pending" for command in commands)
+        assert all(command.status == "pending" for command in financial_commands)
+        assert (
+            db.query(ProviderCommand)
+            .filter(ProviderCommand.command_type == "moysklad.sales_return.create")
+            .count()
+            == 0
+        )
 
+        # First complete the paid-order/demand provider spine. The physical
+        # SalesReturn is not allowed to run until the demand dependency exists.
         worker_result = asyncio.run(process_provider_commands(db, limit=20))
-        assert worker_result["claimed"] == 3
-        assert worker_result["sent"] == 3
+        assert worker_result["claimed"] == 2
+        assert worker_result["sent"] == 2
         assert worker_result["review_required"] == 0
         assert worker_result["failed"] == 0
+        assert [path for path, _payload in provider_posts] == [
+            "entity/customerorder",
+            "entity/demand",
+        ]
 
         db.expire_all()
-        sent_commands = (
+        refunded_order = (
+            db.query(Order)
+            .options(joinedload(Order.items), joinedload(Order.customer))
+            .filter(Order.id == order_id)
+            .one()
+        )
+        persisted_return = db.query(ReturnRequest).filter(ReturnRequest.id == ret.id).one()
+        case = ensure_physical_case(db, ret=persisted_return, order=refunded_order)
+        physical_item = (
+            db.query(ReturnLogisticsItem)
+            .filter(ReturnLogisticsItem.case_id == case.id)
+            .one()
+        )
+        physical_key_prefix = f"spine-{token}"
+        authorize_item(
+            db,
+            case_id=case.id,
+            item_id=physical_item.id,
+            quantity=2,
+            idempotency_key=f"{physical_key_prefix}-authorize",
+            actor_admin_id=None,
+            reason="Warehouse-authorized full physical return",
+        )
+        mark_in_transit(db, case_id=case.id)
+        receive_item(
+            db,
+            case_id=case.id,
+            item_id=physical_item.id,
+            quantity=2,
+            idempotency_key=f"{physical_key_prefix}-receive",
+            actor_admin_id=None,
+            reason="Warehouse received two units",
+        )
+        inspection = inspect_item(
+            db,
+            case_id=case.id,
+            item_id=physical_item.id,
+            quantity=2,
+            disposition="resalable",
+            idempotency_key=f"{physical_key_prefix}-inspect",
+            actor_admin_id=None,
+            reason="Both units inspected and resalable",
+        )
+        assert inspection.case.status == "inspected"
+        physical_command = enqueue_moysklad_physical_sales_return(db, case.id)
+        assert physical_command is not None
+        db.commit()
+
+        db.expire_all()
+        persisted_variant = db.query(ProductVariant).filter(ProductVariant.id == variant.id).one()
+        assert persisted_variant.stock_qty == 5
+        assert persisted_variant.reserved_qty == 0
+        queued_physical_command = (
             db.query(ProviderCommand)
-            .filter(ProviderCommand.aggregate_id.in_([str(order_id), str(ret.id)]))
+            .filter(
+                ProviderCommand.aggregate_type == "return_logistics_case",
+                ProviderCommand.aggregate_id == str(case.id),
+                ProviderCommand.command_type == "moysklad.physical_sales_return.create",
+            )
+            .one()
+        )
+        assert queued_physical_command.status == "pending"
+
+        physical_worker_result = asyncio.run(process_provider_commands(db, limit=20))
+        assert physical_worker_result["claimed"] == 1
+        assert physical_worker_result["sent"] == 1
+        assert physical_worker_result["review_required"] == 0
+        assert physical_worker_result["failed"] == 0
+
+        db.expire_all()
+        sent_order_commands = (
+            db.query(ProviderCommand)
+            .filter(
+                ProviderCommand.aggregate_type == "order",
+                ProviderCommand.aggregate_id == str(order_id),
+            )
             .order_by(ProviderCommand.id.asc())
             .all()
         )
-        assert [command.status for command in sent_commands] == ["sent", "sent", "sent"]
-        assert [command.external_id for command in sent_commands] == [
+        sent_physical_command = (
+            db.query(ProviderCommand)
+            .filter(
+                ProviderCommand.aggregate_type == "return_logistics_case",
+                ProviderCommand.aggregate_id == str(case.id),
+                ProviderCommand.command_type == "moysklad.physical_sales_return.create",
+            )
+            .one()
+        )
+        assert [command.status for command in sent_order_commands] == ["sent", "sent"]
+        assert [command.external_id for command in sent_order_commands] == [
             "ms-customer-order-ci",
             "ms-demand-ci",
-            "ms-sales-return-ci",
         ]
+        assert sent_physical_command.status == "sent"
+        assert sent_physical_command.external_id == "ms-sales-return-ci"
         assert [path for path, _payload in provider_posts] == [
             "entity/customerorder",
             "entity/demand",
@@ -328,6 +445,7 @@ def main() -> int:
         assert sales_return_payload["demand"]["meta"]["href"].endswith(
             "/entity/demand/ms-demand-ci"
         )
+        assert sum(int(position["quantity"]) for position in sales_return_payload["positions"]) == 2
 
         replay_result = apply_provider_refund_status(
             db,
@@ -336,9 +454,25 @@ def main() -> int:
             "succeeded",
         )
         assert replay_result["idempotent"] is True
+        assert replay_result["inventory_effect"] == "none_financial_refund_is_not_physical_return"
+        replay_inspection = inspect_item(
+            db,
+            case_id=case.id,
+            item_id=physical_item.id,
+            quantity=2,
+            disposition="resalable",
+            idempotency_key=f"{physical_key_prefix}-inspect",
+            actor_admin_id=None,
+            reason="Both units inspected and resalable",
+        )
+        assert replay_inspection.idempotent is True
+        enqueue_moysklad_physical_sales_return(db, case.id)
         db.commit()
         assert asyncio.run(process_provider_commands(db, limit=20))["claimed"] == 0
 
+        db.expire_all()
+        final_variant = db.query(ProductVariant).filter(ProductVariant.id == variant.id).one()
+        assert final_variant.stock_qty == 5
         movement_kinds = [
             row.kind
             for row in db.query(InventoryMovement)
@@ -359,14 +493,16 @@ def main() -> int:
                 {
                     "status": "ok",
                     "order_id": order_id,
-                    "stock_after_full_refund": persisted_variant.stock_qty,
+                    "stock_after_financial_refund": 3,
+                    "stock_after_physical_resalable_return": final_variant.stock_qty,
+                    "financial_refund_sales_return_commands": 0,
                     "provider_commands": [
                         {
                             "type": command.command_type,
                             "status": command.status,
                             "external_id": command.external_id,
                         }
-                        for command in sent_commands
+                        for command in [*sent_order_commands, sent_physical_command]
                     ],
                     "provider_posts": [path for path, _payload in provider_posts],
                     "inventory_movements": movement_kinds,
@@ -378,8 +514,10 @@ def main() -> int:
         )
         return 0
     finally:
-        moysklad_outbound.get_settings = original_get_settings
-        moysklad_outbound._request_json = original_request_json
+        moysklad_outbound.get_settings = original_outbound_get_settings
+        moysklad_outbound._request_json = original_outbound_request_json
+        moysklad_reverse_return.get_settings = original_reverse_get_settings
+        moysklad_reverse_return._request_json = original_reverse_request_json
         db.close()
         if outer_transaction.is_active:
             outer_transaction.rollback()
