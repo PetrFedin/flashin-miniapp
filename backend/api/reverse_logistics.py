@@ -78,6 +78,59 @@ def _case_item_by_order_item(db: Session, case_id: int, order_item_id: int) -> R
     return item
 
 
+def _order_item_preview(order: Order) -> list[dict[str, object]]:
+    return [
+        {
+            "id": None,
+            "order_item_id": row.id,
+            "variant_id": row.variant_id,
+            "title": row.title,
+            "size": row.size,
+            "ordered_qty": row.quantity,
+            "authorized_qty": 0,
+            "received_qty": 0,
+            "inspected_qty": 0,
+            "resalable_qty": 0,
+            "damaged_qty": 0,
+            "quarantine_qty": 0,
+        }
+        for row in sorted(order.items, key=lambda item: int(item.id))
+    ]
+
+
+def _physical_payload(db: Session, ret: ReturnRequest) -> dict[str, object]:
+    order = db.query(Order).filter(Order.id == ret.order_id).first()
+    if order is None or int(order.customer_id) != int(ret.customer_id):
+        raise HTTPException(status_code=409, detail="Return request is linked to an invalid order")
+
+    case = db.query(ReturnLogisticsCase).filter(ReturnLogisticsCase.return_request_id == ret.id).first()
+    if case is None:
+        return {
+            "return_request_id": ret.id,
+            "order_id": order.id,
+            "financial_status": ret.status,
+            "physical_status": "not_started",
+            "items": _order_item_preview(order),
+        }
+
+    summary = physical_case_summary(db, case)
+    order_items = {int(row.id): row for row in order.items}
+    enriched_items = []
+    for item in summary["items"]:
+        order_item = order_items.get(int(item["order_item_id"]))
+        enriched_items.append({
+            **item,
+            "title": order_item.title if order_item is not None else "",
+            "size": order_item.size if order_item is not None else "",
+        })
+    return {
+        "financial_status": ret.status,
+        "physical_status": case.status,
+        **summary,
+        "items": enriched_items,
+    }
+
+
 @router.get("/returns/{return_id}/physical")
 def customer_physical_return(
     return_id: int,
@@ -91,16 +144,7 @@ def customer_physical_return(
     )
     if ret is None:
         raise HTTPException(status_code=404, detail="Return request not found")
-    case = db.query(ReturnLogisticsCase).filter(ReturnLogisticsCase.return_request_id == ret.id).first()
-    if case is None:
-        return {
-            "return_request_id": ret.id,
-            "financial_status": ret.status,
-            "physical_status": "not_started",
-            "items": [],
-        }
-    summary = physical_case_summary(db, case)
-    return {"financial_status": ret.status, "physical_status": case.status, **summary}
+    return _physical_payload(db, ret)
 
 
 @router.get("/admin/returns/{return_id}/physical")
@@ -113,15 +157,7 @@ def admin_physical_return(
     ret = db.query(ReturnRequest).filter(ReturnRequest.id == return_id).first()
     if ret is None:
         raise HTTPException(status_code=404, detail="Return request not found")
-    case = db.query(ReturnLogisticsCase).filter(ReturnLogisticsCase.return_request_id == ret.id).first()
-    if case is None:
-        return {
-            "return_request_id": ret.id,
-            "financial_status": ret.status,
-            "physical_status": "not_started",
-            "items": [],
-        }
-    return {"financial_status": ret.status, "physical_status": case.status, **physical_case_summary(db, case)}
+    return _physical_payload(db, ret)
 
 
 def _mutation_context(db: Session, return_id: int, admin):
