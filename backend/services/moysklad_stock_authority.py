@@ -39,6 +39,7 @@ def _latest_resalable_event(
         )
         .filter(
             ReturnLogisticsItem.variant_id == int(variant_id),
+            ReturnLogisticsItem.case_id == ReturnLogisticsEvent.case_id,
             ReturnLogisticsEvent.event_type == "inspected",
             ReturnLogisticsEvent.disposition == "resalable",
             ReturnLogisticsEvent.quantity > 0,
