@@ -92,7 +92,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["item_id"], ["return_logistics_items.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["actor_admin_id"], ["admin_users.id"]),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("item_id", "idempotency_key", name="uq_return_logistics_item_idempotency"),
+        sa.UniqueConstraint("case_id", "idempotency_key", name="uq_return_logistics_case_idempotency"),
     )
     op.create_index("ix_return_logistics_events_case_id", "return_logistics_events", ["case_id"])
     op.create_index("ix_return_logistics_events_item_id", "return_logistics_events", ["item_id"])
