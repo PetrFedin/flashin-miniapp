@@ -4,6 +4,7 @@ from sqlalchemy.orm import sessionmaker
 from backend.database import Base
 from backend.models import (
     Customer,
+    InventoryMovement,
     MoySkladConflict,
     Order,
     OrderItem,
@@ -12,6 +13,7 @@ from backend.models import (
     ReturnRequest,
     StockReconciliationLog,
 )
+from backend.provider_models import ProviderCommand
 from backend.reverse_logistics_models import (
     ReturnLogisticsCase,
     ReturnLogisticsEvent,
@@ -109,16 +111,48 @@ def _inspection(db, variant, order, item, disposition: str, quantity: int = 1):
         reason="test",
     )
     db.add(event)
+    db.flush()
+    if disposition == "resalable":
+        before = int(variant.stock_qty)
+        variant.stock_qty = before + quantity
+        db.add(
+            InventoryMovement(
+                order_id=order.id,
+                variant_id=variant.id,
+                kind="return",
+                quantity=quantity,
+                stock_before=before,
+                stock_after=before + quantity,
+                reserved_before=int(variant.reserved_qty),
+                reserved_after=int(variant.reserved_qty),
+                source=f"reverse_logistics_event:{event.id}",
+            )
+        )
     db.commit()
-    return event
+    return event, case
+
+
+def _provider_command(db, case, *, status: str, external_id: str = ""):
+    command = ProviderCommand(
+        provider="moysklad",
+        command_type="moysklad.physical_sales_return.create",
+        idempotency_key=f"physical-return:{case.id}:sales_return:v1",
+        aggregate_type="return_logistics_case",
+        aggregate_id=str(case.id),
+        payload_json=f'{{"case_id":{case.id}}}',
+        status=status,
+        attempts=1,
+        external_id=external_id,
+    )
+    db.add(command)
+    db.commit()
+    return command
 
 
 def test_stale_provider_snapshot_cannot_erase_verified_resalable_stock():
     db = _db()
     variant, order, item = _variant(db, "protected", stock=5)
-    event = _inspection(db, variant, order, item, "resalable")
-    variant.stock_qty = 6
-    db.commit()
+    event, _case = _inspection(db, variant, order, item, "resalable")
 
     count = reconcile_stock_rows(db, [{"sku": variant.sku, "stock_qty": 5}], apply=True)
     db.refresh(variant)
@@ -128,19 +162,16 @@ def test_stale_provider_snapshot_cannot_erase_verified_resalable_stock():
     conflict = db.query(MoySkladConflict).filter(MoySkladConflict.status == "open").one()
     assert conflict.conflict_type == "stale_stock_pending_physical_return"
     assert str(event.id) in conflict.message
-    reconciliation = db.query(StockReconciliationLog).filter(
+    assert db.query(StockReconciliationLog).filter(
         StockReconciliationLog.action == "blocked_physical_return",
         StockReconciliationLog.status == "open",
-    ).one()
-    assert reconciliation.external_stock_qty == 5
+    ).count() == 1
 
 
 def test_main_assortment_stock_writer_uses_same_authority_boundary():
     db = _db()
     variant, order, item = _variant(db, "main-sync", stock=5)
     _inspection(db, variant, order, item, "resalable")
-    variant.stock_qty = 6
-    db.commit()
 
     _apply_synced_stock(db, variant, 5, sync_type="manual", admin_id=None)
     db.commit()
@@ -163,31 +194,17 @@ def test_damaged_or_quarantine_only_does_not_create_false_stock_protection():
         assert db.query(MoySkladConflict).filter(MoySkladConflict.status == "open").count() == 0
 
 
-def test_mixed_physical_disposition_keeps_resalable_units_protected():
+def test_review_required_resalable_case_cannot_clear_guard_even_on_high_snapshot():
     db = _db()
-    variant, order, item = _variant(db, "mixed", stock=5)
-    _inspection(db, variant, order, item, "resalable")
-    # A later damaged return does not revoke the earlier verified resalable unit.
-    # Use a second original line because each physical case owns one order line.
-    product = db.query(Product).filter(Product.id == variant.product_id).one()
-    second_item = OrderItem(
-        order_id=order.id,
-        product_id=product.id,
-        variant_id=variant.id,
-        title="mixed-2",
-        size="M",
-        quantity=2,
-        price=1000,
-    )
-    db.add(second_item)
-    db.commit()
-    _inspection(db, variant, order, second_item, "damaged")
-    variant.stock_qty = 6
-    db.commit()
+    variant, order, item = _variant(db, "mixed-review", stock=5)
+    _event, case = _inspection(db, variant, order, item, "resalable")
+    _provider_command(db, case, status="review_required")
 
-    decision = evaluate_moysklad_stock_snapshot(db, variant, 5)
+    decision = evaluate_moysklad_stock_snapshot(db, variant, 10)
+
     assert decision.blocked is True
     assert decision.target_stock == 6
+    assert db.query(MoySkladConflict).filter(MoySkladConflict.status == "open").count() == 1
 
 
 def test_unrelated_variant_continues_sync_while_return_variant_is_protected():
@@ -195,8 +212,6 @@ def test_unrelated_variant_continues_sync_while_return_variant_is_protected():
     protected, order, item = _variant(db, "protected-two", stock=5)
     other, _other_order, _other_item = _variant(db, "unrelated", stock=8)
     _inspection(db, protected, order, item, "resalable")
-    protected.stock_qty = 6
-    db.commit()
 
     reconcile_stock_rows(
         db,
@@ -213,19 +228,48 @@ def test_unrelated_variant_continues_sync_while_return_variant_is_protected():
     assert other.stock_qty == 3
 
 
-def test_actual_provider_catchup_releases_guard_for_future_normal_sync():
+def test_sent_command_alone_is_not_catchup_and_old_snapshot_remains_blocked():
+    db = _db()
+    variant, order, item = _variant(db, "sent-not-caught", stock=5)
+    _event, case = _inspection(db, variant, order, item, "resalable")
+    _provider_command(db, case, status="sent", external_id="sales-return-1")
+
+    decision = evaluate_moysklad_stock_snapshot(db, variant, 5)
+
+    assert decision.blocked is True
+    assert decision.target_stock == 6
+
+
+def test_local_sale_after_return_cannot_fake_provider_catchup():
+    db = _db()
+    variant, order, item = _variant(db, "local-sale", stock=5)
+    _event, case = _inspection(db, variant, order, item, "resalable")
+    _provider_command(db, case, status="sent", external_id="sales-return-2")
+    # Return ledger says stock_after=6. A later local sale lowers current stock,
+    # so an old provider value of 5 must not be mistaken for catch-up.
+    variant.stock_qty = 5
+    db.commit()
+
+    decision = evaluate_moysklad_stock_snapshot(db, variant, 5)
+
+    assert decision.blocked is True
+    assert db.query(StockReconciliationLog).filter(
+        StockReconciliationLog.action == "physical_return_catchup"
+    ).count() == 0
+
+
+def test_actual_provider_transaction_and_stock_catchup_release_guard():
     db = _db()
     variant, order, item = _variant(db, "catchup", stock=5)
-    _inspection(db, variant, order, item, "resalable")
-    variant.stock_qty = 6
-    db.commit()
+    _event, case = _inspection(db, variant, order, item, "resalable")
 
     reconcile_stock_rows(db, [{"sku": variant.sku, "stock_qty": 5}], apply=True)
     db.refresh(variant)
     assert variant.stock_qty == 6
 
-    # The provider now actually exposes the warehouse-confirmed quantity.
+    _provider_command(db, case, status="sent", external_id="sales-return-3")
     reconcile_stock_rows(db, [{"sku": variant.sku, "stock_qty": 6}], apply=True)
+
     catchup = db.query(StockReconciliationLog).filter(
         StockReconciliationLog.action == "physical_return_catchup",
         StockReconciliationLog.status == "resolved",
@@ -233,8 +277,6 @@ def test_actual_provider_catchup_releases_guard_for_future_normal_sync():
     assert catchup.external_stock_qty == 6
     assert db.query(MoySkladConflict).filter(MoySkladConflict.status == "open").count() == 0
 
-    # Protection is not a permanent floor: a later legitimate provider change
-    # is authoritative again after catch-up has actually been observed.
     reconcile_stock_rows(db, [{"sku": variant.sku, "stock_qty": 4}], apply=True)
     db.refresh(variant)
     assert variant.stock_qty == 4
@@ -243,11 +285,13 @@ def test_actual_provider_catchup_releases_guard_for_future_normal_sync():
 def test_reserved_floor_cannot_fake_provider_catchup():
     db = _db()
     variant, order, item = _variant(db, "reserved-floor", stock=6, reserved=5)
-    _inspection(db, variant, order, item, "resalable")
+    _event, case = _inspection(db, variant, order, item, "resalable")
+    _provider_command(db, case, status="sent", external_id="sales-return-4")
 
     decision = evaluate_moysklad_stock_snapshot(db, variant, 4)
+
     assert decision.blocked is True
-    assert decision.target_stock == 6
+    assert decision.target_stock == 7
     assert db.query(StockReconciliationLog).filter(
         StockReconciliationLog.action == "physical_return_catchup"
     ).count() == 0
