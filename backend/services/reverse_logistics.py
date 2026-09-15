@@ -253,9 +253,6 @@ def authorize_item(
     if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity <= 0 or quantity > item.ordered_qty:
         raise HTTPException(status_code=409, detail="Authorized quantity is outside ordered quantity")
 
-    # An exact retry must remain successful even if the case advanced after the
-    # first committed response (for example authorize -> in_transit). Check the
-    # durable event identity before applying current-state lifecycle rejection.
     event_key = _key(idempotency_key)
     clean_reason = _reason(reason)
     digest = _payload_hash(item.id, "authorized", quantity, "", clean_reason)
@@ -320,21 +317,34 @@ def receive_item(
     item = _locked_item(db, case.id, item_id)
     if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity <= 0:
         raise HTTPException(status_code=400, detail="Received quantity must be positive")
-    event, idempotent = _event(
-        db, case=case, item=item, event_type="received", quantity=quantity, disposition="",
-        idempotency_key=idempotency_key, actor_admin_id=actor_admin_id, reason=reason,
+
+    event_key = _key(idempotency_key)
+    clean_reason = _reason(reason)
+    digest = _payload_hash(item.id, "received", quantity, "", clean_reason)
+    existing = _existing_event(
+        db,
+        case_id=case.id,
+        idempotency_key=event_key,
+        expected_hash=digest,
     )
-    if not idempotent:
-        if case.status not in {"in_transit", "received"}:
-            raise HTTPException(
-                status_code=409,
-                detail="Physical return must be in transit before receipt",
-            )
-        if item.authorized_qty <= 0 or item.received_qty + quantity > item.authorized_qty:
-            raise HTTPException(status_code=409, detail="Received quantity exceeds authorized physical return")
-        item.received_qty += quantity
-        _refresh_case_from_db(db, case)
-    return PhysicalMutationResult(case, item, event, idempotent)
+    if existing is not None:
+        return PhysicalMutationResult(case, item, existing, True)
+
+    if case.status not in {"in_transit", "received"}:
+        raise HTTPException(
+            status_code=409,
+            detail="Physical return must be in transit before receipt",
+        )
+    if item.authorized_qty <= 0 or item.received_qty + quantity > item.authorized_qty:
+        raise HTTPException(status_code=409, detail="Received quantity exceeds authorized physical return")
+
+    event, _ = _event(
+        db, case=case, item=item, event_type="received", quantity=quantity, disposition="",
+        idempotency_key=event_key, actor_admin_id=actor_admin_id, reason=clean_reason,
+    )
+    item.received_qty += quantity
+    _refresh_case_from_db(db, case)
+    return PhysicalMutationResult(case, item, event, False)
 
 
 def inspect_item(
@@ -355,42 +365,55 @@ def inspect_item(
     item = _locked_item(db, case.id, item_id)
     if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity <= 0:
         raise HTTPException(status_code=400, detail="Inspected quantity must be positive")
-    event, idempotent = _event(
-        db, case=case, item=item, event_type="inspected", quantity=quantity,
-        disposition=normalized_disposition, idempotency_key=idempotency_key,
-        actor_admin_id=actor_admin_id, reason=reason,
+
+    event_key = _key(idempotency_key)
+    clean_reason = _reason(reason)
+    digest = _payload_hash(item.id, "inspected", quantity, normalized_disposition, clean_reason)
+    existing = _existing_event(
+        db,
+        case_id=case.id,
+        idempotency_key=event_key,
+        expected_hash=digest,
     )
-    if not idempotent:
-        if case.status not in {"received", "inspected"}:
-            raise HTTPException(
-                status_code=409,
-                detail="Physical return must be fully received before inspection",
-            )
-        if item.inspected_qty + quantity > item.received_qty:
-            raise HTTPException(status_code=409, detail="Inspected quantity exceeds physically received quantity")
-        item.inspected_qty += quantity
-        if normalized_disposition == "resalable":
-            item.resalable_qty += quantity
-            variant = _load_locked_variant(db, item.variant_id)
-            stock_before = int(variant.stock_qty)
-            reserved_before = int(variant.reserved_qty)
-            variant.stock_qty += quantity
-            _record_movement(
-                db,
-                order_id=int(case.order_id),
-                variant=variant,
-                kind="return",
-                quantity=quantity,
-                stock_before=stock_before,
-                reserved_before=reserved_before,
-                source=f"reverse_logistics_event:{event.id}",
-            )
-        elif normalized_disposition == "damaged":
-            item.damaged_qty += quantity
-        else:
-            item.quarantine_qty += quantity
-        _refresh_case_from_db(db, case)
-    return PhysicalMutationResult(case, item, event, idempotent)
+    if existing is not None:
+        return PhysicalMutationResult(case, item, existing, True)
+
+    if case.status not in {"received", "inspected"}:
+        raise HTTPException(
+            status_code=409,
+            detail="Physical return must be fully received before inspection",
+        )
+    if item.inspected_qty + quantity > item.received_qty:
+        raise HTTPException(status_code=409, detail="Inspected quantity exceeds physically received quantity")
+
+    event, _ = _event(
+        db, case=case, item=item, event_type="inspected", quantity=quantity,
+        disposition=normalized_disposition, idempotency_key=event_key,
+        actor_admin_id=actor_admin_id, reason=clean_reason,
+    )
+    item.inspected_qty += quantity
+    if normalized_disposition == "resalable":
+        item.resalable_qty += quantity
+        variant = _load_locked_variant(db, item.variant_id)
+        stock_before = int(variant.stock_qty)
+        reserved_before = int(variant.reserved_qty)
+        variant.stock_qty += quantity
+        _record_movement(
+            db,
+            order_id=int(case.order_id),
+            variant=variant,
+            kind="return",
+            quantity=quantity,
+            stock_before=stock_before,
+            reserved_before=reserved_before,
+            source=f"reverse_logistics_event:{event.id}",
+        )
+    elif normalized_disposition == "damaged":
+        item.damaged_qty += quantity
+    else:
+        item.quarantine_qty += quantity
+    _refresh_case_from_db(db, case)
+    return PhysicalMutationResult(case, item, event, False)
 
 
 def physical_case_summary(db: Session, case: ReturnLogisticsCase) -> dict[str, object]:
