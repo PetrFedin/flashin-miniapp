@@ -68,7 +68,10 @@ class ReturnLogisticsEvent(Base):
 
     __tablename__ = "return_logistics_events"
     __table_args__ = (
-        UniqueConstraint("item_id", "idempotency_key", name="uq_return_logistics_item_idempotency"),
+        # The request route is scoped to one physical-return aggregate and the
+        # order item lives in the request body. Reusing one key for another item
+        # must therefore conflict rather than create a second side effect.
+        UniqueConstraint("case_id", "idempotency_key", name="uq_return_logistics_case_idempotency"),
         CheckConstraint(
             "event_type IN ('authorized','received','inspected')",
             name="ck_return_logistics_events_type",
