@@ -140,6 +140,11 @@ def validate_variant_movement_chain(
     Return movements are not inferred from money. They must be an exact
     one-for-one projection of durable resalable inspection events, including
     source and quantity. Multiple partial return events are therefore valid.
+
+    Snapshot continuity is deliberately *not* required between two movements
+    belonging to the same order. Other orders and explicit stock adjustments
+    may legally touch the same variant between reserve, commit and return. Each
+    movement still has to conserve its own stock/reserved transition exactly.
     """
 
     failures: list[str] = []
@@ -165,16 +170,6 @@ def validate_variant_movement_chain(
     if any(not movement_transition_valid(movement) for movement in chain):
         failures.append("movement_transition_invalid")
 
-    for index in range(1, len(chain)):
-        previous = chain[index - 1]
-        current = chain[index]
-        if (
-            int(previous.stock_after) != int(current.stock_before)
-            or int(previous.reserved_after) != int(current.reserved_before)
-        ):
-            failures.append("movement_chain_not_contiguous")
-            break
-
     actual_returns = [movement for movement in chain if movement.kind == "return"]
     expected_returns = {evidence.source: evidence.quantity for evidence in physical_returns}
     actual_return_map: dict[str, int] = {}
@@ -194,8 +189,6 @@ def validate_variant_movement_chain(
     if expected_return_qty > expected_quantity or actual_return_qty > expected_quantity:
         failures.append("return_quantity_exceeds_commit")
 
-    # A cancelled/pending order cannot have a sellable physical return because
-    # no commercial stock commit exists to reverse.
     if physical_returns and "commit" not in core_chain:
         failures.append("return_without_commit")
 
