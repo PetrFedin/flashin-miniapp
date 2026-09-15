@@ -16,14 +16,23 @@ def _status(value: Any) -> str:
     return str(value or "").strip().lower()
 
 
-def _physical_return_requires_provider_return(trace: dict[str, Any]) -> bool:
+def _inspected_physical_case_ids(trace: dict[str, Any]) -> set[str]:
     physical_returns = trace.get("physical_returns")
     if not isinstance(physical_returns, list):
-        return False
-    return any(
-        isinstance(item, dict) and _status(item.get("status")) == "inspected"
-        for item in physical_returns
-    )
+        return set()
+    result: set[str] = set()
+    for item in physical_returns:
+        if not isinstance(item, dict) or _status(item.get("status")) != "inspected":
+            continue
+        case_id = str(item.get("id") or "").strip()
+        # A terminal physical return without its aggregate identifier cannot be
+        # reconciled to provider evidence and must remain operator-visible.
+        result.add(case_id or "<missing>")
+    return result
+
+
+def _physical_return_requires_provider_return(trace: dict[str, Any]) -> bool:
+    return bool(_inspected_physical_case_ids(trace))
 
 
 def _required_commands(trace: dict[str, Any]) -> set[str]:
@@ -50,18 +59,39 @@ def _required_commands(trace: dict[str, Any]) -> set[str]:
     return required
 
 
-def _command_types(trace: dict[str, Any]) -> set[str]:
+def _moysklad_commands(trace: dict[str, Any]) -> list[dict[str, Any]]:
     commands = trace.get("provider_commands")
     if not isinstance(commands, list):
-        return set()
+        return []
+    return [
+        item
+        for item in commands
+        if isinstance(item, dict)
+        and (
+            _status(item.get("provider")) == "moysklad"
+            or _status(item.get("command_type")).startswith("moysklad.")
+        )
+    ]
+
+
+def _command_types(trace: dict[str, Any]) -> set[str]:
+    return {
+        _status(item.get("command_type"))
+        for item in _moysklad_commands(trace)
+        if _status(item.get("command_type"))
+    }
+
+
+def _physical_command_case_ids(trace: dict[str, Any]) -> set[str]:
     result: set[str] = set()
-    for item in commands:
-        if not isinstance(item, dict):
+    for item in _moysklad_commands(trace):
+        if _status(item.get("command_type")) != _PHYSICAL_SALES_RETURN:
             continue
-        command_type = _status(item.get("command_type"))
-        provider = _status(item.get("provider"))
-        if provider == "moysklad" or command_type.startswith("moysklad."):
-            result.add(command_type)
+        if _status(item.get("aggregate_type")) != "return_logistics_case":
+            continue
+        aggregate_id = str(item.get("aggregate_id") or "").strip()
+        if aggregate_id:
+            result.add(aggregate_id)
     return result
 
 
@@ -80,7 +110,12 @@ def enforce_moysklad_lifecycle_contract(
     reconciliation: dict[str, Any],
     trace: dict[str, Any],
 ) -> dict[str, Any]:
-    """Ensure lifecycle states contain every expected MoySklad command."""
+    """Ensure lifecycle states contain every expected MoySklad command.
+
+    Physical SalesReturn evidence is aggregate-specific: one command for case A
+    cannot satisfy a completed case B merely because both commands share the
+    same type.
+    """
 
     result = deepcopy(reconciliation)
     stages = result.get("stages") if isinstance(result.get("stages"), list) else []
@@ -93,26 +128,38 @@ def enforce_moysklad_lifecycle_contract(
 
     required = _required_commands(trace)
     missing = sorted(required - _command_types(trace))
-    if not missing:
+    inspected_case_ids = _inspected_physical_case_ids(trace)
+    missing_physical_case_ids = sorted(
+        inspected_case_ids - _physical_command_case_ids(trace)
+    )
+    if not missing and not missing_physical_case_ids:
         return result
 
     order = trace.get("order") if isinstance(trace.get("order"), dict) else {}
     order_status = _status(order.get("status"))
     payment_status = _status(order.get("payment_status"))
     delivery_status = _status(order.get("delivery_status"))
-    physical_terminal = _physical_return_requires_provider_return(trace)
+    physical_terminal = bool(inspected_case_ids)
     should_review = bool(
         order_status in {"shipped", "completed", "refunded"}
         or payment_status == "refunded"
         or delivery_status in {"shipped", "in_transit", "out_for_delivery", "delivered"}
         or physical_terminal
     )
+    evidence: list[str] = []
+    if missing:
+        evidence.append(f"moysklad.missing={','.join(missing)}")
+    if missing_physical_case_ids:
+        evidence.append(
+            "moysklad.physical_sales_return.missing_case_ids="
+            + ",".join(missing_physical_case_ids)
+        )
     moysklad.update(
         {
             "status": "REVIEW" if should_review else "PENDING",
             "reason": "moysklad_required_command_missing",
             "next_action": "inspect_moysklad_command_queue" if should_review else "wait_for_provider_command",
-            "evidence": [f"moysklad.missing={','.join(missing)}"],
+            "evidence": evidence,
         }
     )
 
