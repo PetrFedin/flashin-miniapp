@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 
 from fastapi import HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import utcnow_naive
@@ -113,6 +114,43 @@ def ensure_physical_case(db: Session, *, ret: ReturnRequest, order: Order) -> Re
     return case
 
 
+def _lock_case_with_order(db: Session, case_id: int) -> tuple[ReturnLogisticsCase, Order]:
+    """Serialize physical mutations for every return case belonging to one order.
+
+    A return request is not the inventory authority boundary: one order may have
+    several financial ReturnRequest rows. Locking the original order before the
+    case gives all physical cases a shared mutex and prevents two cases from
+    concurrently reserving the same sold unit.
+    """
+    snapshot = (
+        db.query(ReturnLogisticsCase.id, ReturnLogisticsCase.order_id)
+        .filter(ReturnLogisticsCase.id == case_id)
+        .first()
+    )
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Physical return case not found")
+    order = (
+        db.query(Order)
+        .filter(Order.id == int(snapshot.order_id))
+        .with_for_update()
+        .first()
+    )
+    if order is None:
+        raise HTTPException(status_code=409, detail="Physical return case is linked to a missing order")
+    case = (
+        db.query(ReturnLogisticsCase)
+        .filter(
+            ReturnLogisticsCase.id == case_id,
+            ReturnLogisticsCase.order_id == order.id,
+        )
+        .with_for_update()
+        .first()
+    )
+    if case is None:
+        raise HTTPException(status_code=409, detail="Physical return case changed while being locked")
+    return case, order
+
+
 def _locked_item(db: Session, case_id: int, item_id: int) -> ReturnLogisticsItem:
     item = (
         db.query(ReturnLogisticsItem)
@@ -123,6 +161,21 @@ def _locked_item(db: Session, case_id: int, item_id: int) -> ReturnLogisticsItem
     if item is None:
         raise HTTPException(status_code=404, detail="Physical return item not found")
     return item
+
+
+def _authorized_elsewhere(db: Session, *, case: ReturnLogisticsCase, item: ReturnLogisticsItem) -> int:
+    """Return physical quantity already claimed by sibling cases for this sold line."""
+    value = (
+        db.query(func.coalesce(func.sum(ReturnLogisticsItem.authorized_qty), 0))
+        .join(ReturnLogisticsCase, ReturnLogisticsCase.id == ReturnLogisticsItem.case_id)
+        .filter(
+            ReturnLogisticsCase.order_id == case.order_id,
+            ReturnLogisticsItem.order_item_id == item.order_item_id,
+            ReturnLogisticsItem.id != item.id,
+        )
+        .scalar()
+    )
+    return int(value or 0)
 
 
 def _refresh_case(case: ReturnLogisticsCase, items: list[ReturnLogisticsItem]) -> None:
@@ -195,34 +248,48 @@ def authorize_item(
     actor_admin_id: int | None,
     reason: str = "",
 ) -> PhysicalMutationResult:
-    case = db.query(ReturnLogisticsCase).filter(ReturnLogisticsCase.id == case_id).with_for_update().first()
-    if case is None:
-        raise HTTPException(status_code=404, detail="Physical return case not found")
+    case, _order = _lock_case_with_order(db, case_id)
     item = _locked_item(db, case.id, item_id)
     if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity <= 0 or quantity > item.ordered_qty:
         raise HTTPException(status_code=409, detail="Authorized quantity is outside ordered quantity")
-    event, idempotent = _event(
-        db, case=case, item=item, event_type="authorized", quantity=quantity, disposition="",
-        idempotency_key=idempotency_key, actor_admin_id=actor_admin_id, reason=reason,
+    if case.status not in {"requested", "authorized"}:
+        # Validate lifecycle before creating an event row. Invalid attempts must
+        # never look like accepted operational evidence, even transiently.
+        raise HTTPException(
+            status_code=409,
+            detail="Physical return authorization is frozen after transit starts",
+        )
+    event_key = _key(idempotency_key)
+    clean_reason = _reason(reason)
+    digest = _payload_hash(item.id, "authorized", quantity, "", clean_reason)
+    existing = _existing_event(
+        db,
+        case_id=case.id,
+        idempotency_key=event_key,
+        expected_hash=digest,
     )
-    if not idempotent:
-        if case.status not in {"requested", "authorized"}:
-            raise HTTPException(
-                status_code=409,
-                detail="Physical return authorization is frozen after transit starts",
-            )
-        if item.authorized_qty:
-            raise HTTPException(status_code=409, detail="Physical return item is already authorized")
-        item.authorized_qty = quantity
-        _refresh_case_from_db(db, case)
-    return PhysicalMutationResult(case, item, event, idempotent)
+    if existing is not None:
+        return PhysicalMutationResult(case, item, existing, True)
+    if item.authorized_qty:
+        raise HTTPException(status_code=409, detail="Physical return item is already authorized")
+    already_claimed = _authorized_elsewhere(db, case=case, item=item)
+    if already_claimed + quantity > int(item.ordered_qty):
+        raise HTTPException(
+            status_code=409,
+            detail="Cumulative physical return authorization exceeds original sold quantity",
+        )
+    event, _ = _event(
+        db, case=case, item=item, event_type="authorized", quantity=quantity, disposition="",
+        idempotency_key=event_key, actor_admin_id=actor_admin_id, reason=clean_reason,
+    )
+    item.authorized_qty = quantity
+    _refresh_case_from_db(db, case)
+    return PhysicalMutationResult(case, item, event, False)
 
 
 def mark_in_transit(db: Session, *, case_id: int) -> ReturnLogisticsCase:
     db.flush()
-    case = db.query(ReturnLogisticsCase).filter(ReturnLogisticsCase.id == case_id).with_for_update().first()
-    if case is None:
-        raise HTTPException(status_code=404, detail="Physical return case not found")
+    case, _order = _lock_case_with_order(db, case_id)
     authorized = (
         db.query(ReturnLogisticsItem)
         .filter(ReturnLogisticsItem.case_id == case.id, ReturnLogisticsItem.authorized_qty > 0)
@@ -246,9 +313,7 @@ def receive_item(
     actor_admin_id: int | None,
     reason: str = "",
 ) -> PhysicalMutationResult:
-    case = db.query(ReturnLogisticsCase).filter(ReturnLogisticsCase.id == case_id).with_for_update().first()
-    if case is None:
-        raise HTTPException(status_code=404, detail="Physical return case not found")
+    case, _order = _lock_case_with_order(db, case_id)
     item = _locked_item(db, case.id, item_id)
     if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity <= 0:
         raise HTTPException(status_code=400, detail="Received quantity must be positive")
@@ -283,9 +348,7 @@ def inspect_item(
     normalized_disposition = str(disposition or "").strip().lower()
     if normalized_disposition not in _DISPOSITIONS:
         raise HTTPException(status_code=400, detail="Disposition must be resalable, damaged or quarantine")
-    case = db.query(ReturnLogisticsCase).filter(ReturnLogisticsCase.id == case_id).with_for_update().first()
-    if case is None:
-        raise HTTPException(status_code=404, detail="Physical return case not found")
+    case, _order = _lock_case_with_order(db, case_id)
     item = _locked_item(db, case.id, item_id)
     if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity <= 0:
         raise HTTPException(status_code=400, detail="Inspected quantity must be positive")
