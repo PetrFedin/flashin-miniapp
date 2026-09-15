@@ -63,3 +63,5 @@ jobs:
         run: python scripts/reverse_logistics_state_smoke.py
       - name: Prove physical return lifecycle and idempotency contract
         run: python scripts/reverse_logistics_contract_smoke.py
+      - name: Prove MoySklad partial-return and disposition safety
+        run: python scripts/moysklad_reverse_logistics_contract_smoke.py
