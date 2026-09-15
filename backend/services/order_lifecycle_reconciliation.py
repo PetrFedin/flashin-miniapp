@@ -169,6 +169,31 @@ def _movement_invalid(item: dict[str, Any]) -> bool:
     )
 
 
+def _physical_return_quantities(trace: dict[str, Any]) -> tuple[int, int, int, bool, bool]:
+    resalable = 0
+    damaged = 0
+    quarantine = 0
+    has_cases = False
+    in_progress = False
+    for case in _items(trace, "physical_returns"):
+        has_cases = True
+        if _status(case.get("status")) != "inspected":
+            in_progress = True
+        case_items = case.get("items")
+        if not isinstance(case_items, list):
+            continue
+        for item in case_items:
+            if not isinstance(item, dict):
+                continue
+            try:
+                resalable += int(item.get("resalable_qty") or 0)
+                damaged += int(item.get("damaged_qty") or 0)
+                quarantine += int(item.get("quarantine_qty") or 0)
+            except (TypeError, ValueError):
+                return -1, -1, -1, has_cases, in_progress
+    return resalable, damaged, quarantine, has_cases, in_progress
+
+
 def _inventory_stage(trace: dict[str, Any]) -> dict[str, Any]:
     order_status, payment_status, _delivery_status = _order_state(trace)
     movements = _items(trace, "inventory")
@@ -200,21 +225,84 @@ def _inventory_stage(trace: dict[str, Any]) -> dict[str, Any]:
             f"inventory.movements={len(movements)}",
         )
 
-    if payment_status == "refunded" or order_status == "refunded":
-        if "commit" in kinds and "return" not in kinds:
+    return_qty = sum(
+        int(item.get("quantity") or 0)
+        for item in movements
+        if _status(item.get("kind")) == "return"
+    )
+    commit_qty = sum(
+        int(item.get("quantity") or 0)
+        for item in movements
+        if _status(item.get("kind")) == "commit"
+    )
+    resalable_qty, damaged_qty, quarantine_qty, has_physical, physical_in_progress = _physical_return_quantities(trace)
+    if min(resalable_qty, damaged_qty, quarantine_qty) < 0:
+        return _stage(
+            "inventory",
+            BLOCKED,
+            "physical_return_evidence_invalid",
+            "inspect_physical_return",
+            "physical_return.quantities=invalid",
+        )
+
+    # A sellable-stock return movement must be explained exactly by physical
+    # inspection evidence classified as resalable. Financial settlement is not
+    # inventory evidence, and damaged/quarantine quantities remain non-sellable.
+    if return_qty != resalable_qty:
+        return _stage(
+            "inventory",
+            BLOCKED,
+            "inventory_physical_return_mismatch",
+            "inspect_inventory_ledger",
+            f"inventory.return_qty={return_qty}",
+            f"physical.resalable_qty={resalable_qty}",
+        )
+    if return_qty > commit_qty:
+        return _stage(
+            "inventory",
+            BLOCKED,
+            "inventory_return_exceeds_committed_quantity",
+            "inspect_inventory_ledger",
+            f"inventory.return_qty={return_qty}",
+            f"inventory.commit_qty={commit_qty}",
+        )
+
+    if has_physical:
+        if physical_in_progress:
             return _stage(
                 "inventory",
-                REVIEW,
-                "refunded_order_missing_inventory_return",
-                "inspect_inventory_ledger",
-                "inventory.kind=return_missing",
+                PENDING,
+                "physical_return_in_progress",
+                "wait_for_physical_return",
+                f"physical.resalable_qty={resalable_qty}",
+                f"physical.non_resalable_qty={damaged_qty + quarantine_qty}",
+            )
+        if resalable_qty:
+            return _stage(
+                "inventory",
+                PASS,
+                "physical_return_inventory_exact",
+                "none",
+                f"inventory.return_qty={return_qty}",
+                f"physical.resalable_qty={resalable_qty}",
             )
         return _stage(
             "inventory",
             PASS,
-            "refund_inventory_reconciled",
+            "non_resalable_return_inventory_neutral",
             "none",
-            f"inventory.movements={len(movements)}",
+            f"physical.damaged_qty={damaged_qty}",
+            f"physical.quarantine_qty={quarantine_qty}",
+        )
+
+    if payment_status == "refunded" or order_status == "refunded":
+        return _stage(
+            "inventory",
+            PASS,
+            "financial_refund_inventory_neutral",
+            "none",
+            "physical_returns.count=0",
+            "inventory.return_qty=0",
         )
 
     if payment_status in _PAID_LIKE or order_status in {
