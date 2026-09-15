@@ -32,19 +32,44 @@ def _key(value: str) -> str:
     return key
 
 
-def _payload_hash(event_type: str, quantity: int, disposition: str = "") -> str:
+def _reason(value: str) -> str:
+    return str(value or "").strip()[:2000]
+
+
+def _payload_hash(
+    item_id: int,
+    event_type: str,
+    quantity: int,
+    disposition: str = "",
+    reason: str = "",
+) -> str:
     payload = json.dumps(
-        {"event_type": event_type, "quantity": int(quantity), "disposition": disposition},
+        {
+            "item_id": int(item_id),
+            "event_type": event_type,
+            "quantity": int(quantity),
+            "disposition": disposition,
+            "reason": reason,
+        },
         separators=(",", ":"),
         sort_keys=True,
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _existing_event(db: Session, *, item_id: int, idempotency_key: str, expected_hash: str) -> ReturnLogisticsEvent | None:
+def _existing_event(
+    db: Session,
+    *,
+    case_id: int,
+    idempotency_key: str,
+    expected_hash: str,
+) -> ReturnLogisticsEvent | None:
     event = (
         db.query(ReturnLogisticsEvent)
-        .filter(ReturnLogisticsEvent.item_id == item_id, ReturnLogisticsEvent.idempotency_key == idempotency_key)
+        .filter(
+            ReturnLogisticsEvent.case_id == case_id,
+            ReturnLogisticsEvent.idempotency_key == idempotency_key,
+        )
         .first()
     )
     if event is not None and event.payload_hash != expected_hash:
@@ -126,8 +151,14 @@ def _event(
     reason: str,
 ) -> tuple[ReturnLogisticsEvent, bool]:
     key = _key(idempotency_key)
-    digest = _payload_hash(event_type, quantity, disposition)
-    existing = _existing_event(db, item_id=item.id, idempotency_key=key, expected_hash=digest)
+    clean_reason = _reason(reason)
+    digest = _payload_hash(item.id, event_type, quantity, disposition, clean_reason)
+    existing = _existing_event(
+        db,
+        case_id=case.id,
+        idempotency_key=key,
+        expected_hash=digest,
+    )
     if existing is not None:
         return existing, True
     event = ReturnLogisticsEvent(
@@ -139,7 +170,7 @@ def _event(
         idempotency_key=key,
         payload_hash=digest,
         actor_admin_id=actor_admin_id,
-        reason=str(reason or "").strip()[:2000],
+        reason=clean_reason,
         created_at=utcnow_naive(),
     )
     db.add(event)
@@ -175,6 +206,11 @@ def authorize_item(
         idempotency_key=idempotency_key, actor_admin_id=actor_admin_id, reason=reason,
     )
     if not idempotent:
+        if case.status not in {"requested", "authorized"}:
+            raise HTTPException(
+                status_code=409,
+                detail="Physical return authorization is frozen after transit starts",
+            )
         if item.authorized_qty:
             raise HTTPException(status_code=409, detail="Physical return item is already authorized")
         item.authorized_qty = quantity
