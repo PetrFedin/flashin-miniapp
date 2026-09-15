@@ -17,13 +17,14 @@ def reconciliation(status="PASS"):
     }
 
 
-def trace(status, payment_status, delivery_status, command_types):
+def trace(status, payment_status, delivery_status, command_types, *, physical_returns=None):
     return {
         "order": {
             "status": status,
             "payment_status": payment_status,
             "delivery_status": delivery_status,
         },
+        "physical_returns": list(physical_returns or []),
         "provider_commands": [
             {"provider": "moysklad", "command_type": command_type, "status": "sent"}
             for command_type in command_types
@@ -71,7 +72,7 @@ def test_shipped_order_missing_demand_requires_review():
     assert "moysklad.demand.create" in moysklad_stage(result)["evidence"][0]
 
 
-def test_refunded_order_requires_customer_order_demand_and_sales_return():
+def test_financially_refunded_order_does_not_require_physical_sales_return_without_physical_evidence():
     result = enforce_moysklad_lifecycle_contract(
         reconciliation("PASS"),
         trace(
@@ -82,12 +83,30 @@ def test_refunded_order_requires_customer_order_demand_and_sales_return():
         ),
     )
 
+    assert result["overall_status"] == "PASS"
+    assert result["requires_operator_action"] is False
+    assert moysklad_stage(result)["status"] == "PASS"
+
+
+def test_inspected_physical_return_requires_physical_sales_return_command():
+    result = enforce_moysklad_lifecycle_contract(
+        reconciliation("PASS"),
+        trace(
+            "refunded",
+            "refunded",
+            "delivered",
+            ["moysklad.customer_order.create", "moysklad.demand.create"],
+            physical_returns=[{"id": 7, "status": "inspected"}],
+        ),
+    )
+
     assert result["overall_status"] == "REVIEW"
     assert result["requires_operator_action"] is True
-    assert "moysklad.sales_return.create" in moysklad_stage(result)["evidence"][0]
+    assert "moysklad.physical_sales_return.create" in moysklad_stage(result)["evidence"][0]
+    assert "moysklad.sales_return.create" not in moysklad_stage(result)["evidence"][0]
 
 
-def test_refunded_order_with_full_moysklad_lifecycle_stays_pass():
+def test_inspected_physical_return_with_full_moysklad_lifecycle_stays_pass():
     result = enforce_moysklad_lifecycle_contract(
         reconciliation("PASS"),
         trace(
@@ -97,13 +116,30 @@ def test_refunded_order_with_full_moysklad_lifecycle_stays_pass():
             [
                 "moysklad.customer_order.create",
                 "moysklad.demand.create",
-                "moysklad.sales_return.create",
+                "moysklad.physical_sales_return.create",
             ],
+            physical_returns=[{"id": 7, "status": "inspected"}],
         ),
     )
 
     assert result["overall_status"] == "PASS"
     assert result["requires_operator_action"] is False
+    assert moysklad_stage(result)["status"] == "PASS"
+
+
+def test_physical_return_in_progress_does_not_require_sales_return_early():
+    result = enforce_moysklad_lifecycle_contract(
+        reconciliation("PASS"),
+        trace(
+            "refunded",
+            "refunded",
+            "delivered",
+            ["moysklad.customer_order.create", "moysklad.demand.create"],
+            physical_returns=[{"id": 7, "status": "received"}],
+        ),
+    )
+
+    assert result["overall_status"] == "PASS"
     assert moysklad_stage(result)["status"] == "PASS"
 
 
