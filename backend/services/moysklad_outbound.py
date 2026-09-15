@@ -454,23 +454,11 @@ async def export_demand(db: Session, order_id: int) -> str:
     return external_id
 
 
-async def export_sales_return(db: Session, order_id: int, return_id: int) -> str:
-    _require_export_configuration()
-    snapshot = _prepare_sales_return_snapshot(db, order_id, return_id)
-    positions = await _document_positions(snapshot.order)
-    sync_id = _sync_id("salesreturn", snapshot.return_id)
-    payload = _base_document(snapshot.order, positions, sync_id)
-    payload["externalCode"] = f"FLASHIN-RETURN-{snapshot.return_id}"
-    payload["demand"] = _entity_meta("demand", snapshot.demand_external_id)
-    payload["description"] = (
-        f"FLASHIN full refund return #{snapshot.return_id} for order #{snapshot.order.id}; "
-        f"provider_refund_id={snapshot.provider_refund_id}"
-    )[:4096]
-    result = await _request_json("POST", "entity/salesreturn", json_body=payload)
-    external_id = str(result.get("id") or "").strip()
-    if not external_id:
-        raise MoySkladReviewRequired("MoySklad sales return returned no id")
-    return external_id
+async def export_sales_return(_db: Session, _order_id: int, _return_id: int) -> str:
+    """Retired financial-refund export retained only as a fail-closed API shim."""
+    raise MoySkladReviewRequired(
+        "Legacy financial SalesReturn is disabled; physical reverse-logistics evidence is required"
+    )
 
 
 def enqueue_moysklad_customer_order(db: Session, order_id: int):
@@ -501,15 +489,8 @@ def enqueue_moysklad_demand(db: Session, order_id: int):
     )
 
 
-def enqueue_moysklad_sales_return(db: Session, order_id: int, return_id: int):
-    if not get_settings().moysklad_order_export_enabled:
-        return None
-    return enqueue_provider_command(
-        db,
-        provider="moysklad",
-        command_type="moysklad.sales_return.create",
-        idempotency_key=f"return:{int(return_id)}:sales_return:v1",
-        aggregate_type="return",
-        aggregate_id=return_id,
-        payload={"order_id": int(order_id), "return_id": int(return_id)},
+def enqueue_moysklad_sales_return(_db: Session, _order_id: int, _return_id: int):
+    """Retired financial-refund command API retained only to fail closed."""
+    raise MoySkladReviewRequired(
+        "Legacy financial SalesReturn enqueue is disabled; physical reverse-logistics evidence is required"
     )
