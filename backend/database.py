@@ -1,6 +1,13 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import CheckConstraint, create_engine, event
+from sqlalchemy import (
+    CheckConstraint,
+    Index,
+    UniqueConstraint,
+    create_engine,
+    event,
+    text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapper, sessionmaker
 
 from .config import get_settings
@@ -22,12 +29,20 @@ def utcnow_naive(_context=None) -> datetime:
 
 
 @event.listens_for(Mapper, "after_mapper_constructed")
-def _upgrade_legacy_inventory_movement_constraint(mapper: Mapper, _class) -> None:
-    """Keep legacy ORM metadata aligned with Alembic migration 0026."""
+def _upgrade_legacy_inventory_movement_schema(mapper: Mapper, _class) -> None:
+    """Keep legacy ORM metadata aligned with Alembic revision 0041.
+
+    ``models.py`` predates first-class physical-return movements. Production is
+    migrated by Alembic, while many deterministic unit tests intentionally use
+    ``Base.metadata.create_all`` against SQLite. The metadata adapter therefore
+    mirrors the production contract exactly enough for both paths to enforce
+    the same invariants instead of giving tests a weaker/different schema.
+    """
     table = mapper.local_table
     if getattr(table, "name", "") != "inventory_movements":
         return
-    constraint = next(
+
+    kind_constraint = next(
         (
             item
             for item in list(table.constraints)
@@ -36,15 +51,50 @@ def _upgrade_legacy_inventory_movement_constraint(mapper: Mapper, _class) -> Non
         ),
         None,
     )
-    if constraint is None or "'return'" in str(constraint.sqltext):
-        return
-    table.constraints.remove(constraint)
-    table.append_constraint(
-        CheckConstraint(
-            "kind IN ('reserve', 'release', 'commit', 'return')",
-            name="ck_inventory_movements_kind",
+    if kind_constraint is not None and "'return'" not in str(kind_constraint.sqltext):
+        table.constraints.remove(kind_constraint)
+        table.append_constraint(
+            CheckConstraint(
+                "kind IN ('reserve', 'release', 'commit', 'return')",
+                name="ck_inventory_movements_kind",
+            )
         )
+
+    legacy_unique = next(
+        (
+            item
+            for item in list(table.constraints)
+            if isinstance(item, UniqueConstraint)
+            and item.name == "uq_inventory_movement_order_variant_kind"
+        ),
+        None,
     )
+    if legacy_unique is not None:
+        table.constraints.remove(legacy_unique)
+
+    existing_index_names = {index.name for index in table.indexes}
+    core_predicate = text("kind IN ('reserve','release','commit')")
+    if "uq_inventory_movement_core_kind" not in existing_index_names:
+        Index(
+            "uq_inventory_movement_core_kind",
+            table.c.order_id,
+            table.c.variant_id,
+            table.c.kind,
+            unique=True,
+            postgresql_where=core_predicate,
+            sqlite_where=core_predicate,
+        )
+    return_predicate = text(
+        "kind = 'return' AND source LIKE 'reverse_logistics_event:%'"
+    )
+    if "uq_inventory_movement_reverse_event_source" not in existing_index_names:
+        Index(
+            "uq_inventory_movement_reverse_event_source",
+            table.c.source,
+            unique=True,
+            postgresql_where=return_predicate,
+            sqlite_where=return_predicate,
+        )
 
 
 @event.listens_for(Mapper, "mapper_configured")
