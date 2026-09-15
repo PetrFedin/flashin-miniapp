@@ -12,6 +12,7 @@ test("Service Operations derives every section from effective permissions", () =
   assert.match(panelSource, /hasAdminPermission\(session, "orders\.read"\)/);
   assert.match(panelSource, /hasAdminPermission\(session, "customers\.read"\)/);
   assert.match(panelSource, /hasAdminPermission\(session, "refunds\.write"\)/);
+  assert.match(panelSource, /hasAdminPermission\(session, "returns\.physical\.write"\)/);
   assert.doesNotMatch(panelSource, /hasAdminPermission\(session, "orders\.write"\)/);
 });
 
@@ -26,13 +27,14 @@ test("Service Operations keeps release capability endpoints explicit and only lo
 });
 
 
-test("privacy and refund mutations fail closed without write permissions", () => {
+test("privacy, financial refund and physical return mutations fail closed without write permissions", () => {
   assert.match(panelSource, /if \(!canPrivacyWrite\)/);
   assert.match(panelSource, /privacy\.write/);
   assert.match(panelSource, /if \(!canRefundsWrite\)/);
   assert.match(panelSource, /refunds\.write/);
   assert.match(panelSource, /canPrivacyWrite && \(/);
   assert.match(panelSource, /canRefundsWrite && \(/);
+  assert.match(panelSource, /canWrite=\{canPhysicalReturnsWrite\}/);
   assert.doesNotMatch(panelSource, /canReturnsWrite/);
 });
 
@@ -40,4 +42,12 @@ test("privacy and refund mutations fail closed without write permissions", () =>
 test("returns customer identity is hidden unless both RBAC and server visibility allow it", () => {
   assert.match(panelSource, /canCustomersRead && item\.customer_pii_visible/);
   assert.match(panelSource, /Данные клиента скрыты/);
+});
+
+
+test("financial and physical return states are rendered as separate authorities", () => {
+  assert.match(panelSource, /Финансы:/);
+  assert.match(panelSource, /PhysicalReturnPanel/);
+  assert.match(panelSource, /returnItem=\{item\}/);
+  assert.match(panelSource, /onChanged=\{load\}/);
 });
