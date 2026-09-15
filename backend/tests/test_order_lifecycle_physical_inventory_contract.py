@@ -22,7 +22,9 @@ def reconciliation(status="PASS"):
     }
 
 
-def trace(*, physical_items=None, inventory_returns=None):
+def trace(*, physical_items=None, inventory_returns=None, inventory_commits=None):
+    returns = list(inventory_returns or [])
+    commits = list(returns if inventory_commits is None else inventory_commits)
     return {
         "physical_returns": [
             {
@@ -33,11 +35,18 @@ def trace(*, physical_items=None, inventory_returns=None):
         ] if physical_items is not None else [],
         "inventory": [
             {
+                "kind": "commit",
+                "quantity": quantity,
+                **({"variant_id": variant_id} if variant_id is not None else {}),
+            }
+            for variant_id, quantity in commits
+        ] + [
+            {
                 "kind": "return",
                 "quantity": quantity,
                 **({"variant_id": variant_id} if variant_id is not None else {}),
             }
-            for variant_id, quantity in (inventory_returns or [])
+            for variant_id, quantity in returns
         ],
     }
 
@@ -60,7 +69,7 @@ def test_matching_variant_evidence_stays_pass():
     assert inventory_stage(result)["status"] == "PASS"
 
 
-def test_equal_total_on_wrong_variant_is_blocked():
+def test_equal_total_on_wrong_return_variant_is_blocked():
     result = enforce_physical_inventory_variant_contract(
         reconciliation(),
         trace(
@@ -101,11 +110,43 @@ def test_multiple_movements_for_same_variant_are_summed_exactly():
         trace(
             physical_items=[{"variant_id": 101, "resalable_qty": 2}],
             inventory_returns=[(101, 1), (101, 1)],
+            inventory_commits=[(101, 2)],
         ),
     )
 
     assert result["overall_status"] == "PASS"
     assert inventory_stage(result)["status"] == "PASS"
+
+
+def test_return_variant_cannot_be_covered_by_commit_on_another_variant():
+    result = enforce_physical_inventory_variant_contract(
+        reconciliation(),
+        trace(
+            physical_items=[{"variant_id": 101, "resalable_qty": 1}],
+            inventory_returns=[(101, 1)],
+            inventory_commits=[(202, 1)],
+        ),
+    )
+
+    assert result["overall_status"] == "BLOCKED"
+    stage = inventory_stage(result)
+    assert stage["reason"] == "inventory_return_exceeds_committed_variant_quantity"
+    assert "inventory.return_by_variant=101:1" in stage["evidence"]
+    assert "inventory.commit_by_variant=202:1" in stage["evidence"]
+
+
+def test_return_quantity_cannot_exceed_commit_for_same_variant():
+    result = enforce_physical_inventory_variant_contract(
+        reconciliation(),
+        trace(
+            physical_items=[{"variant_id": 101, "resalable_qty": 2}],
+            inventory_returns=[(101, 2)],
+            inventory_commits=[(101, 1)],
+        ),
+    )
+
+    assert result["overall_status"] == "BLOCKED"
+    assert inventory_stage(result)["reason"] == "inventory_return_exceeds_committed_variant_quantity"
 
 
 def test_positive_resalable_quantity_without_variant_id_is_blocked():
@@ -128,12 +169,28 @@ def test_return_movement_without_variant_id_is_blocked():
         trace(
             physical_items=[{"variant_id": 101, "resalable_qty": 1}],
             inventory_returns=[(None, 1)],
+            inventory_commits=[(101, 1)],
         ),
     )
 
     assert result["overall_status"] == "BLOCKED"
     assert inventory_stage(result)["reason"] == "physical_return_variant_evidence_invalid"
-    assert "inventory.variant_evidence_valid=false" in inventory_stage(result)["evidence"]
+    assert "inventory.return_variant_evidence_valid=false" in inventory_stage(result)["evidence"]
+
+
+def test_commit_movement_without_variant_id_is_blocked_when_return_exists():
+    result = enforce_physical_inventory_variant_contract(
+        reconciliation(),
+        trace(
+            physical_items=[{"variant_id": 101, "resalable_qty": 1}],
+            inventory_returns=[(101, 1)],
+            inventory_commits=[(None, 1)],
+        ),
+    )
+
+    assert result["overall_status"] == "BLOCKED"
+    assert inventory_stage(result)["reason"] == "physical_return_variant_evidence_invalid"
+    assert "inventory.commit_variant_evidence_valid=false" in inventory_stage(result)["evidence"]
 
 
 def test_existing_inventory_block_is_never_downgraded_or_rewritten():
