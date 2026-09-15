@@ -16,6 +16,7 @@ def trace(**overrides):
         "payments": [],
         "payment_events": [],
         "returns": [],
+        "physical_returns": [],
         "provider_commands": [],
         "inventory": [],
         "fulfillment": [],
@@ -78,6 +79,23 @@ def settled_trace():
     )
 
 
+def refunded_trace():
+    payload = settled_trace()
+    payload["order"] = {
+        **payload["order"],
+        "status": "refunded",
+        "payment_status": "refunded",
+    }
+    payload["returns"] = [
+        {
+            "status": "approved",
+            "provider_refund_id": "refund-safe-id",
+            "refund_amount": 1000.0,
+        }
+    ]
+    return payload
+
+
 def active_paid_trace(*, fulfillment_status="new"):
     return trace(
         order={
@@ -132,6 +150,113 @@ def test_completed_coherent_order_is_pass():
     assert result["overall_status"] == "PASS"
     assert result["requires_operator_action"] is False
     assert {item["status"] for item in result["stages"]} == {"PASS"}
+
+
+def test_financial_refund_without_physical_return_is_inventory_neutral_and_passes():
+    result = evaluate_order_lifecycle(refunded_trace())
+
+    assert result["overall_status"] == "PASS"
+    assert result["requires_operator_action"] is False
+    assert stage(result, "inventory")["status"] == "PASS"
+    assert stage(result, "inventory")["reason"] == "financial_refund_inventory_neutral"
+
+
+def test_unbacked_legacy_return_movement_is_blocked_after_financial_refund():
+    payload = refunded_trace()
+    payload["inventory"].append(
+        {
+            "kind": "return",
+            "quantity": 1,
+            "stock_before": 4,
+            "stock_after": 5,
+            "reserved_before": 0,
+            "reserved_after": 0,
+        }
+    )
+
+    result = evaluate_order_lifecycle(payload)
+
+    assert result["overall_status"] == "BLOCKED"
+    assert stage(result, "inventory")["reason"] == "inventory_physical_return_mismatch"
+    assert "inventory.return_qty=1" in stage(result, "inventory")["evidence"]
+    assert "physical.resalable_qty=0" in stage(result, "inventory")["evidence"]
+
+
+def test_physical_return_in_progress_is_pending_when_inventory_matches_evidence():
+    payload = refunded_trace()
+    payload["physical_returns"] = [
+        {
+            "id": 9,
+            "status": "received",
+            "items": [
+                {
+                    "resalable_qty": 0,
+                    "damaged_qty": 0,
+                    "quarantine_qty": 0,
+                }
+            ],
+        }
+    ]
+
+    result = evaluate_order_lifecycle(payload)
+
+    assert result["overall_status"] == "PENDING"
+    assert result["requires_operator_action"] is False
+    assert stage(result, "inventory")["reason"] == "physical_return_in_progress"
+
+
+def test_inspected_resalable_return_requires_exact_sellable_inventory_movement():
+    payload = refunded_trace()
+    payload["physical_returns"] = [
+        {
+            "id": 9,
+            "status": "inspected",
+            "items": [
+                {
+                    "resalable_qty": 1,
+                    "damaged_qty": 0,
+                    "quarantine_qty": 0,
+                }
+            ],
+        }
+    ]
+    payload["inventory"].append(
+        {
+            "kind": "return",
+            "quantity": 1,
+            "stock_before": 4,
+            "stock_after": 5,
+            "reserved_before": 0,
+            "reserved_after": 0,
+        }
+    )
+
+    result = evaluate_order_lifecycle(payload)
+
+    assert result["overall_status"] == "PASS"
+    assert stage(result, "inventory")["reason"] == "physical_return_inventory_exact"
+
+
+def test_inspected_damaged_and_quarantine_return_keeps_sellable_inventory_neutral():
+    payload = refunded_trace()
+    payload["physical_returns"] = [
+        {
+            "id": 9,
+            "status": "inspected",
+            "items": [
+                {
+                    "resalable_qty": 0,
+                    "damaged_qty": 1,
+                    "quarantine_qty": 1,
+                }
+            ],
+        }
+    ]
+
+    result = evaluate_order_lifecycle(payload)
+
+    assert result["overall_status"] == "PASS"
+    assert stage(result, "inventory")["reason"] == "non_resalable_return_inventory_neutral"
 
 
 def test_open_payment_review_is_review_not_blocked():
