@@ -105,6 +105,15 @@ def upgrade() -> None:
     op.create_index("ix_return_logistics_events_actor_admin_id", "return_logistics_events", ["actor_admin_id"])
     op.create_index("ix_return_logistics_events_created_at", "return_logistics_events", ["created_at"])
 
+    # A physical warehouse receipt is a first-class inventory movement. Widen
+    # the pre-0041 check before any return traffic can be accepted.
+    op.drop_constraint("ck_inventory_movements_kind", "inventory_movements", type_="check")
+    op.create_check_constraint(
+        "ck_inventory_movements_kind",
+        "inventory_movements",
+        "kind IN ('reserve', 'release', 'commit', 'return')",
+    )
+
     # Preserve one movement per commercial reserve/release/commit while allowing
     # multiple legitimate physical-return receipts for the same order/variant.
     op.drop_constraint("uq_inventory_movement_order_variant_kind", "inventory_movements", type_="unique")
@@ -157,6 +166,15 @@ def downgrade() -> None:
         "uq_inventory_movement_order_variant_kind",
         "inventory_movements",
         ["order_id", "variant_id", "kind"],
+    )
+
+    # Only safe because downgrade is already blocked whenever physical return
+    # evidence exists. Restore the exact pre-0041 kind contract.
+    op.drop_constraint("ck_inventory_movements_kind", "inventory_movements", type_="check")
+    op.create_check_constraint(
+        "ck_inventory_movements_kind",
+        "inventory_movements",
+        "kind IN ('reserve', 'release', 'commit')",
     )
 
     op.drop_index("ix_return_logistics_events_created_at", table_name="return_logistics_events")
