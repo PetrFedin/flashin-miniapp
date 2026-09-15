@@ -51,14 +51,17 @@ def _physical_resalable_by_variant(trace: dict[str, Any]) -> tuple[dict[int, int
     return totals, True
 
 
-def _inventory_returns_by_variant(trace: dict[str, Any]) -> tuple[dict[int, int], bool]:
+def _inventory_kind_by_variant(
+    trace: dict[str, Any],
+    kind: str,
+) -> tuple[dict[int, int], bool]:
     totals: dict[int, int] = {}
     inventory = trace.get("inventory")
     if not isinstance(inventory, list):
         return totals, True
 
     for movement in inventory:
-        if not isinstance(movement, dict) or _status(movement.get("kind")) != "return":
+        if not isinstance(movement, dict) or _status(movement.get("kind")) != kind:
             continue
         try:
             quantity = int(movement.get("quantity") or 0)
@@ -93,15 +96,32 @@ def _evidence(prefix: str, values: dict[int, int]) -> str:
     return f"{prefix}={rendered}"
 
 
+def _block(
+    inventory_stage: dict[str, Any],
+    *,
+    reason: str,
+    evidence: list[str],
+) -> None:
+    inventory_stage.update(
+        {
+            "status": "BLOCKED",
+            "reason": reason,
+            "next_action": "inspect_inventory_ledger",
+            "evidence": evidence,
+        }
+    )
+
+
 def enforce_physical_inventory_variant_contract(
     reconciliation: dict[str, Any],
     trace: dict[str, Any],
 ) -> dict[str, Any]:
-    """Require sellable-return inventory evidence to match physical evidence per variant.
+    """Require physical-return inventory evidence to reconcile per variant.
 
     Aggregate quantity equality is insufficient: a return movement for variant B
     must never compensate for missing inventory evidence for physically returned
-    variant A. The order operations trace contains only sanitized identifiers and
+    variant A. A sellable return also cannot exceed the quantity previously
+    committed for that exact variant. The trace contains only sanitized ids and
     quantities, so the contract emits no provider payloads or customer data.
     """
 
@@ -115,32 +135,51 @@ def enforce_physical_inventory_variant_contract(
         return result
 
     physical_by_variant, physical_valid = _physical_resalable_by_variant(trace)
-    movement_by_variant, movement_valid = _inventory_returns_by_variant(trace)
+    return_by_variant, return_valid = _inventory_kind_by_variant(trace, "return")
 
-    if not physical_valid or not movement_valid:
-        inventory_stage.update(
-            {
-                "status": "BLOCKED",
-                "reason": "physical_return_variant_evidence_invalid",
-                "next_action": "inspect_inventory_ledger",
-                "evidence": [
-                    f"physical.variant_evidence_valid={str(physical_valid).lower()}",
-                    f"inventory.variant_evidence_valid={str(movement_valid).lower()}",
-                ],
-            }
+    if not physical_valid or not return_valid:
+        _block(
+            inventory_stage,
+            reason="physical_return_variant_evidence_invalid",
+            evidence=[
+                f"physical.variant_evidence_valid={str(physical_valid).lower()}",
+                f"inventory.return_variant_evidence_valid={str(return_valid).lower()}",
+            ],
         )
-    elif physical_by_variant != movement_by_variant:
-        inventory_stage.update(
-            {
-                "status": "BLOCKED",
-                "reason": "inventory_physical_return_variant_mismatch",
-                "next_action": "inspect_inventory_ledger",
-                "evidence": [
-                    _evidence("physical.resalable_by_variant", physical_by_variant),
-                    _evidence("inventory.return_by_variant", movement_by_variant),
-                ],
-            }
+    elif physical_by_variant != return_by_variant:
+        _block(
+            inventory_stage,
+            reason="inventory_physical_return_variant_mismatch",
+            evidence=[
+                _evidence("physical.resalable_by_variant", physical_by_variant),
+                _evidence("inventory.return_by_variant", return_by_variant),
+            ],
         )
+    elif return_by_variant:
+        commit_by_variant, commit_valid = _inventory_kind_by_variant(trace, "commit")
+        if not commit_valid:
+            _block(
+                inventory_stage,
+                reason="physical_return_variant_evidence_invalid",
+                evidence=["inventory.commit_variant_evidence_valid=false"],
+            )
+        else:
+            exceeds_commit = {
+                variant_id: quantity
+                for variant_id, quantity in return_by_variant.items()
+                if quantity > commit_by_variant.get(variant_id, 0)
+            }
+            if exceeds_commit:
+                _block(
+                    inventory_stage,
+                    reason="inventory_return_exceeds_committed_variant_quantity",
+                    evidence=[
+                        _evidence("inventory.return_by_variant", return_by_variant),
+                        _evidence("inventory.commit_by_variant", commit_by_variant),
+                    ],
+                )
+            else:
+                return result
     else:
         return result
 
