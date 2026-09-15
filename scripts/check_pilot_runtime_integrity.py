@@ -19,7 +19,6 @@ from backend.database import engine
 ROOT = Path(__file__).resolve().parents[1]
 
 REQUIRED_TABLES = {
-    "alembic_version",
     "customers",
     "orders",
     "pilot_runtime_state",
@@ -118,18 +117,32 @@ def revisions_match_release_head(expected: set[str], current: set[str]) -> bool:
 
 
 def _assert_database_at_release_head(connection: Connection) -> None:
+    present_tables = set(inspect(connection).get_table_names())
+    if "alembic_version" not in present_tables:
+        raise MissingPilotRuntimeSchema({"alembic_version"})
     expected = _script_heads()
     current = _database_revisions(connection)
     if not revisions_match_release_head(expected, current):
         raise AlembicRevisionMismatch(expected, current)
 
 
-def run_audit(connection: Connection) -> dict[str, int]:
+def run_audit(
+    connection: Connection,
+    *,
+    require_release_head: bool = False,
+) -> dict[str, int]:
+    """Audit runtime rows, optionally binding them to the target release schema.
+
+    Pure unit/in-memory callers can validate row invariants without pretending to
+    be an Alembic deployment. Production rollback invokes the CLI below, which
+    always requires the exact target release head before public services start.
+    """
     present_tables = set(inspect(connection).get_table_names())
     missing = REQUIRED_TABLES - present_tables
     if missing:
         raise MissingPilotRuntimeSchema(missing)
-    _assert_database_at_release_head(connection)
+    if require_release_head:
+        _assert_database_at_release_head(connection)
     return {
         name: int(connection.execute(text(query)).scalar_one())
         for name, query in CHECKS.items()
@@ -139,7 +152,7 @@ def run_audit(connection: Connection) -> dict[str, int]:
 def main() -> int:
     try:
         with engine.connect() as connection:
-            results = run_audit(connection)
+            results = run_audit(connection, require_release_head=True)
     except MissingPilotRuntimeSchema as exc:
         print(
             json.dumps(
