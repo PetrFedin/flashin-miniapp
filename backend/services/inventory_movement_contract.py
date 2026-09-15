@@ -13,21 +13,40 @@ from ..reverse_logistics_models import (
     ReturnLogisticsItem,
 )
 
+# Inventory authority follows the commercial lifecycle, not payment/refund
+# wording. Canonical order states are grouped by the stock side effect they
+# prove:
+# - pending payment keeps the checkout reservation;
+# - payment review/cancellation releases it without a sale;
+# - settled/fulfillment/refund states keep the original sale committed.
+# Financial refund states never imply a sellable physical return.
 _COMMITTED_ORDER_STATUSES = {
     "paid",
-    "picking",
-    "packed",
+    "assembling",
+    "picking",  # legacy fulfillment alias retained for historical evidence
+    "packed",  # legacy fulfillment alias retained for historical evidence
     "ready",
     "shipped",
     "completed",
-    "refund_pending",
-    "partially_refunded",
-    "refunded",
+    "refund_requested",
+    "refund_pending",  # legacy/refund worker aliases retained for evidence
     "refund_retry_required",
     "refund_review_required",
+    "partially_refunded",
+    "refunded",
 }
-_CANCELLED_ORDER_STATUSES = {"cancelled", "expired"}
-_PENDING_ORDER_STATUSES = {"created", "pending", "pending_payment", "payment_pending"}
+_RELEASED_RESERVATION_ORDER_STATUSES = {
+    "payment_review_required",
+    "cancelled",
+    "expired",  # legacy reservation-expiry alias
+}
+_PENDING_ORDER_STATUSES = {
+    "created",
+    "payment_created",
+    "pending",  # legacy aliases retained for historical evidence
+    "pending_payment",
+    "payment_pending",
+}
 
 
 @dataclass(frozen=True)
@@ -44,7 +63,7 @@ class PhysicalReturnEvidence:
 
 def expected_core_chain(order_status: str) -> tuple[str, ...] | None:
     status = str(order_status or "").strip().lower()
-    if status in _CANCELLED_ORDER_STATUSES:
+    if status in _RELEASED_RESERVATION_ORDER_STATUSES:
         return ("reserve", "release")
     if status in _COMMITTED_ORDER_STATUSES:
         return ("reserve", "commit")
