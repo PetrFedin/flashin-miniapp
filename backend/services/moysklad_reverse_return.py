@@ -79,8 +79,23 @@ def _prepare_physical_return_snapshot(db: Session, case_id: int) -> _PhysicalRet
 
         lines: list[_PhysicalReturnLine] = []
         for physical in physical_items:
-            if int(physical.inspected_qty) != int(physical.authorized_qty):
+            inspected_qty = int(physical.inspected_qty)
+            authorized_qty = int(physical.authorized_qty)
+            resalable_qty = int(physical.resalable_qty)
+            damaged_qty = int(physical.damaged_qty)
+            quarantine_qty = int(physical.quarantine_qty)
+            if inspected_qty != authorized_qty:
                 raise MoySkladReviewRequired("Physical return inspection is incomplete")
+            if resalable_qty + damaged_qty + quarantine_qty != inspected_qty:
+                raise MoySkladReviewRequired("Physical return disposition evidence is inconsistent")
+            if damaged_qty or quarantine_qty:
+                raise MoySkladReviewRequired(
+                    "Damaged/quarantine physical return requires provider disposition reconciliation; "
+                    "automatic MoySklad SalesReturn would increase provider stock"
+                )
+            if resalable_qty != inspected_qty:
+                raise MoySkladReviewRequired("Only fully resalable physical quantities can be auto-exported")
+
             loaded = order_lines.get(int(physical.order_item_id))
             if loaded is None:
                 raise MoySkladReviewRequired("Physical return item is not part of the original order")
@@ -93,10 +108,10 @@ def _prepare_physical_return_snapshot(db: Session, case_id: int) -> _PhysicalRet
             lines.append(
                 _PhysicalReturnLine(
                     moysklad_id=moysklad_id,
-                    quantity=int(physical.inspected_qty),
+                    quantity=resalable_qty,
                     net_total_cents=_prorated_cents(
                         full_line_cents,
-                        int(physical.inspected_qty),
+                        resalable_qty,
                         int(order_item.quantity),
                     ),
                 )
@@ -167,7 +182,7 @@ async def export_physical_sales_return(db: Session, case_id: int) -> str:
     }
     payload["description"] = (
         f"FLASHIN physical return case #{snapshot.case_id}; "
-        f"return_request=#{snapshot.return_request_id}; inspected quantities only"
+        f"return_request=#{snapshot.return_request_id}; verified resalable quantities only"
     )[:4096]
     result = await _request_json("POST", "entity/salesreturn", json_body=payload)
     external_id = str(result.get("id") or "").strip()
