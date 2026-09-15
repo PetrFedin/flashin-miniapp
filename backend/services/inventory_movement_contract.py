@@ -47,6 +47,7 @@ _PENDING_ORDER_STATUSES = {
     "pending_payment",
     "payment_pending",
 }
+_MOVEMENT_KINDS = {"reserve", "release", "commit", "return"}
 
 
 @dataclass(frozen=True)
@@ -186,8 +187,21 @@ def validate_variant_movement_chain(
     ):
         failures.append("core_quantity_mismatch")
 
-    if any(not movement_transition_valid(movement) for movement in chain):
+    invalid_transition_kinds: list[str] = []
+    for movement in chain:
+        if movement_transition_valid(movement):
+            continue
+        kind = str(movement.kind or "").strip().lower()
+        if kind in _MOVEMENT_KINDS:
+            invalid_transition_kinds.append(kind)
+    if invalid_transition_kinds or any(
+        str(movement.kind or "").strip().lower() not in _MOVEMENT_KINDS
+        for movement in chain
+    ):
         failures.append("movement_transition_invalid")
+        failures.extend(
+            f"{kind}_transition_invalid" for kind in invalid_transition_kinds
+        )
 
     actual_returns = [movement for movement in chain if movement.kind == "return"]
     expected_returns = {evidence.source: evidence.quantity for evidence in physical_returns}
