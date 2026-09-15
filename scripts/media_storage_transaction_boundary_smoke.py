@@ -7,7 +7,9 @@ The smoke proves:
 - an auth/request transaction exists before upload handling;
 - S3 put_object runs with no active SQLAlchemy transaction;
 - finalize re-enters PostgreSQL and atomically persists media + audit;
-- a storage timeout never enters DB finalize or creates a MediaAsset.
+- an ambiguous storage timeout never enters DB finalize or creates a MediaAsset;
+- the generated object key survives the ambiguous write error so durable cleanup
+  can be recorded by the upload handler.
 """
 
 from __future__ import annotations
@@ -156,19 +158,26 @@ def main() -> int:
         db.rollback()
 
         # A provider failure must happen outside PostgreSQL and must not create
-        # a new MediaAsset or audit finalize record.
+        # a new MediaAsset or audit finalize record. Since #222 makes ambiguous
+        # writes recoverable, the route now re-raises MediaStorageWriteError
+        # carrying the exact generated key while preserving TimeoutError as the
+        # cause. That is the expected provider-boundary contract.
         request_admin = db.query(AdminUser).filter(AdminUser.id == admin_id).one()
         assert db.in_transaction() is True
         transport.failure = TimeoutError("simulated object-store timeout")
         second_upload = Upload(_png_bytes(), f"media-boundary-timeout-{token}.png")
+        ambiguous_storage_key = ""
         try:
             asyncio.run(
                 media_api.upload_media(file=second_upload, admin=request_admin, db=db)
             )
-        except TimeoutError as exc:
-            assert "object-store timeout" in str(exc)
+        except media_storage.MediaStorageWriteError as exc:
+            ambiguous_storage_key = exc.storage_key
+            assert ambiguous_storage_key
+            assert isinstance(exc.__cause__, TimeoutError)
+            assert "object-store timeout" in str(exc.__cause__)
         else:
-            raise AssertionError("storage timeout must propagate")
+            raise AssertionError("ambiguous storage timeout must preserve generated recovery key")
 
         assert second_upload.closed is True
         assert transport.transaction_clean_checks == 2
@@ -187,6 +196,7 @@ def main() -> int:
                     "successful_finalize_persisted": True,
                     "audit_persisted": True,
                     "timeout_finalize_created": False,
+                    "ambiguous_write_key_preserved": bool(ambiguous_storage_key),
                 },
                 ensure_ascii=False,
                 indent=2,
