@@ -41,6 +41,7 @@ from backend.models import (  # noqa: E402
     ReturnRequest,
 )
 from backend.provider_models import ProviderCommand  # noqa: E402
+from backend.reverse_logistics_models import ReturnLogisticsCase, ReturnLogisticsItem  # noqa: E402
 from backend.main import app  # noqa: E402
 
 _payments: dict[str, dict[str, Any]] = {}
@@ -188,7 +189,24 @@ def e2e_order_state(order_id: int):
             .order_by(ReturnRequest.id.asc())
             .all()
         )
-        return_ids = {str(row.id) for row in returns}
+        return_ids = {int(row.id) for row in returns}
+        physical_cases = (
+            db.query(ReturnLogisticsCase)
+            .filter(ReturnLogisticsCase.return_request_id.in_(return_ids))
+            .order_by(ReturnLogisticsCase.id.asc())
+            .all()
+            if return_ids
+            else []
+        )
+        physical_case_ids = {int(row.id) for row in physical_cases}
+        physical_items = (
+            db.query(ReturnLogisticsItem)
+            .filter(ReturnLogisticsItem.case_id.in_(physical_case_ids))
+            .order_by(ReturnLogisticsItem.id.asc())
+            .all()
+            if physical_case_ids
+            else []
+        )
         commands = db.query(ProviderCommand).order_by(ProviderCommand.id.asc()).all()
         relevant_commands = [
             command
@@ -197,7 +215,13 @@ def e2e_order_state(order_id: int):
                 command.aggregate_type == "order" and str(command.aggregate_id) == str(order.id)
             )
             or (
-                command.aggregate_type == "return" and str(command.aggregate_id) in return_ids
+                command.aggregate_type == "return" and str(command.aggregate_id).isdigit()
+                and int(command.aggregate_id) in return_ids
+            )
+            or (
+                command.aggregate_type == "return_logistics_case"
+                and str(command.aggregate_id).isdigit()
+                and int(command.aggregate_id) in physical_case_ids
             )
         ]
         notifications = (
@@ -218,6 +242,11 @@ def e2e_order_state(order_id: int):
             .order_by(InventoryMovement.id.asc())
             .all()
         )
+
+        cases_by_return = {int(row.return_request_id): row for row in physical_cases}
+        items_by_case: dict[int, list[ReturnLogisticsItem]] = {}
+        for row in physical_items:
+            items_by_case.setdefault(int(row.case_id), []).append(row)
 
         return {
             "order": {
@@ -257,8 +286,33 @@ def e2e_order_state(order_id: int):
                     "status": row.status,
                     "provider_refund_id": row.provider_refund_id,
                     "refund_amount": row.refund_amount,
+                    "physical_status": (
+                        cases_by_return[int(row.id)].status
+                        if int(row.id) in cases_by_return
+                        else "not_started"
+                    ),
                 }
                 for row in returns
+            ],
+            "physical_returns": [
+                {
+                    "id": case.id,
+                    "return_request_id": case.return_request_id,
+                    "status": case.status,
+                    "items": [
+                        {
+                            "order_item_id": item.order_item_id,
+                            "authorized_qty": item.authorized_qty,
+                            "received_qty": item.received_qty,
+                            "inspected_qty": item.inspected_qty,
+                            "resalable_qty": item.resalable_qty,
+                            "damaged_qty": item.damaged_qty,
+                            "quarantine_qty": item.quarantine_qty,
+                        }
+                        for item in items_by_case.get(int(case.id), [])
+                    ],
+                }
+                for case in physical_cases
             ],
             "inventory_movements": [
                 {
