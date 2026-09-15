@@ -84,6 +84,9 @@ export function getPhysicalIdempotencyKey(signature, {
   if (existing) return existing.key;
   const key = String(createKey());
   entries.push({ signature: normalized, key });
+  // Persistence before the network side effect is mandatory. If storage is
+  // unavailable, fail closed so an ambiguous response can never be retried
+  // with a different idempotency identity.
   writeRegistry(storage, entries);
   return key;
 }
@@ -93,6 +96,13 @@ export function clearPhysicalIdempotencyKey(signature, {
 } = {}) {
   if (!storage) return;
   const normalized = String(signature || "");
-  const entries = readRegistry(storage).filter((entry) => entry.signature !== normalized);
-  writeRegistry(storage, entries);
+  try {
+    const entries = readRegistry(storage).filter((entry) => entry.signature !== normalized);
+    writeRegistry(storage, entries);
+  } catch {
+    // Cleanup happens only after the server has confirmed the mutation. A
+    // browser storage failure must not turn an already committed operation
+    // into a false UI failure. Stale entries are bounded and harmless: the
+    // server-side payload hash still rejects key reuse with different data.
+  }
 }
