@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
+import PhysicalReturnPanel from "./PhysicalReturnPanel.jsx";
 import { hasAdminPermission } from "./adminPermissions.js";
 import { AdminApiError, adminJson } from "./api.js";
 import {
@@ -44,6 +45,7 @@ export default function ServiceOperationsPanel({ onUnauthorized, session }) {
   const canReturnsRead = hasAdminPermission(session, "orders.read");
   const canCustomersRead = hasAdminPermission(session, "customers.read");
   const canRefundsWrite = hasAdminPermission(session, "refunds.write");
+  const canPhysicalReturnsWrite = hasAdminPermission(session, "returns.physical.write");
 
   const [tickets, setTickets] = useState([]);
   const [privacyRequests, setPrivacyRequests] = useState([]);
@@ -364,14 +366,16 @@ export default function ServiceOperationsPanel({ onUnauthorized, session }) {
         {canReturnsRead && (
           <article className="service-card" aria-labelledby="returns-queue-title">
             <h3 id="returns-queue-title">Возвраты и refunds</h3>
-            {!canRefundsWrite && <p className="event-warning">Возвраты доступны только для чтения: нет refunds.write.</p>}
+            {!canRefundsWrite && !canPhysicalReturnsWrite && (
+              <p className="event-warning">Возвраты доступны только для чтения: нет refunds.write и returns.physical.write.</p>
+            )}
             {sectionErrors.returns && <p className="error-inline">{sectionErrors.returns}</p>}
             {!sectionErrors.returns && !returns.length && <p>Возвратов на обработку нет.</p>}
             {returns.map((item) => (
               <div className="service-item" key={item.id}>
                 <div className="service-item-heading">
                   <b>#{item.id} · Заказ #{item.order_id}</b>
-                  <span>{RETURN_STATUS_LABELS[item.status] || item.status}</span>
+                  <span>Финансы: {RETURN_STATUS_LABELS[item.status] || item.status}</span>
                 </div>
                 <p>{item.reason}</p>
                 <small>
@@ -409,6 +413,12 @@ export default function ServiceOperationsPanel({ onUnauthorized, session }) {
                   </div>
                 )}
                 {item.provider_refund_id && <small>Provider refund: {item.provider_refund_id}</small>}
+                <PhysicalReturnPanel
+                  returnItem={item}
+                  canWrite={canPhysicalReturnsWrite}
+                  onChanged={load}
+                  onUnauthorized={onUnauthorized}
+                />
               </div>
             ))}
           </article>
