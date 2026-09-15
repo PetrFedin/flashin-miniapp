@@ -5,12 +5,19 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
-from ..models import MoySkladConflict, ProductVariant, StockReconciliationLog
+from ..models import (
+    InventoryMovement,
+    MoySkladConflict,
+    ProductVariant,
+    StockReconciliationLog,
+)
+from ..provider_models import ProviderCommand
 from ..reverse_logistics_models import ReturnLogisticsEvent, ReturnLogisticsItem
 
 _STALE_PHYSICAL_RETURN_CONFLICT = "stale_stock_pending_physical_return"
 _BLOCKED_RECONCILIATION_ACTION = "blocked_physical_return"
 _CATCHUP_RECONCILIATION_ACTION = "physical_return_catchup"
+_PHYSICAL_RETURN_COMMAND = "moysklad.physical_sales_return.create"
 
 
 @dataclass(frozen=True)
@@ -22,37 +29,21 @@ class MoySkladStockDecision:
     pending_event_ids: tuple[int, ...] = ()
 
 
+@dataclass(frozen=True)
+class _PendingReturnEvidence:
+    event_id: int
+    case_id: int
+    quantity: int
+    created_at: datetime
+
+    @property
+    def source(self) -> str:
+        return f"reverse_logistics_event:{self.event_id}"
+
+
 def _provider_identity(variant: ProductVariant) -> str:
     external_id = str(variant.moysklad_id or "").strip()
     return external_id or f"local-variant:{int(variant.id)}"
-
-
-def _latest_resalable_event(
-    db: Session,
-    variant_id: int,
-) -> tuple[int, datetime] | None:
-    row = (
-        db.query(ReturnLogisticsEvent.id, ReturnLogisticsEvent.created_at)
-        .join(
-            ReturnLogisticsItem,
-            ReturnLogisticsItem.id == ReturnLogisticsEvent.item_id,
-        )
-        .filter(
-            ReturnLogisticsItem.variant_id == int(variant_id),
-            ReturnLogisticsItem.case_id == ReturnLogisticsEvent.case_id,
-            ReturnLogisticsEvent.event_type == "inspected",
-            ReturnLogisticsEvent.disposition == "resalable",
-            ReturnLogisticsEvent.quantity > 0,
-        )
-        .order_by(
-            ReturnLogisticsEvent.created_at.desc(),
-            ReturnLogisticsEvent.id.desc(),
-        )
-        .first()
-    )
-    if row is None:
-        return None
-    return int(row[0]), row[1]
 
 
 def _latest_catchup(
@@ -74,23 +65,108 @@ def _latest_catchup(
     )
 
 
-def _pending_resalable_event_ids(db: Session, variant_id: int) -> tuple[int, ...]:
-    """Return latest physical evidence still awaiting an observed provider catch-up.
+def _pending_resalable_evidence(
+    db: Session,
+    variant_id: int,
+) -> tuple[_PendingReturnEvidence, ...]:
+    """Load resalable physical events newer than the last proven provider catch-up."""
 
-    A successfully sent SalesReturn is not enough: MoySklad's inbound stock
-    endpoint may still expose an older snapshot. The authority boundary is
-    released only after a later inbound snapshot is observed at or above the
-    then-current verified local stock.
-    """
-
-    latest_event = _latest_resalable_event(db, variant_id)
-    if latest_event is None:
-        return ()
-    event_id, event_created_at = latest_event
+    query = (
+        db.query(
+            ReturnLogisticsEvent.id,
+            ReturnLogisticsEvent.case_id,
+            ReturnLogisticsEvent.quantity,
+            ReturnLogisticsEvent.created_at,
+        )
+        .join(
+            ReturnLogisticsItem,
+            ReturnLogisticsItem.id == ReturnLogisticsEvent.item_id,
+        )
+        .filter(
+            ReturnLogisticsItem.variant_id == int(variant_id),
+            ReturnLogisticsItem.case_id == ReturnLogisticsEvent.case_id,
+            ReturnLogisticsEvent.event_type == "inspected",
+            ReturnLogisticsEvent.disposition == "resalable",
+            ReturnLogisticsEvent.quantity > 0,
+        )
+    )
     catchup = _latest_catchup(db, variant_id)
-    if catchup is not None and catchup.created_at >= event_created_at:
-        return ()
-    return (event_id,)
+    if catchup is not None:
+        query = query.filter(ReturnLogisticsEvent.created_at > catchup.created_at)
+    rows = query.order_by(
+        ReturnLogisticsEvent.created_at.asc(),
+        ReturnLogisticsEvent.id.asc(),
+    ).all()
+    return tuple(
+        _PendingReturnEvidence(
+            event_id=int(event_id),
+            case_id=int(case_id),
+            quantity=int(quantity),
+            created_at=created_at,
+        )
+        for event_id, case_id, quantity, created_at in rows
+    )
+
+
+def _physical_ledger_floor(
+    db: Session,
+    *,
+    variant_id: int,
+    evidence: tuple[_PendingReturnEvidence, ...],
+) -> int | None:
+    """Return immutable local post-return stock floor, or fail closed on bad evidence."""
+
+    if not evidence:
+        return None
+    by_source = {
+        str(row.source): row
+        for row in (
+            db.query(InventoryMovement)
+            .filter(
+                InventoryMovement.variant_id == int(variant_id),
+                InventoryMovement.kind == "return",
+                InventoryMovement.source.in_([item.source for item in evidence]),
+            )
+            .all()
+        )
+    }
+    stock_after: list[int] = []
+    for item in evidence:
+        movement = by_source.get(item.source)
+        if movement is None or int(movement.quantity) != item.quantity:
+            return None
+        stock_after.append(int(movement.stock_after))
+    return max(stock_after) if stock_after else None
+
+
+def _provider_returns_exported(
+    db: Session,
+    evidence: tuple[_PendingReturnEvidence, ...],
+) -> bool:
+    """Require exact provider transaction evidence for every pending physical case."""
+
+    case_ids = {item.case_id for item in evidence}
+    if not case_ids:
+        return False
+    commands = (
+        db.query(ProviderCommand)
+        .filter(
+            ProviderCommand.provider == "moysklad",
+            ProviderCommand.command_type == _PHYSICAL_RETURN_COMMAND,
+            ProviderCommand.aggregate_type == "return_logistics_case",
+            ProviderCommand.aggregate_id.in_([str(case_id) for case_id in case_ids]),
+        )
+        .all()
+    )
+    exported: set[int] = set()
+    for command in commands:
+        if command.status != "sent" or not str(command.external_id or "").strip():
+            continue
+        try:
+            exported.add(int(command.aggregate_id))
+        except (TypeError, ValueError):
+            continue
+    return exported == case_ids
 
 
 def _open_or_refresh_conflict(
@@ -99,13 +175,17 @@ def _open_or_refresh_conflict(
     variant: ProductVariant,
     external_stock: int,
     pending_event_ids: tuple[int, ...],
+    provider_exported: bool,
+    catchup_floor: int | None,
 ) -> None:
     provider_id = _provider_identity(variant)
     event_text = ",".join(str(event_id) for event_id in pending_event_ids)
+    floor_text = "invalid/missing" if catchup_floor is None else str(catchup_floor)
     message = (
-        f"Provider stock {int(external_stock)} would lower verified local stock "
+        f"Provider stock {int(external_stock)} is not authoritative for local stock "
         f"{int(variant.stock_qty)} while resalable inspection event(s) {event_text} "
-        "have not been observed in an inbound MoySklad stock snapshot; snapshot was not applied"
+        f"await provider reconciliation; provider_exported={provider_exported}; "
+        f"required_catchup_stock={floor_text}; snapshot was not applied"
     )
     existing = (
         db.query(MoySkladConflict)
@@ -161,7 +241,7 @@ def _open_or_refresh_conflict(
 
 def _resolve_stale_conflicts(db: Session, variant: ProductVariant) -> None:
     provider_id = _provider_identity(variant)
-    rows = (
+    for row in (
         db.query(MoySkladConflict)
         .filter(
             MoySkladConflict.moysklad_id == provider_id,
@@ -169,8 +249,7 @@ def _resolve_stale_conflicts(db: Session, variant: ProductVariant) -> None:
             MoySkladConflict.status == "open",
         )
         .all()
-    )
-    for row in rows:
+    ):
         row.status = "resolved"
 
 
@@ -192,11 +271,12 @@ def _record_catchup(
             action=_CATCHUP_RECONCILIATION_ACTION,
             status="resolved",
             message=(
-                f"Inbound MoySklad stock caught up after resalable inspection event(s) {event_text}"
+                f"MoySklad physical return transaction and inbound stock caught up "
+                f"for resalable inspection event(s) {event_text}"
             ),
         )
     )
-    open_reconciliations = (
+    for row in (
         db.query(StockReconciliationLog)
         .filter(
             StockReconciliationLog.variant_id == int(variant.id),
@@ -204,8 +284,7 @@ def _record_catchup(
             StockReconciliationLog.status == "open",
         )
         .all()
-    )
-    for row in open_reconciliations:
+    ):
         row.status = "resolved"
 
 
@@ -214,12 +293,18 @@ def evaluate_moysklad_stock_snapshot(
     variant: ProductVariant,
     external_stock: int,
 ) -> MoySkladStockDecision:
-    """Protect verified warehouse truth from a stale downward provider snapshot.
+    """Protect warehouse-confirmed sellable returns from stale absolute sync.
 
-    The protection is scoped to a variant and to resalable physical inspection
-    evidence. Financial refunds and damaged/quarantine inspection never create
-    it. A provider command being sent does not clear it: only an actually
-    observed inbound stock snapshot at or above current local stock does.
+    While resalable physical-return evidence is not fully reconciled, *no*
+    differing absolute MoySklad snapshot may overwrite the local variant. The
+    guard clears only when every pending physical case has a successful
+    provider SalesReturn transaction and the raw inbound stock reaches the
+    immutable post-return stock recorded by the local inventory ledger.
+
+    This deliberately fails closed for mixed damaged/quarantine cases whose
+    provider command is ``review_required``. Financial refunds and non-sellable
+    dispositions never create this protection because they create no resalable
+    inspection event.
     """
 
     normalized_external = int(external_stock)
@@ -228,15 +313,24 @@ def evaluate_moysklad_stock_snapshot(
     current_stock = int(variant.stock_qty or 0)
     reserved_qty = int(variant.reserved_qty or 0)
     target_stock = max(normalized_external, reserved_qty)
-    pending_event_ids = _pending_resalable_event_ids(db, int(variant.id))
+    evidence = _pending_resalable_evidence(db, int(variant.id))
 
-    if not pending_event_ids:
+    if not evidence:
         _resolve_stale_conflicts(db, variant)
         return MoySkladStockDecision(target_stock=target_stock, blocked=False)
 
-    # Catch-up is proved by the provider's raw stock value, never by the local
-    # reserved-quantity floor applied to a lower provider number.
-    if normalized_external >= current_stock:
+    pending_event_ids = tuple(item.event_id for item in evidence)
+    provider_exported = _provider_returns_exported(db, evidence)
+    catchup_floor = _physical_ledger_floor(
+        db,
+        variant_id=int(variant.id),
+        evidence=evidence,
+    )
+    if (
+        provider_exported
+        and catchup_floor is not None
+        and normalized_external >= catchup_floor
+    ):
         _record_catchup(
             db,
             variant=variant,
@@ -251,6 +345,8 @@ def evaluate_moysklad_stock_snapshot(
         variant=variant,
         external_stock=normalized_external,
         pending_event_ids=pending_event_ids,
+        provider_exported=provider_exported,
+        catchup_floor=catchup_floor,
     )
     return MoySkladStockDecision(
         target_stock=current_stock,
