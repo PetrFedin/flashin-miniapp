@@ -98,11 +98,25 @@ def _fixture(db, token: str):
         reason="Physical contract smoke",
         status="approved",
         provider_refund_id=f"refund-{token}",
-        refund_amount=400,
+        refund_amount=300,
     )
-    db.add(ret)
+    sibling_ret = ReturnRequest(
+        order_id=order.id,
+        customer_id=customer.id,
+        reason="Second financial return for the same original order",
+        status="approved_partial",
+        provider_refund_id=f"refund-sibling-{token}",
+        refund_amount=100,
+    )
+    db.add_all([ret, sibling_ret])
     db.commit()
-    return order.id, ret.id, [item.id for item in order_items], [variant.id for variant in variants]
+    return (
+        order.id,
+        ret.id,
+        sibling_ret.id,
+        [item.id for item in order_items],
+        [variant.id for variant in variants],
+    )
 
 
 def main() -> int:
@@ -111,7 +125,7 @@ def main() -> int:
 
     token = uuid.uuid4().hex[:12]
     with SessionLocal() as db:
-        order_id, return_id, order_item_ids, variant_ids = _fixture(db, token)
+        order_id, return_id, sibling_return_id, order_item_ids, variant_ids = _fixture(db, token)
 
         ret = db.query(ReturnRequest).filter(ReturnRequest.id == return_id).one()
         preview = _physical_payload(db, ret)
@@ -138,6 +152,46 @@ def main() -> int:
             reason="line one",
         )
         db.commit()
+
+        # A second ReturnRequest for the same order must not create a second
+        # inventory authority. Both physical cases share the original sold-line
+        # quantity ceiling, even though their financial refund records differ.
+        sibling_ret = db.query(ReturnRequest).filter(ReturnRequest.id == sibling_return_id).one()
+        sibling_case = ensure_physical_case(
+            db,
+            ret=sibling_ret,
+            order=db.query(Order).filter(Order.id == order_id).one(),
+        )
+        sibling_items = {
+            int(row.order_item_id): row
+            for row in db.query(ReturnLogisticsItem).filter(ReturnLogisticsItem.case_id == sibling_case.id).all()
+        }
+        db.commit()
+
+        _expect_conflict(
+            lambda: authorize_item(
+                db,
+                case_id=sibling_case.id,
+                item_id=sibling_items[order_item_ids[0]].id,
+                quantity=1,
+                idempotency_key=f"sibling-overclaim-{token}",
+                actor_admin_id=None,
+                reason="must not authorize already claimed sold units",
+            ),
+            "original sold quantity",
+        )
+        db.rollback()
+        db.expire_all()
+        assert (
+            db.query(ReturnLogisticsItem)
+            .filter(
+                ReturnLogisticsItem.case_id == sibling_case.id,
+                ReturnLogisticsItem.order_item_id == order_item_ids[0],
+            )
+            .one()
+            .authorized_qty
+            == 0
+        )
 
         _expect_conflict(
             lambda: authorize_item(
@@ -201,6 +255,20 @@ def main() -> int:
         db.rollback()
 
         mark_in_transit(db, case_id=case.id)
+        db.commit()
+
+        # An exact replay after lifecycle advancement is still idempotent: a
+        # lost authorize response must never turn into a false operator error.
+        replay_after_transit = authorize_item(
+            db,
+            case_id=case.id,
+            item_id=items[order_item_ids[0]].id,
+            quantity=2,
+            idempotency_key=shared_key,
+            actor_admin_id=None,
+            reason="line one",
+        )
+        assert replay_after_transit.idempotent is True
         db.commit()
 
         _expect_conflict(
@@ -307,6 +375,8 @@ def main() -> int:
         "preview_before_case": True,
         "case_scoped_idempotency": True,
         "reason_in_payload_fingerprint": True,
+        "cross_case_sold_quantity_cap": True,
+        "authorize_replay_after_transit": True,
         "authorization_frozen_after_transit": True,
         "receipt_requires_transit": True,
         "inspection_requires_full_receipt": True,
