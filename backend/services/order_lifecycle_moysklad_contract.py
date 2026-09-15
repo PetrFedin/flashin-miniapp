@@ -9,11 +9,21 @@ from ..order_statuses import SETTLED_ORDER_PAYMENT_STATUSES
 _STATUS_RANK = {"PASS": 0, "PENDING": 1, "REVIEW": 2, "BLOCKED": 3}
 _CUSTOMER_ORDER = "moysklad.customer_order.create"
 _DEMAND = "moysklad.demand.create"
-_SALES_RETURN = "moysklad.sales_return.create"
+_PHYSICAL_SALES_RETURN = "moysklad.physical_sales_return.create"
 
 
 def _status(value: Any) -> str:
     return str(value or "").strip().lower()
+
+
+def _physical_return_requires_provider_return(trace: dict[str, Any]) -> bool:
+    physical_returns = trace.get("physical_returns")
+    if not isinstance(physical_returns, list):
+        return False
+    return any(
+        isinstance(item, dict) and _status(item.get("status")) == "inspected"
+        for item in physical_returns
+    )
 
 
 def _required_commands(trace: dict[str, Any]) -> set[str]:
@@ -31,8 +41,12 @@ def _required_commands(trace: dict[str, Any]) -> set[str]:
         "shipped", "in_transit", "out_for_delivery", "delivered"
     }:
         required.add(_DEMAND)
-    if payment_status == "refunded" or order_status == "refunded":
-        required.add(_SALES_RETURN)
+    # Financial refund settlement has no authority over physical inventory.
+    # Require a provider SalesReturn only after the physical-return aggregate
+    # reaches inspected. Damaged/quarantine cases still create the physical
+    # command, which deliberately becomes review_required before provider I/O.
+    if _physical_return_requires_provider_return(trace):
+        required.add(_PHYSICAL_SALES_RETURN)
     return required
 
 
@@ -86,10 +100,12 @@ def enforce_moysklad_lifecycle_contract(
     order_status = _status(order.get("status"))
     payment_status = _status(order.get("payment_status"))
     delivery_status = _status(order.get("delivery_status"))
+    physical_terminal = _physical_return_requires_provider_return(trace)
     should_review = bool(
         order_status in {"shipped", "completed", "refunded"}
         or payment_status == "refunded"
         or delivery_status in {"shipped", "in_transit", "out_for_delivery", "delivered"}
+        or physical_terminal
     )
     moysklad.update(
         {
