@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
-"""Read-only database integrity audit for the first-20-order pilot runtime."""
+"""Read-only database and schema integrity audit for the pilot runtime."""
 
 from __future__ import annotations
 
 import json
 import sys
 from collections.abc import Mapping
+from pathlib import Path
 
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import SQLAlchemyError
 
 from backend.database import engine
 
+ROOT = Path(__file__).resolve().parents[1]
+
 REQUIRED_TABLES = {
+    "alembic_version",
     "customers",
     "orders",
     "pilot_runtime_state",
@@ -82,11 +88,48 @@ class MissingPilotRuntimeSchema(RuntimeError):
         super().__init__("missing tables: " + ", ".join(sorted(missing_tables)))
 
 
+class AlembicRevisionMismatch(RuntimeError):
+    def __init__(self, expected: set[str], current: set[str]):
+        self.expected = expected
+        self.current = current
+        super().__init__(
+            "database Alembic revision does not match target release head: "
+            f"expected={sorted(expected)} current={sorted(current)}"
+        )
+
+
+def _script_heads() -> set[str]:
+    config = Config(str(ROOT / "backend" / "alembic.ini"))
+    config.set_main_option("script_location", str(ROOT / "backend" / "alembic"))
+    return set(ScriptDirectory.from_config(config).get_heads())
+
+
+def _database_revisions(connection: Connection) -> set[str]:
+    return {
+        str(row[0])
+        for row in connection.execute(text("SELECT version_num FROM alembic_version"))
+        if row[0]
+    }
+
+
+def revisions_match_release_head(expected: set[str], current: set[str]) -> bool:
+    """Exact schema compatibility predicate used by rollback and tests."""
+    return bool(expected) and current == expected
+
+
+def _assert_database_at_release_head(connection: Connection) -> None:
+    expected = _script_heads()
+    current = _database_revisions(connection)
+    if not revisions_match_release_head(expected, current):
+        raise AlembicRevisionMismatch(expected, current)
+
+
 def run_audit(connection: Connection) -> dict[str, int]:
     present_tables = set(inspect(connection).get_table_names())
     missing = REQUIRED_TABLES - present_tables
     if missing:
         raise MissingPilotRuntimeSchema(missing)
+    _assert_database_at_release_head(connection)
     return {
         name: int(connection.execute(text(query)).scalar_one())
         for name, query in CHECKS.items()
@@ -106,6 +149,21 @@ def main() -> int:
                     "missing_tables": sorted(exc.missing_tables),
                 },
                 ensure_ascii=False,
+            ),
+            file=sys.stderr,
+        )
+        return 2
+    except AlembicRevisionMismatch as exc:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "reason": "alembic_revision_mismatch",
+                    "expected_heads": sorted(exc.expected),
+                    "database_revisions": sorted(exc.current),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
             ),
             file=sys.stderr,
         )
