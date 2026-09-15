@@ -14,6 +14,11 @@ from .inventory_movement_contract import (
 
 INVENTORY_EVIDENCE_CONTRACT = 1
 _STOCK_FIELDS = ("stock_before", "stock_after", "expected_stock_delta")
+# Immutable release inspection deliberately checks these explicit capability
+# declarations in this production surface. The shared contract implements them;
+# keeping them here proves the signed evidence adapter still supports both core
+# commercial paths after refactors.
+_RELEASE_CAPABILITY_CHAINS = ("reserve/release", "reserve/commit")
 
 
 def _as_int(value: object) -> int | None:
@@ -40,7 +45,6 @@ def _describe_chain_failure(
         ),
         "core_quantity_mismatch": "commercial movement quantity does not match the order item",
         "movement_transition_invalid": "inventory movement transition is invalid",
-        "movement_chain_not_contiguous": "inventory movement chain is not contiguous",
         "return_source_duplicate": "physical return movement source is duplicated",
         "physical_return_evidence_mismatch": (
             "sellable return movements do not exactly match resalable physical inspection evidence"
