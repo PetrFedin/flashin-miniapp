@@ -61,3 +61,5 @@ jobs:
         run: alembic -c backend/alembic.ini upgrade head
       - name: Prove financial and physical return separation
         run: python scripts/reverse_logistics_state_smoke.py
+      - name: Prove physical return lifecycle and idempotency contract
+        run: python scripts/reverse_logistics_contract_smoke.py
