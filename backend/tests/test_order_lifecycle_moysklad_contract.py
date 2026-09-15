@@ -17,7 +17,30 @@ def reconciliation(status="PASS"):
     }
 
 
-def trace(status, payment_status, delivery_status, command_types, *, physical_returns=None):
+def trace(
+    status,
+    payment_status,
+    delivery_status,
+    command_types,
+    *,
+    physical_returns=None,
+    physical_command_case_ids=None,
+):
+    physical_ids = iter(list(physical_command_case_ids or []))
+    commands = []
+    for command_type in command_types:
+        item = {"provider": "moysklad", "command_type": command_type, "status": "sent"}
+        if command_type == "moysklad.physical_sales_return.create":
+            try:
+                case_id = next(physical_ids)
+            except StopIteration:
+                case_id = None
+            if case_id is not None:
+                item.update({
+                    "aggregate_type": "return_logistics_case",
+                    "aggregate_id": str(case_id),
+                })
+        commands.append(item)
     return {
         "order": {
             "status": status,
@@ -25,10 +48,7 @@ def trace(status, payment_status, delivery_status, command_types, *, physical_re
             "delivery_status": delivery_status,
         },
         "physical_returns": list(physical_returns or []),
-        "provider_commands": [
-            {"provider": "moysklad", "command_type": command_type, "status": "sent"}
-            for command_type in command_types
-        ],
+        "provider_commands": commands,
     }
 
 
@@ -102,8 +122,10 @@ def test_inspected_physical_return_requires_physical_sales_return_command():
 
     assert result["overall_status"] == "REVIEW"
     assert result["requires_operator_action"] is True
-    assert "moysklad.physical_sales_return.create" in moysklad_stage(result)["evidence"][0]
-    assert "moysklad.sales_return.create" not in moysklad_stage(result)["evidence"][0]
+    evidence = " ".join(moysklad_stage(result)["evidence"])
+    assert "moysklad.physical_sales_return.create" in evidence
+    assert "missing_case_ids=7" in evidence
+    assert "moysklad.sales_return.create" not in evidence
 
 
 def test_inspected_physical_return_with_full_moysklad_lifecycle_stays_pass():
@@ -119,6 +141,58 @@ def test_inspected_physical_return_with_full_moysklad_lifecycle_stays_pass():
                 "moysklad.physical_sales_return.create",
             ],
             physical_returns=[{"id": 7, "status": "inspected"}],
+            physical_command_case_ids=[7],
+        ),
+    )
+
+    assert result["overall_status"] == "PASS"
+    assert result["requires_operator_action"] is False
+    assert moysklad_stage(result)["status"] == "PASS"
+
+
+def test_each_inspected_physical_case_requires_its_own_provider_command():
+    result = enforce_moysklad_lifecycle_contract(
+        reconciliation("PASS"),
+        trace(
+            "refunded",
+            "refunded",
+            "delivered",
+            [
+                "moysklad.customer_order.create",
+                "moysklad.demand.create",
+                "moysklad.physical_sales_return.create",
+            ],
+            physical_returns=[
+                {"id": 7, "status": "inspected"},
+                {"id": 8, "status": "inspected"},
+            ],
+            physical_command_case_ids=[7],
+        ),
+    )
+
+    assert result["overall_status"] == "REVIEW"
+    assert result["requires_operator_action"] is True
+    assert "missing_case_ids=8" in " ".join(moysklad_stage(result)["evidence"])
+
+
+def test_two_inspected_physical_cases_with_two_commands_stay_pass():
+    result = enforce_moysklad_lifecycle_contract(
+        reconciliation("PASS"),
+        trace(
+            "refunded",
+            "refunded",
+            "delivered",
+            [
+                "moysklad.customer_order.create",
+                "moysklad.demand.create",
+                "moysklad.physical_sales_return.create",
+                "moysklad.physical_sales_return.create",
+            ],
+            physical_returns=[
+                {"id": 7, "status": "inspected"},
+                {"id": 8, "status": "inspected"},
+            ],
+            physical_command_case_ids=[7, 8],
         ),
     )
 
