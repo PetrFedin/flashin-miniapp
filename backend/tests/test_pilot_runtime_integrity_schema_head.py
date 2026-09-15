@@ -22,12 +22,14 @@ def test_schema_revision_supports_exact_multi_head_set_without_subset_acceptance
     assert revisions_match_release_head(expected, {"head_a", "head_b", "head_c"}) is False
 
 
-def test_runtime_integrity_reads_release_heads_and_database_revision():
+def test_runtime_integrity_cli_requires_release_head_while_library_audit_remains_reusable():
     source = RUNTIME_INTEGRITY.read_text(encoding="utf-8")
 
     assert "ScriptDirectory.from_config(config).get_heads()" in source
     assert 'SELECT version_num FROM alembic_version' in source
+    assert "if require_release_head:" in source
     assert "_assert_database_at_release_head(connection)" in source
+    assert "run_audit(connection, require_release_head=True)" in source
     assert '"reason": "alembic_revision_mismatch"' in source
 
 
