@@ -65,3 +65,5 @@ jobs:
         run: python scripts/reverse_logistics_contract_smoke.py
       - name: Prove MoySklad partial-return and disposition safety
         run: python scripts/moysklad_reverse_logistics_contract_smoke.py
+      - name: Prove physical evidence blocks destructive schema downgrade
+        run: python scripts/reverse_logistics_downgrade_guard_smoke.py
