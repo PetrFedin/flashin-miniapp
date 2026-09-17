@@ -11,6 +11,7 @@ from ..database import utcnow_naive
 from ..models import MoySkladSyncLog, Product, ProductVariant
 from .inventory import adjust_stock
 from .moysklad_mapping import apply_mapping, log_conflict
+from .moysklad_stock_authority import evaluate_moysklad_stock_snapshot
 
 
 def _headers() -> dict:
@@ -189,8 +190,9 @@ def _apply_synced_stock(
     sync_type: str,
     admin_id: int | None,
 ) -> ProductVariant:
-    target_stock = max(external_stock, int(variant.reserved_qty or 0))
-    if target_stock == variant.stock_qty:
+    decision = evaluate_moysklad_stock_snapshot(db, variant, int(external_stock))
+    target_stock = int(decision.target_stock)
+    if decision.blocked or target_stock == int(variant.stock_qty or 0):
         return variant
     return adjust_stock(
         db,

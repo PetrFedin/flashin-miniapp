@@ -63,7 +63,7 @@ async function orderState(request, orderId) {
   return response.json();
 }
 
-test("Telegram -> YooKassa webhook -> stock/MoySklad -> fulfillment -> refund -> notification", async ({ page, browser }) => {
+test("Telegram -> payment -> fulfillment -> financial refund -> physical return -> provider evidence", async ({ page, browser }) => {
   await installTelegram(page);
 
   const catalogResponse = await page.request.get(`${API_BASE}/api/products`);
@@ -172,7 +172,7 @@ test("Telegram -> YooKassa webhook -> stock/MoySklad -> fulfillment -> refund ->
   await expect(page.getByText("Доставлена", { exact: true })).toBeVisible();
   await expect(page.getByText(tracking)).toBeVisible();
 
-  // The customer registers the return from the real Mini App against the same row.
+  // The customer registers the financial return request from the real Mini App.
   await page.getByPlaceholder("Что необходимо вернуть и почему").fill("Не подошёл размер изделия, полный возврат E2E");
   await page.getByRole("button", { name: "Зарегистрировать возврат" }).click();
   await expect(page.getByRole("status")).toContainText(`Запрос на возврат заказа #${order.id} зарегистрирован`);
@@ -181,16 +181,21 @@ test("Telegram -> YooKassa webhook -> stock/MoySklad -> fulfillment -> refund ->
   state = await orderState(page.request, order.id);
   expect(state.returns).toHaveLength(1);
   expect(state.returns[0].status).toBe("requested");
+  expect(state.returns[0].physical_status).toBe("not_started");
   const returnId = state.returns[0].id;
 
-  // Admin approves the full amount. The local provider intentionally returns
-  // pending first, so no stock restoration can occur before refund.succeeded.
+  // Admin approves the full money amount. The local provider intentionally
+  // returns pending first. Neither approval nor provider settlement may restore
+  // sellable stock because no warehouse evidence exists yet.
   await adminPage.getByRole("button", { name: "Обновить сервис" }).click();
   const returnsQueue = adminPage.getByRole("article", { name: "Возвраты и refunds" });
-  await expect(returnsQueue.getByText(`#${returnId} · Заказ #${order.id}`)).toBeVisible();
+  const returnCard = returnsQueue.locator(".service-item").filter({
+    hasText: `#${returnId} · Заказ #${order.id}`,
+  }).first();
+  await expect(returnCard).toBeVisible();
   await adminPage.getByLabel(`Сумма возврата ${returnId}`).fill(String(state.order.total_amount));
   adminPage.once("dialog", (dialog) => dialog.accept());
-  await returnsQueue.getByRole("button", { name: "Подтвердить refund" }).click();
+  await returnCard.getByRole("button", { name: "Подтвердить refund" }).click();
   await expect(
     adminPage.getByRole("status").filter({
       hasText: `Возврат #${returnId} передан платёжному провайдеру`,
@@ -206,8 +211,8 @@ test("Telegram -> YooKassa webhook -> stock/MoySklad -> fulfillment -> refund ->
   expect(refundId).toContain("e2e-refund-");
 
   // Provider success is delivered twice to the canonical webhook. The second
-  // callback must be idempotent: inventory, notification and provider commands
-  // may not be duplicated.
+  // callback must be idempotent. Financial completion still has zero inventory
+  // authority and may not create a provider SalesReturn.
   const refundConfirmation = await adminPage.request.post(
     `${API_BASE}/__e2e/yookassa/confirm-refund/${refundId}`,
   );
@@ -218,30 +223,67 @@ test("Telegram -> YooKassa webhook -> stock/MoySklad -> fulfillment -> refund ->
   expect(state.order.payment_status).toBe("refunded");
   expect(state.order.delivery_status).toBe("delivered");
   expect(state.returns[0].status).toBe("approved");
-  expect(state.variants[0].stock_qty).toBe(baselineStockQty);
+  expect(state.returns[0].physical_status).toBe("not_started");
+  expect(state.variants[0].stock_qty).toBe(baselineStockQty - 1);
   expect(state.variants[0].reserved_qty).toBe(0);
+  expect(state.inventory_movements.map((item) => item.kind)).toEqual(["reserve", "commit"]);
 
-  const movementKinds = state.inventory_movements.map((item) => item.kind);
-  expect(movementKinds).toEqual(["reserve", "commit", "return"]);
-  expect(movementKinds.filter((kind) => kind === "return")).toHaveLength(1);
-
-  const commandTypes = state.provider_commands.map((item) => item.command_type);
+  let commandTypes = state.provider_commands.map((item) => item.command_type);
   expect(commandTypes).toContain("moysklad.customer_order.create");
   expect(commandTypes).toContain("moysklad.demand.create");
-  expect(commandTypes).toContain("moysklad.sales_return.create");
-  expect(commandTypes.filter((type) => type === "moysklad.sales_return.create")).toHaveLength(1);
+  expect(commandTypes).not.toContain("moysklad.sales_return.create");
+  expect(commandTypes).not.toContain("moysklad.physical_sales_return.create");
 
   const refundNotifications = state.notifications.filter((item) => item.message.includes("полностью возвращена"));
   expect(refundNotifications).toHaveLength(1);
   expect(refundNotifications[0].status).toBe("pending");
 
+  // Financial refund and physical reverse logistics now remain visible as
+  // separate authorities in the same returns cockpit.
+  await adminPage.getByRole("button", { name: "Обновить сервис" }).click();
+  await expect(returnCard.getByText("Финансы: Возвращён полностью", { exact: true })).toBeVisible();
+  await returnCard.getByRole("button", { name: "Открыть физический возврат" }).click();
+  await expect(returnCard.getByText("Физический возврат: Не начат", { exact: true })).toBeVisible();
+  await expect(returnCard.getByText("FLASHIN Wool Coat")).toBeVisible();
+
+  await returnCard.getByRole("button", { name: "Авторизовать позицию" }).click();
+  await expect(returnCard.getByText("Физический возврат: Авторизован", { exact: true })).toBeVisible();
+
+  await returnCard.getByRole("button", { name: "Зафиксировать передачу в пути" }).click();
+  await expect(returnCard.getByText("Физический возврат: В пути", { exact: true })).toBeVisible();
+
+  await returnCard.getByRole("button", { name: "Зафиксировать приёмку" }).click();
+  await expect(returnCard.getByText("Физический возврат: Принят", { exact: true })).toBeVisible();
+
+  await returnCard.getByLabel("Disposition").selectOption("resalable");
+  await returnCard.getByRole("button", { name: "Зафиксировать disposition" }).click();
+  await expect(returnCard.getByText("Физический возврат: Осмотр завершён", { exact: true })).toBeVisible();
+
+  state = await orderState(adminPage.request, order.id);
+  expect(state.returns[0].physical_status).toBe("inspected");
+  expect(state.physical_returns).toHaveLength(1);
+  expect(state.physical_returns[0].status).toBe("inspected");
+  expect(state.physical_returns[0].items).toHaveLength(1);
+  expect(state.physical_returns[0].items[0].authorized_qty).toBe(1);
+  expect(state.physical_returns[0].items[0].received_qty).toBe(1);
+  expect(state.physical_returns[0].items[0].inspected_qty).toBe(1);
+  expect(state.physical_returns[0].items[0].resalable_qty).toBe(1);
+  expect(state.physical_returns[0].items[0].damaged_qty).toBe(0);
+  expect(state.physical_returns[0].items[0].quarantine_qty).toBe(0);
+  expect(state.variants[0].stock_qty).toBe(baselineStockQty);
+
+  const movementKinds = state.inventory_movements.map((item) => item.kind);
+  expect(movementKinds).toEqual(["reserve", "commit", "return"]);
+  expect(movementKinds.filter((kind) => kind === "return")).toHaveLength(1);
+
+  commandTypes = state.provider_commands.map((item) => item.command_type);
+  expect(commandTypes).not.toContain("moysklad.sales_return.create");
+  expect(commandTypes.filter((type) => type === "moysklad.physical_sales_return.create")).toHaveLength(1);
+
   await page.reload();
   await page.getByRole("button", { name: "Заказы" }).click();
   await expect(page.getByText("Возвращён", { exact: true })).toBeVisible();
   await expect(page.getByText("Возвращено", { exact: true })).toBeVisible();
-
-  await adminPage.getByRole("button", { name: "Обновить сервис" }).click();
-  await expect(returnsQueue.getByText("Возвращён полностью", { exact: true })).toBeVisible();
 
   const adminToken = await adminPage.evaluate(() => localStorage.getItem("admin_token"));
   expect(adminToken, "Integrated admin login must persist its bearer token").toBeTruthy();

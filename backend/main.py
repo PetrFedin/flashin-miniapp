@@ -60,6 +60,7 @@ from .api.reconciliation import router as reconciliation_router
 from .api.refund_webhooks import router as refund_webhooks_router
 from .api.restock import router as restock_router
 from .api.returns import router as returns_router
+from .api.reverse_logistics import router as reverse_logistics_router
 from .api.search import router as search_router
 from .api.support import router as support_router
 from .api.timeline import router as timeline_router
@@ -134,7 +135,6 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["X-Request-ID"],
 )
-# Added last so the correlation id wraps CORS, rate-limit, guard and route responses.
 app.add_middleware(RequestIdMiddleware)
 
 Path(settings.media_local_dir).mkdir(parents=True, exist_ok=True)
@@ -164,6 +164,7 @@ app.include_router(admin_notifications_router, prefix="/api")
 app.include_router(admin_returns_router, prefix="/api")
 app.include_router(media_router, prefix="/api")
 app.include_router(returns_router, prefix="/api")
+app.include_router(reverse_logistics_router, prefix="/api")
 app.include_router(wishlist_router, prefix="/api")
 app.include_router(restock_router, prefix="/api")
 app.include_router(delivery_router, prefix="/api")

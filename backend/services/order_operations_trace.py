@@ -19,6 +19,7 @@ from ..models import (
 )
 from ..notification_models import NotificationDeliveryState, NotificationEventKey
 from ..provider_models import ProviderCommand
+from ..reverse_logistics_models import ReturnLogisticsCase, ReturnLogisticsItem
 
 
 def _iso(value):
@@ -113,18 +114,46 @@ def build_order_operations_trace(db: Session, order_id: int) -> dict[str, object
     )
     return_ids = [int(item.id) for item in returns]
 
+    physical_cases = []
+    physical_items = []
+    if return_ids:
+        physical_cases = (
+            db.query(ReturnLogisticsCase)
+            .filter(ReturnLogisticsCase.return_request_id.in_(return_ids))
+            .order_by(ReturnLogisticsCase.created_at.asc(), ReturnLogisticsCase.id.asc())
+            .all()
+        )
+        case_ids = [int(item.id) for item in physical_cases]
+        if case_ids:
+            physical_items = (
+                db.query(ReturnLogisticsItem)
+                .filter(ReturnLogisticsItem.case_id.in_(case_ids))
+                .order_by(ReturnLogisticsItem.id.asc())
+                .all()
+            )
+    else:
+        case_ids = []
+
     provider_filter = and_(
         ProviderCommand.aggregate_type == "order",
         ProviderCommand.aggregate_id == str(order_id),
     )
+    provider_filters = [provider_filter]
     if return_ids:
-        provider_filter = or_(
-            provider_filter,
+        provider_filters.append(
             and_(
                 ProviderCommand.aggregate_type == "return",
                 ProviderCommand.aggregate_id.in_([str(value) for value in return_ids]),
-            ),
+            )
         )
+    if case_ids:
+        provider_filters.append(
+            and_(
+                ProviderCommand.aggregate_type == "return_logistics_case",
+                ProviderCommand.aggregate_id.in_([str(value) for value in case_ids]),
+            )
+        )
+    provider_filter = or_(*provider_filters) if len(provider_filters) > 1 else provider_filters[0]
     provider_commands = (
         db.query(ProviderCommand)
         .filter(provider_filter)
@@ -233,6 +262,13 @@ def build_order_operations_trace(db: Session, order_id: int) -> dict[str, object
         if event.status == "open" and event.due_at is not None and event.due_at <= now
     )
 
+    physical_items_by_case: dict[int, list[ReturnLogisticsItem]] = {}
+    for item in physical_items:
+        physical_items_by_case.setdefault(int(item.case_id), []).append(item)
+    physical_case_by_return = {
+        int(item.return_request_id): item for item in physical_cases
+    }
+
     return {
         "schema_version": 2,
         "correlation": {"type": "order_id", "value": str(order_id)},
@@ -283,9 +319,38 @@ def build_order_operations_trace(db: Session, order_id: int) -> dict[str, object
                 "status": str(item.status),
                 "provider_refund_id": str(item.provider_refund_id or ""),
                 "refund_amount": float(item.refund_amount),
+                "physical_status": (
+                    str(physical_case_by_return[int(item.id)].status)
+                    if int(item.id) in physical_case_by_return
+                    else "not_started"
+                ),
                 "created_at": _iso(item.created_at),
             }
             for item in returns
+        ],
+        "physical_returns": [
+            {
+                "id": int(case.id),
+                "return_request_id": int(case.return_request_id),
+                "status": str(case.status),
+                "created_at": _iso(case.created_at),
+                "updated_at": _iso(case.updated_at),
+                "items": [
+                    {
+                        "order_item_id": int(item.order_item_id),
+                        "variant_id": int(item.variant_id),
+                        "ordered_qty": int(item.ordered_qty),
+                        "authorized_qty": int(item.authorized_qty),
+                        "received_qty": int(item.received_qty),
+                        "inspected_qty": int(item.inspected_qty),
+                        "resalable_qty": int(item.resalable_qty),
+                        "damaged_qty": int(item.damaged_qty),
+                        "quarantine_qty": int(item.quarantine_qty),
+                    }
+                    for item in physical_items_by_case.get(int(case.id), [])
+                ],
+            }
+            for case in physical_cases
         ],
         "provider_commands": [_provider_command(command) for command in provider_commands],
         "inventory": [

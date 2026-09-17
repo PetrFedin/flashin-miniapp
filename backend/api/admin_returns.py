@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import Customer, Order, ReturnRequest
+from ..reverse_logistics_models import ReturnLogisticsCase
 from ..security import get_current_admin
 from ..services.rbac import has_permission, require_permission
 from ..services.refund_state import refund_money
@@ -55,9 +56,11 @@ def list_admin_returns(
             ReturnRequest,
             Order,
             func.coalesce(refunded_totals.c.refunded_total, 0),
+            ReturnLogisticsCase.status.label("physical_status"),
         )
         .join(Order, Order.id == ReturnRequest.order_id)
         .outerjoin(refunded_totals, refunded_totals.c.order_id == Order.id)
+        .outerjoin(ReturnLogisticsCase, ReturnLogisticsCase.return_request_id == ReturnRequest.id)
     )
     normalized_status = (status or "").strip().lower()
     if normalized_status:
@@ -71,7 +74,7 @@ def list_admin_returns(
 
     customers_by_id: dict[int, Customer] = {}
     if can_read_customer and rows:
-        customer_ids = {return_request.customer_id for return_request, _, _ in rows}
+        customer_ids = {return_request.customer_id for return_request, _, _, _ in rows}
         customers_by_id = {
             customer.id: customer
             for customer in db.query(Customer).filter(Customer.id.in_(customer_ids)).all()
@@ -79,7 +82,7 @@ def list_admin_returns(
 
     zero = refund_money(0, "zero")
     result = []
-    for return_request, order, raw_refunded_total in rows:
+    for return_request, order, raw_refunded_total, physical_status in rows:
         refunded_total = refund_money(raw_refunded_total, "refunded total")
         refundable_balance = max(
             refund_money(order.total_amount, "order total") - refunded_total,
@@ -93,6 +96,7 @@ def list_admin_returns(
                 **_customer_fields(customer, can_read_customer),
                 "reason": return_request.reason,
                 "status": return_request.status,
+                "physical_status": str(physical_status or "not_started"),
                 "refund_amount": return_request.refund_amount,
                 "provider_refund_id": return_request.provider_refund_id,
                 "order_total": order.total_amount,

@@ -9,13 +9,25 @@ from backend.models import (
     OrderItem,
     Product,
     ProductVariant,
+    ReturnRequest,
     StockReconciliationLog,
 )
-from backend.services.inventory import commit_reserved_to_sold, reserve_variant
-from backend.services.pilot_inventory_safety import (
-    _movement_transition_valid,
-    build_pilot_inventory_safety,
+from backend.reverse_logistics_models import (
+    ReturnLogisticsCase,
+    ReturnLogisticsEvent,
+    ReturnLogisticsItem,
 )
+from backend.services.inventory import (
+    commit_reserved_to_sold,
+    release_variant,
+    reserve_variant,
+)
+from backend.services.inventory_movement_contract import (
+    PhysicalReturnEvidence,
+    movement_transition_valid,
+    validate_variant_movement_chain,
+)
+from backend.services.pilot_inventory_safety import build_pilot_inventory_safety
 
 
 def _db():
@@ -47,19 +59,72 @@ def _order_fixture(db, *, status: str = "pending", quantity: int = 1, sku: str =
     )
     db.add(order)
     db.flush()
-    db.add(
-        OrderItem(
-            order_id=order.id,
-            product_id=product.id,
-            variant_id=variant.id,
-            title=product.title,
-            size=variant.size,
-            quantity=quantity,
-            price=1000,
-        )
+    item = OrderItem(
+        order_id=order.id,
+        product_id=product.id,
+        variant_id=variant.id,
+        title=product.title,
+        size=variant.size,
+        quantity=quantity,
+        price=1000,
     )
+    db.add(item)
     db.commit()
-    return order, variant
+    return order, variant, item
+
+
+def _physical_event(
+    db,
+    *,
+    order: Order,
+    item: OrderItem,
+    disposition: str,
+    quantity: int = 1,
+):
+    request = ReturnRequest(
+        order_id=order.id,
+        customer_id=order.customer_id,
+        reason="physical test",
+        status="approved",
+        refund_amount=0,
+    )
+    db.add(request)
+    db.flush()
+    case = ReturnLogisticsCase(
+        return_request_id=request.id,
+        order_id=order.id,
+        customer_id=order.customer_id,
+        status="inspected",
+    )
+    db.add(case)
+    db.flush()
+    physical_item = ReturnLogisticsItem(
+        case_id=case.id,
+        order_item_id=item.id,
+        variant_id=item.variant_id,
+        ordered_qty=item.quantity,
+        authorized_qty=quantity,
+        received_qty=quantity,
+        inspected_qty=quantity,
+        resalable_qty=quantity if disposition == "resalable" else 0,
+        damaged_qty=quantity if disposition == "damaged" else 0,
+        quarantine_qty=quantity if disposition == "quarantine" else 0,
+    )
+    db.add(physical_item)
+    db.flush()
+    event = ReturnLogisticsEvent(
+        case_id=case.id,
+        item_id=physical_item.id,
+        event_type="inspected",
+        disposition=disposition,
+        quantity=quantity,
+        idempotency_key=f"inspect-{case.id}-{disposition}",
+        payload_hash="a" * 64,
+        reason="test evidence",
+    )
+    db.add(event)
+    db.commit()
+    return event
 
 
 def _reconciliation(variant: ProductVariant, *, external_stock_qty: int, status: str):
@@ -71,6 +136,20 @@ def _reconciliation(variant: ProductVariant, *, external_stock_qty: int, status:
         local_reserved_qty=variant.reserved_qty,
         action="report",
         status=status,
+    )
+
+
+def _movement(*, kind: str, quantity: int, before: tuple[int, int], after: tuple[int, int], source: str):
+    return InventoryMovement(
+        order_id=1,
+        variant_id=1,
+        kind=kind,
+        quantity=quantity,
+        stock_before=before[0],
+        stock_after=after[0],
+        reserved_before=before[1],
+        reserved_after=after[1],
+        source=source,
     )
 
 
@@ -90,7 +169,7 @@ def test_empty_pilot_is_healthy_and_identifier_free():
 
 def test_pending_order_requires_exact_reserve_chain():
     db = _db()
-    order, variant = _order_fixture(db)
+    order, variant, _item = _order_fixture(db)
 
     missing = build_pilot_inventory_safety(db, [order.id])
     assert missing["healthy"] is False
@@ -108,7 +187,7 @@ def test_pending_order_requires_exact_reserve_chain():
 
 def test_paid_order_requires_commit_and_respects_order_item_quantity():
     db = _db()
-    order, variant = _order_fixture(db, status="paid", quantity=2, sku="paid")
+    order, variant, _item = _order_fixture(db, status="paid", quantity=2, sku="paid")
     reserve_variant(db, variant.id, 2, order_id=order.id, source="checkout")
     db.commit()
 
@@ -123,37 +202,133 @@ def test_paid_order_requires_commit_and_respects_order_item_quantity():
     assert after_commit["healthy"] is True
 
 
+def test_financial_refund_does_not_require_physical_return():
+    db = _db()
+    order, variant, _item = _order_fixture(db, status="refunded", sku="refund-no-return")
+    reserve_variant(db, variant.id, 1, order_id=order.id, source="checkout")
+    commit_reserved_to_sold(db, variant.id, 1, order_id=order.id, source="payment")
+    db.commit()
+
+    verdict = build_pilot_inventory_safety(db, [order.id])
+    assert verdict["healthy"] is True
+    assert "inventory_physical_return_evidence_mismatch" not in verdict["blocking_codes"]
+
+
+def test_damaged_physical_evidence_does_not_require_sellable_return_movement():
+    db = _db()
+    order, variant, item = _order_fixture(db, status="refunded", sku="damaged-only")
+    reserve_variant(db, variant.id, 1, order_id=order.id, source="checkout")
+    commit_reserved_to_sold(db, variant.id, 1, order_id=order.id, source="payment")
+    _physical_event(db, order=order, item=item, disposition="damaged")
+
+    verdict = build_pilot_inventory_safety(db, [order.id])
+    assert verdict["healthy"] is True
+
+
+def test_resalable_evidence_without_matching_return_movement_blocks():
+    db = _db()
+    order, variant, item = _order_fixture(db, status="refunded", sku="resalable-missing-ledger")
+    reserve_variant(db, variant.id, 1, order_id=order.id, source="checkout")
+    commit_reserved_to_sold(db, variant.id, 1, order_id=order.id, source="payment")
+    _physical_event(db, order=order, item=item, disposition="resalable")
+
+    verdict = build_pilot_inventory_safety(db, [order.id])
+    assert verdict["healthy"] is False
+    assert "inventory_physical_return_evidence_mismatch" in verdict["blocking_codes"]
+
+
+def test_multiple_partial_physical_returns_are_valid_in_shared_contract():
+    chain = [
+        _movement(kind="reserve", quantity=2, before=(10, 0), after=(10, 2), source="checkout"),
+        _movement(kind="commit", quantity=2, before=(10, 2), after=(8, 0), source="payment"),
+        _movement(kind="return", quantity=1, before=(8, 0), after=(9, 0), source="reverse_logistics_event:101"),
+        _movement(kind="return", quantity=1, before=(9, 0), after=(10, 0), source="reverse_logistics_event:102"),
+    ]
+    physical = (
+        PhysicalReturnEvidence(event_id=101, order_id=1, variant_id=1, quantity=1),
+        PhysicalReturnEvidence(event_id=102, order_id=1, variant_id=1, quantity=1),
+    )
+
+    assert validate_variant_movement_chain(
+        chain,
+        order_quantity=2,
+        core_chain=("reserve", "commit"),
+        physical_returns=physical,
+    ) == ()
+
+
+def test_return_prefix_without_matching_physical_event_is_not_trusted():
+    chain = [
+        _movement(kind="reserve", quantity=1, before=(10, 0), after=(10, 1), source="checkout"),
+        _movement(kind="commit", quantity=1, before=(10, 1), after=(9, 0), source="payment"),
+        _movement(kind="return", quantity=1, before=(9, 0), after=(10, 0), source="reverse_logistics_event:999"),
+    ]
+    physical = (
+        PhysicalReturnEvidence(event_id=101, order_id=1, variant_id=1, quantity=1),
+    )
+
+    failures = validate_variant_movement_chain(
+        chain,
+        order_quantity=1,
+        core_chain=("reserve", "commit"),
+        physical_returns=physical,
+    )
+    assert "physical_return_evidence_mismatch" in failures
+
+
+def test_return_cannot_exceed_original_commit():
+    chain = [
+        _movement(kind="reserve", quantity=1, before=(10, 0), after=(10, 1), source="checkout"),
+        _movement(kind="commit", quantity=1, before=(10, 1), after=(9, 0), source="payment"),
+        _movement(kind="return", quantity=2, before=(9, 0), after=(11, 0), source="reverse_logistics_event:101"),
+    ]
+    physical = (
+        PhysicalReturnEvidence(event_id=101, order_id=1, variant_id=1, quantity=2),
+    )
+
+    failures = validate_variant_movement_chain(
+        chain,
+        order_quantity=1,
+        core_chain=("reserve", "commit"),
+        physical_returns=physical,
+    )
+    assert "return_quantity_exceeds_commit" in failures
+
+
+def test_cancelled_order_requires_reserve_release_and_cannot_return_sellable_stock():
+    db = _db()
+    order, variant, _item = _order_fixture(db, status="cancelled", sku="cancelled")
+    reserve_variant(db, variant.id, 1, order_id=order.id, source="checkout")
+    release_variant(db, variant.id, 1, order_id=order.id, source="cancel")
+    db.commit()
+
+    verdict = build_pilot_inventory_safety(db, [order.id])
+    assert verdict["healthy"] is True
+
+
 def test_transition_conservation_rejects_bad_snapshot_and_accepts_return():
-    bad = InventoryMovement(
-        order_id=1,
-        variant_id=1,
+    bad = _movement(
         kind="reserve",
         quantity=1,
-        stock_before=10,
-        stock_after=9,
-        reserved_before=0,
-        reserved_after=1,
+        before=(10, 0),
+        after=(9, 1),
         source="test",
     )
-    assert _movement_transition_valid(bad) is False
+    assert movement_transition_valid(bad) is False
 
-    returned = InventoryMovement(
-        order_id=1,
-        variant_id=1,
+    returned = _movement(
         kind="return",
         quantity=2,
-        stock_before=8,
-        stock_after=10,
-        reserved_before=0,
-        reserved_after=0,
-        source="refund",
+        before=(8, 0),
+        after=(10, 0),
+        source="reverse_logistics_event:1",
     )
-    assert _movement_transition_valid(returned) is True
+    assert movement_transition_valid(returned) is True
 
 
 def test_latest_open_reconciliation_blocks_but_newer_resolved_clears_it():
     db = _db()
-    order, variant = _order_fixture(db, sku="reconcile")
+    order, variant, _item = _order_fixture(db, sku="reconcile")
     reserve_variant(db, variant.id, 1, order_id=order.id, source="checkout")
     db.add(_reconciliation(variant, external_stock_qty=7, status="open"))
     db.commit()
@@ -173,9 +348,9 @@ def test_latest_open_reconciliation_blocks_but_newer_resolved_clears_it():
 
 def test_unrelated_variant_reconciliation_does_not_block_pilot_order():
     db = _db()
-    order, variant = _order_fixture(db, sku="pilot")
+    order, variant, _item = _order_fixture(db, sku="pilot")
     reserve_variant(db, variant.id, 1, order_id=order.id, source="checkout")
-    _other_order, other_variant = _order_fixture(db, sku="other")
+    _other_order, other_variant, _other_item = _order_fixture(db, sku="other")
     db.add(_reconciliation(other_variant, external_stock_qty=1, status="open"))
     db.commit()
 

@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import MoySkladSyncLog, Order, ReturnRequest
 from ..provider_models import ProviderCommand
+from ..reverse_logistics_models import ReturnLogisticsCase
 from ..schemas import MoySkladSyncOut
 from ..security import get_current_admin
 from ..services.moysklad import sync_assortment_to_catalog
@@ -16,12 +17,11 @@ _ORDER_COMMAND_TYPES = (
     "moysklad.customer_order.create",
     "moysklad.demand.create",
 )
-_RETURN_COMMAND_TYPE = "moysklad.sales_return.create"
+_LEGACY_RETURN_COMMAND_TYPE = "moysklad.sales_return.create"
+_PHYSICAL_RETURN_COMMAND_TYPE = "moysklad.physical_sales_return.create"
 
 
 def _serialize_outbound_command(command: ProviderCommand) -> dict[str, object]:
-    """Return only non-secret operational evidence for one provider command."""
-
     return {
         "id": int(command.id),
         "provider": str(command.provider),
@@ -40,21 +40,11 @@ def _serialize_outbound_command(command: ProviderCommand) -> dict[str, object]:
 async def sync_moysklad(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
     require_permission(db, admin, "products.write")
     require_permission(db, admin, "inventory.write")
-    return await sync_assortment_to_catalog(
-        db,
-        sync_type="manual",
-        admin_id=admin.id,
-    )
+    return await sync_assortment_to_catalog(db, sync_type="manual", admin_id=admin.id)
 
 
 @router.get("/operations-status")
-def moysklad_operations_status(
-    response: Response,
-    admin=Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    """Sanitized, read-only supply-chain status for catalog operators."""
-
+def moysklad_operations_status(response: Response, admin=Depends(get_current_admin), db: Session = Depends(get_db)):
     require_permission(db, admin, "products.read")
     response.headers["Cache-Control"] = "no-store, max-age=0"
     response.headers["Pragma"] = "no-cache"
@@ -68,16 +58,8 @@ def sync_logs(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
 
 
 @router.get("/orders/{order_id}/outbound-evidence")
-def order_outbound_evidence(
-    order_id: int,
-    admin=Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    """Read-only, sanitized proof of MoySklad outbound effects for one order.
-
-    This endpoint intentionally excludes provider payloads, idempotency keys and
-    error text. It exists for pilot operations and terminal E2E verification.
-    """
+def order_outbound_evidence(order_id: int, admin=Depends(get_current_admin), db: Session = Depends(get_db)):
+    """Sanitized proof of order and physical-return outbound effects."""
 
     require_permission(db, admin, "orders.read")
     order = db.query(Order.id).filter(Order.id == order_id).first()
@@ -86,12 +68,17 @@ def order_outbound_evidence(
 
     return_ids = [
         int(row[0])
-        for row in (
-            db.query(ReturnRequest.id)
-            .filter(ReturnRequest.order_id == order_id)
-            .order_by(ReturnRequest.id.asc())
-            .all()
-        )
+        for row in db.query(ReturnRequest.id)
+        .filter(ReturnRequest.order_id == order_id)
+        .order_by(ReturnRequest.id.asc())
+        .all()
+    ]
+    case_ids = [
+        int(row[0])
+        for row in db.query(ReturnLogisticsCase.id)
+        .filter(ReturnLogisticsCase.order_id == order_id)
+        .order_by(ReturnLogisticsCase.id.asc())
+        .all()
     ]
 
     order_commands = (
@@ -105,25 +92,39 @@ def order_outbound_evidence(
         .all()
     )
 
-    return_commands: list[ProviderCommand] = []
+    legacy_commands: list[ProviderCommand] = []
     if return_ids:
-        return_commands = (
+        legacy_commands = (
             db.query(ProviderCommand)
             .filter(
                 ProviderCommand.provider == "moysklad",
                 ProviderCommand.aggregate_type == "return",
                 ProviderCommand.aggregate_id.in_([str(value) for value in return_ids]),
-                ProviderCommand.command_type == _RETURN_COMMAND_TYPE,
+                ProviderCommand.command_type == _LEGACY_RETURN_COMMAND_TYPE,
+            )
+            .all()
+        )
+
+    physical_commands: list[ProviderCommand] = []
+    if case_ids:
+        physical_commands = (
+            db.query(ProviderCommand)
+            .filter(
+                ProviderCommand.provider == "moysklad",
+                ProviderCommand.aggregate_type == "return_logistics_case",
+                ProviderCommand.aggregate_id.in_([str(value) for value in case_ids]),
+                ProviderCommand.command_type == _PHYSICAL_RETURN_COMMAND_TYPE,
             )
             .all()
         )
 
     commands = sorted(
-        [*order_commands, *return_commands],
+        [*order_commands, *legacy_commands, *physical_commands],
         key=lambda row: (row.created_at, row.id),
     )
     return {
         "order_id": order_id,
         "return_ids": return_ids,
+        "physical_return_case_ids": case_ids,
         "commands": [_serialize_outbound_command(command) for command in commands],
     }

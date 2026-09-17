@@ -16,7 +16,7 @@ from backend.models import (
 )
 
 
-def test_refund_webhook_uses_authoritative_provider_state_and_is_idempotent():
+def test_refund_webhook_uses_authoritative_provider_state_is_idempotent_and_inventory_neutral():
     connection = engine.connect()
     outer_transaction = connection.begin()
     db = Session(
@@ -137,10 +137,17 @@ def test_refund_webhook_uses_authoritative_provider_state_and_is_idempotent():
         first_payload = first.json()
         assert first_payload["return_status"] == "approved"
         assert first_payload["payment_status"] == "refunded"
+        assert first_payload["result"]["inventory_effect"] == (
+            "none_financial_refund_is_not_physical_return"
+        )
+        assert first_payload["result"]["physical_return_required_for_stock"] is True
 
         duplicate = client.post("/api/returns/webhook/yookassa", json=spoofed_webhook)
         assert duplicate.status_code == 200, duplicate.text
         assert duplicate.json()["result"]["idempotent"] is True
+        assert duplicate.json()["result"]["inventory_effect"] == (
+            "none_financial_refund_is_not_physical_return"
+        )
 
         db.expire_all()
         persisted_order = db.query(Order).filter(Order.id == order_id).one()
@@ -164,11 +171,8 @@ def test_refund_webhook_uses_authoritative_provider_state_and_is_idempotent():
         assert persisted_order.status == "refunded"
         assert persisted_order.payment_status == "refunded"
         assert persisted_return.status == "approved"
-        assert persisted_variant.stock_qty == 5
-        assert len(movements) == 1
-        assert movements[0].quantity == 1
-        assert movements[0].stock_before == 4
-        assert movements[0].stock_after == 5
+        assert persisted_variant.stock_qty == 4
+        assert movements == []
         assert len(notifications) == 1
     finally:
         if client is not None:

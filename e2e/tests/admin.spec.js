@@ -148,6 +148,7 @@ async function mockAdminApi(page) {
     customer_name: "Pilot User",
     reason: "Не подошёл размер изделия",
     status: "requested",
+    physical_status: "not_started",
     currency: "RUB",
     order_total: 9000,
     approved_refund_total: 0,
@@ -424,7 +425,8 @@ test("Admin completes support, privacy and refund service operations", async ({ 
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Подтвердить refund" }).click();
   await expect(page.getByRole("status")).toContainText("Возврат #801 передан платёжному провайдеру");
-  await expect(returnsQueue.locator(".service-item-heading span")).toHaveText("Возвращён частично");
+  await expect(returnsQueue.locator(".service-item-heading span")).toHaveText("Финансы: Возвращён частично");
+  await expect(returnsQueue.getByText("Физический возврат: Не начат", { exact: true })).toBeVisible();
   await expect(returnsQueue.getByText("Provider refund: refund-pilot-801")).toBeVisible();
   await expect(page.getByText("Требуют действия: 1")).toBeVisible();
 });

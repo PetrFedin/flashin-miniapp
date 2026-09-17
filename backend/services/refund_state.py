@@ -1,4 +1,9 @@
-"""Shared validation and state transitions for provider refunds."""
+"""Shared validation and state transitions for provider refunds.
+
+Financial settlement is deliberately inventory-neutral. Physical stock authority
+lives in reverse logistics and may only restore sellable quantity after a
+received item has been inspected with a resalable disposition.
+"""
 
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
@@ -6,8 +11,6 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from ..models import Order, ReturnRequest
-from .inventory import restore_sold_variants
-from .moysklad_outbound import enqueue_moysklad_sales_return
 from .notifications import queue_order_refund
 from .refund_loyalty import apply_full_refund_loyalty
 
@@ -71,15 +74,6 @@ def remaining_refundable_amount(
     return remaining
 
 
-def _order_item_quantities(order: Order) -> dict[int, int]:
-    quantities: dict[int, int] = {}
-    for item in order.items:
-        quantities[item.variant_id] = quantities.get(item.variant_id, 0) + item.quantity
-    if not quantities:
-        raise HTTPException(status_code=409, detail="Refunded order has no inventory items")
-    return quantities
-
-
 def _idempotent_succeeded_result(db: Session, ret: ReturnRequest, order: Order) -> dict[str, object]:
     order_total = refund_money(order.total_amount, "order total")
     cumulative_total = completed_refund_total(db, order.id)
@@ -90,6 +84,7 @@ def _idempotent_succeeded_result(db: Session, ret: ReturnRequest, order: Order) 
         "remaining_refundable_amount": float(order_total - cumulative_total),
         "idempotent": True,
         "return_status": ret.status,
+        "inventory_effect": "none_financial_refund_is_not_physical_return",
     }
 
 
@@ -102,8 +97,8 @@ def apply_provider_refund_status(
     normalized_status = provider_status.strip().lower()
 
     # A provider observation can be stale relative to another concurrent approval.
-    # Once local success is finalized, no later pending/canceled/succeeded response
-    # may demote it or replay loyalty, inventory, notification, or outbound effects.
+    # Once local success is finalized, no later response may demote it or replay
+    # loyalty/notification effects. Inventory is never a financial-refund effect.
     if ret.status in _FINAL_REFUND_STATUSES:
         return _idempotent_succeeded_result(db, ret, order)
 
@@ -129,6 +124,8 @@ def apply_provider_refund_status(
         result: dict[str, object] = {
             "cumulative_refund_amount": float(cumulative_total),
             "remaining_refundable_amount": float(order_total - cumulative_total),
+            "inventory_effect": "none_financial_refund_is_not_physical_return",
+            "physical_return_required_for_stock": True,
         }
 
         if full_refund:
@@ -140,17 +137,11 @@ def apply_provider_refund_status(
                     redeemed_points=order.loyalty_points_redeemed,
                 )
             )
-            restored = restore_sold_variants(
-                db,
-                _order_item_quantities(order),
-                order_id=order.id,
-                source="full_refund",
-            )
-            result["inventory_restored"] = restored
-            if order.delivery_status in {"shipped", "delivered"}:
-                enqueue_moysklad_sales_return(db, order.id, ret.id)
         else:
-            result["policy"] = "loyalty_and_inventory_adjusted_only_after_full_cumulative_refund"
+            result["policy"] = (
+                "financial_refund_never_changes_sellable_inventory; "
+                "received_inspected_resalable_physical_disposition_is_required"
+            )
 
         queue_order_refund(
             db,

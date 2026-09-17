@@ -3,9 +3,9 @@
 
 All local application state uses real routes and transactional persistence. Only
 YooKassa HTTP calls are replaced with deterministic fakes. The smoke proves
-partial-refund money/loyalty invariants and replay safety, rejects over-refunds,
-and proves a full cumulative refund restores sold inventory exactly once while
-queueing customer notifications idempotently.
+partial/full refund money and loyalty invariants, replay safety and over-refund
+protection, while proving financial refund completion alone does not restore
+sold inventory before physical warehouse evidence.
 """
 
 from __future__ import annotations
@@ -471,7 +471,7 @@ def main() -> int:
         assert persisted_order.status == "refunded"
         assert persisted_order.payment_status == "refunded"
         assert persisted_payment.status == "succeeded"
-        assert persisted_variant.stock_qty == 5
+        assert persisted_variant.stock_qty == 3
         assert persisted_variant.reserved_qty == 0
         assert persisted_promo.used_count == 1
         assert persisted_cart.status == "converted"
@@ -497,10 +497,7 @@ def main() -> int:
             ("order_refund_reversal", Decimal("-17.00")),
             ("loyalty_refund", Decimal("100.00")),
         ]
-        assert len(return_movements) == 1
-        assert return_movements[0].quantity == 2
-        assert return_movements[0].stock_before == 3
-        assert return_movements[0].stock_after == 5
+        assert len(return_movements) == 0
         assert len(notifications) == 3
         assert len(paid_keys) == 1
         assert len(event_keys) == 3
@@ -535,8 +532,8 @@ def main() -> int:
                     "refunds": ["700.00", "1000.00"],
                     "remaining": "0.00",
                     "loyalty_after_full_refund": f"{_money(persisted_profile.loyalty_points):.2f}",
-                    "stock_after_full_refund": persisted_variant.stock_qty,
-                    "return_movements": len(return_movements),
+                    "stock_after_financial_refund": persisted_variant.stock_qty,
+                    "return_movements_without_physical_evidence": len(return_movements),
                     "notifications": len(notifications),
                     "provider_refund_calls": len(refund_create_calls),
                 },
