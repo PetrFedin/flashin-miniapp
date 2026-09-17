@@ -28,18 +28,62 @@ def utcnow_naive(_context=None) -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
 
-@event.listens_for(Mapper, "after_mapper_constructed")
-def _upgrade_legacy_inventory_movement_schema(mapper: Mapper, _class) -> None:
-    """Keep legacy ORM metadata aligned with Alembic revision 0041.
+def _append_partial_unique_index(
+    table,
+    *,
+    name: str,
+    columns: tuple[str, ...],
+    predicate: str,
+) -> None:
+    """Mirror a production partial unique index in create_all test metadata."""
 
-    ``models.py`` predates first-class physical-return movements. Production is
-    migrated by Alembic, while many deterministic unit tests intentionally use
+    if name in {index.name for index in table.indexes}:
+        return
+    where = text(predicate)
+    Index(
+        name,
+        *(table.c[column] for column in columns),
+        unique=True,
+        postgresql_where=where,
+        sqlite_where=where,
+    )
+
+
+@event.listens_for(Mapper, "after_mapper_constructed")
+def _upgrade_legacy_authority_schema(mapper: Mapper, _class) -> None:
+    """Keep legacy ORM metadata aligned with Alembic authority revisions.
+
+    Production is migrated by Alembic, while deterministic unit tests often use
     ``Base.metadata.create_all`` against SQLite. The metadata adapter therefore
-    mirrors the production contract exactly enough for both paths to enforce
-    the same invariants instead of giving tests a weaker/different schema.
+    mirrors the 0041 inventory-movement contract and the 0042 single-open
+    MoySklad evidence invariants so tests never run against a weaker schema.
     """
+
     table = mapper.local_table
-    if getattr(table, "name", "") != "inventory_movements":
+    table_name = getattr(table, "name", "")
+
+    if table_name == "moysklad_conflicts":
+        _append_partial_unique_index(
+            table,
+            name="uq_moysklad_conflict_open_stale_physical_return",
+            columns=("moysklad_id", "conflict_type"),
+            predicate=(
+                "status = 'open' AND "
+                "conflict_type = 'stale_stock_pending_physical_return'"
+            ),
+        )
+        return
+
+    if table_name == "stock_reconciliation_logs":
+        _append_partial_unique_index(
+            table,
+            name="uq_stock_reconciliation_open_blocked_physical_return",
+            columns=("variant_id",),
+            predicate="status = 'open' AND action = 'blocked_physical_return'",
+        )
+        return
+
+    if table_name != "inventory_movements":
         return
 
     kind_constraint = next(
@@ -72,29 +116,18 @@ def _upgrade_legacy_inventory_movement_schema(mapper: Mapper, _class) -> None:
     if legacy_unique is not None:
         table.constraints.remove(legacy_unique)
 
-    existing_index_names = {index.name for index in table.indexes}
-    core_predicate = text("kind IN ('reserve','release','commit')")
-    if "uq_inventory_movement_core_kind" not in existing_index_names:
-        Index(
-            "uq_inventory_movement_core_kind",
-            table.c.order_id,
-            table.c.variant_id,
-            table.c.kind,
-            unique=True,
-            postgresql_where=core_predicate,
-            sqlite_where=core_predicate,
-        )
-    return_predicate = text(
-        "kind = 'return' AND source LIKE 'reverse_logistics_event:%'"
+    _append_partial_unique_index(
+        table,
+        name="uq_inventory_movement_core_kind",
+        columns=("order_id", "variant_id", "kind"),
+        predicate="kind IN ('reserve','release','commit')",
     )
-    if "uq_inventory_movement_reverse_event_source" not in existing_index_names:
-        Index(
-            "uq_inventory_movement_reverse_event_source",
-            table.c.source,
-            unique=True,
-            postgresql_where=return_predicate,
-            sqlite_where=return_predicate,
-        )
+    _append_partial_unique_index(
+        table,
+        name="uq_inventory_movement_reverse_event_source",
+        columns=("source",),
+        predicate="kind = 'return' AND source LIKE 'reverse_logistics_event:%'",
+    )
 
 
 @event.listens_for(Mapper, "mapper_configured")
