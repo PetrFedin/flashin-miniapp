@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from ..models import (
@@ -18,6 +19,10 @@ _STALE_PHYSICAL_RETURN_CONFLICT = "stale_stock_pending_physical_return"
 _BLOCKED_RECONCILIATION_ACTION = "blocked_physical_return"
 _CATCHUP_RECONCILIATION_ACTION = "physical_return_catchup"
 _PHYSICAL_RETURN_COMMAND = "moysklad.physical_sales_return.create"
+_OPEN_EVIDENCE_CONSTRAINTS = {
+    "uq_moysklad_conflict_open_stale_physical_return",
+    "uq_stock_reconciliation_open_blocked_physical_return",
+}
 
 
 @dataclass(frozen=True)
@@ -269,6 +274,25 @@ def _uses_process_local_sqlite_database(db: Session) -> bool:
     return database in (None, "", ":memory:")
 
 
+def _is_open_evidence_unique_race(exc: IntegrityError) -> bool:
+    """Recognize only the two expected first-writer-wins evidence races."""
+
+    original = getattr(exc, "orig", None)
+    diagnostic = getattr(original, "diag", None)
+    constraint_name = getattr(diagnostic, "constraint_name", None)
+    if constraint_name in _OPEN_EVIDENCE_CONSTRAINTS:
+        return True
+
+    # SQLite deterministic tests report columns rather than index names. Keep
+    # this fallback narrow so unrelated integrity failures still fail closed.
+    message = str(original or exc).lower()
+    return (
+        "unique constraint failed: moysklad_conflicts.moysklad_id, moysklad_conflicts.conflict_type"
+        in message
+        or "unique constraint failed: stock_reconciliation_logs.variant_id" in message
+    )
+
+
 def _persist_blocked_evidence_durably(
     db: Session,
     *,
@@ -287,6 +311,12 @@ def _persist_blocked_evidence_durably(
     transaction, so deterministic unit tests retain the legacy same-session
     path while production databases and file-backed rollback tests use a truly
     separate connection/commit.
+
+    The first open row is protected by partial unique indexes. Concurrent stale
+    snapshots may therefore race on the initial insert; the loser rolls back
+    only its evidence transaction, rereads the winning open row and refreshes
+    it. No ProductVariant/SKU lock is introduced and unrelated variants remain
+    independently concurrent.
     """
 
     if _uses_process_local_sqlite_database(db):
@@ -307,22 +337,31 @@ def _persist_blocked_evidence_durably(
         autoflush=False,
         expire_on_commit=False,
     )
-    evidence_db = EvidenceSession()
-    try:
-        _open_or_refresh_conflict(
-            evidence_db,
-            variant=variant,
-            external_stock=external_stock,
-            pending_event_ids=pending_event_ids,
-            provider_exported=provider_exported,
-            catchup_floor=catchup_floor,
-        )
-        evidence_db.commit()
-    except Exception:
-        evidence_db.rollback()
-        raise
-    finally:
-        evidence_db.close()
+    for attempt in range(2):
+        evidence_db = EvidenceSession()
+        try:
+            _open_or_refresh_conflict(
+                evidence_db,
+                variant=variant,
+                external_stock=external_stock,
+                pending_event_ids=pending_event_ids,
+                provider_exported=provider_exported,
+                catchup_floor=catchup_floor,
+            )
+            evidence_db.commit()
+            return
+        except IntegrityError as exc:
+            evidence_db.rollback()
+            if attempt == 0 and _is_open_evidence_unique_race(exc):
+                continue
+            raise
+        except Exception:
+            evidence_db.rollback()
+            raise
+        finally:
+            evidence_db.close()
+
+    raise RuntimeError("MoySklad blocked evidence persistence retry exhausted")
 
 
 def _resolve_stale_conflicts(db: Session, variant: ProductVariant) -> None:
