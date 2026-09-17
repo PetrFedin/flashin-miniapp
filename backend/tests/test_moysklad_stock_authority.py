@@ -309,6 +309,7 @@ def test_blocked_operational_evidence_survives_business_transaction_rollback(tmp
     variant, order, item = _variant(setup, "rollback-evidence", stock=5)
     event, _case = _inspection(setup, variant, order, item, "resalable")
     variant_id = int(variant.id)
+    event_id = int(event.id)
     setup.close()
 
     business = SessionFactory()
@@ -317,7 +318,7 @@ def test_blocked_operational_evidence_survives_business_transaction_rollback(tmp
         assert current_variant is not None
         decision = evaluate_moysklad_stock_snapshot(business, current_variant, 5)
         assert decision.blocked is True
-        assert decision.pending_event_ids == (int(event.id),)
+        assert decision.pending_event_ids == (event_id,)
 
         # Prove the caller really rolls back mutable business state after the
         # authority decision. The operational evidence must not roll back with it.
@@ -337,7 +338,7 @@ def test_blocked_operational_evidence_survives_business_transaction_rollback(tmp
             MoySkladConflict.status == "open",
             MoySkladConflict.conflict_type == "stale_stock_pending_physical_return",
         ).one()
-        assert str(event.id) in conflict.message
+        assert str(event_id) in conflict.message
         blocked = verify.query(StockReconciliationLog).filter(
             StockReconciliationLog.variant_id == variant_id,
             StockReconciliationLog.action == "blocked_physical_return",
