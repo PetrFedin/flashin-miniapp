@@ -27,6 +27,7 @@ from backend.provider_models import ProviderCommand
 from backend.reverse_logistics_models import ReturnLogisticsItem
 from backend.services import moysklad_reverse_return as reverse_moysklad
 from backend.services.moysklad_outbound import MoySkladReviewRequired
+from backend.services.provider_commands import enqueue_provider_command
 from backend.services.reverse_logistics import (
     authorize_item,
     ensure_physical_case,
@@ -162,6 +163,21 @@ def _variant_for_case(db, case_id: int) -> ProductVariant:
     return db.query(ProductVariant).filter(ProductVariant.id == physical.variant_id).one()
 
 
+def _persist_allocation_command(db, case_id: int) -> ProviderCommand:
+    payload = reverse_moysklad._build_physical_return_allocation(db, case_id)
+    command = enqueue_provider_command(
+        db,
+        provider="moysklad",
+        command_type="moysklad.physical_sales_return.create",
+        idempotency_key=f"physical-return:{int(case_id)}:sales_return:v1",
+        aggregate_type="return_logistics_case",
+        aggregate_id=case_id,
+        payload=payload,
+    )
+    db.commit()
+    return command
+
+
 def _add_physical_provider_command(db, case_id: int, token: str, suffix: str) -> None:
     db.add(
         ProviderCommand(
@@ -189,6 +205,8 @@ def _all_resalable_partial(token: str) -> dict[str, int]:
             returned_qty=2,
             dispositions=[(2, "resalable")],
         )
+        command = _persist_allocation_command(db, case_id)
+        assert '"allocation_version":2' in str(command.payload_json)
 
     with SessionLocal() as db:
         snapshot = reverse_moysklad._prepare_physical_return_snapshot(db, case_id)
@@ -395,6 +413,7 @@ def main() -> int:
         {
             "status": "ok",
             "partial_resalable_outbound": partial,
+            "immutable_money_allocation": "provider_command_payload_v2",
             "stale_provider_stock_guard": stale_guard,
             "non_sellable_stock_sync": non_sellable_sync,
             "damaged_quarantine_provider_outcome": "review_required_before_external_io",
