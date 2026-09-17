@@ -19,6 +19,7 @@ from release_control import MANIFEST_NAME, sha256_file, verify_release
 ROOT = Path(__file__).resolve().parents[1]
 STATE_DIR = ROOT / "deploy/release/runtime"
 CAPABILITY_NAME = "pilot_runtime_guard"
+
 REQUIRED_FILES = {
     ".env.production.example",
     ".github/workflows/ci.yml",
@@ -116,6 +117,8 @@ REQUIRED_FILES = {
 AUTHORITY_REQUIRED_FILES = {
     ".github/workflows/reverse-logistics-state.yml",
     "backend/alembic/versions/0041_reverse_logistics_authority.py",
+    "backend/alembic/versions/0042_moysklad_stock_evidence_concurrency.py",
+    "backend/database.py",
     "backend/models.py",
     "backend/reverse_logistics_models.py",
     "backend/services/inventory_movement_contract.py",
@@ -127,12 +130,458 @@ AUTHORITY_REQUIRED_FILES = {
     "backend/services/stock_reconciliation.py",
     "backend/tests/test_moysklad_reverse_return_allocation.py",
     "backend/tests/test_moysklad_stock_authority.py",
+    "backend/tests/test_moysklad_stock_authority_concurrency.py",
     "backend/tests/test_pilot_database_evidence.py",
     "scripts/moysklad_reverse_logistics_contract_smoke.py",
+    "scripts/moysklad_stock_authority_concurrency_smoke.py",
     "scripts/reverse_logistics_downgrade_guard_smoke.py",
     "scripts/reverse_logistics_state_smoke.py",
 }
 REQUIRED_FILES |= AUTHORITY_REQUIRED_FILES
+
+# Keep immutable capability semantics inspectable and maintainable. Every tuple
+# binds one packaged runtime/test surface to concrete behavior, not just presence.
+MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("backend/api/orders.py", ("acquire_pilot_checkout(", "record_pilot_order(")),
+    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 21",)),
+    (
+        "scripts/pilot_release_capability.py",
+        (
+            "from pilot_release_contract import CAPABILITY_VERSION",
+            "AUTHORITY_REQUIRED_FILES",
+            "REQUIRED_FILES |= AUTHORITY_REQUIRED_FILES",
+            "MARKER_REQUIREMENTS",
+        ),
+    ),
+    (
+        "backend/services/pilot_runtime.py",
+        ("from scripts.pilot_release_contract import CAPABILITY_VERSION", '"version": CAPABILITY_VERSION'),
+    ),
+    (
+        "backend/services/pilot_database_evidence.py",
+        (
+            "def validate_pilot_database_evidence(",
+            "pilot slot order_id",
+            "PostgreSQL payment",
+            "PostgreSQL refund",
+            "final GO scenario order IDs",
+        ),
+    ),
+    (
+        "backend/services/pilot_inventory_evidence.py",
+        (
+            "def validate_order_inventory_evidence(",
+            "reserve/release",
+            "reserve/commit",
+            "signed stock_before",
+            "signed expected_stock_delta",
+            "scoped inventory movement delta",
+            "expected inventory contract delta",
+        ),
+    ),
+    (
+        "backend/services/inventory.py",
+        ("InventoryMovement(", 'kind="reserve"', 'kind="release"', 'kind="commit"', "order_id=order_id"),
+    ),
+    (
+        "backend/alembic/versions/0024_inventory_movement_ledger.py",
+        ("0024_inventory_movement_ledger", "0023_pilot_state_replay_anchor", "inventory_movements", "uq_inventory_movement_order_variant_kind"),
+    ),
+    (
+        "backend/tests/test_inventory_movement_ledger.py",
+        (
+            "test_reserve_and_release_are_one_durable_order_linked_chain",
+            "test_reserve_and_commit_capture_stock_and_reserved_snapshots",
+            "test_production_inventory_callsites_are_order_attributed",
+        ),
+    ),
+    (
+        "backend/tests/test_pilot_database_evidence.py",
+        (
+            "test_exact_completed_twenty_order_database_evidence_is_accepted",
+            "test_missing_or_wrong_slot_order_fails_closed",
+            "test_payment_refund_status_and_amount_are_read_from_postgresql",
+            "test_final_go_rejects_active_or_incomplete_runtime",
+            "test_interleaved_same_sku_order_proof_uses_only_its_own_movement_delta",
+            "test_interleaved_same_sku_order_cannot_sign_other_orders_commit",
+            "test_expected_inventory_delta_is_semantic_and_order_local",
+        ),
+    ),
+    (
+        ".github/workflows/reverse-logistics-state.yml",
+        (
+            "name: Reverse Logistics State",
+            "python scripts/reverse_logistics_state_smoke.py",
+            "python scripts/moysklad_reverse_logistics_contract_smoke.py",
+            "python -m pytest -q backend/tests/test_moysklad_reverse_return_allocation.py",
+            "python scripts/moysklad_stock_authority_concurrency_smoke.py",
+            "python scripts/reverse_logistics_downgrade_guard_smoke.py",
+        ),
+    ),
+    (
+        "backend/alembic/versions/0041_reverse_logistics_authority.py",
+        ("0041_reverse_logistics_authority", "_DOWNGRADE_BLOCKED", "return_logistics_events", "uq_inventory_movement_reverse_event_source"),
+    ),
+    (
+        "backend/alembic/versions/0042_moysklad_stock_evidence_concurrency.py",
+        (
+            "0042_moysklad_stock_evidence_concurrency",
+            "0041_reverse_logistics_authority",
+            "_collapse_duplicate_open_evidence",
+            "uq_moysklad_conflict_open_stale_physical_return",
+            "uq_stock_reconciliation_open_blocked_physical_return",
+        ),
+    ),
+    (
+        "backend/database.py",
+        (
+            "_append_partial_unique_index",
+            "uq_moysklad_conflict_open_stale_physical_return",
+            "uq_stock_reconciliation_open_blocked_physical_return",
+        ),
+    ),
+    ("backend/models.py", ("class MoySkladConflict", "class StockReconciliationLog")),
+    (
+        "backend/reverse_logistics_models.py",
+        ("class ReturnLogisticsCase", "class ReturnLogisticsItem", "class ReturnLogisticsEvent", "uq_return_logistics_case_idempotency"),
+    ),
+    (
+        "backend/services/inventory_movement_contract.py",
+        ("def movement_transition_valid(", "def expected_inventory_delta(", "Snapshot continuity is deliberately *not* required", 'if movement.kind == "return"'),
+    ),
+    (
+        "backend/services/reverse_logistics.py",
+        ("def inspect_item(", 'normalized_disposition == "resalable"', 'kind="return"', 'source=f"reverse_logistics_event:{event.id}"'),
+    ),
+    (
+        "backend/services/moysklad_reverse_return.py",
+        (
+            "_ALLOCATION_VERSION = 2",
+            "def _build_physical_return_allocation(",
+            "def enqueue_moysklad_physical_sales_return(",
+            "moysklad.physical_sales_return.create",
+            "Immutable physical return monetary allocation does not match physical evidence",
+            "allocation_error",
+            "Damaged/quarantine physical return requires provider disposition reconciliation",
+            "Only fully resalable physical quantities can be auto-exported",
+        ),
+    ),
+    (
+        "backend/services/moysklad_stock_authority.py",
+        (
+            "def evaluate_moysklad_stock_snapshot(",
+            "_STALE_PHYSICAL_RETURN_CONFLICT",
+            "_BLOCKED_RECONCILIATION_ACTION",
+            "_OPEN_EVIDENCE_CONSTRAINTS",
+            "def _is_open_evidence_unique_race(",
+            "def _persist_blocked_evidence_durably(",
+            "No ProductVariant/SKU lock is introduced",
+            "catch-up/resolution remains in the caller transaction",
+        ),
+    ),
+    (
+        "backend/services/stock_reconciliation.py",
+        ("evaluate_moysklad_stock_snapshot", "if decision.blocked:", "db.commit()"),
+    ),
+    (
+        "backend/tests/test_moysklad_reverse_return_allocation.py",
+        (
+            "test_sibling_partial_returns_allocate_exact_original_line_cents_without_rounding_drift",
+            "assert allocations == [34, 34, 33]",
+            "test_tampered_physical_return_money_allocation_fails_closed",
+            "test_allocation_failure_persists_owned_fail_closed_provider_evidence",
+        ),
+    ),
+    (
+        "backend/tests/test_moysklad_stock_authority.py",
+        (
+            "test_stale_provider_snapshot_cannot_erase_verified_resalable_stock",
+            "test_actual_provider_transaction_and_stock_catchup_release_guard",
+            "test_blocked_operational_evidence_survives_business_transaction_rollback",
+        ),
+    ),
+    (
+        "backend/tests/test_moysklad_stock_authority_concurrency.py",
+        (
+            "test_create_all_mirrors_moysklad_open_evidence_unique_indexes",
+            "test_only_owned_open_evidence_unique_races_are_retryable",
+            "test_sqlite_owned_unique_messages_are_retryable_without_masking_others",
+        ),
+    ),
+    ("scripts/reverse_logistics_state_smoke.py", ("reverse", "logistics")),
+    (
+        "scripts/moysklad_reverse_logistics_contract_smoke.py",
+        ("moysklad", "physical", "immutable_money_allocation"),
+    ),
+    (
+        "scripts/moysklad_stock_authority_concurrency_smoke.py",
+        (
+            "WORKERS = 12",
+            "Barrier(WORKERS)",
+            "evaluate_moysklad_stock_snapshot",
+            "one open evidence pair",
+        ),
+    ),
+    (
+        "scripts/reverse_logistics_downgrade_guard_smoke.py",
+        (
+            "downgrade",
+            "0041",
+            "0042_moysklad_stock_evidence_concurrency",
+            "uq_moysklad_conflict_open_stale_physical_return",
+            "uq_stock_reconciliation_open_blocked_physical_return",
+        ),
+    ),
+    (
+        "scripts/readiness_gate.py",
+        ("def build_signed_live_report(", '"kind": "pilot_live_gate"', "configuration_fingerprint(env, secret)", "release_binding(current_release)", "return sign_payload(payload, secret)"),
+    ),
+    (
+        "scripts/pilot_admission.py",
+        ("live gate evidence signature is invalid", "live gate configuration fingerprint does not match", "live gate release binding is missing", "validate_release_binding(release, current_release)", "def validate_admission_evidence_inputs(", "current_release=current_release"),
+    ),
+    (
+        "backend/tests/test_pilot_admission.py",
+        ("test_live_gate_rejects_tampering_configuration_and_other_release", "test_admission_create_preflight_binds_live_gate_to_current_release", "configuration fingerprint", "live gate release"),
+    ),
+    (
+        "scripts/pilot_control_binding.py",
+        ("def build_admission_binding(", "manifest_sha256", "def validate_admission_binding(", "def require_admission_binding("),
+    ),
+    (
+        "scripts/pilot_control.py",
+        ("SCHEMA_VERSION = 7", "database_evidence_contract", "inventory_evidence_contract", "verified_admission_context(", "approved_operator_names=args.approved_operators", "mutation=_mutation_from_args(", "Unattributed pilot state schema 4 cannot be reused", "Last accountable mutation"),
+    ),
+    ("scripts/pilot_runner.py", ("errors = verify_default_admission(ROOT)", "return pilot_control_main(args)")),
+    (
+        "backend/services/pilot_runtime.py",
+        ("build_admission_binding(manifest_path, manifest)", "validate_state_descendant(", "validate_audit_log(", "approved_operators(manifest)", "validate_pilot_database_evidence(", "state.pilot_state_revision", "armed runtime pilot state replay anchor is missing"),
+    ),
+    (
+        "scripts/pilot_runtime.py",
+        ("build_admission_binding(DEFAULT_MANIFEST, manifest)", "validate_audit_log(", "approved_operators(manifest)", "validate_pilot_database_evidence(", "pilot_state_revision", "validate_anchor_transition(", "Stopped pilot runtime cannot change admission or release lineage"),
+    ),
+    (
+        "Makefile",
+        ("python3 scripts/pilot_runner.py init $(ARGS)", "--operator-role operations_owner", "python3 scripts/pilot_runner.py record $(ARGS)", "python3 scripts/pilot_runner.py status", "python3 scripts/pilot_runner.py validate --final"),
+    ),
+    (
+        "backend/tests/test_pilot_control_binding.py",
+        ("test_state_is_bound_to_one_exact_signed_admission_file", "test_legacy_state_is_rejected_without_silent_migration", "test_makefile_routes_pilot_control_through_admission_runner"),
+    ),
+    (
+        "backend/tests/test_pilot_control_audit.py",
+        ("test_init_and_record_are_bound_to_admission_owners_and_lineage", "test_unapproved_name_or_role_is_rejected", "test_misleading_scenario_audit_is_rejected", "test_tampered_or_unapproved_audit_fails_state_load", "test_init_and_record_parser_require_accountable_identity"),
+    ),
+    (
+        "scripts/pilot_control_audit.py",
+        ("APPROVAL_ROLES", "def approved_operators(", "def normalize_mutation(", "def validate_audit_log(", "def validate_record_mutation(", "does not match signed admission owner"),
+    ),
+    (
+        "scripts/pilot_control_chain.py",
+        ("def signed_state_sha256(", "def validate_anchor_transition(", "pilot control state revision rollback detected", "pilot control state ancestry does not match the armed runtime"),
+    ),
+    (
+        "scripts/pilot_control_lock.py",
+        ("def exclusive_state_lock(", "fcntl.LOCK_EX | fcntl.LOCK_NB", "Pilot control state lock acquisition timed out", "os.fchmod(handle.fileno(), 0o600)"),
+    ),
+    (
+        "scripts/pilot_control_io.py",
+        ("def durable_atomic_write_text(", "os.fsync(handle.fileno())", "os.replace(temporary_path, path)", "_fsync_directory(path.parent)", "os.fchmod(handle.fileno(), 0o600)"),
+    ),
+    ("backend/pilot_models.py", ("pilot_state_revision", "pilot_state_sha256", "ck_pilot_runtime_state_anchor")),
+    (
+        "backend/alembic/versions/0023_pilot_state_replay_anchor.py",
+        ("0023_pilot_state_replay_anchor", "0022_pilot_runtime_guard", "pilot_state_revision", "pilot_state_sha256"),
+    ),
+    (
+        "backend/tests/test_pilot_control_signature.py",
+        ("test_cross_process_writers_serialize_and_reject_stale_parent", "test_cross_process_lock_timeout_fails_closed", 'multiprocessing.get_context("fork")'),
+    ),
+    (
+        "backend/tests/test_pilot_control_durability.py",
+        ("test_durable_atomic_write_fsyncs_file_and_parent_directory", "test_summary_refresh_repairs_stale_file_without_advancing_state", "test_summary_write_failure_leaves_valid_committed_state_and_is_repairable", "test_status_summary_refresh_does_not_change_signed_json_bytes"),
+    ),
+    (
+        "backend/tests/test_pilot_runtime.py",
+        ("test_tampered_pilot_control_state_fails_closed_on_checkout", "test_runtime_anchor_advances_to_descendant_and_rejects_replay", "test_unrelated_valid_signed_state_branch_fails_closed"),
+    ),
+    (
+        "backend/services/pilot_circuit_breaker.py",
+        ("def stop_pilot_for_order(", "def trip_pilot_circuit_breaker("),
+    ),
+    (
+        "backend/api/payments.py",
+        ("ProviderPaymentIntegrityError", "trip_pilot_circuit_breaker(", "stop_pilot_for_order("),
+    ),
+    ("backend/api/returns.py", ("trip_pilot_circuit_breaker(", "stop_pilot_for_order(")),
+    (
+        "backend/api/support.py",
+        ("class AdminSupportTicketOut", "assigned_admin_id: int | None = None", "response_model=list[AdminSupportTicketOut]", "response_model=AdminSupportTicketOut"),
+    ),
+    (
+        "backend/tests/test_support_admin_schema.py",
+        ("test_admin_support_ticket_schema_exposes_accountable_owner", "assigned_admin_id"),
+    ),
+    ("backend/services/payment_reconciliation.py", ("payment_reconciliation_mismatch", "stop_pilot_for_order(")),
+    ("backend/order_statuses.py", ("SETTLED_ORDER_PAYMENT_STATUSES", '"paid_review_required"', '"refund_review_required"')),
+    (
+        "backend/services/payment_settlement.py",
+        ("from ..order_statuses import SETTLED_ORDER_PAYMENT_STATUSES", "reward_referral_after_first_paid_order(db, order.customer_id, order.id)", "if order.payment_status in SETTLED_ORDER_PAYMENT_STATUSES"),
+    ),
+    (
+        "backend/services/loyalty.py",
+        ("def _lock_referral_customer(", "def _has_prior_settled_order(", "Referral code must be applied before the first paid order", "return attach_referral_to_customer(db, code, new_customer_id)", 'attribution.status = "ineligible"', "def reward_referral_after_first_paid_order("),
+    ),
+    (
+        "backend/tests/test_referral_attribution.py",
+        ("test_legacy_apply_referral_only_attaches_pending_attribution", "test_referral_after_settled_order_is_rejected_even_for_same_code", "test_missing_customer_is_not_silently_eligible"),
+    ),
+    (
+        "backend/services/fulfillment.py",
+        ("def _picklist_is_complete(", "Every picklist item must be fully picked before packing", 'order.delivery_status = "ready"'),
+    ),
+    (
+        "backend/api/fulfillment.py",
+        ("fulfillment.task.update", "fulfillment.task_item.update", "assigned_admin_id"),
+    ),
+    (
+        "backend/services/delivery_providers.py",
+        ("_SHIPMENT_TRANSITIONS", "Only a ready order can be transferred to delivery", 'order.status = "shipped"', 'order.status = "completed"'),
+    ),
+    (
+        "backend/api/delivery_providers.py",
+        ("delivery.shipment.create", "delivery.shipment.update", "with_for_update()"),
+    ),
+    ("backend/main.py", ("collect_pilot_metrics", '@app.get("/metrics"', "return metrics_response()")),
+    (
+        "backend/middleware/metrics.py",
+        ("flashin_pilot_metrics_collection_success", "def collect_pilot_metrics(", 'return "__unmatched__"'),
+    ),
+    (
+        "deploy/monitoring/rules/flashin_pilot.yml",
+        ("FlashinPilotMetricsUnavailable", "FlashinPilotArtifactIntegrityFailed", "FlashinPilotMoneyAttentionRequired", "FlashinPilotCapacityLow"),
+    ),
+    (
+        "deploy/grafana/dashboards/flashin_operations.json",
+        ("FLASHIN Operations", "flashin_pilot_checkout_ready", "flashin_pilot_money_attention"),
+    ),
+    ("deploy/grafana/provisioning/datasources/prometheus.yml", ("prometheus", "http://prometheus:9090")),
+    ("deploy/monitoring/prometheus.yml", ("rule_files", "/etc/prometheus/rules/*.yml", "backend:8000")),
+    (
+        "scripts/check_production_compose.py",
+        ('MONITORING_SERVICES = {"prometheus", "grafana"}', 'PRODUCTION_PROFILES = ("production", "workers", "scheduler", "search", "monitoring")', "Grafana anonymous access must be disabled"),
+    ),
+    (".env.production.example", ("METRICS_ENABLED=true", "GRAFANA_ADMIN_USER=", "GRAFANA_ADMIN_PASSWORD=")),
+    ("docker-compose.yml", ("prometheus:", "grafana:", "prometheus_data", "grafana_data")),
+    (
+        ".github/workflows/ci.yml",
+        ("browser-e2e:", "Install Chromium", "Run Mini App and Admin browser journeys", "Run transactional referral attribution smoke", "Run transactional full fulfillment smoke", "Run signed backup and restore drill", "bash scripts/backup_restore_smoke.sh", "Run signed full release rollback drill", "bash scripts/release_rollback_smoke.sh", "needs: [backend, frontend, admin, browser-e2e]"),
+    ),
+    ("e2e/package.json", ('"@playwright/test": "1.54.2"', '"test": "playwright test"')),
+    (
+        "e2e/playwright.config.js",
+        ('name: "storefront-mobile"', 'name: "admin-desktop"', 'trace: "retain-on-failure"', 'screenshot: "only-on-failure"', 'video: "retain-on-failure"'),
+    ),
+    (
+        "e2e/tests/storefront.spec.js",
+        ("Mini App critical pilot journey", "Mini App cart quantity and removal controls", "Mini App profile, support, privacy and return journey", "Mini App payment return route refreshes paid order"),
+    ),
+    (
+        "e2e/tests/admin.spec.js",
+        ("Admin critical pilot operator journey", "Admin operations, fulfillment and BusinessEvent recovery journey", "Admin completes support, privacy and refund service operations"),
+    ),
+    (
+        "e2e/tests/owner-admin.spec.js",
+        ("Admin assigns an accountable owner to a support ticket", "assigned_admin_id: 42", "Ответственный обращения 901"),
+    ),
+    (
+        "e2e/tests/fulfillment-admin.spec.js",
+        ("Admin completes picklist, shipment and delivery lifecycle", "Собрать все позиции и упаковать", "PILOT-TRACK-9100", 'status: "completed"'),
+    ),
+    (
+        "admin/src/FulfillmentOperationsPanel.jsx",
+        ('"/api/fulfillment/tasks"', '"/api/delivery-providers/shipments"', "async function pickAndPack(", "async function ship(", "async function deliver("),
+    ),
+    (
+        "admin/src/fulfillmentOperations.js",
+        ("export function isPicklistComplete(", "export function fulfillmentAction(", "export function normalizeTracking(", "export function fulfillmentAttentionCount(", "Собрать все позиции и упаковать", "Передать в доставку", "Подтвердить доставку"),
+    ),
+    (
+        "admin/src/fulfillmentOperations.test.js",
+        ("fulfillment actions expose only the next safe workflow step", "picklist completeness requires every ordered unit", "tracking is bounded and meaningful", "attention remains until shipment is delivered"),
+    ),
+    (
+        "admin/src/ServiceOperationsPanel.jsx",
+        ('support: "/api/support/admin/tickets"', 'privacy: "/api/privacy/admin/requests"', 'returns: "/api/admin/returns"', 'adminJson("/api/returns/admin/approve"', "Подтвердить refund", "Ответственный обращения"),
+    ),
+    (
+        "admin/src/serviceOperations.js",
+        ("export function supportTransitions(", "export function canProcessPrivacy(", "export function canApproveReturn(", "export function normalizeAdminAssignment(", "export function normalizeRefundAmount(", "export function serviceAttentionCount("),
+    ),
+    (
+        "admin/src/serviceOperations.test.js",
+        ("support transitions follow the backend state machine", "support owner assignment accepts only positive integer Admin IDs", "refund amount is positive, bounded and rounded", "aggregate attention are fail-closed"),
+    ),
+    (
+        "admin/src/BusinessEventsPanel.jsx",
+        ('import FulfillmentOperationsPanel from "./FulfillmentOperationsPanel.jsx"', '<FulfillmentOperationsPanel onUnauthorized={onUnauthorized} />', 'import ServiceOperationsPanel from "./ServiceOperationsPanel.jsx"', "<ServiceOperationsPanel onUnauthorized={onUnauthorized} />"),
+    ),
+    ("admin/index.html", ('href="/src/serviceOperations.css"', "FLASHIN Admin")),
+    ("admin/src/serviceOperations.css", (".service-operations", ".service-grid", ".attention-badge")),
+    (
+        "scripts/full_fulfillment_smoke.py",
+        ("Every picklist item must be fully picked before packing", "idempotent shipment create", 'persisted_order.status == "completed"', 'persisted_order.delivery_status == "delivered"'),
+    ),
+    (
+        "scripts/referral_attribution_smoke.py",
+        ("duplicate referral payment webhook", "late_referral.status_code == 409", "persisted_referral.used_count == 1", "len(reward_rows) == 1", "second_persisted_order.referral_code is None"),
+    ),
+    (
+        "scripts/backup_integrity.py",
+        ('KIND = "postgres_backup_manifest"', "CRITICAL_TABLES = (", "def snapshot_database(", "def verify_restorable(", "def verify_live_database(", "backup SHA-256 does not match signed manifest", "restored critical table"),
+    ),
+    (
+        "scripts/backup_postgres.sh",
+        ("MANIFEST_FILE=", 'python3 "$INTEGRITY_SCRIPT" create', "Backup created, restored in isolation and signed"),
+    ),
+    (
+        "scripts/verify_backup.sh",
+        ("Signed backup manifest not found", 'python3 "$INTEGRITY_SCRIPT" verify', "Backup signature, archive, schema and critical data verification OK"),
+    ),
+    (
+        "scripts/restore_postgres.sh",
+        ("Signed backup manifest not found", 'python3 "$INTEGRITY_SCRIPT" verify', 'python3 "$INTEGRITY_SCRIPT" verify-live', "signed snapshot verified"),
+    ),
+    (
+        "scripts/backup_restore_smoke.sh",
+        ("tampered_archive_rejected", "mutated_database_rejected", "restored_value_verified", "verify-live", "restore_postgres.sh --yes"),
+    ),
+    (
+        "scripts/release_rollback_smoke.sh",
+        ("ROLLBACK_DRILL=1", "PREVIOUS_MARKER=", "CURRENT_MARKER=", "container_marker=", "restored_name=", "verify-live", "verify --slot both", "verify-rollback", "runtime_image_rebuilt", "release_pointer_promoted", "signed_evidence_verified"),
+    ),
+    (
+        "backend/tests/test_backup_integrity.py",
+        ("test_signed_manifest_binds_exact_archive_and_snapshot", "test_archive_byte_or_size_change_is_rejected", "test_snapshot_comparison_detects_schema_revision_and_ledger_changes", "test_database_identifiers_fail_closed"),
+    ),
+    (
+        "scripts/deploy_release_gate.py",
+        ("deployment release archive must be retained under deploy/release/builds", "--untracked-files=all", "release manifest git_commit does not match checkout HEAD", "release manifest file set does not match deploy checkout", "deploy checkout file differs from release artifact", "deploy checkout executable mode differs from release artifact"),
+    ),
+    (
+        "backend/tests/test_deploy_release_gate.py",
+        ("test_exact_retained_release_and_clean_checkout_are_accepted", "test_nonignored_untracked_build_context_is_rejected", "test_archive_from_other_commit_is_rejected", "test_non_executable_permission_differences_are_tolerated", "test_executable_mode_drift_is_rejected", "test_deploy_verifies_release_before_runtime_stop_and_builds_from_extracted_artifact"),
+    ),
+    (
+        "scripts/deploy_production.sh",
+        ("Verifying retained immutable Release artifact before any runtime mutation", "deploy_release_gate.py --archive", "release_control.py extract", 'cd "$release_source_dir"', "Building images from verified immutable Release artifact", "RELEASE=deploy/release/builds/flashin_<release>.zip make deploy-prod"),
+    ),
+    (
+        "docs/pilot/end_to_end_coverage_matrix.md",
+        ("## Browser journeys", "Nine stateful Playwright journeys", "accountable active Admin ID", "Admin service operations", "full picklist", "## Transactional referral evidence", "first paid order -> one inviter reward", "## Signed backup and restore evidence", "Backup/restore integrity", "Release rollback", "## Evidence boundary"),
+    ),
+)
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -193,107 +642,8 @@ def inspect_runtime_guard(archive: Path) -> list[str]:
             if missing:
                 errors.append("Release is missing pilot runtime files: " + ", ".join(missing))
 
-            _require_markers(bundle, files, "backend/api/orders.py", ("acquire_pilot_checkout(", "record_pilot_order("), errors)
-            _require_markers(bundle, files, "scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 20",), errors)
-            _require_markers(bundle, files, "scripts/pilot_release_capability.py", ("from pilot_release_contract import CAPABILITY_VERSION", "AUTHORITY_REQUIRED_FILES", "REQUIRED_FILES |= AUTHORITY_REQUIRED_FILES"), errors)
-            _require_markers(bundle, files, "backend/services/pilot_runtime.py", ("from scripts.pilot_release_contract import CAPABILITY_VERSION", '"version": CAPABILITY_VERSION'), errors)
-            _require_markers(bundle, files, "backend/services/pilot_database_evidence.py", ("def validate_pilot_database_evidence(", "pilot slot order_id", "PostgreSQL payment", "PostgreSQL refund", "final GO scenario order IDs"), errors)
-            _require_markers(bundle, files, "backend/services/pilot_inventory_evidence.py", ("def validate_order_inventory_evidence(", "reserve/release", "reserve/commit", "signed stock_before", "signed expected_stock_delta", "scoped inventory movement delta", "expected inventory contract delta"), errors)
-            _require_markers(bundle, files, "backend/services/inventory.py", ("InventoryMovement(", "kind=\"reserve\"", "kind=\"release\"", "kind=\"commit\"", "order_id=order_id"), errors)
-            _require_markers(bundle, files, "backend/alembic/versions/0024_inventory_movement_ledger.py", ("0024_inventory_movement_ledger", "0023_pilot_state_replay_anchor", "inventory_movements", "uq_inventory_movement_order_variant_kind"), errors)
-            _require_markers(bundle, files, "backend/tests/test_inventory_movement_ledger.py", ("test_reserve_and_release_are_one_durable_order_linked_chain", "test_reserve_and_commit_capture_stock_and_reserved_snapshots", "test_production_inventory_callsites_are_order_attributed"), errors)
-            _require_markers(bundle, files, "backend/tests/test_pilot_database_evidence.py", ("test_exact_completed_twenty_order_database_evidence_is_accepted", "test_missing_or_wrong_slot_order_fails_closed", "test_payment_refund_status_and_amount_are_read_from_postgresql", "test_final_go_rejects_active_or_incomplete_runtime", "test_interleaved_same_sku_order_proof_uses_only_its_own_movement_delta", "test_interleaved_same_sku_order_cannot_sign_other_orders_commit", "test_expected_inventory_delta_is_semantic_and_order_local"), errors)
-
-            # Reverse-logistics authority spine: presence alone is insufficient.
-            # Marker checks bind the signed capability to the runtime semantics
-            # that separate financial refund, physical receipt and provider sync.
-            _require_markers(bundle, files, ".github/workflows/reverse-logistics-state.yml", ("name: Reverse Logistics State", "python scripts/reverse_logistics_state_smoke.py", "python scripts/moysklad_reverse_logistics_contract_smoke.py", "pytest -q backend/tests/test_moysklad_reverse_return_allocation.py", "python scripts/reverse_logistics_downgrade_guard_smoke.py"), errors)
-            _require_markers(bundle, files, "backend/alembic/versions/0041_reverse_logistics_authority.py", ("0041_reverse_logistics_authority", "_DOWNGRADE_BLOCKED", "return_logistics_events", "uq_inventory_movement_reverse_event_source"), errors)
-            _require_markers(bundle, files, "backend/models.py", ("class MoySkladConflict", "class StockReconciliationLog"), errors)
-            _require_markers(bundle, files, "backend/reverse_logistics_models.py", ("class ReturnLogisticsCase", "class ReturnLogisticsItem", "class ReturnLogisticsEvent", "uq_return_logistics_case_idempotency"), errors)
-            _require_markers(bundle, files, "backend/services/inventory_movement_contract.py", ("def movement_transition_valid(", "def expected_inventory_delta(", "Snapshot continuity is deliberately *not* required", 'if movement.kind == "return"'), errors)
-            _require_markers(bundle, files, "backend/services/reverse_logistics.py", ("def inspect_item(", 'normalized_disposition == "resalable"', 'kind="return"', 'source=f"reverse_logistics_event:{event.id}"'), errors)
-            _require_markers(bundle, files, "backend/services/moysklad_reverse_return.py", ("_ALLOCATION_VERSION = 2", "def _build_physical_return_allocation(", "def enqueue_moysklad_physical_sales_return(", "moysklad.physical_sales_return.create", "Immutable physical return monetary allocation does not match physical evidence", "allocation_error", "Damaged/quarantine physical return requires provider disposition reconciliation", "Only fully resalable physical quantities can be auto-exported"), errors)
-            _require_markers(bundle, files, "backend/services/moysklad_stock_authority.py", ("def evaluate_moysklad_stock_snapshot(", "_STALE_PHYSICAL_RETURN_CONFLICT", "_BLOCKED_RECONCILIATION_ACTION", "def _persist_blocked_evidence_durably(", "catch-up/resolution remains in the caller transaction"), errors)
-            _require_markers(bundle, files, "backend/services/stock_reconciliation.py", ("evaluate_moysklad_stock_snapshot", "if decision.blocked:", "db.commit()"), errors)
-            _require_markers(bundle, files, "backend/tests/test_moysklad_reverse_return_allocation.py", ("test_sibling_partial_returns_allocate_exact_original_line_cents_without_rounding_drift", "assert allocations == [34, 34, 33]", "test_tampered_physical_return_money_allocation_fails_closed", "test_allocation_failure_persists_owned_fail_closed_provider_evidence"), errors)
-            _require_markers(bundle, files, "backend/tests/test_moysklad_stock_authority.py", ("test_stale_provider_snapshot_cannot_erase_verified_resalable_stock", "test_actual_provider_transaction_and_stock_catchup_release_guard", "test_blocked_operational_evidence_survives_business_transaction_rollback"), errors)
-            _require_markers(bundle, files, "scripts/reverse_logistics_state_smoke.py", ("reverse", "logistics"), errors)
-            _require_markers(bundle, files, "scripts/moysklad_reverse_logistics_contract_smoke.py", ("moysklad", "physical", "immutable_money_allocation"), errors)
-            _require_markers(bundle, files, "scripts/reverse_logistics_downgrade_guard_smoke.py", ("downgrade", "0041"), errors)
-
-            _require_markers(bundle, files, "scripts/readiness_gate.py", ("def build_signed_live_report(", '"kind": "pilot_live_gate"', "configuration_fingerprint(env, secret)", "release_binding(current_release)", "return sign_payload(payload, secret)"), errors)
-            _require_markers(bundle, files, "scripts/pilot_admission.py", ("live gate evidence signature is invalid", "live gate configuration fingerprint does not match", "live gate release binding is missing", "validate_release_binding(release, current_release)", "def validate_admission_evidence_inputs(", "current_release=current_release"), errors)
-            _require_markers(bundle, files, "backend/tests/test_pilot_admission.py", ("test_live_gate_rejects_tampering_configuration_and_other_release", "test_admission_create_preflight_binds_live_gate_to_current_release", "configuration fingerprint", "live gate release"), errors)
-            _require_markers(bundle, files, "scripts/pilot_control_binding.py", ("def build_admission_binding(", "manifest_sha256", "def validate_admission_binding(", "def require_admission_binding("), errors)
-            _require_markers(bundle, files, "scripts/pilot_control.py", ("SCHEMA_VERSION = 7", "database_evidence_contract", "inventory_evidence_contract", "verified_admission_context(", "approved_operator_names=args.approved_operators", "mutation=_mutation_from_args(", "Unattributed pilot state schema 4 cannot be reused", "Last accountable mutation"), errors)
-            _require_markers(bundle, files, "scripts/pilot_runner.py", ("errors = verify_default_admission(ROOT)", "return pilot_control_main(args)"), errors)
-            _require_markers(bundle, files, "backend/services/pilot_runtime.py", ("build_admission_binding(manifest_path, manifest)", "validate_state_descendant(", "validate_audit_log(", "approved_operators(manifest)", "validate_pilot_database_evidence(", "state.pilot_state_revision", "armed runtime pilot state replay anchor is missing"), errors)
-            _require_markers(bundle, files, "scripts/pilot_runtime.py", ("build_admission_binding(DEFAULT_MANIFEST, manifest)", "validate_audit_log(", "approved_operators(manifest)", "validate_pilot_database_evidence(", "pilot_state_revision", "validate_anchor_transition(", "Stopped pilot runtime cannot change admission or release lineage"), errors)
-            _require_markers(bundle, files, "Makefile", ("python3 scripts/pilot_runner.py init $(ARGS)", "--operator-role operations_owner", "python3 scripts/pilot_runner.py record $(ARGS)", "python3 scripts/pilot_runner.py status", "python3 scripts/pilot_runner.py validate --final"), errors)
-            _require_markers(bundle, files, "backend/tests/test_pilot_control_binding.py", ("test_state_is_bound_to_one_exact_signed_admission_file", "test_legacy_state_is_rejected_without_silent_migration", "test_makefile_routes_pilot_control_through_admission_runner"), errors)
-            _require_markers(bundle, files, "backend/tests/test_pilot_control_audit.py", ("test_init_and_record_are_bound_to_admission_owners_and_lineage", "test_unapproved_name_or_role_is_rejected", "test_misleading_scenario_audit_is_rejected", "test_tampered_or_unapproved_audit_fails_state_load", "test_init_and_record_parser_require_accountable_identity"), errors)
-            _require_markers(bundle, files, "scripts/pilot_control_audit.py", ("APPROVAL_ROLES", "def approved_operators(", "def normalize_mutation(", "def validate_audit_log(", "def validate_record_mutation(", "does not match signed admission owner"), errors)
-            _require_markers(bundle, files, "scripts/pilot_control_chain.py", ("def signed_state_sha256(", "def validate_anchor_transition(", "pilot control state revision rollback detected", "pilot control state ancestry does not match the armed runtime"), errors)
-            _require_markers(bundle, files, "scripts/pilot_control_lock.py", ("def exclusive_state_lock(", "fcntl.LOCK_EX | fcntl.LOCK_NB", "Pilot control state lock acquisition timed out", "os.fchmod(handle.fileno(), 0o600)"), errors)
-            _require_markers(bundle, files, "scripts/pilot_control_io.py", ("def durable_atomic_write_text(", "os.fsync(handle.fileno())", "os.replace(temporary_path, path)", "_fsync_directory(path.parent)", "os.fchmod(handle.fileno(), 0o600)"), errors)
-            _require_markers(bundle, files, "backend/pilot_models.py", ("pilot_state_revision", "pilot_state_sha256", "ck_pilot_runtime_state_anchor"), errors)
-            _require_markers(bundle, files, "backend/alembic/versions/0023_pilot_state_replay_anchor.py", ("0023_pilot_state_replay_anchor", "0022_pilot_runtime_guard", "pilot_state_revision", "pilot_state_sha256"), errors)
-            _require_markers(bundle, files, "backend/tests/test_pilot_control_signature.py", ("test_cross_process_writers_serialize_and_reject_stale_parent", "test_cross_process_lock_timeout_fails_closed", "multiprocessing.get_context(\"fork\")"), errors)
-            _require_markers(bundle, files, "backend/tests/test_pilot_control_durability.py", ("test_durable_atomic_write_fsyncs_file_and_parent_directory", "test_summary_refresh_repairs_stale_file_without_advancing_state", "test_summary_write_failure_leaves_valid_committed_state_and_is_repairable", "test_status_summary_refresh_does_not_change_signed_json_bytes"), errors)
-            _require_markers(bundle, files, "backend/tests/test_pilot_runtime.py", ("test_tampered_pilot_control_state_fails_closed_on_checkout", "test_runtime_anchor_advances_to_descendant_and_rejects_replay", "test_unrelated_valid_signed_state_branch_fails_closed"), errors)
-            _require_markers(bundle, files, "backend/services/pilot_circuit_breaker.py", ("def stop_pilot_for_order(", "def trip_pilot_circuit_breaker("), errors)
-            _require_markers(bundle, files, "backend/api/payments.py", ("ProviderPaymentIntegrityError", "trip_pilot_circuit_breaker(", "stop_pilot_for_order("), errors)
-            _require_markers(bundle, files, "backend/api/returns.py", ("trip_pilot_circuit_breaker(", "stop_pilot_for_order("), errors)
-            _require_markers(bundle, files, "backend/api/support.py", ("class AdminSupportTicketOut", "assigned_admin_id: int | None = None", "response_model=list[AdminSupportTicketOut]", "response_model=AdminSupportTicketOut"), errors)
-            _require_markers(bundle, files, "backend/tests/test_support_admin_schema.py", ("test_admin_support_ticket_schema_exposes_accountable_owner", "assigned_admin_id"), errors)
-            _require_markers(bundle, files, "backend/services/payment_reconciliation.py", ("payment_reconciliation_mismatch", "stop_pilot_for_order("), errors)
-            _require_markers(bundle, files, "backend/order_statuses.py", ("SETTLED_ORDER_PAYMENT_STATUSES", '"paid_review_required"', '"refund_review_required"'), errors)
-            _require_markers(bundle, files, "backend/services/payment_settlement.py", ("from ..order_statuses import SETTLED_ORDER_PAYMENT_STATUSES", "reward_referral_after_first_paid_order(db, order.customer_id, order.id)", "if order.payment_status in SETTLED_ORDER_PAYMENT_STATUSES"), errors)
-            _require_markers(bundle, files, "backend/services/loyalty.py", ("def _lock_referral_customer(", "def _has_prior_settled_order(", "Referral code must be applied before the first paid order", "return attach_referral_to_customer(db, code, new_customer_id)", 'attribution.status = "ineligible"', "def reward_referral_after_first_paid_order("), errors)
-            _require_markers(bundle, files, "backend/tests/test_referral_attribution.py", ("test_legacy_apply_referral_only_attaches_pending_attribution", "test_referral_after_settled_order_is_rejected_even_for_same_code", "test_missing_customer_is_not_silently_eligible"), errors)
-            _require_markers(bundle, files, "backend/services/fulfillment.py", ("def _picklist_is_complete(", "Every picklist item must be fully picked before packing", 'order.delivery_status = "ready"'), errors)
-            _require_markers(bundle, files, "backend/api/fulfillment.py", ("fulfillment.task.update", "fulfillment.task_item.update", "assigned_admin_id"), errors)
-            _require_markers(bundle, files, "backend/services/delivery_providers.py", ("_SHIPMENT_TRANSITIONS", "Only a ready order can be transferred to delivery", 'order.status = "shipped"', 'order.status = "completed"'), errors)
-            _require_markers(bundle, files, "backend/api/delivery_providers.py", ("delivery.shipment.create", "delivery.shipment.update", "with_for_update()"), errors)
-            _require_markers(bundle, files, "backend/main.py", ("collect_pilot_metrics", '@app.get("/metrics"', "return metrics_response()"), errors)
-            _require_markers(bundle, files, "backend/middleware/metrics.py", ("flashin_pilot_metrics_collection_success", "def collect_pilot_metrics(", 'return "__unmatched__"'), errors)
-            _require_markers(bundle, files, "deploy/monitoring/rules/flashin_pilot.yml", ("FlashinPilotMetricsUnavailable", "FlashinPilotArtifactIntegrityFailed", "FlashinPilotMoneyAttentionRequired", "FlashinPilotCapacityLow"), errors)
-            _require_markers(bundle, files, "deploy/grafana/dashboards/flashin_operations.json", ("FLASHIN Operations", "flashin_pilot_checkout_ready", "flashin_pilot_money_attention"), errors)
-            _require_markers(bundle, files, "deploy/grafana/provisioning/datasources/prometheus.yml", ("prometheus", "http://prometheus:9090"), errors)
-            _require_markers(bundle, files, "deploy/monitoring/prometheus.yml", ("rule_files", "/etc/prometheus/rules/*.yml", "backend:8000"), errors)
-            _require_markers(bundle, files, "scripts/check_production_compose.py", ('MONITORING_SERVICES = {"prometheus", "grafana"}', 'PRODUCTION_PROFILES = ("production", "workers", "scheduler", "search", "monitoring")', "Grafana anonymous access must be disabled"), errors)
-            _require_markers(bundle, files, ".env.production.example", ("METRICS_ENABLED=true", "GRAFANA_ADMIN_USER=", "GRAFANA_ADMIN_PASSWORD="), errors)
-            _require_markers(bundle, files, "docker-compose.yml", ("prometheus:", "grafana:", "prometheus_data", "grafana_data"), errors)
-            _require_markers(bundle, files, ".github/workflows/ci.yml", ("browser-e2e:", "Install Chromium", "Run Mini App and Admin browser journeys", "Run transactional referral attribution smoke", "Run transactional full fulfillment smoke", "Run signed backup and restore drill", "bash scripts/backup_restore_smoke.sh", "Run signed full release rollback drill", "bash scripts/release_rollback_smoke.sh", "needs: [backend, frontend, admin, browser-e2e]"), errors)
-            _require_markers(bundle, files, "e2e/package.json", ('"@playwright/test": "1.54.2"', '"test": "playwright test"'), errors)
-            _require_markers(bundle, files, "e2e/playwright.config.js", ('name: "storefront-mobile"', 'name: "admin-desktop"', 'trace: "retain-on-failure"', 'screenshot: "only-on-failure"', 'video: "retain-on-failure"'), errors)
-            _require_markers(bundle, files, "e2e/tests/storefront.spec.js", ("Mini App critical pilot journey", "Mini App cart quantity and removal controls", "Mini App profile, support, privacy and return journey", "Mini App payment return route refreshes paid order"), errors)
-            _require_markers(bundle, files, "e2e/tests/admin.spec.js", ("Admin critical pilot operator journey", "Admin operations, fulfillment and BusinessEvent recovery journey", "Admin completes support, privacy and refund service operations"), errors)
-            _require_markers(bundle, files, "e2e/tests/owner-admin.spec.js", ("Admin assigns an accountable owner to a support ticket", "assigned_admin_id: 42", "Ответственный обращения 901"), errors)
-            _require_markers(bundle, files, "e2e/tests/fulfillment-admin.spec.js", ("Admin completes picklist, shipment and delivery lifecycle", "Собрать все позиции и упаковать", "PILOT-TRACK-9100", 'status: "completed"'), errors)
-            _require_markers(bundle, files, "admin/src/FulfillmentOperationsPanel.jsx", ('"/api/fulfillment/tasks"', '"/api/delivery-providers/shipments"', "async function pickAndPack(", "async function ship(", "async function deliver("), errors)
-            _require_markers(bundle, files, "admin/src/fulfillmentOperations.js", ("export function isPicklistComplete(", "export function fulfillmentAction(", "export function normalizeTracking(", "export function fulfillmentAttentionCount(", "Собрать все позиции и упаковать", "Передать в доставку", "Подтвердить доставку"), errors)
-            _require_markers(bundle, files, "admin/src/fulfillmentOperations.test.js", ("fulfillment actions expose only the next safe workflow step", "picklist completeness requires every ordered unit", "tracking is bounded and meaningful", "attention remains until shipment is delivered"), errors)
-            _require_markers(bundle, files, "admin/src/ServiceOperationsPanel.jsx", ('support: "/api/support/admin/tickets"', 'privacy: "/api/privacy/admin/requests"', 'returns: "/api/admin/returns"', 'adminJson("/api/returns/admin/approve"', "Подтвердить refund", "Ответственный обращения"), errors)
-            _require_markers(bundle, files, "admin/src/serviceOperations.js", ("export function supportTransitions(", "export function canProcessPrivacy(", "export function canApproveReturn(", "export function normalizeAdminAssignment(", "export function normalizeRefundAmount(", "export function serviceAttentionCount("), errors)
-            _require_markers(bundle, files, "admin/src/serviceOperations.test.js", ("support transitions follow the backend state machine", "support owner assignment accepts only positive integer Admin IDs", "refund amount is positive, bounded and rounded", "aggregate attention are fail-closed"), errors)
-            _require_markers(bundle, files, "admin/src/BusinessEventsPanel.jsx", ('import FulfillmentOperationsPanel from "./FulfillmentOperationsPanel.jsx"', '<FulfillmentOperationsPanel onUnauthorized={onUnauthorized} />', 'import ServiceOperationsPanel from "./ServiceOperationsPanel.jsx"', "<ServiceOperationsPanel onUnauthorized={onUnauthorized} />"), errors)
-            _require_markers(bundle, files, "admin/index.html", ('href="/src/serviceOperations.css"', "FLASHIN Admin"), errors)
-            _require_markers(bundle, files, "admin/src/serviceOperations.css", (".service-operations", ".service-grid", ".attention-badge"), errors)
-            _require_markers(bundle, files, "scripts/full_fulfillment_smoke.py", ("Every picklist item must be fully picked before packing", "idempotent shipment create", 'persisted_order.status == "completed"', 'persisted_order.delivery_status == "delivered"'), errors)
-            _require_markers(bundle, files, "scripts/referral_attribution_smoke.py", ("duplicate referral payment webhook", "late_referral.status_code == 409", "persisted_referral.used_count == 1", "len(reward_rows) == 1", "second_persisted_order.referral_code is None"), errors)
-            _require_markers(bundle, files, "scripts/backup_integrity.py", ('KIND = "postgres_backup_manifest"', "CRITICAL_TABLES = (", "def snapshot_database(", "def verify_restorable(", "def verify_live_database(", "backup SHA-256 does not match signed manifest", "restored critical table"), errors)
-            _require_markers(bundle, files, "scripts/backup_postgres.sh", ("MANIFEST_FILE=", 'python3 "$INTEGRITY_SCRIPT" create', "Backup created, restored in isolation and signed"), errors)
-            _require_markers(bundle, files, "scripts/verify_backup.sh", ("Signed backup manifest not found", 'python3 "$INTEGRITY_SCRIPT" verify', "Backup signature, archive, schema and critical data verification OK"), errors)
-            _require_markers(bundle, files, "scripts/restore_postgres.sh", ("Signed backup manifest not found", 'python3 "$INTEGRITY_SCRIPT" verify', 'python3 "$INTEGRITY_SCRIPT" verify-live', "signed snapshot verified"), errors)
-            _require_markers(bundle, files, "scripts/backup_restore_smoke.sh", ("tampered_archive_rejected", "mutated_database_rejected", "restored_value_verified", "verify-live", "restore_postgres.sh --yes"), errors)
-            _require_markers(bundle, files, "scripts/release_rollback_smoke.sh", ("ROLLBACK_DRILL=1", "PREVIOUS_MARKER=", "CURRENT_MARKER=", "container_marker=", "restored_name=", "verify-live", "verify --slot both", "verify-rollback", "runtime_image_rebuilt", "release_pointer_promoted", "signed_evidence_verified"), errors)
-            _require_markers(bundle, files, "backend/tests/test_backup_integrity.py", ("test_signed_manifest_binds_exact_archive_and_snapshot", "test_archive_byte_or_size_change_is_rejected", "test_snapshot_comparison_detects_schema_revision_and_ledger_changes", "test_database_identifiers_fail_closed"), errors)
-            _require_markers(bundle, files, "scripts/deploy_release_gate.py", ("deployment release archive must be retained under deploy/release/builds", "--untracked-files=all", "release manifest git_commit does not match checkout HEAD", "release manifest file set does not match deploy checkout", "deploy checkout file differs from release artifact", "deploy checkout executable mode differs from release artifact"), errors)
-            _require_markers(bundle, files, "backend/tests/test_deploy_release_gate.py", ("test_exact_retained_release_and_clean_checkout_are_accepted", "test_nonignored_untracked_build_context_is_rejected", "test_archive_from_other_commit_is_rejected", "test_non_executable_permission_differences_are_tolerated", "test_executable_mode_drift_is_rejected", "test_deploy_verifies_release_before_runtime_stop_and_builds_from_extracted_artifact"), errors)
-            _require_markers(bundle, files, "scripts/deploy_production.sh", ("Verifying retained immutable Release artifact before any runtime mutation", "deploy_release_gate.py --archive", "release_control.py extract", 'cd "$release_source_dir"', "Building images from verified immutable Release artifact", "RELEASE=deploy/release/builds/flashin_<release>.zip make deploy-prod"), errors)
-            _require_markers(bundle, files, "docs/pilot/end_to_end_coverage_matrix.md", ("## Browser journeys", "Nine stateful Playwright journeys", "accountable active Admin ID", "Admin service operations", "full picklist", "## Transactional referral evidence", "first paid order -> one inviter reward", "## Signed backup and restore evidence", "Backup/restore integrity", "Release rollback", "## Evidence boundary"), errors)
+            for path, markers in MARKER_REQUIREMENTS:
+                _require_markers(bundle, files, path, markers, errors)
 
             if "docker-compose.production.yml" in files:
                 compose = bundle.read("docker-compose.production.yml").decode("utf-8")
@@ -413,11 +763,32 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "stamp":
             state = stamp_slot(args.slot, args.env)
-            print(json.dumps({"ok": True, "slot": args.slot, "release_id": state.get("release_id"), "sha256": state.get("sha256"), "capability": CAPABILITY_NAME, "version": CAPABILITY_VERSION}, ensure_ascii=False))
+            print(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "slot": args.slot,
+                        "release_id": state.get("release_id"),
+                        "sha256": state.get("sha256"),
+                        "capability": CAPABILITY_NAME,
+                        "version": CAPABILITY_VERSION,
+                    },
+                    ensure_ascii=False,
+                )
+            )
             return 0
         if args.command == "inspect":
             errors = inspect_runtime_guard(args.archive)
-            print(json.dumps({"ok": not errors, "archive": str(args.archive.resolve()), "errors": errors}, ensure_ascii=False))
+            print(
+                json.dumps(
+                    {
+                        "ok": not errors,
+                        "archive": str(args.archive.resolve()),
+                        "errors": errors,
+                    },
+                    ensure_ascii=False,
+                )
+            )
             return 1 if errors else 0
         slots = ("current", "previous") if args.slot == "both" else (args.slot,)
         errors = {slot: verify_slot(slot, args.env) for slot in slots}
