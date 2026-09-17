@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from backend.database import Base  # noqa: E402
-from backend.models import (
+from backend.models import (  # noqa: E402
     Customer,
     InventoryMovement,
     Order,
@@ -17,10 +17,17 @@ from backend.models import (
     Product,
     ProductVariant,
     ReturnRequest,
-)  # noqa: E402
+)
 from backend.pilot_models import PilotOrderSlot, PilotRuntimeState  # noqa: E402
+from backend.services.inventory_movement_contract import (  # noqa: E402
+    expected_inventory_delta,
+    movement_transition_valid,
+)
 from backend.services.pilot_database_evidence import (  # noqa: E402
     validate_pilot_database_evidence,
+)
+from backend.services.pilot_inventory_evidence import (  # noqa: E402
+    validate_order_inventory_evidence,
 )
 from pilot_control import SCENARIOS, new_state as _new_state, record_scenario  # noqa: E402
 from pilot_control_audit import build_audit_entry, normalize_mutation  # noqa: E402
@@ -230,6 +237,149 @@ def populated_session():
     return session, runtime
 
 
+def _movement(
+    *,
+    kind: str,
+    quantity: int,
+    stock_before: int,
+    stock_after: int,
+    reserved_before: int,
+    reserved_after: int,
+) -> InventoryMovement:
+    return InventoryMovement(
+        order_id=1,
+        variant_id=1,
+        kind=kind,
+        quantity=quantity,
+        stock_before=stock_before,
+        stock_after=stock_after,
+        reserved_before=reserved_before,
+        reserved_after=reserved_after,
+        source="test",
+    )
+
+
+def _interleaved_same_sku_session():
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    customer = Customer(telegram_id="interleaved-customer")
+    product = Product(
+        sku="INTERLEAVED",
+        title="Interleaved inventory proof",
+        slug="interleaved-inventory-proof",
+        price=1000,
+    )
+    session.add_all([customer, product])
+    session.flush()
+    variant = ProductVariant(
+        product_id=product.id,
+        sku="INTERLEAVED-ONE",
+        size="ONE",
+        stock_qty=8,
+        reserved_qty=0,
+    )
+    session.add(variant)
+    session.flush()
+    order_a = Order(
+        customer_id=customer.id,
+        status="paid",
+        payment_status="paid",
+        total_amount=1000,
+        currency="RUB",
+    )
+    order_b = Order(
+        customer_id=customer.id,
+        status="paid",
+        payment_status="paid",
+        total_amount=1000,
+        currency="RUB",
+    )
+    session.add_all([order_a, order_b])
+    session.flush()
+    session.add_all(
+        [
+            OrderItem(
+                order_id=order_a.id,
+                product_id=product.id,
+                variant_id=variant.id,
+                title=product.title,
+                size=variant.size,
+                quantity=1,
+                price=1000,
+            ),
+            OrderItem(
+                order_id=order_b.id,
+                product_id=product.id,
+                variant_id=variant.id,
+                title=product.title,
+                size=variant.size,
+                quantity=1,
+                price=1000,
+            ),
+        ]
+    )
+    # One physical SKU, two independent order chains. IDs intentionally encode
+    # the real interleaving A.reserve -> B.reserve -> B.commit -> A.commit.
+    session.add(
+        InventoryMovement(
+            order_id=order_a.id,
+            variant_id=variant.id,
+            kind="reserve",
+            quantity=1,
+            stock_before=10,
+            stock_after=10,
+            reserved_before=0,
+            reserved_after=1,
+            source="checkout:A",
+        )
+    )
+    session.flush()
+    session.add(
+        InventoryMovement(
+            order_id=order_b.id,
+            variant_id=variant.id,
+            kind="reserve",
+            quantity=1,
+            stock_before=10,
+            stock_after=10,
+            reserved_before=1,
+            reserved_after=2,
+            source="checkout:B",
+        )
+    )
+    session.flush()
+    session.add(
+        InventoryMovement(
+            order_id=order_b.id,
+            variant_id=variant.id,
+            kind="commit",
+            quantity=1,
+            stock_before=10,
+            stock_after=9,
+            reserved_before=2,
+            reserved_after=1,
+            source="payment_settlement:B",
+        )
+    )
+    session.flush()
+    session.add(
+        InventoryMovement(
+            order_id=order_a.id,
+            variant_id=variant.id,
+            kind="commit",
+            quantity=1,
+            stock_before=9,
+            stock_after=8,
+            reserved_before=1,
+            reserved_after=0,
+            source="payment_settlement:A",
+        )
+    )
+    session.commit()
+    return session, order_a
+
+
 def test_exact_completed_twenty_order_database_evidence_is_accepted():
     session, runtime = populated_session()
     try:
@@ -322,8 +472,7 @@ def test_schema_five_is_explicitly_not_database_bound():
         session.close()
 
 
-
-def test_stock_claim_is_read_from_contiguous_inventory_movements():
+def test_signed_stock_after_is_bound_to_order_movement_boundaries():
     session, runtime = populated_session()
     state = state_with_passed_scenarios()
     stock_record = next(
@@ -357,5 +506,69 @@ def test_missing_or_broken_inventory_chain_fails_closed():
     try:
         errors = validate_pilot_database_evidence(session, state, runtime)
         assert any("reserve inventory transition is invalid" in error for error in errors)
+    finally:
+        session.close()
+
+
+def test_expected_inventory_delta_is_semantic_and_order_local():
+    reserve = _movement(
+        kind="reserve",
+        quantity=2,
+        stock_before=10,
+        stock_after=10,
+        reserved_before=0,
+        reserved_after=2,
+    )
+    commit = _movement(
+        kind="commit",
+        quantity=2,
+        stock_before=10,
+        stock_after=8,
+        reserved_before=2,
+        reserved_after=0,
+    )
+    physical_return = _movement(
+        kind="return",
+        quantity=1,
+        stock_before=8,
+        stock_after=9,
+        reserved_before=0,
+        reserved_after=0,
+    )
+
+    assert expected_inventory_delta([commit]) == 2
+    assert expected_inventory_delta([physical_return]) == -1
+    assert expected_inventory_delta([reserve, commit, physical_return]) == 1
+    assert all(movement_transition_valid(row) for row in (reserve, commit, physical_return))
+
+
+def test_interleaved_same_sku_order_proof_uses_only_its_own_movement_delta():
+    session, order_a = _interleaved_same_sku_session()
+    record = {
+        "number": 101,
+        "stock_before": 10,
+        "stock_after": 8,
+        "expected_stock_delta": 1,
+    }
+    try:
+        assert validate_order_inventory_evidence(session, record, order_a) == []
+    finally:
+        session.close()
+
+
+def test_interleaved_same_sku_order_cannot_sign_other_orders_commit():
+    session, order_a = _interleaved_same_sku_session()
+    record = {
+        "number": 102,
+        "stock_before": 10,
+        "stock_after": 8,
+        # Boundary difference is 2 because B committed between A's movements.
+        # A owns only its own commit and must never be allowed to sign B's unit.
+        "expected_stock_delta": 2,
+    }
+    try:
+        errors = validate_order_inventory_evidence(session, record, order_a)
+        assert any("scoped inventory movement delta" in error for error in errors)
+        assert any("expected inventory contract delta" in error for error in errors)
     finally:
         session.close()

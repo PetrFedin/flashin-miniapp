@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from ..models import InventoryMovement, Order, OrderItem
 from .inventory_movement_contract import (
     expected_core_chain,
+    expected_inventory_delta,
     load_resalable_return_evidence,
     validate_variant_movement_chain,
 )
@@ -71,6 +72,10 @@ def validate_order_inventory_evidence(
     Contract v1 is intentionally retained. Financial refund state does not
     synthesize a stock return; `return` movements are accepted only when they
     exactly project durable `inspected/resalable` reverse-logistics events.
+
+    Signed boundary snapshots remain exact observational evidence, but the
+    signed delta is scoped to this order's movements. Another order may mutate
+    the same SKU between two snapshots and must never be charged to this proof.
     """
     if not any(record.get(field) not in (None, "") for field in _STOCK_FIELDS):
         return []
@@ -102,6 +107,9 @@ def validate_order_inventory_evidence(
     core_chain = expected_core_chain(str(order.status))
     total_stock_before = 0
     total_stock_after = 0
+    scoped_movement_delta = 0
+    contract_delta = 0
+    contract_delta_valid = True
     for variant_id, expected_quantity in expected_by_variant.items():
         chain = by_variant.get(variant_id, [])
         failures = validate_variant_movement_chain(
@@ -118,6 +126,14 @@ def validate_order_inventory_evidence(
             continue
         total_stock_before += int(chain[0].stock_before)
         total_stock_after += int(chain[-1].stock_after)
+        scoped_movement_delta += sum(
+            int(movement.stock_before) - int(movement.stock_after)
+            for movement in chain
+        )
+        try:
+            contract_delta += expected_inventory_delta(chain)
+        except (TypeError, ValueError):
+            contract_delta_valid = False
 
     signed_before = _as_int(record.get("stock_before"))
     signed_after = _as_int(record.get("stock_after"))
@@ -130,8 +146,12 @@ def validate_order_inventory_evidence(
         errors.append(
             f"#{number}: signed stock_after does not match inventory movements"
         )
-    if signed_delta != total_stock_before - total_stock_after:
+    if signed_delta != scoped_movement_delta:
         errors.append(
-            f"#{number}: signed expected_stock_delta does not match inventory movements"
+            f"#{number}: signed expected_stock_delta does not match scoped inventory movement delta"
+        )
+    if not contract_delta_valid or signed_delta != contract_delta:
+        errors.append(
+            f"#{number}: signed expected_stock_delta does not match expected inventory contract delta"
         )
     return list(dict.fromkeys(errors))

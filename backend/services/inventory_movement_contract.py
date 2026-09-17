@@ -148,6 +148,34 @@ def movement_transition_valid(movement: InventoryMovement) -> bool:
     return False
 
 
+def expected_inventory_delta(chain: Iterable[InventoryMovement]) -> int:
+    """Return the inventory delta implied by this order-local movement chain.
+
+    The value uses movement semantics rather than boundary snapshots so another
+    order may legally touch the same SKU between two movements without being
+    attributed to this order's signed proof. Positive values consume sellable
+    stock; physical ``return`` movements restore it and therefore subtract.
+
+    Local movement arithmetic remains the responsibility of
+    :func:`movement_transition_valid`; this helper is an independent
+    defense-in-depth projection of the chain's intended business effect.
+    """
+
+    delta = 0
+    for movement in chain:
+        kind = str(movement.kind or "").strip().lower()
+        quantity = int(movement.quantity)
+        if quantity <= 0:
+            raise ValueError("inventory movement quantity must be positive")
+        if kind == "commit":
+            delta += quantity
+        elif kind == "return":
+            delta -= quantity
+        elif kind not in {"reserve", "release"}:
+            raise ValueError(f"unsupported inventory movement kind: {kind or '<empty>'}")
+    return delta
+
+
 def validate_variant_movement_chain(
     chain: list[InventoryMovement],
     *,

@@ -86,7 +86,6 @@ REQUIRED_FILES = {
     "scripts/pilot_control_lock.py",
     "scripts/pilot_control_io.py",
     "scripts/pilot_control.py",
-    "backend/pilot_models.py",
     "backend/alembic/versions/0023_pilot_state_replay_anchor.py",
     "scripts/pilot_runner.py",
     "backend/tests/test_pilot_control_binding.py",
@@ -109,6 +108,30 @@ REQUIRED_FILES = {
     "scripts/deploy_production.sh",
     "scripts/rollback.sh",
 }
+
+# Reverse-logistics/MoySklad stock authority is part of the immutable rollback
+# capability, not merely incidental archive content. These files jointly define
+# schema authority, physical evidence, signed inventory semantics, provider
+# reconciliation, durable blocked evidence and the state workflow that proves it.
+AUTHORITY_REQUIRED_FILES = {
+    ".github/workflows/reverse-logistics-state.yml",
+    "backend/alembic/versions/0041_reverse_logistics_authority.py",
+    "backend/models.py",
+    "backend/reverse_logistics_models.py",
+    "backend/services/inventory_movement_contract.py",
+    "backend/services/moysklad_reverse_return.py",
+    "backend/services/moysklad_stock_authority.py",
+    "backend/services/pilot_inventory_evidence.py",
+    "backend/services/pilot_inventory_safety.py",
+    "backend/services/reverse_logistics.py",
+    "backend/services/stock_reconciliation.py",
+    "backend/tests/test_moysklad_stock_authority.py",
+    "backend/tests/test_pilot_database_evidence.py",
+    "scripts/moysklad_reverse_logistics_contract_smoke.py",
+    "scripts/reverse_logistics_downgrade_guard_smoke.py",
+    "scripts/reverse_logistics_state_smoke.py",
+}
+REQUIRED_FILES |= AUTHORITY_REQUIRED_FILES
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -170,15 +193,33 @@ def inspect_runtime_guard(archive: Path) -> list[str]:
                 errors.append("Release is missing pilot runtime files: " + ", ".join(missing))
 
             _require_markers(bundle, files, "backend/api/orders.py", ("acquire_pilot_checkout(", "record_pilot_order("), errors)
-            _require_markers(bundle, files, "scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 18",), errors)
-            _require_markers(bundle, files, "scripts/pilot_release_capability.py", ("from pilot_release_contract import CAPABILITY_VERSION",), errors)
+            _require_markers(bundle, files, "scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 19",), errors)
+            _require_markers(bundle, files, "scripts/pilot_release_capability.py", ("from pilot_release_contract import CAPABILITY_VERSION", "AUTHORITY_REQUIRED_FILES", "REQUIRED_FILES |= AUTHORITY_REQUIRED_FILES"), errors)
             _require_markers(bundle, files, "backend/services/pilot_runtime.py", ("from scripts.pilot_release_contract import CAPABILITY_VERSION", '"version": CAPABILITY_VERSION'), errors)
             _require_markers(bundle, files, "backend/services/pilot_database_evidence.py", ("def validate_pilot_database_evidence(", "pilot slot order_id", "PostgreSQL payment", "PostgreSQL refund", "final GO scenario order IDs"), errors)
-            _require_markers(bundle, files, "backend/services/pilot_inventory_evidence.py", ("def validate_order_inventory_evidence(", "reserve/release", "reserve/commit", "signed stock_before", "signed expected_stock_delta"), errors)
+            _require_markers(bundle, files, "backend/services/pilot_inventory_evidence.py", ("def validate_order_inventory_evidence(", "reserve/release", "reserve/commit", "signed stock_before", "signed expected_stock_delta", "scoped inventory movement delta", "expected inventory contract delta"), errors)
             _require_markers(bundle, files, "backend/services/inventory.py", ("InventoryMovement(", "kind=\"reserve\"", "kind=\"release\"", "kind=\"commit\"", "order_id=order_id"), errors)
             _require_markers(bundle, files, "backend/alembic/versions/0024_inventory_movement_ledger.py", ("0024_inventory_movement_ledger", "0023_pilot_state_replay_anchor", "inventory_movements", "uq_inventory_movement_order_variant_kind"), errors)
             _require_markers(bundle, files, "backend/tests/test_inventory_movement_ledger.py", ("test_reserve_and_release_are_one_durable_order_linked_chain", "test_reserve_and_commit_capture_stock_and_reserved_snapshots", "test_production_inventory_callsites_are_order_attributed"), errors)
-            _require_markers(bundle, files, "backend/tests/test_pilot_database_evidence.py", ("test_exact_completed_twenty_order_database_evidence_is_accepted", "test_missing_or_wrong_slot_order_fails_closed", "test_payment_refund_status_and_amount_are_read_from_postgresql", "test_final_go_rejects_active_or_incomplete_runtime"), errors)
+            _require_markers(bundle, files, "backend/tests/test_pilot_database_evidence.py", ("test_exact_completed_twenty_order_database_evidence_is_accepted", "test_missing_or_wrong_slot_order_fails_closed", "test_payment_refund_status_and_amount_are_read_from_postgresql", "test_final_go_rejects_active_or_incomplete_runtime", "test_interleaved_same_sku_order_proof_uses_only_its_own_movement_delta", "test_interleaved_same_sku_order_cannot_sign_other_orders_commit", "test_expected_inventory_delta_is_semantic_and_order_local"), errors)
+
+            # Reverse-logistics authority spine: presence alone is insufficient.
+            # Marker checks bind the signed capability to the runtime semantics
+            # that separate financial refund, physical receipt and provider sync.
+            _require_markers(bundle, files, ".github/workflows/reverse-logistics-state.yml", ("name: Reverse Logistics State", "python scripts/reverse_logistics_state_smoke.py", "python scripts/moysklad_reverse_logistics_contract_smoke.py", "python scripts/reverse_logistics_downgrade_guard_smoke.py"), errors)
+            _require_markers(bundle, files, "backend/alembic/versions/0041_reverse_logistics_authority.py", ("0041_reverse_logistics_authority", "_DOWNGRADE_BLOCKED", "return_logistics_events", "uq_inventory_movement_reverse_event_source"), errors)
+            _require_markers(bundle, files, "backend/models.py", ("class MoySkladConflict", "class StockReconciliationLog"), errors)
+            _require_markers(bundle, files, "backend/reverse_logistics_models.py", ("class ReturnLogisticsCase", "class ReturnLogisticsItem", "class ReturnLogisticsEvent", "uq_return_logistics_case_idempotency"), errors)
+            _require_markers(bundle, files, "backend/services/inventory_movement_contract.py", ("def movement_transition_valid(", "def expected_inventory_delta(", "Snapshot continuity is deliberately *not* required", 'if movement.kind == "return"'), errors)
+            _require_markers(bundle, files, "backend/services/reverse_logistics.py", ("def inspect_item(", 'normalized_disposition == "resalable"', 'kind="return"', 'source=f"reverse_logistics_event:{event.id}"'), errors)
+            _require_markers(bundle, files, "backend/services/moysklad_reverse_return.py", ("def enqueue_moysklad_physical_sales_return(", "moysklad.physical_sales_return.create", "Damaged/quarantine physical return requires provider disposition reconciliation", "Only fully resalable physical quantities can be auto-exported"), errors)
+            _require_markers(bundle, files, "backend/services/moysklad_stock_authority.py", ("def evaluate_moysklad_stock_snapshot(", "_STALE_PHYSICAL_RETURN_CONFLICT", "_BLOCKED_RECONCILIATION_ACTION", "def _persist_blocked_evidence_durably(", "catch-up/resolution remains in the caller transaction"), errors)
+            _require_markers(bundle, files, "backend/services/stock_reconciliation.py", ("evaluate_moysklad_stock_snapshot", "if decision.blocked:", "db.commit()"), errors)
+            _require_markers(bundle, files, "backend/tests/test_moysklad_stock_authority.py", ("test_stale_provider_snapshot_cannot_erase_verified_resalable_stock", "test_actual_provider_transaction_and_stock_catchup_release_guard", "test_blocked_operational_evidence_survives_business_transaction_rollback"), errors)
+            _require_markers(bundle, files, "scripts/reverse_logistics_state_smoke.py", ("reverse", "logistics"), errors)
+            _require_markers(bundle, files, "scripts/moysklad_reverse_logistics_contract_smoke.py", ("moysklad", "physical"), errors)
+            _require_markers(bundle, files, "scripts/reverse_logistics_downgrade_guard_smoke.py", ("downgrade", "0041"), errors)
+
             _require_markers(bundle, files, "scripts/readiness_gate.py", ("def build_signed_live_report(", '"kind": "pilot_live_gate"', "configuration_fingerprint(env, secret)", "release_binding(current_release)", "return sign_payload(payload, secret)"), errors)
             _require_markers(bundle, files, "scripts/pilot_admission.py", ("live gate evidence signature is invalid", "live gate configuration fingerprint does not match", "live gate release binding is missing", "validate_release_binding(release, current_release)", "def validate_admission_evidence_inputs(", "current_release=current_release"), errors)
             _require_markers(bundle, files, "backend/tests/test_pilot_admission.py", ("test_live_gate_rejects_tampering_configuration_and_other_release", "test_admission_create_preflight_binds_live_gate_to_current_release", "configuration fingerprint", "live gate release"), errors)

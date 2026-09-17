@@ -295,3 +295,56 @@ def test_reserved_floor_cannot_fake_provider_catchup():
     assert db.query(StockReconciliationLog).filter(
         StockReconciliationLog.action == "physical_return_catchup"
     ).count() == 0
+
+
+def test_blocked_operational_evidence_survives_business_transaction_rollback(tmp_path):
+    """Conflict evidence must outlive the caller transaction that was rejected."""
+
+    database_path = tmp_path / "moysklad-authority-rollback.db"
+    engine = create_engine(f"sqlite:///{database_path}")
+    Base.metadata.create_all(engine)
+    SessionFactory = sessionmaker(bind=engine)
+
+    setup = SessionFactory()
+    variant, order, item = _variant(setup, "rollback-evidence", stock=5)
+    event, _case = _inspection(setup, variant, order, item, "resalable")
+    variant_id = int(variant.id)
+    setup.close()
+
+    business = SessionFactory()
+    try:
+        current_variant = business.get(ProductVariant, variant_id)
+        assert current_variant is not None
+        decision = evaluate_moysklad_stock_snapshot(business, current_variant, 5)
+        assert decision.blocked is True
+        assert decision.pending_event_ids == (int(event.id),)
+
+        # Prove the caller really rolls back mutable business state after the
+        # authority decision. The operational evidence must not roll back with it.
+        current_variant.reserved_qty = 2
+        business.flush()
+        business.rollback()
+    finally:
+        business.close()
+
+    verify = SessionFactory()
+    try:
+        persisted_variant = verify.get(ProductVariant, variant_id)
+        assert persisted_variant is not None
+        assert persisted_variant.stock_qty == 6
+        assert persisted_variant.reserved_qty == 0
+        conflict = verify.query(MoySkladConflict).filter(
+            MoySkladConflict.status == "open",
+            MoySkladConflict.conflict_type == "stale_stock_pending_physical_return",
+        ).one()
+        assert str(event.id) in conflict.message
+        blocked = verify.query(StockReconciliationLog).filter(
+            StockReconciliationLog.variant_id == variant_id,
+            StockReconciliationLog.action == "blocked_physical_return",
+            StockReconciliationLog.status == "open",
+        ).one()
+        assert blocked.external_stock_qty == 5
+        assert blocked.local_stock_qty == 6
+    finally:
+        verify.close()
+        engine.dispose()

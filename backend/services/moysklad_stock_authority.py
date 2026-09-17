@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from ..models import (
     InventoryMovement,
@@ -41,9 +41,30 @@ class _PendingReturnEvidence:
         return f"reverse_logistics_event:{self.event_id}"
 
 
+@dataclass(frozen=True)
+class _VariantAuthoritySnapshot:
+    """Primitive stock identity safe to pass into an evidence-only transaction."""
+
+    variant_id: int
+    provider_id: str
+    sku: str
+    stock_qty: int
+    reserved_qty: int
+
+
 def _provider_identity(variant: ProductVariant) -> str:
     external_id = str(variant.moysklad_id or "").strip()
     return external_id or f"local-variant:{int(variant.id)}"
+
+
+def _variant_authority_snapshot(variant: ProductVariant) -> _VariantAuthoritySnapshot:
+    return _VariantAuthoritySnapshot(
+        variant_id=int(variant.id),
+        provider_id=_provider_identity(variant),
+        sku=str(variant.sku or "")[:120],
+        stock_qty=int(variant.stock_qty or 0),
+        reserved_qty=int(variant.reserved_qty or 0),
+    )
 
 
 def _latest_catchup(
@@ -172,38 +193,37 @@ def _provider_returns_exported(
 def _open_or_refresh_conflict(
     db: Session,
     *,
-    variant: ProductVariant,
+    variant: _VariantAuthoritySnapshot,
     external_stock: int,
     pending_event_ids: tuple[int, ...],
     provider_exported: bool,
     catchup_floor: int | None,
 ) -> None:
-    provider_id = _provider_identity(variant)
     event_text = ",".join(str(event_id) for event_id in pending_event_ids)
     floor_text = "invalid/missing" if catchup_floor is None else str(catchup_floor)
     message = (
         f"Provider stock {int(external_stock)} is not authoritative for local stock "
-        f"{int(variant.stock_qty)} while resalable inspection event(s) {event_text} "
+        f"{variant.stock_qty} while resalable inspection event(s) {event_text} "
         f"await provider reconciliation; provider_exported={provider_exported}; "
         f"required_catchup_stock={floor_text}; snapshot was not applied"
     )
     existing = (
         db.query(MoySkladConflict)
         .filter(
-            MoySkladConflict.moysklad_id == provider_id,
+            MoySkladConflict.moysklad_id == variant.provider_id,
             MoySkladConflict.conflict_type == _STALE_PHYSICAL_RETURN_CONFLICT,
             MoySkladConflict.status == "open",
         )
         .first()
     )
     if existing is not None:
-        existing.sku = str(variant.sku or "")[:120]
+        existing.sku = variant.sku
         existing.message = message
     else:
         db.add(
             MoySkladConflict(
-                moysklad_id=provider_id,
-                sku=str(variant.sku or "")[:120],
+                moysklad_id=variant.provider_id,
+                sku=variant.sku,
                 conflict_type=_STALE_PHYSICAL_RETURN_CONFLICT,
                 message=message,
                 status="open",
@@ -213,7 +233,7 @@ def _open_or_refresh_conflict(
     reconciliation = (
         db.query(StockReconciliationLog)
         .filter(
-            StockReconciliationLog.variant_id == int(variant.id),
+            StockReconciliationLog.variant_id == variant.variant_id,
             StockReconciliationLog.action == _BLOCKED_RECONCILIATION_ACTION,
             StockReconciliationLog.status == "open",
         )
@@ -222,21 +242,87 @@ def _open_or_refresh_conflict(
     )
     if reconciliation is None:
         reconciliation = StockReconciliationLog(
-            variant_id=int(variant.id),
-            sku=str(variant.sku or "")[:120],
-            local_stock_qty=int(variant.stock_qty),
+            variant_id=variant.variant_id,
+            sku=variant.sku,
+            local_stock_qty=variant.stock_qty,
             external_stock_qty=int(external_stock),
-            local_reserved_qty=int(variant.reserved_qty or 0),
+            local_reserved_qty=variant.reserved_qty,
             action=_BLOCKED_RECONCILIATION_ACTION,
             status="open",
             message=message,
         )
         db.add(reconciliation)
     else:
-        reconciliation.local_stock_qty = int(variant.stock_qty)
+        reconciliation.local_stock_qty = variant.stock_qty
         reconciliation.external_stock_qty = int(external_stock)
-        reconciliation.local_reserved_qty = int(variant.reserved_qty or 0)
+        reconciliation.local_reserved_qty = variant.reserved_qty
         reconciliation.message = message
+
+
+def _uses_process_local_sqlite_database(db: Session) -> bool:
+    """Return True where a second session cannot provide an independent commit."""
+
+    bind = db.get_bind()
+    if bind.dialect.name != "sqlite":
+        return False
+    database = getattr(getattr(bind, "url", None), "database", None)
+    return database in (None, "", ":memory:")
+
+
+def _persist_blocked_evidence_durably(
+    db: Session,
+    *,
+    variant: _VariantAuthoritySnapshot,
+    external_stock: int,
+    pending_event_ids: tuple[int, ...],
+    provider_exported: bool,
+    catchup_floor: int | None,
+) -> None:
+    """Commit fail-closed operational evidence outside the business transaction.
+
+    A blocked provider snapshot must remain explainable even if the caller rolls
+    back its business transaction. Only the conflict/reconciliation evidence is
+    written here; ProductVariant, order and return state stay owned by the
+    caller's transaction. In-memory SQLite cannot create an independent durable
+    transaction, so deterministic unit tests retain the legacy same-session
+    path while production databases and file-backed rollback tests use a truly
+    separate connection/commit.
+    """
+
+    if _uses_process_local_sqlite_database(db):
+        _open_or_refresh_conflict(
+            db,
+            variant=variant,
+            external_stock=external_stock,
+            pending_event_ids=pending_event_ids,
+            provider_exported=provider_exported,
+            catchup_floor=catchup_floor,
+        )
+        return
+
+    bind = db.get_bind()
+    EvidenceSession = sessionmaker(
+        bind=bind,
+        autocommit=False,
+        autoflush=False,
+        expire_on_commit=False,
+    )
+    evidence_db = EvidenceSession()
+    try:
+        _open_or_refresh_conflict(
+            evidence_db,
+            variant=variant,
+            external_stock=external_stock,
+            pending_event_ids=pending_event_ids,
+            provider_exported=provider_exported,
+            catchup_floor=catchup_floor,
+        )
+        evidence_db.commit()
+    except Exception:
+        evidence_db.rollback()
+        raise
+    finally:
+        evidence_db.close()
 
 
 def _resolve_stale_conflicts(db: Session, variant: ProductVariant) -> None:
@@ -305,6 +391,11 @@ def evaluate_moysklad_stock_snapshot(
     provider command is ``review_required``. Financial refunds and non-sellable
     dispositions never create this protection because they create no resalable
     inspection event.
+
+    Blocked evidence is committed independently so a later business rollback
+    cannot erase the reason the provider snapshot was rejected. Successful
+    catch-up/resolution remains in the caller transaction and therefore rolls
+    back atomically with any stock mutation it authorizes.
     """
 
     normalized_external = int(external_stock)
@@ -340,9 +431,9 @@ def evaluate_moysklad_stock_snapshot(
         _resolve_stale_conflicts(db, variant)
         return MoySkladStockDecision(target_stock=target_stock, blocked=False)
 
-    _open_or_refresh_conflict(
+    _persist_blocked_evidence_durably(
         db,
-        variant=variant,
+        variant=_variant_authority_snapshot(variant),
         external_stock=normalized_external,
         pending_event_ids=pending_event_ids,
         provider_exported=provider_exported,
