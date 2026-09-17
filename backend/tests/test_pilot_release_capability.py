@@ -70,7 +70,7 @@ def _release(repo: Path, tmp_path: Path, release_id: str, created_at: str) -> Pa
 
 
 def test_signed_release_capability_is_bound_to_exact_release():
-    assert CAPABILITY_VERSION == 19
+    assert CAPABILITY_VERSION == 20
     secret = "s" * 48
     state = _release_state()
     state["capabilities"] = {
@@ -125,11 +125,16 @@ def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(
         ("scripts/restore_postgres.sh", "#!/usr/bin/env bash\nexit 0\n", "verify-live"),
         ("scripts/deploy_release_gate.py", "#!/usr/bin/env python3\n", "retained under deploy/release/builds"),
         ("scripts/deploy_production.sh", "#!/usr/bin/env bash\n", "deploy_release_gate.py"),
-        ("scripts/pilot_release_contract.py", "CAPABILITY_VERSION = 18\n", "CAPABILITY_VERSION = 19"),
+        ("scripts/pilot_release_contract.py", "CAPABILITY_VERSION = 19\n", "CAPABILITY_VERSION = 20"),
         (
             "backend/services/inventory_movement_contract.py",
             "def movement_transition_valid(movement): return True\n",
             "expected_inventory_delta",
+        ),
+        (
+            "backend/services/moysklad_reverse_return.py",
+            "def enqueue_moysklad_physical_sales_return(*args, **kwargs): pass\n",
+            "_ALLOCATION_VERSION = 2",
         ),
         (
             "backend/services/moysklad_stock_authority.py",
@@ -144,7 +149,12 @@ def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(
         (
             ".github/workflows/reverse-logistics-state.yml",
             "name: Reverse Logistics State\njobs: {}\n",
-            "moysklad_reverse_logistics_contract_smoke.py",
+            "test_moysklad_reverse_return_allocation.py",
+        ),
+        (
+            "backend/tests/test_moysklad_reverse_return_allocation.py",
+            "def test_placeholder(): pass\n",
+            "test_sibling_partial_returns_allocate_exact_original_line_cents_without_rounding_drift",
         ),
         (
             "backend/tests/test_moysklad_stock_authority.py",

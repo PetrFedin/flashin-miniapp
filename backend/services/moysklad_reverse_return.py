@@ -512,8 +512,16 @@ def enqueue_moysklad_physical_sales_return(db: Session, case_id: int):
         # Physical inspection is warehouse truth and must not be rolled back by
         # provider-side mapping or monetary-data defects. Persist the command in
         # a fail-closed form so the worker/operator sees durable review evidence.
+        failed_case = (
+            db.query(ReturnLogisticsCase)
+            .filter(ReturnLogisticsCase.id == int(case_id))
+            .first()
+        )
+        if failed_case is None:
+            raise
         payload = {
             "case_id": int(case_id),
+            "order_id": int(failed_case.order_id),
             "allocation_version": _ALLOCATION_VERSION,
             "allocation_basis": _ALLOCATION_BASIS,
             "allocation_error": str(exc)[:1000],

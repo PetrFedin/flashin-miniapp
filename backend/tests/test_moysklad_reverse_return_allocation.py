@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine
@@ -161,6 +162,50 @@ def test_tampered_physical_return_money_allocation_fails_closed():
     db.commit()
 
     with pytest.raises(MoySkladReviewRequired, match="Immutable physical return monetary allocation"):
+        reverse_moysklad._persisted_allocation_payload(
+            db,
+            case_id=case_id,
+            order_id=order.id,
+        )
+
+
+def test_allocation_failure_persists_owned_fail_closed_provider_evidence(monkeypatch):
+    db = _db()
+    order, item, variant = _rounding_order(db)
+    case_id, _payload = _complete_one_unit_case(db, order, item, variant, 1)
+
+    # Remove only the synthetic successful command so enqueue can exercise its
+    # allocation-failure path against the already durable physical case.
+    db.query(ProviderCommand).filter(
+        ProviderCommand.provider == "moysklad",
+        ProviderCommand.idempotency_key == f"physical-return:{case_id}:sales_return:v1",
+    ).delete(synchronize_session=False)
+    db.commit()
+
+    monkeypatch.setattr(
+        reverse_moysklad,
+        "get_settings",
+        lambda: SimpleNamespace(moysklad_order_export_enabled=True),
+    )
+
+    def fail_allocation(*_args, **_kwargs):
+        raise MoySkladReviewRequired("forced allocation failure")
+
+    monkeypatch.setattr(
+        reverse_moysklad,
+        "_build_physical_return_allocation",
+        fail_allocation,
+    )
+
+    command = reverse_moysklad.enqueue_moysklad_physical_sales_return(db, case_id)
+    db.flush()
+    payload = json.loads(command.payload_json)
+
+    assert payload["case_id"] == case_id
+    assert payload["order_id"] == order.id
+    assert payload["allocation_error"] == "forced allocation failure"
+
+    with pytest.raises(MoySkladReviewRequired, match="forced allocation failure"):
         reverse_moysklad._persisted_allocation_payload(
             db,
             case_id=case_id,
