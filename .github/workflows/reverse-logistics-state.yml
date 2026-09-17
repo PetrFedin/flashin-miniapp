@@ -69,5 +69,7 @@ jobs:
         run: python scripts/moysklad_reverse_logistics_contract_smoke.py
       - name: Prove cumulative partial-return monetary allocation
         run: python -m pytest -q backend/tests/test_moysklad_reverse_return_allocation.py
+      - name: Prove MoySklad stock authority concurrency
+        run: python scripts/moysklad_stock_authority_concurrency_smoke.py
       - name: Prove physical evidence blocks destructive schema downgrade
         run: python scripts/reverse_logistics_downgrade_guard_smoke.py
