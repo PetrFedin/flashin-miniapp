@@ -70,7 +70,7 @@ def _release(repo: Path, tmp_path: Path, release_id: str, created_at: str) -> Pa
 
 
 def test_signed_release_capability_is_bound_to_exact_release():
-    assert CAPABILITY_VERSION == 20
+    assert CAPABILITY_VERSION == 21
     secret = "s" * 48
     state = _release_state()
     state["capabilities"] = {
@@ -102,13 +102,13 @@ def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(
     guarded = _release(repo, tmp_path, "guarded", "2026-08-10T00:00:00Z")
     assert inspect_runtime_guard(guarded) == []
 
-    missing_path = repo / "scripts/backup_integrity.py"
+    missing_path = repo / "scripts/moysklad_stock_authority_concurrency_smoke.py"
     missing_path.unlink()
     _git(repo, "add", "-u")
-    _git(repo, "commit", "-qm", "remove backup integrity")
+    _git(repo, "commit", "-qm", "remove authority concurrency proof")
     unguarded = _release(repo, tmp_path, "unguarded", "2026-08-10T00:01:00Z")
     errors = inspect_runtime_guard(unguarded)
-    assert any("scripts/backup_integrity.py" in error for error in errors)
+    assert any("scripts/moysklad_stock_authority_concurrency_smoke.py" in error for error in errors)
 
 
 @pytest.mark.parametrize(
@@ -125,7 +125,7 @@ def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(
         ("scripts/restore_postgres.sh", "#!/usr/bin/env bash\nexit 0\n", "verify-live"),
         ("scripts/deploy_release_gate.py", "#!/usr/bin/env python3\n", "retained under deploy/release/builds"),
         ("scripts/deploy_production.sh", "#!/usr/bin/env bash\n", "deploy_release_gate.py"),
-        ("scripts/pilot_release_contract.py", "CAPABILITY_VERSION = 19\n", "CAPABILITY_VERSION = 20"),
+        ("scripts/pilot_release_contract.py", "CAPABILITY_VERSION = 20\n", "CAPABILITY_VERSION = 21"),
         (
             "backend/services/inventory_movement_contract.py",
             "def movement_transition_valid(movement): return True\n",
@@ -139,7 +139,7 @@ def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(
         (
             "backend/services/moysklad_stock_authority.py",
             "def evaluate_moysklad_stock_snapshot(*args, **kwargs): pass\n",
-            "_persist_blocked_evidence_durably",
+            "_is_open_evidence_unique_race",
         ),
         (
             "backend/alembic/versions/0041_reverse_logistics_authority.py",
@@ -147,9 +147,19 @@ def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(
             "_DOWNGRADE_BLOCKED",
         ),
         (
+            "backend/alembic/versions/0042_moysklad_stock_evidence_concurrency.py",
+            "revision = '0042_moysklad_stock_evidence_concurrency'\n",
+            "uq_moysklad_conflict_open_stale_physical_return",
+        ),
+        (
+            "backend/database.py",
+            "class Base: pass\n",
+            "_append_partial_unique_index",
+        ),
+        (
             ".github/workflows/reverse-logistics-state.yml",
             "name: Reverse Logistics State\njobs: {}\n",
-            "test_moysklad_reverse_return_allocation.py",
+            "moysklad_stock_authority_concurrency_smoke.py",
         ),
         (
             "backend/tests/test_moysklad_reverse_return_allocation.py",
@@ -160,6 +170,21 @@ def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(
             "backend/tests/test_moysklad_stock_authority.py",
             "def test_placeholder(): pass\n",
             "test_blocked_operational_evidence_survives_business_transaction_rollback",
+        ),
+        (
+            "backend/tests/test_moysklad_stock_authority_concurrency.py",
+            "def test_placeholder(): pass\n",
+            "test_only_owned_open_evidence_unique_races_are_retryable",
+        ),
+        (
+            "scripts/moysklad_stock_authority_concurrency_smoke.py",
+            "def main(): return 0\n",
+            "WORKERS = 12",
+        ),
+        (
+            "scripts/reverse_logistics_downgrade_guard_smoke.py",
+            "def main(): return 0\n",
+            "0042_moysklad_stock_evidence_concurrency",
         ),
         (
             "backend/tests/test_pilot_database_evidence.py",
