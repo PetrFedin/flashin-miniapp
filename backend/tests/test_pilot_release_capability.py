@@ -70,7 +70,7 @@ def _release(repo: Path, tmp_path: Path, release_id: str, created_at: str) -> Pa
 
 
 def test_signed_release_capability_is_bound_to_exact_release():
-    assert CAPABILITY_VERSION == 18
+    assert CAPABILITY_VERSION == 19
     secret = "s" * 48
     state = _release_state()
     state["capabilities"] = {
@@ -125,7 +125,37 @@ def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(
         ("scripts/restore_postgres.sh", "#!/usr/bin/env bash\nexit 0\n", "verify-live"),
         ("scripts/deploy_release_gate.py", "#!/usr/bin/env python3\n", "retained under deploy/release/builds"),
         ("scripts/deploy_production.sh", "#!/usr/bin/env bash\n", "deploy_release_gate.py"),
-        ("scripts/pilot_release_contract.py", "CAPABILITY_VERSION = 17\n", "CAPABILITY_VERSION = 18"),
+        ("scripts/pilot_release_contract.py", "CAPABILITY_VERSION = 18\n", "CAPABILITY_VERSION = 19"),
+        (
+            "backend/services/inventory_movement_contract.py",
+            "def movement_transition_valid(movement): return True\n",
+            "expected_inventory_delta",
+        ),
+        (
+            "backend/services/moysklad_stock_authority.py",
+            "def evaluate_moysklad_stock_snapshot(*args, **kwargs): pass\n",
+            "_persist_blocked_evidence_durably",
+        ),
+        (
+            "backend/alembic/versions/0041_reverse_logistics_authority.py",
+            "revision = '0041_reverse_logistics_authority'\n",
+            "_DOWNGRADE_BLOCKED",
+        ),
+        (
+            ".github/workflows/reverse-logistics-state.yml",
+            "name: Reverse Logistics State\njobs: {}\n",
+            "moysklad_reverse_logistics_contract_smoke.py",
+        ),
+        (
+            "backend/tests/test_moysklad_stock_authority.py",
+            "def test_placeholder(): pass\n",
+            "test_blocked_operational_evidence_survives_business_transaction_rollback",
+        ),
+        (
+            "backend/tests/test_pilot_database_evidence.py",
+            "def test_placeholder(): pass\n",
+            "test_interleaved_same_sku_order_cannot_sign_other_orders_commit",
+        ),
     ],
 )
 def test_immutable_archive_rejects_removed_guard_marker(
