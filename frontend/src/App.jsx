@@ -15,6 +15,7 @@ import {
   downloadPrivacyData,
   getCart,
   getOrder,
+  getPlatformCapabilities,
   getProduct,
   getProfile,
   getTimeline,
@@ -51,6 +52,11 @@ import {
 } from "./orderRules.js";
 import { loadProfileSections, loadStorefrontBootstrap } from "./storefrontLoaders.js";
 import { useActionLocks } from "./useActionLocks.js";
+
+const SAFE_RUNTIME_CAPABILITIES = {
+  commercial_checkout: { enabled: false },
+  payments: { enabled: false, mode: "disabled", provider: null },
+};
 
 const DELIVERY_REQUOTE_CODES = new Set([
   "quote_expired",
@@ -128,6 +134,7 @@ export default function App() {
   const [selected, setSelected] = useState(null);
   const [selectedVariantId, setSelectedVariantId] = useState(null);
   const [cart, setCart] = useState(null);
+  const [capabilities, setCapabilities] = useState(SAFE_RUNTIME_CAPABILITIES);
   const [orders, setOrders] = useState([]);
   const [profile, setProfile] = useState(null);
   const [loyaltyRows, setLoyaltyRows] = useState([]);
@@ -163,6 +170,9 @@ export default function App() {
     () => cart?.items?.reduce((sum, item) => sum + item.quantity, 0) || 0,
     [cart],
   );
+  const commercialCheckoutEnabled = capabilities?.commercial_checkout?.enabled === true;
+  const paymentsEnabled = capabilities?.payments?.enabled === true;
+  const commerceEnabled = commercialCheckoutEnabled && paymentsEnabled;
   const checkoutBusy = isBusy("checkout");
   const deliveryQuoteBusy = isBusy("delivery-quote");
   const addToCartBusy = isBusy("add-to-cart");
@@ -241,11 +251,13 @@ export default function App() {
         const bootstrap = await loadStorefrontBootstrap({
           listProducts,
           getCart,
+          getPlatformCapabilities,
           listLooks,
           listWishlist,
         });
         setProducts(bootstrap.products);
         setCart(bootstrap.cart);
+        setCapabilities(bootstrap.capabilities || SAFE_RUNTIME_CAPABILITIES);
         setLooks(bootstrap.looks);
         setWishlist(bootstrap.wishlist);
         if (bootstrap.warnings.length) {
@@ -296,13 +308,13 @@ export default function App() {
       mainButton.onClick?.(handler);
       handlers.push(handler);
     };
-    if (view === "checkout") bind("Перейти к оплате", handleCheckout, checkoutActionReady);
-    else if (view === "cart" && cartCount > 0) bind("Оформить заказ", () => setView("checkout"));
+    if (view === "checkout" && commerceEnabled) bind("Перейти к оплате", handleCheckout, checkoutActionReady);
+    else if (view === "cart" && cartCount > 0 && commerceEnabled) bind("Оформить заказ", () => setView("checkout"));
     else if (view === "product" && selectedVariant?.available_qty > 0) bind("Добавить в корзину", handleAddSelected, !addToCartBusy);
     else if (view !== "cart" && cartCount > 0) bind(`Корзина · ${cartCount}`, () => setView("cart"));
     else mainButton.hide?.();
     return () => handlers.forEach((handler) => mainButton.offClick?.(handler));
-  }, [tg, view, cartCount, selectedVariant, checkoutForm, checkoutActionReady, addToCartBusy]);
+  }, [tg, view, cartCount, selectedVariant, checkoutForm, checkoutActionReady, addToCartBusy, commerceEnabled]);
 
   async function loadProfileData() {
     const { data, warnings } = await loadProfileSections({
@@ -490,6 +502,10 @@ export default function App() {
   }
 
   async function handleCheckout() {
+    if (!commerceEnabled) {
+      setError("Онлайн-оформление и оплата сейчас отключены. Товары останутся в корзине.");
+      return;
+    }
     if (checkoutForm.delivery_type === "courier" && !courierQuoteReady) {
       setError("Сначала рассчитайте и подтвердите курьерскую доставку.");
       return;
@@ -549,6 +565,10 @@ export default function App() {
   }
 
   async function handleOrderPayment(order) {
+    if (!paymentsEnabled) {
+      setError("Онлайн-оплата сейчас отключена.");
+      return;
+    }
     await act(`pay-${order.id}`, async () => {
       const payment = await createPayment(order.id);
       if (!payment.confirmation_url) throw new Error("Для заказа нет активной ссылки оплаты");
@@ -714,7 +734,9 @@ export default function App() {
                 <div className="promo"><input placeholder="Реферальный код" value={referralInput} onChange={(event) => setReferralInput(event.target.value)} disabled={isBusy("referral")} /><button className="secondary compact" onClick={handleApplyReferral} disabled={!referralInput.trim() || isBusy("referral")}>Добавить</button></div>
               </div>
               <div className="summary"><StatusRow label="Товары" value={money(cart.total_amount)} />{cart.discount_amount > 0 && <StatusRow label="Скидка" value={`−${money(cart.discount_amount)}`} tone="success" />}<div className="summary-total"><span>К оплате без доставки</span><b>{money(cart.final_amount)}</b></div></div>
-              <button className="primary" onClick={() => setView("checkout")}>Оформить заказ</button>
+              {commerceEnabled
+                ? <button className="primary" onClick={() => setView("checkout")}>Оформить заказ</button>
+                : <div className="panel"><b>Онлайн-оформление сейчас отключено.</b><p className="muted">Корзина и выбранные товары сохраняются; каталог, избранное и сервисные функции доступны.</p></div>}
             </>}
           </main>
         )}
@@ -742,7 +764,7 @@ export default function App() {
               <StatusRow label="Получение" value={order.delivery_type === "courier" ? "Курьер" : "Самовывоз"} />
               {order.address && <StatusRow label="Адрес" value={order.address} />}{order.tracking_number && <StatusRow label="Трек-номер" value={order.tracking_number} />}
               <div className="order-items">{order.items?.map((item) => <div key={item.id}><span>{item.title} · {item.size} × {item.quantity}</span><b>{money(item.price * item.quantity, order.currency)}</b></div>)}</div>
-              <div className="actions horizontal">{canPayOrder(order) && <button className="primary" onClick={() => handleOrderPayment(order)} disabled={isBusy(`pay-${order.id}`)}>Продолжить оплату</button>}{canCancelOrder(order) && <button className="secondary" onClick={() => handleOrderCancel(order)} disabled={isBusy(`cancel-${order.id}`)}>Отменить заказ</button>}</div>
+              <div className="actions horizontal">{paymentsEnabled && canPayOrder(order) && <button className="primary" onClick={() => handleOrderPayment(order)} disabled={isBusy(`pay-${order.id}`)}>Продолжить оплату</button>}{canCancelOrder(order) && <button className="secondary" onClick={() => handleOrderCancel(order)} disabled={isBusy(`cancel-${order.id}`)}>Отменить заказ</button>}</div>
               {canReturnOrder(order) && <div className="return-box"><label>Причина возврата<textarea placeholder="Что необходимо вернуть и почему" value={returnReasons[order.id] || ""} onChange={(event) => setReturnReasons({ ...returnReasons, [order.id]: event.target.value })} disabled={isBusy(`return-${order.id}`)} /></label><button className="secondary" onClick={() => handleReturn(order)} disabled={isBusy(`return-${order.id}`)}>Зарегистрировать возврат</button></div>}
             </article>)}
           </main>
