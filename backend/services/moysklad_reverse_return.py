@@ -29,6 +29,7 @@ from .moysklad_outbound import (
     _sync_id,
 )
 from .provider_commands import enqueue_provider_command
+from .runtime_capabilities import moysklad_execution_enabled
 
 _ALLOCATION_VERSION = 2
 _ALLOCATION_BASIS = "physical_case_completion_v1"
@@ -492,7 +493,8 @@ async def export_physical_sales_return(db: Session, case_id: int) -> str:
 
 
 def enqueue_moysklad_physical_sales_return(db: Session, case_id: int):
-    if not get_settings().moysklad_order_export_enabled:
+    settings = get_settings()
+    if not moysklad_execution_enabled(settings) or not settings.moysklad_order_export_enabled:
         return None
     key = _command_key(case_id)
     existing = (
