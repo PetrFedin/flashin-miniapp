@@ -20,6 +20,8 @@ def _safe_production_settings(**overrides):
         "admin_totp_encryption_key": "t" * 48,
         "outbox_signing_secret": "o" * 48,
         "pilot_evidence_signing_secret": "p" * 48,
+        "commercial_checkout_enabled": True,
+        "payments_mode": "live",
         "pilot_runtime_enforced": True,
         "pilot_runtime_max_orders": 20,
         "payment_provider": "yookassa",
@@ -28,6 +30,8 @@ def _safe_production_settings(**overrides):
         "yookassa_return_url": "https://mini.flashin.store/payment-result",
         "media_storage": "local",
         "meilisearch_enabled": False,
+        "moysklad_mode": "disabled",
+        "moysklad_order_export_enabled": False,
         "enable_seed": False,
         "use_create_all": False,
     }
@@ -45,6 +49,24 @@ def test_safe_production_configuration_is_accepted():
     assert settings.admin_totp_encryption_key != settings.jwt_secret
     assert settings.pilot_runtime_enforced is True
     assert settings.pilot_runtime_max_orders == 20
+
+
+def test_provider_disabled_production_does_not_require_commerce_credentials_or_pilot_state():
+    settings = _safe_production_settings(
+        commercial_checkout_enabled=False,
+        payments_mode="disabled",
+        pilot_runtime_enforced=False,
+        pilot_evidence_signing_secret="",
+        yookassa_shop_id="",
+        yookassa_secret_key="",
+        moysklad_mode="disabled",
+        moysklad_order_export_enabled=False,
+    )
+
+    assert settings.commercial_checkout_enabled is False
+    assert settings.payments_mode == "disabled"
+    assert settings.moysklad_mode == "disabled"
+    assert settings.pilot_runtime_enforced is False
 
 
 def test_default_production_secrets_are_rejected():
@@ -119,9 +141,28 @@ def test_production_requires_explicit_https_cors_origins():
         _safe_production_settings(cors_origins="http://mini.flashin.store")
 
 
-def test_production_requires_yookassa_credentials():
+def test_production_requires_yookassa_credentials_when_payments_are_enabled():
     with pytest.raises(ValidationError):
         _safe_production_settings(yookassa_shop_id="", yookassa_secret_key="")
+
+
+def test_production_rejects_enabled_payments_when_checkout_is_disabled():
+    with pytest.raises(ValidationError) as exc_info:
+        _safe_production_settings(
+            commercial_checkout_enabled=False,
+            payments_mode="live",
+            pilot_runtime_enforced=False,
+        )
+
+    assert "PAYMENTS_MODE must be disabled" in str(exc_info.value)
+
+
+def test_runtime_provider_modes_are_explicit_enums():
+    with pytest.raises(ValidationError):
+        _safe_production_settings(payments_mode="maybe")
+
+    with pytest.raises(ValidationError):
+        _safe_production_settings(moysklad_mode="maybe")
 
 
 def test_unsafe_jwt_algorithm_is_rejected_in_every_environment():
