@@ -10,6 +10,9 @@ import pilot_launch_preflight as preflight  # noqa: E402
 SHA = "a" * 40
 RUNTIME_ENV = {
     "APP_ENV": "production",
+    "COMMERCIAL_CHECKOUT_ENABLED": "true",
+    "PAYMENTS_MODE": "live",
+    "MOYSKLAD_MODE": "live",
     "PILOT_RUNTIME_ENFORCED": "true",
     "PILOT_RUNTIME_MAX_ORDERS": "20",
 }
@@ -106,6 +109,9 @@ def test_runtime_configuration_is_fail_closed(monkeypatch, tmp_path):
         "read_env",
         lambda _path: {
             "APP_ENV": "staging",
+            "COMMERCIAL_CHECKOUT_ENABLED": "false",
+            "PAYMENTS_MODE": "disabled",
+            "MOYSKLAD_MODE": "disabled",
             "PILOT_RUNTIME_ENFORCED": "false",
             "PILOT_RUNTIME_MAX_ORDERS": "21",
         },
@@ -118,6 +124,9 @@ def test_runtime_configuration_is_fail_closed(monkeypatch, tmp_path):
     stage = _stage(report, "runtime_configuration")
     assert stage["status"] == "blocked"
     assert any("APP_ENV must be production" in item for item in stage["errors"])
+    assert any("COMMERCIAL_CHECKOUT_ENABLED must be true" in item for item in stage["errors"])
+    assert any("PAYMENTS_MODE must be sandbox or live" in item for item in stage["errors"])
+    assert any("MOYSKLAD_MODE must be sandbox or live" in item for item in stage["errors"])
     assert any("PILOT_RUNTIME_ENFORCED must be true" in item for item in stage["errors"])
     assert any("exactly 20" in item for item in stage["errors"])
 
