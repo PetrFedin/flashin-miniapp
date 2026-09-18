@@ -34,6 +34,7 @@ from ..services.inventory import reserve_variant
 from ..services.pilot_runtime import acquire_pilot_checkout, record_pilot_order
 from ..services.pricing import load_product_price_quotes
 from ..services.promos import calculate_discount
+from ..services.runtime_capabilities import require_commercial_checkout
 
 router = APIRouter(prefix="/orders", tags=["orders"])
 
@@ -328,6 +329,7 @@ def checkout(
     customer: Customer = Depends(get_current_customer),
     db: Session = Depends(get_db),
 ):
+    require_commercial_checkout()
     idempotency_key = _normalize_idempotency_key(idempotency_key_header)
     checkout_input = normalize_checkout_input(
         name=payload.name,

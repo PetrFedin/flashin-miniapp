@@ -87,6 +87,10 @@ async function installApi(page) {
     });
 
     if (path === "/api/auth/telegram" && method === "POST") return json({ access_token: "delivery-test-token" });
+    if (path === "/api/platform/capabilities" && method === "GET") return json({
+      commercial_checkout: { enabled: true },
+      payments: { enabled: true, mode: "live", provider: "yookassa" },
+    });
     if (path === "/api/products" && method === "GET") return json([product]);
     if (path === `/api/products/${product.id}` && method === "GET") return json(product);
     if (path === "/api/looks" && method === "GET") return json([]);

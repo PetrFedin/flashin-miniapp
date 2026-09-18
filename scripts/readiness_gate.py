@@ -44,6 +44,18 @@ def _positive_int(env: Mapping[str, str], key: str, default: int) -> int:
     return value
 
 
+def _truthy(value: object) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _controlled_commerce_profile(env: Mapping[str, str]) -> bool:
+    return (
+        _truthy(env.get("COMMERCIAL_CHECKOUT_ENABLED"))
+        and str(env.get("PAYMENTS_MODE", "")).strip().lower() in {"sandbox", "live"}
+        and _truthy(env.get("PILOT_RUNTIME_ENFORCED"))
+    )
+
+
 def _provider_wiring_checks(env: Mapping[str, str]) -> list[CheckResult]:
     report = validate_wiring(env)
     return [
@@ -126,7 +138,8 @@ def main() -> int:
 
     env = read_env(ROOT / ".env")
     checks = build_predeploy_checks(ROOT)
-    checks.extend(_provider_wiring_checks(env))
+    if _controlled_commerce_profile(env):
+        checks.extend(_provider_wiring_checks(env))
     checks.append(_alertmanager_config_check())
     if args.phase == "live":
         checks.extend(build_live_checks(ROOT))

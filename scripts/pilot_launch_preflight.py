@@ -70,6 +70,12 @@ def _runtime_configuration_errors(env: Mapping[str, str]) -> list[str]:
     errors: list[str] = []
     if str(env.get("APP_ENV") or "").strip().lower() != "production":
         errors.append("APP_ENV must be production for pilot runtime arm")
+    if not _true(env.get("COMMERCIAL_CHECKOUT_ENABLED")):
+        errors.append("COMMERCIAL_CHECKOUT_ENABLED must be true for pilot runtime arm")
+    if str(env.get("PAYMENTS_MODE") or "").strip().lower() not in {"sandbox", "live"}:
+        errors.append("PAYMENTS_MODE must be sandbox or live for pilot runtime arm")
+    if str(env.get("MOYSKLAD_MODE") or "").strip().lower() not in {"sandbox", "live"}:
+        errors.append("MOYSKLAD_MODE must be sandbox or live for pilot runtime arm")
     if not _true(env.get("PILOT_RUNTIME_ENFORCED")):
         errors.append("PILOT_RUNTIME_ENFORCED must be true")
     try:
@@ -323,10 +329,13 @@ def run_preflight(
             next_action=(
                 ""
                 if not runtime_configuration_errors
-                else "set APP_ENV=production, PILOT_RUNTIME_ENFORCED=true and PILOT_RUNTIME_MAX_ORDERS=20 in the deployed .env"
+                else "set APP_ENV=production, COMMERCIAL_CHECKOUT_ENABLED=true, PAYMENTS_MODE=live, MOYSKLAD_MODE=live, PILOT_RUNTIME_ENFORCED=true and PILOT_RUNTIME_MAX_ORDERS=20 in the deployed .env"
             ),
             details={
                 "app_env": str(env.get("APP_ENV") or "").strip(),
+                "commercial_checkout_enabled": _true(env.get("COMMERCIAL_CHECKOUT_ENABLED")),
+                "payments_mode": str(env.get("PAYMENTS_MODE") or "").strip().lower(),
+                "moysklad_mode": str(env.get("MOYSKLAD_MODE") or "").strip().lower(),
                 "pilot_runtime_enforced": _true(env.get("PILOT_RUNTIME_ENFORCED")),
                 "pilot_runtime_max_orders": str(
                     env.get("PILOT_RUNTIME_MAX_ORDERS") or ""

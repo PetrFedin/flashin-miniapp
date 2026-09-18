@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from ..models import Order, ReturnRequest
 from ..services.payments import fetch_yookassa_refund
+from ..services.runtime_capabilities import payment_execution_enabled
 from ..services.refund_state import (
     apply_provider_refund_status,
     provider_refund_amount,
@@ -47,6 +48,17 @@ def _mark_refund_review_required(
 
 
 async def reconcile_pending_refunds(db: Session, limit: int = 50) -> dict[str, int]:
+    if not payment_execution_enabled():
+        return {
+            "seen": 0,
+            "succeeded": 0,
+            "pending": 0,
+            "canceled": 0,
+            "review_required": 0,
+            "provider_errors": 0,
+            "skipped": 0,
+        }
+
     candidate_ids = [
         row[0]
         for row in (

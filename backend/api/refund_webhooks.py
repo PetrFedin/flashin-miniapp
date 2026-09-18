@@ -6,6 +6,7 @@ from ..database import get_db
 from ..services.payments import fetch_yookassa_refund
 from ..services.pilot_circuit_breaker import PilotCircuitBreakerError, trip_pilot_circuit_breaker
 from ..services.refund_locking import lock_return_request_for_provider_refund
+from ..services.runtime_capabilities import require_payment_execution
 from ..services.refund_state import (
     apply_provider_refund_status,
     provider_refund_amount,
@@ -48,6 +49,7 @@ def _validate_webhook_request_headers(request: Request) -> None:
 
 
 async def _process_refund_webhook(payload: dict, db: Session):
+    require_payment_execution()
     event = str(payload.get("event") or "").strip().lower()
     if event != "refund.succeeded":
         return {"ok": True, "ignored": True, "event": event}
@@ -132,6 +134,7 @@ async def yookassa_provider_webhook(request: Request, db: Session = Depends(get_
     handler deliberately re-fetches authoritative provider state in the
     payment/refund processors instead of trusting webhook object fields.
     """
+    require_payment_execution()
     _validate_webhook_request_headers(request)
     raw_body = await request.body()
     payload, event, _obj, _provider_id = _parse_webhook_payload(raw_body)

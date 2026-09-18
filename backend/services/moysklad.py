@@ -12,6 +12,7 @@ from ..models import MoySkladSyncLog, Product, ProductVariant
 from .inventory import adjust_stock
 from .moysklad_mapping import apply_mapping, log_conflict
 from .moysklad_stock_authority import evaluate_moysklad_stock_snapshot
+from .runtime_capabilities import require_moysklad_execution
 
 
 def _headers() -> dict:
@@ -31,7 +32,7 @@ def _headers() -> dict:
 
 
 async def fetch_assortment(limit: int = 100, offset: int = 0) -> dict:
-    settings = get_settings()
+    settings = require_moysklad_execution(get_settings())
     safe_limit = max(1, min(int(limit), 1000))
     safe_offset = max(0, int(offset))
     url = f"{settings.moysklad_base_url}/entity/assortment"

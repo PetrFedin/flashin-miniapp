@@ -139,22 +139,16 @@ if is_production:
             "POSTGRES_PASSWORD",
             "CORS_ORIGINS",
             "ADMIN_URL",
-            "YOOKASSA_SHOP_ID",
-            "YOOKASSA_SECRET_KEY",
+            "COMMERCIAL_CHECKOUT_ENABLED",
+            "PAYMENTS_MODE",
             "OUTBOX_SIGNING_SECRET",
             "ADMIN_TOTP_ENCRYPTION_KEY",
-            "PILOT_EVIDENCE_SIGNING_SECRET",
-            "PILOT_PROVIDER_EVIDENCE_MAX_AGE_MINUTES",
-            "PILOT_LIVE_GATE_MAX_AGE_MINUTES",
-            "PILOT_ADMISSION_MAX_AGE_MINUTES",
-            "PILOT_ROLLBACK_DRILL_MAX_AGE_DAYS",
             "PILOT_RUNTIME_ENFORCED",
-            "PILOT_RUNTIME_MAX_ORDERS",
             "MEDIA_STORAGE",
             "MEILISEARCH_ENABLED",
             "SCHEDULER_ENABLED",
+            "MOYSKLAD_MODE",
             "MOYSKLAD_SYNC_INTERVAL_MINUTES",
-            "MOYSKLAD_SALE_PRICE_TYPE",
             "MOYSKLAD_SIZE_ATTRIBUTE_NAMES",
             "MOYSKLAD_COLOR_ATTRIBUTE_NAMES",
             "NOTIFICATION_BATCH_SIZE",
@@ -164,6 +158,27 @@ if is_production:
             "NOTIFICATION_MAX_BACKOFF_SECONDS",
         ]
     )
+
+commercial_checkout_enabled = is_true(env.get("COMMERCIAL_CHECKOUT_ENABLED"))
+payments_mode = env.get("PAYMENTS_MODE", "live").strip().lower()
+moysklad_mode = env.get("MOYSKLAD_MODE", "live").strip().lower()
+pilot_runtime_enforced = is_true(env.get("PILOT_RUNTIME_ENFORCED"))
+
+if is_production and payments_mode != "disabled":
+    required.extend(["YOOKASSA_SHOP_ID", "YOOKASSA_SECRET_KEY", "YOOKASSA_RETURN_URL"])
+if is_production and pilot_runtime_enforced:
+    required.extend(
+        [
+            "PILOT_EVIDENCE_SIGNING_SECRET",
+            "PILOT_PROVIDER_EVIDENCE_MAX_AGE_MINUTES",
+            "PILOT_LIVE_GATE_MAX_AGE_MINUTES",
+            "PILOT_ADMISSION_MAX_AGE_MINUTES",
+            "PILOT_ROLLBACK_DRILL_MAX_AGE_DAYS",
+            "PILOT_RUNTIME_MAX_ORDERS",
+        ]
+    )
+if is_production and moysklad_mode != "disabled":
+    required.append("MOYSKLAD_SALE_PRICE_TYPE")
 
 media_storage = env.get("MEDIA_STORAGE", "local").strip().lower()
 if is_production and media_storage in {"s3", "r2"}:
@@ -222,29 +237,49 @@ if is_production:
         invalid.append("POSTGRES_PASSWORD uses the development password")
     if not is_true(env.get("SCHEDULER_ENABLED")):
         invalid.append("SCHEDULER_ENABLED must be true in production")
-    if not is_true(env.get("PILOT_RUNTIME_ENFORCED")):
-        invalid.append("PILOT_RUNTIME_ENFORCED must be true in production")
+    if payments_mode not in {"disabled", "sandbox", "live"}:
+        invalid.append("PAYMENTS_MODE must be disabled, sandbox, or live")
+    if moysklad_mode not in {"disabled", "sandbox", "live"}:
+        invalid.append("MOYSKLAD_MODE must be disabled, sandbox, or live")
+    if commercial_checkout_enabled:
+        if payments_mode == "disabled":
+            invalid.append("PAYMENTS_MODE must not be disabled when commercial checkout is enabled")
+        if not pilot_runtime_enforced:
+            invalid.append(
+                "PILOT_RUNTIME_ENFORCED must be true for production commercial checkout"
+            )
+    else:
+        if payments_mode != "disabled":
+            invalid.append(
+                "PAYMENTS_MODE must be disabled when production commercial checkout is disabled"
+            )
+        if pilot_runtime_enforced:
+            invalid.append(
+                "PILOT_RUNTIME_ENFORCED must be false when production commercial checkout is disabled"
+            )
     if "localhost" in env.get("CORS_ORIGINS", "") or "127.0.0.1" in env.get("CORS_ORIGINS", ""):
         invalid.append("CORS_ORIGINS contains a local address in production")
 
-    for url_key in ("MINI_APP_URL", "API_PUBLIC_URL", "ADMIN_URL", "YOOKASSA_RETURN_URL"):
+    for url_key in ("MINI_APP_URL", "API_PUBLIC_URL", "ADMIN_URL"):
         require_https(env, url_key, invalid)
+    if payments_mode != "disabled":
+        require_https(env, "YOOKASSA_RETURN_URL", invalid)
 
     if media_storage not in {"s3", "r2"}:
         invalid.append("MEDIA_STORAGE must be r2 or s3 in production")
     else:
         require_https(env, "MEDIA_PUBLIC_BASE_URL", invalid)
 
-    if not is_true(env.get("MEILISEARCH_ENABLED")):
-        invalid.append("MEILISEARCH_ENABLED must be true in production")
-
-    if not env.get("MOYSKLAD_TOKEN") and not (
-        env.get("MOYSKLAD_LOGIN") and env.get("MOYSKLAD_PASSWORD")
-    ):
-        invalid.append("Configure MOYSKLAD_TOKEN or MOYSKLAD_LOGIN and MOYSKLAD_PASSWORD")
-
-    if not env.get("MOYSKLAD_SALE_PRICE_TYPE", "").strip():
-        invalid.append("MOYSKLAD_SALE_PRICE_TYPE must identify the retail sale price")
+    if moysklad_mode == "disabled":
+        if is_true(env.get("MOYSKLAD_ORDER_EXPORT_ENABLED")):
+            invalid.append("MOYSKLAD_ORDER_EXPORT_ENABLED must be false when MOYSKLAD_MODE=disabled")
+    else:
+        if not env.get("MOYSKLAD_TOKEN") and not (
+            env.get("MOYSKLAD_LOGIN") and env.get("MOYSKLAD_PASSWORD")
+        ):
+            invalid.append("Configure MOYSKLAD_TOKEN or MOYSKLAD_LOGIN and MOYSKLAD_PASSWORD")
+        if not env.get("MOYSKLAD_SALE_PRICE_TYPE", "").strip():
+            invalid.append("MOYSKLAD_SALE_PRICE_TYPE must identify the retail sale price")
     if not env.get("MOYSKLAD_SIZE_ATTRIBUTE_NAMES", "").strip():
         invalid.append("MOYSKLAD_SIZE_ATTRIBUTE_NAMES must not be empty")
     if not env.get("MOYSKLAD_COLOR_ATTRIBUTE_NAMES", "").strip():
@@ -261,8 +296,13 @@ live_age = validate_int(env, "PILOT_LIVE_GATE_MAX_AGE_MINUTES", 5, 120, invalid)
 admission_age = validate_int(env, "PILOT_ADMISSION_MAX_AGE_MINUTES", 5, 240, invalid)
 rollback_age = validate_int(env, "PILOT_ROLLBACK_DRILL_MAX_AGE_DAYS", 1, 90, invalid)
 pilot_runtime_max_orders = validate_int(env, "PILOT_RUNTIME_MAX_ORDERS", 1, 20, invalid)
-if is_production and pilot_runtime_max_orders is not None and pilot_runtime_max_orders != 20:
-    invalid.append("PILOT_RUNTIME_MAX_ORDERS must equal 20 in production")
+if (
+    is_production
+    and pilot_runtime_enforced
+    and pilot_runtime_max_orders is not None
+    and pilot_runtime_max_orders != 20
+):
+    invalid.append("PILOT_RUNTIME_MAX_ORDERS must equal 20 for production commercial checkout")
 if initial_backoff is not None and max_backoff is not None and max_backoff < initial_backoff:
     invalid.append("NOTIFICATION_MAX_BACKOFF_SECONDS must be >= NOTIFICATION_INITIAL_BACKOFF_SECONDS")
 
@@ -288,7 +328,10 @@ print(
         "pilot_live_gate_max_age_minutes": live_age,
         "pilot_admission_max_age_minutes": admission_age,
         "pilot_rollback_drill_max_age_days": rollback_age,
-        "pilot_runtime_enforced": is_true(env.get("PILOT_RUNTIME_ENFORCED")),
+        "commercial_checkout_enabled": commercial_checkout_enabled,
+        "payments_mode": payments_mode,
+        "moysklad_mode": moysklad_mode,
+        "pilot_runtime_enforced": pilot_runtime_enforced,
         "pilot_runtime_max_orders": pilot_runtime_max_orders,
     }
 )

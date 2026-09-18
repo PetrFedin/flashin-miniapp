@@ -7,6 +7,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 from pilot_readiness import CheckResult, build_report, check_legal_document, read_env, render_markdown
+import readiness_gate
 
 
 def test_read_env_ignores_comments_and_unquotes_values(tmp_path):
@@ -57,6 +58,22 @@ def test_final_legal_document_passes(tmp_path):
 
     assert result.ok is True
     assert result.detail == "final text detected"
+
+
+def test_provider_wiring_is_not_required_for_provider_disabled_production():
+    disabled = {
+        "COMMERCIAL_CHECKOUT_ENABLED": "false",
+        "PAYMENTS_MODE": "disabled",
+        "PILOT_RUNTIME_ENFORCED": "false",
+    }
+    pilot = {
+        "COMMERCIAL_CHECKOUT_ENABLED": "true",
+        "PAYMENTS_MODE": "live",
+        "PILOT_RUNTIME_ENFORCED": "true",
+    }
+
+    assert readiness_gate._controlled_commerce_profile(disabled) is False
+    assert readiness_gate._controlled_commerce_profile(pilot) is True
 
 
 def test_report_is_no_go_on_any_critical_failure():

@@ -147,6 +147,7 @@ def main() -> int:
         payments_api.create_yookassa_payment = fake_create_yookassa_payment
         payments_api.fetch_yookassa_payment = fake_fetch_yookassa_payment
         moysklad_outbound.get_settings = lambda: SimpleNamespace(
+            moysklad_mode="live",
             moysklad_order_export_enabled=True,
         )
         client = TestClient(app)

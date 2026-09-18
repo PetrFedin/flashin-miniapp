@@ -13,6 +13,7 @@ from pilot_readiness import (  # noqa: E402
     check_env_exact,
     check_http,
     check_public_https_url,
+    _controlled_commerce_profile,
 )
 
 
@@ -110,6 +111,23 @@ def test_public_hosts_must_be_distinct():
     assert valid.ok
     assert not duplicate.ok
     assert "duplicate hosts" in duplicate.detail
+
+
+def test_controlled_commerce_profile_requires_checkout_payments_and_pilot_runtime():
+    assert _controlled_commerce_profile(
+        {
+            "COMMERCIAL_CHECKOUT_ENABLED": "true",
+            "PAYMENTS_MODE": "live",
+            "PILOT_RUNTIME_ENFORCED": "true",
+        }
+    )
+    assert not _controlled_commerce_profile(
+        {
+            "COMMERCIAL_CHECKOUT_ENABLED": "false",
+            "PAYMENTS_MODE": "disabled",
+            "PILOT_RUNTIME_ENFORCED": "false",
+        }
+    )
 
 
 def test_environment_must_be_explicitly_production():
