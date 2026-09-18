@@ -17,6 +17,7 @@ from ..services.rbac import (
     PAYMENT_RECONCILIATION_WRITE_PERMISSION,
     require_permission,
 )
+from ..services.runtime_capabilities import require_payment_execution
 
 router = APIRouter(prefix="/payment-reconciliation", tags=["payment-reconciliation"])
 
@@ -39,6 +40,7 @@ async def check_payment(
     db: Session = Depends(get_db),
 ):
     require_permission(db, admin, PAYMENT_RECONCILIATION_WRITE_PERMISSION)
+    require_payment_execution()
     payment = db.query(Payment).filter(Payment.id == payment_id).first()
     if not payment:
         db.rollback()
