@@ -14,6 +14,7 @@ from ..services.moysklad_reverse_return import export_physical_sales_return
 from ..services.provider_command_safety import (
     enforce_terminal_provider_command_pilot_stop,
 )
+from ..services.runtime_capabilities import moysklad_execution_enabled
 from ..services.provider_commands import (
     claim_provider_commands,
     fail_provider_command,
@@ -54,6 +55,16 @@ _HANDLERS: dict[str, _Handler] = {
 
 
 async def process_provider_commands(db: Session, limit: int = 50) -> dict[str, int]:
+    if not moysklad_execution_enabled():
+        return {
+            "claimed": 0,
+            "sent": 0,
+            "retry_scheduled": 0,
+            "failed": 0,
+            "review_required": 0,
+            "ignored": 0,
+        }
+
     enforce_terminal_provider_command_pilot_stop(db)
 
     claimed = claim_provider_commands(db, provider="moysklad", limit=limit)
