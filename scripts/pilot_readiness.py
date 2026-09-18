@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
 import subprocess
 import urllib.error
 import urllib.request
@@ -190,11 +191,15 @@ def run_command(
     root: Path,
     critical: bool = True,
     timeout: int = 180,
+    env_overrides: Mapping[str, str] | None = None,
 ) -> CheckResult:
     try:
+        process_env = dict(os.environ)
+        process_env.update({str(key): str(value) for key, value in (env_overrides or {}).items()})
         result = subprocess.run(
             list(command),
             cwd=root,
+            env=process_env,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -437,6 +442,7 @@ def build_live_checks(root: Path, env: Mapping[str, str] | None = None) -> list[
                 ["python3", "scripts/check_telegram_bot.py"],
                 root=root,
                 timeout=60,
+                env_overrides=values,
             )
         )
         if str(values.get("MOYSKLAD_MODE", "")).strip().lower() in {"sandbox", "live"}:
@@ -446,6 +452,7 @@ def build_live_checks(root: Path, env: Mapping[str, str] | None = None) -> list[
                     ["python3", "scripts/check_moysklad.py"],
                     root=root,
                     timeout=60,
+                    env_overrides=values,
                 )
             )
     return checks
