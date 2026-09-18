@@ -78,6 +78,7 @@ def main() -> int:
     provider_posts: list[tuple[str, dict]] = []
 
     fake_settings = SimpleNamespace(
+        moysklad_mode="live",
         moysklad_order_export_enabled=True,
         moysklad_token="ci-provider-token",
         moysklad_login="",
