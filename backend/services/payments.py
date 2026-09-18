@@ -8,6 +8,7 @@ from fastapi import HTTPException
 
 from ..config import get_settings
 from .pilot_payment_guard import pilot_new_payment_attempt_guard
+from .runtime_capabilities import require_payment_execution
 
 _YOOKASSA_API = "https://api.yookassa.ru/v3"
 _TRANSIENT_STATUSES = {429, 500, 502, 503, 504}
@@ -75,7 +76,7 @@ async def _request_yookassa(
     payload: dict | None = None,
     idempotence_key: str | None = None,
 ) -> dict:
-    settings = get_settings()
+    settings = require_payment_execution(get_settings())
     if not settings.yookassa_shop_id or not settings.yookassa_secret_key:
         raise HTTPException(status_code=500, detail="YooKassa is not configured.")
 
