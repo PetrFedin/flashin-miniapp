@@ -10,6 +10,7 @@ from ..services.order_cancellation import cancel_order_before_settlement
 from ..services.payment_attempts import resolve_provider_payment_attempt
 from ..services.payment_review import ensure_payment_review_case
 from ..services.payment_settlement import settle_paid_order
+from ..services.runtime_capabilities import payment_execution_enabled
 
 _PROVIDER = "yookassa"
 _RECONCILABLE_PAYMENT_STATUSES = frozenset({"pending", "waiting_for_capture", "succeeded"})
@@ -112,6 +113,17 @@ async def reconcile_pending_payments(db: Session, limit: int = 50) -> dict[str, 
     same settlement/cancellation domain functions used by the webhook path are
     applied. No PaymentEvent row is fabricated because no webhook was received.
     """
+    if not payment_execution_enabled():
+        return {
+            "seen": 0,
+            "succeeded": 0,
+            "pending": 0,
+            "canceled": 0,
+            "review_required": 0,
+            "provider_errors": 0,
+            "skipped": 0,
+        }
+
     candidate_ids = _candidate_payment_ids(db, limit=limit)
     result = {
         "seen": len(candidate_ids),
