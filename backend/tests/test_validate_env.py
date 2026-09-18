@@ -21,6 +21,8 @@ def _valid_production_env() -> dict[str, str]:
         "MINI_APP_URL": "https://mini.flashin.store",
         "API_PUBLIC_URL": "https://api.flashin.store",
         "ADMIN_URL": "https://admin.flashin.store",
+        "COMMERCIAL_CHECKOUT_ENABLED": "true",
+        "PAYMENTS_MODE": "live",
         "YOOKASSA_SHOP_ID": "shop-id",
         "YOOKASSA_SECRET_KEY": "yookassa-secret",
         "YOOKASSA_RETURN_URL": "https://mini.flashin.store/payment-result",
@@ -40,6 +42,7 @@ def _valid_production_env() -> dict[str, str]:
         "S3_SECRET_ACCESS_KEY": "secret-key",
         "MEILISEARCH_ENABLED": "true",
         "MEILISEARCH_MASTER_KEY": "meili-master-key",
+        "MOYSKLAD_MODE": "live",
         "MOYSKLAD_TOKEN": "moysklad-token",
         "MOYSKLAD_SALE_PRICE_TYPE": "Розничная цена",
         "MOYSKLAD_SIZE_ATTRIBUTE_NAMES": "Размер,Size",
@@ -71,6 +74,34 @@ def test_valid_production_environment_passes(tmp_path):
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Environment OK" in result.stdout
+
+
+def test_provider_disabled_production_passes_without_commerce_provider_credentials(tmp_path):
+    values = _valid_production_env()
+    values["COMMERCIAL_CHECKOUT_ENABLED"] = "false"
+    values["PAYMENTS_MODE"] = "disabled"
+    values["PILOT_RUNTIME_ENFORCED"] = "false"
+    values.pop("PILOT_EVIDENCE_SIGNING_SECRET", None)
+    values.pop("PILOT_PROVIDER_EVIDENCE_MAX_AGE_MINUTES", None)
+    values.pop("PILOT_LIVE_GATE_MAX_AGE_MINUTES", None)
+    values.pop("PILOT_ADMISSION_MAX_AGE_MINUTES", None)
+    values.pop("PILOT_ROLLBACK_DRILL_MAX_AGE_DAYS", None)
+    values.pop("PILOT_RUNTIME_MAX_ORDERS", None)
+    values.pop("YOOKASSA_SHOP_ID", None)
+    values.pop("YOOKASSA_SECRET_KEY", None)
+    values.pop("YOOKASSA_RETURN_URL", None)
+    values["MOYSKLAD_MODE"] = "disabled"
+    values.pop("MOYSKLAD_TOKEN", None)
+    values.pop("MOYSKLAD_SALE_PRICE_TYPE", None)
+    values["MEILISEARCH_ENABLED"] = "false"
+    values.pop("MEILISEARCH_MASTER_KEY", None)
+
+    result = _run_validator(tmp_path, values)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Environment OK" in result.stdout
+    assert "'payments_mode': 'disabled'" in result.stdout
+    assert "'moysklad_mode': 'disabled'" in result.stdout
 
 
 def test_persisted_production_admin_password_is_rejected(tmp_path):
@@ -164,14 +195,14 @@ def test_pilot_evidence_ttl_outside_safe_range_is_rejected(tmp_path):
     assert "PILOT_LIVE_GATE_MAX_AGE_MINUTES must be between 5 and 120" in result.stdout
 
 
-def test_disabled_pilot_runtime_is_rejected_in_production(tmp_path):
+def test_disabled_pilot_runtime_is_rejected_when_commercial_checkout_is_enabled(tmp_path):
     values = _valid_production_env()
     values["PILOT_RUNTIME_ENFORCED"] = "false"
 
     result = _run_validator(tmp_path, values)
 
     assert result.returncode == 1
-    assert "PILOT_RUNTIME_ENFORCED must be true in production" in result.stdout
+    assert "PILOT_RUNTIME_ENFORCED must be true for production commercial checkout" in result.stdout
 
 
 def test_pilot_runtime_limit_must_equal_twenty(tmp_path):
@@ -181,4 +212,4 @@ def test_pilot_runtime_limit_must_equal_twenty(tmp_path):
     result = _run_validator(tmp_path, values)
 
     assert result.returncode == 1
-    assert "PILOT_RUNTIME_MAX_ORDERS must equal 20 in production" in result.stdout
+    assert "PILOT_RUNTIME_MAX_ORDERS must equal 20 for production commercial checkout" in result.stdout
