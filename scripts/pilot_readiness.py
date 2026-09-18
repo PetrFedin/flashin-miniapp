@@ -302,6 +302,18 @@ def _public_urls(values: Mapping[str, str]) -> dict[str, str]:
     return {key: str(values.get(key, "")).rstrip("/") for key in PUBLIC_URL_KEYS}
 
 
+def _truthy(value: object) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _controlled_commerce_profile(values: Mapping[str, str]) -> bool:
+    return (
+        _truthy(values.get("COMMERCIAL_CHECKOUT_ENABLED"))
+        and str(values.get("PAYMENTS_MODE", "")).strip().lower() in {"sandbox", "live"}
+        and _truthy(values.get("PILOT_RUNTIME_ENFORCED"))
+    )
+
+
 def build_predeploy_checks(root: Path) -> list[CheckResult]:
     values = read_env(root / ".env")
     public_urls = _public_urls(values)
@@ -409,14 +421,33 @@ def build_live_checks(root: Path, env: Mapping[str, str] | None = None) -> list[
                 },
             )
         )
-    checks.append(
-        run_command(
-            "live:provider_integrations",
-            ["python3", "scripts/check_integrations.py"],
-            root=root,
-            timeout=300,
+    if _controlled_commerce_profile(values):
+        checks.append(
+            run_command(
+                "live:provider_integrations",
+                ["python3", "scripts/check_integrations.py"],
+                root=root,
+                timeout=300,
+            )
         )
-    )
+    else:
+        checks.append(
+            run_command(
+                "live:telegram",
+                ["python3", "scripts/check_telegram_bot.py"],
+                root=root,
+                timeout=60,
+            )
+        )
+        if str(values.get("MOYSKLAD_MODE", "")).strip().lower() in {"sandbox", "live"}:
+            checks.append(
+                run_command(
+                    "live:moysklad",
+                    ["python3", "scripts/check_moysklad.py"],
+                    root=root,
+                    timeout=60,
+                )
+            )
     return checks
 
 
