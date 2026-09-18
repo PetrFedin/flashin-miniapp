@@ -14,6 +14,7 @@ from ..config import get_settings
 from ..models import Order, OrderItem, Product, ProductVariant, ReturnRequest
 from ..provider_models import ProviderCommand
 from .provider_commands import enqueue_provider_command
+from .runtime_capabilities import moysklad_execution_enabled
 
 _MONEY = Decimal("0.01")
 _SYNC_NAMESPACE = uuid.UUID("d5288fc4-9e28-4de8-8a0e-cbb8c1cc1a9f")
@@ -103,6 +104,8 @@ def _entity_meta(entity_type: str, entity_id: str) -> dict[str, Any]:
 
 def _require_export_configuration() -> None:
     settings = get_settings()
+    if not moysklad_execution_enabled(settings):
+        raise MoySkladReviewRequired("MoySklad external execution is disabled")
     if not settings.moysklad_order_export_enabled:
         raise MoySkladReviewRequired("MoySklad order export is disabled")
     _headers()
@@ -123,6 +126,8 @@ async def _request_json(
     params: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     settings = get_settings()
+    if not moysklad_execution_enabled(settings):
+        raise MoySkladReviewRequired("MoySklad external execution is disabled")
     url = f"{settings.moysklad_base_url.rstrip('/')}/{path.lstrip('/')}"
     try:
         async with httpx.AsyncClient(timeout=30) as client:
@@ -462,7 +467,8 @@ async def export_sales_return(_db: Session, _order_id: int, _return_id: int) -> 
 
 
 def enqueue_moysklad_customer_order(db: Session, order_id: int):
-    if not get_settings().moysklad_order_export_enabled:
+    settings = get_settings()
+    if not moysklad_execution_enabled(settings) or not settings.moysklad_order_export_enabled:
         return None
     return enqueue_provider_command(
         db,
@@ -476,7 +482,8 @@ def enqueue_moysklad_customer_order(db: Session, order_id: int):
 
 
 def enqueue_moysklad_demand(db: Session, order_id: int):
-    if not get_settings().moysklad_order_export_enabled:
+    settings = get_settings()
+    if not moysklad_execution_enabled(settings) or not settings.moysklad_order_export_enabled:
         return None
     return enqueue_provider_command(
         db,
