@@ -7,12 +7,17 @@ test("bootstrap keeps critical data when optional sections fail", async () => {
   const result = await loadStorefrontBootstrap({
     listProducts: async () => [{ id: 1 }],
     getCart: async () => ({ id: 2, items: [] }),
+    getPlatformCapabilities: async () => ({
+      commercial_checkout: { enabled: true },
+      payments: { enabled: true, mode: "sandbox" },
+    }),
     listLooks: async () => { throw new Error("looks offline"); },
     listWishlist: async () => [{ id: 3 }],
   });
 
   assert.deepEqual(result.products, [{ id: 1 }]);
   assert.deepEqual(result.cart, { id: 2, items: [] });
+  assert.equal(result.capabilities.commercial_checkout.enabled, true);
   assert.deepEqual(result.looks, []);
   assert.deepEqual(result.wishlist, [{ id: 3 }]);
   assert.equal(result.warnings.length, 1);
@@ -24,11 +29,26 @@ test("bootstrap rejects when catalog or cart cannot load", async () => {
     loadStorefrontBootstrap({
       listProducts: async () => { throw new Error("catalog offline"); },
       getCart: async () => ({ id: 2 }),
+      getPlatformCapabilities: async () => ({}),
       listLooks: async () => [],
       listWishlist: async () => [],
     }),
     /catalog offline/,
   );
+});
+
+test("bootstrap keeps catalog and cart but disables commerce when capability projection fails", async () => {
+  const result = await loadStorefrontBootstrap({
+    listProducts: async () => [{ id: 1 }],
+    getCart: async () => ({ id: 2, items: [] }),
+    getPlatformCapabilities: async () => { throw new Error("capabilities offline"); },
+    listLooks: async () => [],
+    listWishlist: async () => [],
+  });
+
+  assert.equal(result.capabilities.commercial_checkout.enabled, false);
+  assert.equal(result.capabilities.payments.enabled, false);
+  assert.match(result.warnings[0], /Режим покупок/);
 });
 
 test("profile loader preserves successful sections", async () => {
