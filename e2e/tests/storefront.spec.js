@@ -1,5 +1,27 @@
 import { expect, test } from "@playwright/test";
 
+const LIVE_RUNTIME_CAPABILITIES = {
+  catalog: { enabled: true },
+  cart: { enabled: true },
+  commercial_checkout: { enabled: true },
+  payments: { enabled: true, mode: "live", provider: "yookassa" },
+  preorder: { enabled: true },
+  made_to_order: { enabled: true },
+  showroom: { enabled: true },
+  moysklad: { enabled: true, mode: "live" },
+  search: { enabled: true, mode: "database" },
+  media: { enabled: true, mode: "local" },
+  controlled_commerce_pilot: { enabled: true, max_orders: 20 },
+};
+
+const PROVIDER_DISABLED_RUNTIME_CAPABILITIES = {
+  ...LIVE_RUNTIME_CAPABILITIES,
+  commercial_checkout: { enabled: false },
+  payments: { enabled: false, mode: "disabled", provider: null },
+  moysklad: { enabled: false, mode: "disabled" },
+  controlled_commerce_pilot: { enabled: false, max_orders: null },
+};
+
 const product = {
   id: 1,
   sku: "FLASH-001",
@@ -92,6 +114,8 @@ async function installTelegram(page) {
 }
 
 async function mockApi(page, options = {}) {
+  const runtimeCapabilities = options.capabilities || LIVE_RUNTIME_CAPABILITIES;
+  let commercialMutationAttempts = 0;
   let cart = emptyCart();
   let wishlist = [...(options.initialWishlist || [])];
   let orders = [...(options.initialOrders || [])];
@@ -111,6 +135,7 @@ async function mockApi(page, options = {}) {
     });
 
     if (path === "/api/auth/telegram" && method === "POST") return json({ access_token: "pilot-token" });
+    if (path === "/api/platform/capabilities" && method === "GET") return json(runtimeCapabilities);
     if (path === "/api/products" && method === "GET") return json([product]);
     if (path === "/api/products/1" && method === "GET") return json(product);
     if (path === "/api/search/products" && method === "GET") return json([product]);
@@ -158,6 +183,7 @@ async function mockApi(page, options = {}) {
     }
 
     if (path === "/api/orders/checkout" && method === "POST") {
+      commercialMutationAttempts += 1;
       const order = {
         id: 9001,
         status: "created",
@@ -173,6 +199,7 @@ async function mockApi(page, options = {}) {
       return json(order);
     }
     if (path === "/api/payments" && method === "POST") {
+      commercialMutationAttempts += 1;
       return json({ id: 1, order_id: 9001, status: "pending", confirmation_url: null });
     }
     if (path === "/api/orders" && method === "GET") return json(orders);
@@ -232,10 +259,31 @@ async function mockApi(page, options = {}) {
       privacyRequests = [privacyRequest, ...privacyRequests];
       return json(privacyRequest, 201);
     }
+    if (path === "/api/catalog/intents/eligible-products" && method === "GET") {
+      return json([{
+        id: product.id,
+        title: product.title,
+        brand: product.brand,
+        price: product.price,
+        currency: product.currency,
+        intent_type: "preorder",
+        image_url: product.images[0].url,
+        variants: [{ id: 12, size: "L", color: "Black", available_qty: 0, intent_eligible: true }],
+      }]);
+    }
+    if (path === "/api/catalog/intents" && method === "POST") {
+      const body = request.postDataJSON();
+      return json({ id: 1001, ...body, intent_type: "preorder", status: "requested", payment_allowed: false });
+    }
+    if (path === "/api/catalog/showroom/appointments" && method === "POST") {
+      const body = request.postDataJSON();
+      return json({ id: 1101, ...body, status: "requested" });
+    }
     if (path === "/api/analytics/events" && method === "POST") return json({ accepted: true });
 
     return json({ detail: `Unmocked ${method} ${path}` }, 501);
   });
+  return { commercialMutationAttempts: () => commercialMutationAttempts };
 }
 
 async function openProduct(page) {
@@ -302,6 +350,56 @@ test("Mini App critical pilot journey", async ({ page }) => {
   await page.getByRole("button", { name: "Отменить заказ" }).click();
   await expect(page.getByRole("status")).toContainText("Заказ #9001 отменён");
   await expect(page.getByText("Отменён", { exact: true })).toBeVisible();
+});
+
+test("provider-disabled production keeps non-money customer surfaces usable", async ({ page }) => {
+  await installTelegram(page);
+  const proof = await mockApi(page, {
+    capabilities: PROVIDER_DISABLED_RUNTIME_CAPABILITIES,
+    initialOrders: [paidOrder()],
+  });
+  await page.goto("/");
+
+  await expect(page.getByRole("heading", { name: "Каталог" })).toBeVisible();
+  await openProduct(page);
+  await page.getByRole("button", { name: "Сохранить в избранное" }).click();
+  await expect(page.getByText("сохранён в избранном")).toBeVisible();
+  await page.getByRole("button", { name: "Добавить размер M в корзину" }).click();
+  await page.getByRole("button", { name: /Корзина · 1/ }).click();
+  await expect(page.getByText("Онлайн-оформление сейчас отключено.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Оформить заказ" })).toHaveCount(0);
+
+  const nonMoney = await page.evaluate(async () => {
+    const eligible = await fetch("http://localhost:8000/api/catalog/intents/eligible-products").then((response) => response.json());
+    const preorder = await fetch("http://localhost:8000/api/catalog/intents", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ product_id: 1, variant_id: 12, quantity: 1, requested_size: "L", notes: "Browser proof" }),
+    }).then((response) => response.json());
+    const showroom = await fetch("http://localhost:8000/api/catalog/showroom/appointments", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ product_id: 1, starts_at: "2026-10-01T12:00:00Z", duration_minutes: 30, notes: "Browser proof" }),
+    }).then((response) => response.json());
+    return { eligible, preorder, showroom };
+  });
+  expect(nonMoney.eligible[0].intent_type).toBe("preorder");
+  expect(nonMoney.preorder.payment_allowed).toBe(false);
+  expect(nonMoney.showroom.status).toBe("requested");
+
+  await page.getByRole("button", { name: "Профиль" }).click();
+  await expect(page.getByRole("heading", { name: "Профиль и сервис" })).toBeVisible();
+  await page.getByRole("combobox").selectOption("9002");
+  await page.getByPlaceholder("Тема обращения").fill("Вопрос без оплаты");
+  await page.getByPlaceholder("Опишите вопрос и ожидаемый результат").fill("Проверка provider-disabled production");
+  await page.getByRole("button", { name: "Отправить обращение" }).click();
+  await expect(page.getByRole("status")).toContainText("Обращение зарегистрировано");
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Отозвать необязательные согласия" }).click();
+  await expect(page.getByRole("status")).toContainText("Запрос на отзыв согласий зарегистрирован");
+
+  expect(proof.commercialMutationAttempts()).toBe(0);
 });
 
 test("Mini App cart quantity and removal controls", async ({ page }) => {
