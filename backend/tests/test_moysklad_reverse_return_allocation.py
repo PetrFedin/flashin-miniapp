@@ -185,7 +185,7 @@ def test_allocation_failure_persists_owned_fail_closed_provider_evidence(monkeyp
     monkeypatch.setattr(
         reverse_moysklad,
         "get_settings",
-        lambda: SimpleNamespace(moysklad_order_export_enabled=True),
+        lambda: SimpleNamespace(moysklad_mode="live", moysklad_order_export_enabled=True),
     )
 
     def fail_allocation(*_args, **_kwargs):
