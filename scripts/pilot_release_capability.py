@@ -240,6 +240,16 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
     ("frontend/src/storefrontLoaders.js", ("SAFE_CAPABILITY_FALLBACK", "api.getPlatformCapabilities()")),
     (
+        "e2e/tests/storefront.spec.js",
+        (
+            "provider-disabled production keeps non-money customer surfaces usable",
+            "PROVIDER_DISABLED_RUNTIME_CAPABILITIES",
+            "commercialMutationAttempts",
+            "made_to_order",
+            "Онлайн-оформление сейчас отключено.",
+        ),
+    ),
+    (
         "backend/tests/test_runtime_capabilities.py",
         (
             "test_checkout_is_rejected_before_idempotency_or_database_mutation",
