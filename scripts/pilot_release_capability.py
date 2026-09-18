@@ -110,6 +110,35 @@ REQUIRED_FILES = {
     "scripts/rollback.sh",
 }
 
+# Production capability modes are part of the immutable runtime/rollback contract.
+PRODUCTION_CAPABILITY_REQUIRED_FILES = {
+    ".env.production.example",
+    "backend/config.py",
+    "backend/api/orders.py",
+    "backend/api/payments.py",
+    "backend/api/platform.py",
+    "backend/jobs/moysklad_jobs.py",
+    "backend/jobs/payment_jobs.py",
+    "backend/jobs/provider_command_jobs.py",
+    "backend/jobs/refund_jobs.py",
+    "backend/services/diagnostics.py",
+    "backend/services/moysklad.py",
+    "backend/services/payments.py",
+    "backend/services/runtime_capabilities.py",
+    "backend/tests/test_production_config.py",
+    "backend/tests/test_runtime_capabilities.py",
+    "backend/tests/test_runtime_capability_diagnostics.py",
+    "frontend/src/App.jsx",
+    "frontend/src/api.js",
+    "frontend/src/storefrontLoaders.js",
+    "frontend/src/storefrontLoaders.test.js",
+    "scripts/pilot_launch_preflight.py",
+    "scripts/pilot_readiness.py",
+    "scripts/readiness_gate.py",
+    "scripts/validate_env.py",
+}
+REQUIRED_FILES |= PRODUCTION_CAPABILITY_REQUIRED_FILES
+
 # Reverse-logistics/MoySklad stock authority is part of the immutable rollback
 # capability, not merely incidental archive content. These files jointly define
 # schema authority, physical evidence, signed inventory semantics, provider
@@ -143,14 +172,87 @@ REQUIRED_FILES |= AUTHORITY_REQUIRED_FILES
 # binds one packaged runtime/test surface to concrete behavior, not just presence.
 MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("backend/api/orders.py", ("acquire_pilot_checkout(", "record_pilot_order(")),
-    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 21",)),
+    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 22",)),
     (
         "scripts/pilot_release_capability.py",
         (
             "from pilot_release_contract import CAPABILITY_VERSION",
+            "PRODUCTION_CAPABILITY_REQUIRED_FILES",
+            "REQUIRED_FILES |= PRODUCTION_CAPABILITY_REQUIRED_FILES",
             "AUTHORITY_REQUIRED_FILES",
             "REQUIRED_FILES |= AUTHORITY_REQUIRED_FILES",
             "MARKER_REQUIREMENTS",
+        ),
+    ),
+    (
+        ".env.production.example",
+        ("COMMERCIAL_CHECKOUT_ENABLED=false", "PAYMENTS_MODE=disabled", "MOYSKLAD_MODE=disabled"),
+    ),
+    (
+        "backend/config.py",
+        (
+            "commercial_checkout_enabled: bool",
+            "payments_mode: str",
+            "moysklad_mode: str",
+            "PAYMENTS_MODE must be disabled when production commercial checkout is disabled",
+            "PILOT_RUNTIME_ENFORCED must be false when production commercial checkout is disabled",
+        ),
+    ),
+    (
+        "backend/services/runtime_capabilities.py",
+        (
+            "def payment_execution_enabled(",
+            "def moysklad_execution_enabled(",
+            "def require_commercial_checkout(",
+            "def require_payment_execution(",
+            "def require_moysklad_execution(",
+            "def public_runtime_capabilities(",
+        ),
+    ),
+    ("backend/api/platform.py", ('@router.get("/capabilities")', "return public_runtime_capabilities()")),
+    ("backend/api/orders.py", ("require_commercial_checkout", "require_commercial_checkout()", "acquire_pilot_checkout(")),
+    ("backend/api/payments.py", ("require_payment_execution", "ProviderPaymentIntegrityError", "trip_pilot_circuit_breaker(")),
+    ("backend/services/payments.py", ("require_payment_execution", "async def _request_yookassa(")),
+    ("backend/services/moysklad.py", ("require_moysklad_execution", "async def fetch_assortment(")),
+    ("backend/jobs/payment_jobs.py", ("payment_execution_enabled", "reconcile_pending_payments")),
+    ("backend/jobs/refund_jobs.py", ("payment_execution_enabled", "reconcile_pending_refunds")),
+    ("backend/jobs/provider_command_jobs.py", ("moysklad_execution_enabled", "process_provider_commands")),
+    ("backend/jobs/moysklad_jobs.py", ("moysklad_execution_enabled", "run_moysklad_pipeline")),
+    (
+        "backend/services/diagnostics.py",
+        ("payment_execution_enabled(settings)", "moysklad_execution_enabled(settings)", '"status": "disabled"'),
+    ),
+    (
+        "scripts/validate_env.py",
+        ('"COMMERCIAL_CHECKOUT_ENABLED"', '"PAYMENTS_MODE"', '"MOYSKLAD_MODE"', "commercial_checkout_enabled ="),
+    ),
+    (
+        "scripts/pilot_launch_preflight.py",
+        (
+            "COMMERCIAL_CHECKOUT_ENABLED must be true for pilot runtime arm",
+            "PAYMENTS_MODE must be sandbox or live for pilot runtime arm",
+            "MOYSKLAD_MODE must be sandbox or live for pilot runtime arm",
+        ),
+    ),
+    (
+        "frontend/src/App.jsx",
+        ("SAFE_RUNTIME_CAPABILITIES", "commercialCheckoutEnabled", "paymentsEnabled", "Онлайн-оформление сейчас отключено."),
+    ),
+    ("frontend/src/storefrontLoaders.js", ("SAFE_CAPABILITY_FALLBACK", "api.getPlatformCapabilities()")),
+    (
+        "backend/tests/test_runtime_capabilities.py",
+        (
+            "test_checkout_is_rejected_before_idempotency_or_database_mutation",
+            "test_payment_creation_is_rejected_before_attempt_claim",
+            "test_low_level_yookassa_transport_never_constructs_http_client_when_disabled",
+            "test_disabled_background_jobs_do_not_touch_database_or_provider",
+        ),
+    ),
+    (
+        "backend/tests/test_production_config.py",
+        (
+            "test_provider_disabled_production_does_not_require_commerce_credentials_or_pilot_state",
+            "test_production_rejects_enabled_payments_when_checkout_is_disabled",
         ),
     ),
     (
