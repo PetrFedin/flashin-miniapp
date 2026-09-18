@@ -119,6 +119,7 @@ def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(
         ("backend/services/runtime_capabilities.py", "def public_runtime_capabilities(): return {}\n", "require_payment_execution"),
         ("backend/api/platform.py", "router = object()\n", '@router.get("/capabilities")'),
         ("frontend/src/App.jsx", "export default function App() {}\n", "SAFE_RUNTIME_CAPABILITIES"),
+        ("e2e/tests/storefront.spec.js", "test(\"placeholder\", async () => {})\n", "provider-disabled production keeps non-money customer surfaces usable"),
         (".github/workflows/ci.yml", "jobs:\n  docker:\n    needs: [backend]\n", "browser-e2e"),
         ("backend/middleware/metrics.py", "def metrics_response(): pass\n", "flashin_pilot_metrics_collection_success"),
         ("admin/src/BusinessEventsPanel.jsx", "export default function Panel() {}\n", "ServiceOperationsPanel"),
