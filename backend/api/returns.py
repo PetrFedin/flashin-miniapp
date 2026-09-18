@@ -14,6 +14,7 @@ from ..services.pilot_circuit_breaker import (
     trip_pilot_circuit_breaker,
 )
 from ..services.rbac import REFUNDS_WRITE_PERMISSION, require_permission
+from ..services.runtime_capabilities import require_payment_execution
 from ..services.refund_locking import (
     lock_return_request_for_approval,
     lock_return_request_for_known_order,
@@ -252,6 +253,7 @@ async def approve_return(
     db: Session = Depends(get_db),
 ):
     require_permission(db, admin, REFUNDS_WRITE_PERMISSION)
+    require_payment_execution()
 
     try:
         order, ret = lock_return_request_for_approval(db, payload.return_id)
