@@ -260,20 +260,38 @@ async function mockApi(page, options = {}) {
       return json(privacyRequest, 201);
     }
     if (path === "/api/catalog/intents/eligible-products" && method === "GET") {
-      return json([{
-        id: product.id,
-        title: product.title,
-        brand: product.brand,
-        price: product.price,
-        currency: product.currency,
-        intent_type: "preorder",
-        image_url: product.images[0].url,
-        variants: [{ id: 12, size: "L", color: "Black", available_qty: 0, intent_eligible: true }],
-      }]);
+      return json([
+        {
+          id: product.id,
+          title: product.title,
+          brand: product.brand,
+          price: product.price,
+          currency: product.currency,
+          intent_type: "preorder",
+          image_url: product.images[0].url,
+          variants: [{ id: 12, size: "L", color: "Black", available_qty: 0, intent_eligible: true }],
+        },
+        {
+          id: 2,
+          title: "Pilot Made-to-Order Coat",
+          brand: product.brand,
+          price: 24000,
+          currency: product.currency,
+          intent_type: "made_to_order",
+          image_url: product.images[0].url,
+          variants: [],
+        },
+      ]);
     }
     if (path === "/api/catalog/intents" && method === "POST") {
       const body = request.postDataJSON();
-      return json({ id: 1001, ...body, intent_type: "preorder", status: "requested", payment_allowed: false });
+      return json({
+        id: body.product_id === 2 ? 1002 : 1001,
+        ...body,
+        intent_type: body.product_id === 2 ? "made_to_order" : "preorder",
+        status: "requested",
+        payment_allowed: false,
+      });
     }
     if (path === "/api/catalog/showroom/appointments" && method === "POST") {
       const body = request.postDataJSON();
@@ -376,15 +394,23 @@ test("provider-disabled production keeps non-money customer surfaces usable", as
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ product_id: 1, variant_id: 12, quantity: 1, requested_size: "L", notes: "Browser proof" }),
     }).then((response) => response.json());
+    const madeToOrder = await fetch("http://localhost:8000/api/catalog/intents", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ product_id: 2, quantity: 1, requested_size: "Custom", notes: "Browser proof" }),
+    }).then((response) => response.json());
     const showroom = await fetch("http://localhost:8000/api/catalog/showroom/appointments", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ product_id: 1, starts_at: "2026-10-01T12:00:00Z", duration_minutes: 30, notes: "Browser proof" }),
     }).then((response) => response.json());
-    return { eligible, preorder, showroom };
+    return { eligible, preorder, madeToOrder, showroom };
   });
   expect(nonMoney.eligible[0].intent_type).toBe("preorder");
   expect(nonMoney.preorder.payment_allowed).toBe(false);
+  expect(nonMoney.eligible[1].intent_type).toBe("made_to_order");
+  expect(nonMoney.madeToOrder.intent_type).toBe("made_to_order");
+  expect(nonMoney.madeToOrder.payment_allowed).toBe(false);
   expect(nonMoney.showroom.status).toBe("requested");
 
   await page.getByRole("button", { name: "Профиль" }).click();
