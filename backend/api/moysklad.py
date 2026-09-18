@@ -10,6 +10,7 @@ from ..security import get_current_admin
 from ..services.moysklad import sync_assortment_to_catalog
 from ..services.moysklad_operations import build_moysklad_operations_status
 from ..services.rbac import require_permission
+from ..services.runtime_capabilities import require_moysklad_execution
 
 router = APIRouter(prefix="/moysklad", tags=["moysklad"])
 
@@ -40,6 +41,7 @@ def _serialize_outbound_command(command: ProviderCommand) -> dict[str, object]:
 async def sync_moysklad(admin=Depends(get_current_admin), db: Session = Depends(get_db)):
     require_permission(db, admin, "products.write")
     require_permission(db, admin, "inventory.write")
+    require_moysklad_execution()
     return await sync_assortment_to_catalog(db, sync_type="manual", admin_id=admin.id)
 
 
