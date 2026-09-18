@@ -57,6 +57,9 @@ def test_public_capability_projection_is_safe_and_explicit():
     assert payload["payments"]["mode"] == "disabled"
     assert payload["payments"]["provider"] is None
     assert payload["moysklad"] == {"enabled": False, "mode": "disabled"}
+    assert payload["preorder"] == {"enabled": True}
+    assert payload["made_to_order"] == {"enabled": True}
+    assert payload["showroom"] == {"enabled": True}
     assert payload["search"] == {"enabled": True, "mode": "database"}
     rendered = repr(payload)
     assert "must-not-leak-secret" not in rendered
