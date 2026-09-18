@@ -179,6 +179,10 @@ export async function telegramAuth(initData) {
   }
 }
 
+export async function getPlatformCapabilities() {
+  return request("/api/platform/capabilities", { auth: false });
+}
+
 export async function listProducts() {
   return request("/api/products", { auth: false });
 }
