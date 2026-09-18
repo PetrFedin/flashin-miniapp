@@ -36,6 +36,7 @@ from ..services.pilot_circuit_breaker import (
     trip_pilot_circuit_breaker,
 )
 from ..services.provider_failures import is_retryable_yookassa_error, yookassa_error_reason
+from ..services.runtime_capabilities import require_payment_execution
 
 router = APIRouter(prefix="/payments", tags=["payments"])
 
@@ -388,6 +389,7 @@ async def create_payment(
     customer=Depends(get_current_customer),
     db: Session = Depends(get_db),
 ):
+    require_payment_execution()
     provider_payment_id = ""
     provider_status = ""
     attempt_id: int | None = None
@@ -628,6 +630,7 @@ async def create_payment(
 
 @router.post("/webhook/yookassa")
 async def yookassa_webhook(request: Request, db: Session = Depends(get_db)):
+    require_payment_execution()
     content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
     if content_type and content_type != "application/json":
         raise HTTPException(status_code=415, detail="Webhook content type must be application/json")
