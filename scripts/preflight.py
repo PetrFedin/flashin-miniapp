@@ -122,28 +122,69 @@ REQUIRED_FILES = [
     "frontend/public/legal/returns.html",
 ]
 
-missing = [path for path in REQUIRED_FILES if not (ROOT / path).exists()]
-if missing:
-    print("Missing required files:")
-    for path in missing:
-        print(" -", path)
-    sys.exit(1)
+BASE_REQUIRED_ENV_KEYS = (
+    "DATABASE_URL",
+    "TELEGRAM_BOT_TOKEN",
+    "JWT_SECRET",
+    "ADMIN_EMAIL",
+    "MINI_APP_URL",
+    "API_PUBLIC_URL",
+)
 
-env_path = ROOT / ".env"
-if env_path.exists():
-    env = env_path.read_text()
-    required_keys = [
-        "DATABASE_URL",
-        "TELEGRAM_BOT_TOKEN",
-        "JWT_SECRET",
-        "ADMIN_EMAIL",
-        "ADMIN_PASSWORD",
-        "MINI_APP_URL",
-        "API_PUBLIC_URL",
-    ]
-    missing_keys = [key for key in required_keys if f"{key}=" not in env]
-    if missing_keys:
-        print("Missing .env keys:", missing_keys)
-        sys.exit(1)
 
-print("Preflight OK")
+def load_env(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
+def required_env_keys(env: dict[str, str]) -> tuple[str, ...]:
+    app_env = env.get("APP_ENV", "development").strip().lower()
+    if app_env == "production":
+        return BASE_REQUIRED_ENV_KEYS
+    return BASE_REQUIRED_ENV_KEYS + ("ADMIN_PASSWORD",)
+
+
+def validate_admin_password_contract(env: dict[str, str]) -> list[str]:
+    app_env = env.get("APP_ENV", "development").strip().lower()
+    errors: list[str] = []
+    missing = [key for key in required_env_keys(env) if key not in env]
+    if missing:
+        errors.append("Missing .env keys: " + ", ".join(missing))
+    if app_env == "production" and env.get("ADMIN_PASSWORD", "").strip():
+        errors.append(
+            "ADMIN_PASSWORD must not be stored in production; "
+            "use the interactive first-admin bootstrap"
+        )
+    return errors
+
+
+def run_preflight(root: Path = ROOT) -> list[str]:
+    errors: list[str] = []
+    missing_files = [path for path in REQUIRED_FILES if not (root / path).exists()]
+    if missing_files:
+        errors.append("Missing required files: " + ", ".join(missing_files))
+
+    env_path = root / ".env"
+    if env_path.exists():
+        errors.extend(validate_admin_password_contract(load_env(env_path)))
+    return errors
+
+
+def main() -> int:
+    errors = run_preflight()
+    if errors:
+        for error in errors:
+            print(error)
+        return 1
+    print("Preflight OK")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

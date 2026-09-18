@@ -133,6 +133,8 @@ PRODUCTION_CAPABILITY_REQUIRED_FILES = {
     "frontend/src/storefrontLoaders.js",
     "frontend/src/storefrontLoaders.test.js",
     "scripts/pilot_launch_preflight.py",
+    "scripts/preflight.py",
+    "backend/tests/test_preflight_admin_password_contract.py",
     "scripts/pilot_readiness.py",
     "scripts/readiness_gate.py",
     "scripts/validate_env.py",
@@ -172,7 +174,7 @@ REQUIRED_FILES |= AUTHORITY_REQUIRED_FILES
 # binds one packaged runtime/test surface to concrete behavior, not just presence.
 MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("backend/api/orders.py", ("acquire_pilot_checkout(", "record_pilot_order(")),
-    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 22",)),
+    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 23",)),
     (
         "scripts/pilot_release_capability.py",
         (
@@ -232,6 +234,24 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "COMMERCIAL_CHECKOUT_ENABLED must be true for pilot runtime arm",
             "PAYMENTS_MODE must be sandbox or live for pilot runtime arm",
             "MOYSKLAD_MODE must be sandbox or live for pilot runtime arm",
+        ),
+    ),
+    (
+        "scripts/preflight.py",
+        (
+            "def required_env_keys(",
+            "def validate_admin_password_contract(",
+            'if app_env == "production":',
+            "ADMIN_PASSWORD must not be stored in production",
+            'BASE_REQUIRED_ENV_KEYS + ("ADMIN_PASSWORD",)',
+        ),
+    ),
+    (
+        "backend/tests/test_preflight_admin_password_contract.py",
+        (
+            "test_production_preflight_accepts_env_without_admin_password",
+            "test_production_preflight_rejects_persisted_admin_password",
+            "test_nonproduction_preflight_still_requires_admin_password",
         ),
     ),
     (
