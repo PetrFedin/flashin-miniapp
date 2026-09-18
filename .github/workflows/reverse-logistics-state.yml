@@ -71,5 +71,7 @@ jobs:
         run: python -m pytest -q backend/tests/test_moysklad_reverse_return_allocation.py
       - name: Prove MoySklad stock authority concurrency
         run: python scripts/moysklad_stock_authority_concurrency_smoke.py
+      - name: Prove MoySklad product and variant identity authority
+        run: python -m pytest -q backend/tests/test_moysklad_variant_identity_authority.py backend/tests/test_moysklad_variant_identity_migration.py
       - name: Prove physical evidence blocks destructive schema downgrade
         run: python scripts/reverse_logistics_downgrade_guard_smoke.py

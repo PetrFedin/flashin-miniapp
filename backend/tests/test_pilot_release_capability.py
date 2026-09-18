@@ -70,7 +70,7 @@ def _release(repo: Path, tmp_path: Path, release_id: str, created_at: str) -> Pa
 
 
 def test_signed_release_capability_is_bound_to_exact_release():
-    assert CAPABILITY_VERSION == 23
+    assert CAPABILITY_VERSION == 24
     secret = "s" * 48
     state = _release_state()
     state["capabilities"] = {
@@ -132,7 +132,7 @@ def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(
         ("scripts/restore_postgres.sh", "#!/usr/bin/env bash\nexit 0\n", "verify-live"),
         ("scripts/deploy_release_gate.py", "#!/usr/bin/env python3\n", "retained under deploy/release/builds"),
         ("scripts/deploy_production.sh", "#!/usr/bin/env bash\n", "deploy_release_gate.py"),
-        ("scripts/pilot_release_contract.py", "CAPABILITY_VERSION = 22\n", "CAPABILITY_VERSION = 23"),
+        ("scripts/pilot_release_contract.py", "CAPABILITY_VERSION = 23\n", "CAPABILITY_VERSION = 24"),
         (
             "backend/services/inventory_movement_contract.py",
             "def movement_transition_valid(movement): return True\n",
@@ -157,6 +157,31 @@ def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(
             "backend/alembic/versions/0042_moysklad_stock_evidence_concurrency.py",
             "revision = '0042_moysklad_stock_evidence_concurrency'\n",
             "uq_moysklad_conflict_open_stale_physical_return",
+        ),
+        (
+            "backend/alembic/versions/0043_moysklad_variant_identity_authority.py",
+            "revision = '0043_moysklad_variant_identity_authority'\n",
+            "uq_products_moysklad_id_nonempty",
+        ),
+        (
+            "backend/model_constraints.py",
+            "def apply_model_constraints(): pass\n",
+            "uq_product_variants_moysklad_id_nonempty",
+        ),
+        (
+            "backend/services/moysklad.py",
+            "def sync_assortment_to_catalog(): pass\n",
+            "MoySkladAssortmentIdentity",
+        ),
+        (
+            "backend/tests/test_moysklad_variant_identity_authority.py",
+            "def test_placeholder(): pass\n",
+            "test_repeated_sync_and_provider_sku_renames_preserve_local_identity",
+        ),
+        (
+            "backend/tests/test_moysklad_variant_identity_migration.py",
+            "def test_placeholder(): pass\n",
+            "test_create_all_has_same_partial_provider_identity_indexes",
         ),
         (
             "backend/database.py",
@@ -191,7 +216,7 @@ def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(
         (
             "scripts/reverse_logistics_downgrade_guard_smoke.py",
             "def main(): return 0\n",
-            "0042_moysklad_stock_evidence_concurrency",
+            "0043_moysklad_variant_identity_authority",
         ),
         (
             "backend/tests/test_pilot_database_evidence.py",

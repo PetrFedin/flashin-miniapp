@@ -1,6 +1,7 @@
 import base64
 import math
 import re
+from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import httpx
@@ -183,6 +184,352 @@ def _unique_slug(db: Session, sku: str, moysklad_id: str) -> str:
     return candidate
 
 
+
+@dataclass(frozen=True)
+class MoySkladAssortmentIdentity:
+    entity_type: str
+    entity_id: str
+    product_provider_id: str
+    sku: str
+    explicit_sku: bool
+
+    @property
+    def is_variant(self) -> bool:
+        return self.entity_type == "variant"
+
+
+def _assortment_identity(row: dict) -> MoySkladAssortmentIdentity:
+    entity_id = str(row.get("id") or "").strip()
+    raw_sku = row.get("article") or row.get("code")
+    sku = str(raw_sku or entity_id).strip()
+    entity_type = _row_type(row)
+    product_provider_id = (
+        _reference_id(row.get("product"))
+        if entity_type == "variant"
+        else entity_id
+    )
+    return MoySkladAssortmentIdentity(
+        entity_type=entity_type,
+        entity_id=entity_id,
+        product_provider_id=product_provider_id,
+        sku=sku,
+        explicit_sku=bool(raw_sku),
+    )
+
+
+def _product_has_provider_variants(
+    row: dict,
+    *,
+    page_variant_parent_ids: set[str] | None = None,
+) -> bool:
+    """Return True when the provider product is a variant container.
+
+    MoySklad Product exposes a read-only variantsCount. The page-local parent
+    references are a defensive fallback for assortment payloads where that
+    field is absent.
+    """
+
+    try:
+        variants_count = int(row.get("variantsCount") or 0)
+    except (TypeError, ValueError):
+        variants_count = 0
+    if variants_count > 0:
+        return True
+    provider_id = str(row.get("id") or "").strip()
+    return bool(
+        provider_id
+        and page_variant_parent_ids
+        and provider_id in page_variant_parent_ids
+    )
+
+
+def _product_by_provider_id(db: Session, provider_id: str) -> Product | None:
+    clean = str(provider_id or "").strip()
+    if not clean:
+        return None
+    return db.query(Product).filter(Product.moysklad_id == clean).first()
+
+
+def _variant_by_provider_id(db: Session, provider_id: str) -> ProductVariant | None:
+    clean = str(provider_id or "").strip()
+    if not clean:
+        return None
+    return (
+        db.query(ProductVariant)
+        .filter(ProductVariant.moysklad_id == clean)
+        .first()
+    )
+
+
+def _product_sku_is_available(
+    db: Session,
+    sku: str,
+    *,
+    current_product_id: int | None,
+) -> bool:
+    owner = db.query(Product).filter(Product.sku == sku).first()
+    return owner is None or int(owner.id) == int(current_product_id or 0)
+
+
+def _variant_sku_is_available(
+    db: Session,
+    sku: str,
+    *,
+    current_variant_id: int | None,
+) -> bool:
+    owner = db.query(ProductVariant).filter(ProductVariant.sku == sku).first()
+    return owner is None or int(owner.id) == int(current_variant_id or 0)
+
+
+def _resolve_product_authority(
+    db: Session,
+    *,
+    identity: MoySkladAssortmentIdentity,
+    row: dict,
+    price: float,
+    currency: str,
+    sale_price_type: str,
+) -> tuple[Product | None, bool]:
+    """Resolve the local product by immutable provider identity.
+
+    Variant rows may only attach to an already mapped parent product. They are
+    never allowed to manufacture a Product from the variant's own provider ID.
+    Standalone product rows may adopt one unmapped local SKU exactly once.
+    """
+
+    if identity.is_variant:
+        if not identity.product_provider_id:
+            log_conflict(
+                db,
+                identity.entity_id,
+                identity.sku[:120],
+                "variant_missing_parent_identity",
+                "MoySklad variant has no parent product provider identity",
+            )
+            return None, False
+        product = _product_by_provider_id(db, identity.product_provider_id)
+        if product is None:
+            log_conflict(
+                db,
+                identity.entity_id,
+                identity.sku[:120],
+                "variant_parent_not_mapped",
+                (
+                    "MoySklad variant parent product "
+                    f"{identity.product_provider_id} is not mapped locally; "
+                    "variant was not imported"
+                ),
+            )
+            return None, False
+        return product, False
+
+    product = _product_by_provider_id(db, identity.product_provider_id)
+    sku_owner = db.query(Product).filter(Product.sku == identity.sku).first()
+
+    if product is None and sku_owner is not None:
+        if (
+            str(sku_owner.moysklad_id or "").strip()
+            and str(sku_owner.moysklad_id).strip() != identity.product_provider_id
+        ):
+            log_conflict(
+                db,
+                identity.entity_id,
+                identity.sku[:120],
+                "product_sku_identity_collision",
+                (
+                    f"SKU {identity.sku} is already mapped to MoySklad product "
+                    f"{sku_owner.moysklad_id}"
+                ),
+            )
+            return None, False
+        product = sku_owner
+        product.moysklad_id = identity.product_provider_id
+
+    if product is not None and not _product_sku_is_available(
+        db,
+        identity.sku,
+        current_product_id=product.id,
+    ):
+        log_conflict(
+            db,
+            identity.entity_id,
+            identity.sku[:120],
+            "product_sku_identity_collision",
+            (
+                f"MoySklad product {identity.product_provider_id} cannot adopt SKU "
+                f"{identity.sku}; another local Product already owns it"
+            ),
+        )
+        return None, False
+
+    missing_price_message = (
+        f"Configured sale price type '{sale_price_type}' is missing or invalid"
+        if str(sale_price_type or "").strip()
+        else "No positive sale price was supplied"
+    )
+    created = False
+    if product is None:
+        if price <= 0:
+            log_conflict(
+                db,
+                identity.entity_id,
+                identity.sku[:120],
+                "missing_price",
+                f"Product imported inactive because {missing_price_message.lower()}",
+            )
+        product = Product(
+            sku=identity.sku,
+            moysklad_id=identity.product_provider_id,
+            title=str(row.get("name") or identity.sku).strip()[:255],
+            slug=_unique_slug(db, identity.sku, identity.product_provider_id),
+            brand="FLASHIN",
+            description=str(row.get("description") or ""),
+            price=price,
+            currency=currency,
+            category=apply_mapping(
+                db,
+                "category",
+                row.get("pathName", "Clothing"),
+                "Clothing",
+            ),
+            active=price > 0,
+        )
+        db.add(product)
+        db.flush()
+        created = True
+    else:
+        product.sku = identity.sku
+        product.title = str(row.get("name") or identity.sku).strip()[:255]
+        product.description = str(row.get("description") or product.description or "")
+        if price > 0:
+            product.price = price
+        else:
+            log_conflict(
+                db,
+                identity.entity_id,
+                identity.sku[:120],
+                "missing_price",
+                f"Existing local price preserved because {missing_price_message.lower()}",
+            )
+        product.category = apply_mapping(
+            db,
+            "category",
+            row.get("pathName", product.category),
+            product.category,
+        )
+    return product, created
+
+
+def _resolve_variant_authority(
+    db: Session,
+    *,
+    identity: MoySkladAssortmentIdentity,
+    product: Product,
+    size: str,
+    color: str,
+) -> tuple[ProductVariant | None, bool]:
+    """Resolve one sellable local variant by immutable assortment entity ID."""
+
+    variant = _variant_by_provider_id(db, identity.entity_id)
+    sku_owner = db.query(ProductVariant).filter(ProductVariant.sku == identity.sku).first()
+
+    if variant is not None and int(variant.product_id) != int(product.id):
+        log_conflict(
+            db,
+            identity.entity_id,
+            identity.sku[:120],
+            "variant_parent_identity_conflict",
+            (
+                f"MoySklad variant {identity.entity_id} is already bound to local "
+                f"product {variant.product_id}, not authoritative parent {product.id}"
+            ),
+        )
+        return None, False
+
+    if variant is None and sku_owner is not None:
+        owner_provider_id = str(sku_owner.moysklad_id or "").strip()
+        if owner_provider_id and owner_provider_id != identity.entity_id:
+            log_conflict(
+                db,
+                identity.entity_id,
+                identity.sku[:120],
+                "variant_sku_identity_collision",
+                (
+                    f"Variant SKU {identity.sku} is already mapped to MoySklad "
+                    f"assortment {owner_provider_id}"
+                ),
+            )
+            return None, False
+        if int(sku_owner.product_id) != int(product.id):
+            log_conflict(
+                db,
+                identity.entity_id,
+                identity.sku[:120],
+                "variant_parent_identity_conflict",
+                "Unmapped local variant SKU belongs to another local product",
+            )
+            return None, False
+        variant = sku_owner
+        variant.moysklad_id = identity.entity_id
+
+    if variant is not None and not _variant_sku_is_available(
+        db,
+        identity.sku,
+        current_variant_id=variant.id,
+    ):
+        log_conflict(
+            db,
+            identity.entity_id,
+            identity.sku[:120],
+            "variant_sku_identity_collision",
+            (
+                f"MoySklad assortment {identity.entity_id} cannot adopt SKU "
+                f"{identity.sku}; another local ProductVariant already owns it"
+            ),
+        )
+        return None, False
+
+    created = False
+    if variant is None:
+        dimension_owner = (
+            db.query(ProductVariant)
+            .filter(
+                ProductVariant.product_id == int(product.id),
+                ProductVariant.size == str(size)[:32],
+                ProductVariant.color == str(color)[:64],
+            )
+            .first()
+        )
+        if dimension_owner is not None:
+            log_conflict(
+                db,
+                identity.entity_id,
+                identity.sku[:120],
+                "variant_dimension_identity_collision",
+                (
+                    "Authoritative parent already has another local variant for "
+                    f"size={str(size)[:32]!r}, color={str(color)[:64]!r}"
+                ),
+            )
+            return None, False
+        variant = ProductVariant(
+            product_id=product.id,
+            size=str(size)[:32],
+            color=str(color)[:64],
+            sku=identity.sku,
+            moysklad_id=identity.entity_id,
+            stock_qty=0,
+            reserved_qty=0,
+        )
+        db.add(variant)
+        db.flush()
+        created = True
+    else:
+        variant.sku = identity.sku
+        variant.size = str(size)[:32]
+        variant.color = str(color)[:64]
+    return variant, created
+
 def _apply_synced_stock(
     db: Session,
     variant: ProductVariant,
@@ -226,124 +573,89 @@ async def sync_assortment_to_catalog(
             if not rows:
                 break
 
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
+            # Process parent products before variants within each page. Provider
+            # identity remains authoritative across pages; an unresolved parent
+            # fails closed and will converge on a later sync after the product is mapped.
+            page_variant_parent_ids = {
+                _reference_id(row.get("product"))
+                for row in rows
+                if isinstance(row, dict) and _row_type(row) == "variant"
+            }
+            page_variant_parent_ids.discard("")
+            ordered_rows = sorted(
+                (row for row in rows if isinstance(row, dict)),
+                key=lambda row: _row_type(row) == "variant",
+            )
+            for row in ordered_rows:
                 seen += 1
-                moysklad_id = str(row.get("id") or "").strip()
-                raw_sku = row.get("article") or row.get("code")
-                sku = str(raw_sku or moysklad_id).strip()
-                if not moysklad_id or not sku:
+                identity = _assortment_identity(row)
+                if not identity.entity_id or not identity.sku:
                     log_conflict(
                         db,
-                        moysklad_id,
-                        sku,
+                        identity.entity_id,
+                        identity.sku[:120],
                         "missing_identity",
                         "MoySklad item has no stable id or SKU",
                     )
                     continue
-                if len(sku) > 120:
+                if len(identity.sku) > 120:
                     log_conflict(
                         db,
-                        moysklad_id,
-                        sku[:120],
+                        identity.entity_id,
+                        identity.sku[:120],
                         "sku_too_long",
                         "MoySklad SKU exceeds 120 characters",
                     )
                     continue
-                if not raw_sku:
+                if not identity.explicit_sku:
                     log_conflict(
                         db,
-                        moysklad_id,
-                        sku,
+                        identity.entity_id,
+                        identity.sku,
                         "missing_sku",
                         "MoySklad item has no article/code; using id as SKU",
                     )
 
-                name = str(row.get("name") or sku).strip()[:255]
                 price = _price_from_moysklad(row, settings.moysklad_sale_price_type)
                 external_stock = _stock_from_moysklad(row)
-                product = db.query(Product).filter(Product.sku == sku).first()
-
-                if product and product.moysklad_id and product.moysklad_id != moysklad_id:
-                    log_conflict(
-                        db,
-                        moysklad_id,
-                        sku,
-                        "sku_collision",
-                        f"SKU already belongs to MoySklad item {product.moysklad_id}",
-                    )
-                    continue
-
-                missing_price_message = (
-                    f"Configured sale price type '{settings.moysklad_sale_price_type}' is missing or invalid"
-                    if settings.moysklad_sale_price_type.strip()
-                    else "No positive sale price was supplied"
+                product, product_created = _resolve_product_authority(
+                    db,
+                    identity=identity,
+                    row=row,
+                    price=price,
+                    currency=settings.moysklad_default_currency,
+                    sale_price_type=settings.moysklad_sale_price_type,
                 )
-                if not product:
-                    if price <= 0:
-                        log_conflict(
-                            db,
-                            moysklad_id,
-                            sku,
-                            "missing_price",
-                            f"Product imported inactive because {missing_price_message.lower()}",
-                        )
-                    product = Product(
-                        sku=sku,
-                        moysklad_id=moysklad_id,
-                        title=name,
-                        slug=_unique_slug(db, sku, moysklad_id),
-                        brand="FLASHIN",
-                        description=str(row.get("description") or ""),
-                        price=price,
-                        currency=settings.moysklad_default_currency,
-                        category=apply_mapping(
-                            db,
-                            "category",
-                            row.get("pathName", "Clothing"),
-                            "Clothing",
-                        ),
-                        active=price > 0,
-                    )
-                    db.add(product)
-                    db.flush()
+                if product is None:
+                    continue
+                if product_created:
                     upserted_products += 1
-                else:
-                    product.moysklad_id = moysklad_id
-                    product.title = name
-                    product.description = str(row.get("description") or product.description or "")
-                    if price > 0:
-                        product.price = price
-                    else:
-                        log_conflict(
-                            db,
-                            moysklad_id,
-                            sku,
-                            "missing_price",
-                            f"Existing local price preserved because {missing_price_message.lower()}",
-                        )
-                    product.category = apply_mapping(
-                        db,
-                        "category",
-                        row.get("pathName", product.category),
-                        product.category,
+
+                if (
+                    not identity.is_variant
+                    and _product_has_provider_variants(
+                        row,
+                        page_variant_parent_ids=page_variant_parent_ids,
                     )
+                ):
+                    # The Product row is the parent style/container. Sellable
+                    # local variants are sourced only from provider variant IDs.
+                    continue
 
                 raw_size = _attribute_value(
                     row,
                     settings.moysklad_size_attribute_names,
                     direct_keys=("size",),
                 )
-                if not raw_size and _row_type(row) == "variant":
+                if not raw_size and identity.is_variant:
                     log_conflict(
                         db,
-                        moysklad_id,
-                        sku,
+                        identity.entity_id,
+                        identity.sku,
                         "missing_size",
                         "Variant has no configured size attribute; ONE SIZE fallback applied",
                     )
-                size = apply_mapping(db, "size", raw_size or "ONE SIZE", "ONE SIZE")
+                size = apply_mapping(db, "size", raw_size, raw_size) if raw_size else "ONE SIZE"
                 raw_color = _attribute_value(
                     row,
                     settings.moysklad_color_attribute_names,
@@ -351,67 +663,37 @@ async def sync_assortment_to_catalog(
                 )
                 color = apply_mapping(db, "color", raw_color, "") if raw_color else ""
 
-                variant = db.query(ProductVariant).filter(ProductVariant.sku == sku).first()
-                if variant and variant.product_id != product.id:
-                    log_conflict(
-                        db,
-                        moysklad_id,
-                        sku,
-                        "variant_sku_collision",
-                        "Variant SKU belongs to another local product",
-                    )
+                variant, variant_created = _resolve_variant_authority(
+                    db,
+                    identity=identity,
+                    product=product,
+                    size=size,
+                    color=color,
+                )
+                if variant is None:
                     continue
 
-                if not variant:
-                    if external_stock is None:
+                variant_touched = variant_created
+                if external_stock is not None:
+                    if external_stock < int(variant.reserved_qty or 0):
                         log_conflict(
                             db,
-                            moysklad_id,
-                            sku,
-                            "missing_stock",
-                            "Provider did not supply stock; new variant starts at zero",
+                            identity.entity_id,
+                            identity.sku,
+                            "stock_below_reserved",
+                            "External stock is below the local reserved quantity; reservation preserved",
                         )
-                    variant = ProductVariant(
-                        product_id=product.id,
-                        size=str(size)[:32],
-                        color=str(color)[:64],
-                        sku=sku,
-                        moysklad_id=moysklad_id,
-                        stock_qty=0,
-                        reserved_qty=0,
+                    before_stock = int(variant.stock_qty or 0)
+                    variant = _apply_synced_stock(
+                        db,
+                        variant,
+                        external_stock,
+                        sync_type=sync_type,
+                        admin_id=admin_id,
                     )
-                    db.add(variant)
-                    db.flush()
-                    if external_stock is not None:
-                        variant = _apply_synced_stock(
-                            db,
-                            variant,
-                            external_stock,
-                            sync_type=sync_type,
-                            admin_id=admin_id,
-                        )
+                    variant_touched = variant_touched or int(variant.stock_qty or 0) != before_stock
+                if variant_touched:
                     upserted_variants += 1
-                else:
-                    variant.moysklad_id = moysklad_id
-                    variant.size = str(size)[:32]
-                    variant.color = str(color)[:64]
-                    if external_stock is not None:
-                        if external_stock < variant.reserved_qty:
-                            log_conflict(
-                                db,
-                                moysklad_id,
-                                sku,
-                                "stock_below_reserved",
-                                "External stock is below the local reserved quantity; reservation preserved",
-                            )
-                        variant = _apply_synced_stock(
-                            db,
-                            variant,
-                            external_stock,
-                            sync_type=sync_type,
-                            admin_id=admin_id,
-                        )
-                        upserted_variants += 1
 
             db.commit()
             offset += len(rows)

@@ -35,6 +35,7 @@ from .models import (
     Payment,
     PaymentEvent,
     PaymentReconciliation,
+    Product,
     ProductVariant,
     PromoCode,
     ReferralAttribution,
@@ -113,6 +114,19 @@ def apply_model_constraints() -> None:
     _check(ProductVariant.__table__, "ck_product_variants_stock_nonnegative", "stock_qty >= 0")
     _check(ProductVariant.__table__, "ck_product_variants_reserved_nonnegative", "reserved_qty >= 0")
     _check(ProductVariant.__table__, "ck_product_variants_reserved_within_stock", "reserved_qty <= stock_qty")
+
+    _partial_unique_index(
+        Product.__table__,
+        "uq_products_moysklad_id_nonempty",
+        [Product.__table__.c.moysklad_id],
+        "moysklad_id <> ''",
+    )
+    _partial_unique_index(
+        ProductVariant.__table__,
+        "uq_product_variants_moysklad_id_nonempty",
+        [ProductVariant.__table__.c.moysklad_id],
+        "moysklad_id <> ''",
+    )
     _replace_check(
         InventoryMovement.__table__,
         "ck_inventory_movements_kind",

@@ -16,7 +16,7 @@ if str(ROOT) not in sys.path:
 
 from backend.database import engine
 
-EXPECTED_HEAD = "0042_moysklad_stock_evidence_concurrency"
+EXPECTED_HEAD = "0043_moysklad_variant_identity_authority"
 TARGET = "0040_delivery_authority"
 ERROR_FRAGMENT = "0041 downgrade blocked: reverse-logistics evidence exists"
 
@@ -74,6 +74,14 @@ def main() -> int:
             index["name"]
             for index in inspect(connection).get_indexes("stock_reconciliation_logs")
         }
+        product_indexes = {
+            index["name"]
+            for index in inspect(connection).get_indexes("products")
+        }
+        variant_indexes = {
+            index["name"]
+            for index in inspect(connection).get_indexes("product_variants")
+        }
         cases_after = int(connection.execute(text("SELECT count(*) FROM return_logistics_cases")).scalar_one())
         evidence_after = int(
             connection.execute(
@@ -99,6 +107,8 @@ def main() -> int:
     assert "uq_inventory_movement_reverse_event_source" in inventory_indexes
     assert "uq_moysklad_conflict_open_stale_physical_return" in conflict_indexes
     assert "uq_stock_reconciliation_open_blocked_physical_return" in reconciliation_indexes
+    assert "uq_products_moysklad_id_nonempty" in product_indexes
+    assert "uq_product_variants_moysklad_id_nonempty" in variant_indexes
     assert cases_after == cases
     assert evidence_after == evidence_movements
 
@@ -110,6 +120,7 @@ def main() -> int:
             "physical_cases_preserved": cases_after,
             "physical_movements_preserved": evidence_after,
             "concurrency_indexes_preserved": True,
+            "variant_identity_indexes_preserved": True,
             "transactional_ddl_preserved": True,
         }
     )
