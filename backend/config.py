@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     admin_totp_encryption_key: str = ""
 
     payment_provider: str = "yookassa"
+    commercial_checkout_enabled: bool = True
+    payments_mode: str = "live"  # disabled | sandbox | live
     yookassa_shop_id: str = ""
     yookassa_secret_key: str = ""
     yookassa_return_url: str = "https://mini.flashin.store/payment-result"
@@ -68,6 +70,7 @@ class Settings(BaseSettings):
     metrics_enabled: bool = True
 
     moysklad_base_url: str = "https://api.moysklad.ru/api/remap/1.2"
+    moysklad_mode: str = "live"  # disabled | sandbox | live
     moysklad_token: str = ""
     moysklad_login: str = ""
     moysklad_password: str = ""
@@ -152,6 +155,14 @@ class Settings(BaseSettings):
             raise ValueError("Delivery prices cannot be negative")
         if self.media_storage not in {"local", "s3", "r2"}:
             raise ValueError("MEDIA_STORAGE must be local, s3, or r2")
+        payments_mode = self.payments_mode.strip().lower()
+        if payments_mode not in {"disabled", "sandbox", "live"}:
+            raise ValueError("PAYMENTS_MODE must be disabled, sandbox, or live")
+        self.payments_mode = payments_mode
+        moysklad_mode = self.moysklad_mode.strip().lower()
+        if moysklad_mode not in {"disabled", "sandbox", "live"}:
+            raise ValueError("MOYSKLAD_MODE must be disabled, sandbox, or live")
+        self.moysklad_mode = moysklad_mode
         if not self.moysklad_size_attribute_names.strip():
             raise ValueError("MOYSKLAD_SIZE_ATTRIBUTE_NAMES must not be empty")
         if not self.moysklad_color_attribute_names.strip():
@@ -197,29 +208,51 @@ class Settings(BaseSettings):
             errors.append("TELEGRAM_BOT_TOKEN is missing or unsafe")
         if len(self.outbox_signing_secret) < 32 or self.outbox_signing_secret.strip().lower() in weak_values:
             errors.append("OUTBOX_SIGNING_SECRET must be at least 32 characters")
-        if (
-            len(self.pilot_evidence_signing_secret) < 32
-            or self.pilot_evidence_signing_secret.strip().lower() in weak_values
-        ):
-            errors.append("PILOT_EVIDENCE_SIGNING_SECRET must be a unique secret of at least 32 characters")
+        if self.commercial_checkout_enabled:
+            if self.payments_mode == "disabled":
+                errors.append("PAYMENTS_MODE must not be disabled when commercial checkout is enabled")
+            if not self.pilot_runtime_enforced:
+                errors.append(
+                    "PILOT_RUNTIME_ENFORCED must be true for production commercial checkout"
+                )
+            if self.pilot_runtime_max_orders != 20:
+                errors.append(
+                    "PILOT_RUNTIME_MAX_ORDERS must equal 20 for production commercial checkout"
+                )
         else:
-            for name, value in (
-                ("JWT_SECRET", self.jwt_secret),
-                ("ADMIN_TOTP_ENCRYPTION_KEY", self.admin_totp_encryption_key),
-                ("OUTBOX_SIGNING_SECRET", self.outbox_signing_secret),
+            if self.payments_mode != "disabled":
+                errors.append(
+                    "PAYMENTS_MODE must be disabled when production commercial checkout is disabled"
+                )
+            if self.pilot_runtime_enforced:
+                errors.append(
+                    "PILOT_RUNTIME_ENFORCED must be false when production commercial checkout is disabled"
+                )
+
+        if self.pilot_runtime_enforced:
+            if (
+                len(self.pilot_evidence_signing_secret) < 32
+                or self.pilot_evidence_signing_secret.strip().lower() in weak_values
             ):
-                if hmac_compare_secret(self.pilot_evidence_signing_secret, value):
-                    errors.append(f"PILOT_EVIDENCE_SIGNING_SECRET must differ from {name}")
-        if not self.pilot_runtime_enforced:
-            errors.append("PILOT_RUNTIME_ENFORCED must be true in production")
-        if self.pilot_runtime_max_orders != 20:
-            errors.append("PILOT_RUNTIME_MAX_ORDERS must equal 20 in production")
-        if self.payment_provider != "yookassa":
-            errors.append("PAYMENT_PROVIDER must be yookassa")
-        if not self.yookassa_shop_id.strip() or not self.yookassa_secret_key.strip():
-            errors.append("YooKassa credentials are required")
-        if not self.yookassa_return_url.startswith("https://"):
-            errors.append("YOOKASSA_RETURN_URL must use HTTPS")
+                errors.append(
+                    "PILOT_EVIDENCE_SIGNING_SECRET must be a unique secret of at least 32 characters"
+                )
+            else:
+                for name, value in (
+                    ("JWT_SECRET", self.jwt_secret),
+                    ("ADMIN_TOTP_ENCRYPTION_KEY", self.admin_totp_encryption_key),
+                    ("OUTBOX_SIGNING_SECRET", self.outbox_signing_secret),
+                ):
+                    if hmac_compare_secret(self.pilot_evidence_signing_secret, value):
+                        errors.append(f"PILOT_EVIDENCE_SIGNING_SECRET must differ from {name}")
+
+        if self.payments_mode != "disabled":
+            if self.payment_provider != "yookassa":
+                errors.append("PAYMENT_PROVIDER must be yookassa when payments are enabled")
+            if not self.yookassa_shop_id.strip() or not self.yookassa_secret_key.strip():
+                errors.append("YooKassa credentials are required when payments are enabled")
+            if not self.yookassa_return_url.startswith("https://"):
+                errors.append("YOOKASSA_RETURN_URL must use HTTPS when payments are enabled")
         if "flashin:flashin@" in self.database_url.lower():
             errors.append("DATABASE_URL still uses the default database password")
         if self.enable_seed or self.use_create_all:
@@ -249,26 +282,29 @@ class Settings(BaseSettings):
         basic_login = bool(self.moysklad_login.strip())
         basic_password = bool(self.moysklad_password)
         basic_auth = basic_login and basic_password
-        moysklad_configured = token_auth or basic_login or basic_password
         if basic_login != basic_password:
             errors.append("MOYSKLAD_LOGIN and MOYSKLAD_PASSWORD must be configured together")
-        if moysklad_configured and not self.moysklad_sale_price_type.strip():
-            errors.append(
-                "MOYSKLAD_SALE_PRICE_TYPE is required when MoySklad synchronization is configured"
-            )
-        if self.moysklad_order_export_enabled:
+        if self.moysklad_mode == "disabled":
+            if self.moysklad_order_export_enabled:
+                errors.append("MOYSKLAD_ORDER_EXPORT_ENABLED must be false when MOYSKLAD_MODE=disabled")
+        else:
             if not (token_auth or basic_auth):
-                errors.append("MoySklad credentials are required when order export is enabled")
+                errors.append("MoySklad credentials are required when MOYSKLAD_MODE is enabled")
+            if not self.moysklad_sale_price_type.strip():
+                errors.append(
+                    "MOYSKLAD_SALE_PRICE_TYPE is required when MOYSKLAD_MODE is enabled"
+                )
             if not self.moysklad_base_url.startswith("https://"):
-                errors.append("MOYSKLAD_BASE_URL must use HTTPS when order export is enabled")
-            for name, value in (
-                ("MOYSKLAD_ORGANIZATION_ID", self.moysklad_organization_id),
-                ("MOYSKLAD_AGENT_ID", self.moysklad_agent_id),
-                ("MOYSKLAD_STORE_ID", self.moysklad_store_id),
-                ("MOYSKLAD_DELIVERY_SERVICE_ID", self.moysklad_delivery_service_id),
-            ):
-                if not value.strip():
-                    errors.append(f"{name} is required when MoySklad order export is enabled")
+                errors.append("MOYSKLAD_BASE_URL must use HTTPS when MOYSKLAD_MODE is enabled")
+            if self.moysklad_order_export_enabled:
+                for name, value in (
+                    ("MOYSKLAD_ORGANIZATION_ID", self.moysklad_organization_id),
+                    ("MOYSKLAD_AGENT_ID", self.moysklad_agent_id),
+                    ("MOYSKLAD_STORE_ID", self.moysklad_store_id),
+                    ("MOYSKLAD_DELIVERY_SERVICE_ID", self.moysklad_delivery_service_id),
+                ):
+                    if not value.strip():
+                        errors.append(f"{name} is required when MoySklad order export is enabled")
 
         if errors:
             raise ValueError("Unsafe production configuration: " + "; ".join(errors))
