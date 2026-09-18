@@ -9,6 +9,7 @@ from ..database import utcnow_naive
 from ..models import MoySkladSyncLog, Notification, WebhookOutbox
 from ..notification_models import NotificationDeliveryState
 from .database_readiness import migrations_are_current
+from .runtime_capabilities import moysklad_execution_enabled, payment_execution_enabled
 
 
 def _error_name(exc: Exception) -> str:
@@ -34,10 +35,11 @@ def run_diagnostics(db: Session) -> dict:
         "telegram_bot_token",
         "jwt_secret",
         "admin_email",
-        "admin_password",
         "mini_app_url",
         "api_public_url",
     ]
+    if settings.app_env != "production":
+        required_env.append("admin_password")
     env_missing = []
     weak_defaults = {
         "change-me-now",
@@ -51,20 +53,41 @@ def run_diagnostics(db: Session) -> dict:
             env_missing.append(key)
     checks["env"] = {"ok": not env_missing, "missing_or_default": env_missing}
 
-    checks["payments"] = {
-        "ok": bool(settings.yookassa_shop_id and settings.yookassa_secret_key),
-        "provider": settings.payment_provider,
-    }
+    if payment_execution_enabled(settings):
+        checks["payments"] = {
+            "ok": bool(settings.yookassa_shop_id and settings.yookassa_secret_key),
+            "status": "enabled",
+            "mode": settings.payments_mode,
+            "provider": settings.payment_provider,
+        }
+    else:
+        checks["payments"] = {
+            "ok": True,
+            "status": "disabled",
+            "mode": "disabled",
+            "provider": None,
+        }
 
     moysklad_configured = bool(
         settings.moysklad_token
         or (settings.moysklad_login and settings.moysklad_password)
     )
-    checks["moysklad"] = {
-        "ok": moysklad_configured and 5 <= settings.moysklad_sync_interval_minutes <= 1440,
-        "configured": moysklad_configured,
-        "sync_interval_minutes": settings.moysklad_sync_interval_minutes,
-    }
+    if moysklad_execution_enabled(settings):
+        checks["moysklad"] = {
+            "ok": moysklad_configured and 5 <= settings.moysklad_sync_interval_minutes <= 1440,
+            "status": "enabled",
+            "mode": settings.moysklad_mode,
+            "configured": moysklad_configured,
+            "sync_interval_minutes": settings.moysklad_sync_interval_minutes,
+        }
+    else:
+        checks["moysklad"] = {
+            "ok": True,
+            "status": "disabled",
+            "mode": "disabled",
+            "configured": False,
+            "sync_interval_minutes": None,
+        }
 
     checks["scheduler"] = {
         "ok": settings.scheduler_enabled or settings.app_env != "production",
@@ -107,8 +130,9 @@ def run_diagnostics(db: Session) -> dict:
             }
     else:
         checks["search"] = {
-            "ok": settings.app_env != "production",
+            "ok": True,
             "enabled": False,
+            "mode": "database",
         }
 
     now = utcnow_naive()
@@ -165,34 +189,45 @@ def run_diagnostics(db: Session) -> dict:
             "error": _error_name(exc),
         }
 
-    try:
-        stuck_before = now - timedelta(hours=1)
-        stuck_syncs = (
-            db.query(MoySkladSyncLog)
-            .filter(
-                MoySkladSyncLog.status == "started",
-                MoySkladSyncLog.created_at < stuck_before,
+    if not moysklad_execution_enabled(settings):
+        checks["moysklad_sync"] = {
+            "ok": True,
+            "status": "disabled",
+            "stuck": 0,
+            "latest_status": "disabled",
+            "latest_finished_at": None,
+        }
+    else:
+        try:
+            stuck_before = now - timedelta(hours=1)
+            stuck_syncs = (
+                db.query(MoySkladSyncLog)
+                .filter(
+                    MoySkladSyncLog.status == "started",
+                    MoySkladSyncLog.created_at < stuck_before,
+                )
+                .count()
             )
-            .count()
-        )
-        latest_sync = (
-            db.query(MoySkladSyncLog)
-            .order_by(MoySkladSyncLog.created_at.desc(), MoySkladSyncLog.id.desc())
-            .first()
-        )
-        latest_status = latest_sync.status if latest_sync else "never"
-        latest_ok = latest_status != "failed"
-        checks["moysklad_sync"] = {
-            "ok": stuck_syncs == 0 and latest_ok,
-            "stuck": stuck_syncs,
-            "latest_status": latest_status,
-            "latest_finished_at": latest_sync.finished_at if latest_sync else None,
-        }
-    except Exception as exc:
-        checks["moysklad_sync"] = {
-            "ok": False,
-            "error": _error_name(exc),
-        }
+            latest_sync = (
+                db.query(MoySkladSyncLog)
+                .order_by(MoySkladSyncLog.created_at.desc(), MoySkladSyncLog.id.desc())
+                .first()
+            )
+            latest_status = latest_sync.status if latest_sync else "never"
+            latest_ok = latest_status != "failed"
+            checks["moysklad_sync"] = {
+                "ok": stuck_syncs == 0 and latest_ok,
+                "status": "enabled",
+                "stuck": stuck_syncs,
+                "latest_status": latest_status,
+                "latest_finished_at": latest_sync.finished_at if latest_sync else None,
+            }
+        except Exception as exc:
+            checks["moysklad_sync"] = {
+                "ok": False,
+                "status": "enabled",
+                "error": _error_name(exc),
+            }
 
     overall = all(value.get("ok") for value in checks.values())
     return {
