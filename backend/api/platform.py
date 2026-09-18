@@ -28,6 +28,7 @@ from ..services.event_dispatcher import (
     requeue_failed_event,
 )
 from ..services.rbac import require_permission
+from ..services.runtime_capabilities import public_runtime_capabilities
 
 router = APIRouter(prefix="/platform", tags=["platform"])
 _EVENT_STATUSES = {"pending", "processed", "failed"}
@@ -97,6 +98,11 @@ def _decode_public_remote_config_value(value_json: str | None) -> dict | None:
     except (TypeError, json.JSONDecodeError):
         return None
     return value if isinstance(value, dict) else None
+
+
+@router.get("/capabilities")
+def runtime_capabilities():
+    return public_runtime_capabilities()
 
 
 @router.get("/features")
