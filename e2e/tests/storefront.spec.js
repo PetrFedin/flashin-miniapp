@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 
 const LIVE_RUNTIME_CAPABILITIES = {
@@ -247,9 +248,18 @@ async function mockApi(page, options = {}) {
     if (path === "/api/privacy/export" && method === "GET") {
       return route.fulfill({
         status: 200,
-        contentType: "application/json",
-        headers: { "content-disposition": 'attachment; filename="flashin-pilot-export.json"' },
-        body: JSON.stringify({ customer_id: 101, exported: true }),
+        contentType: "application/json; charset=utf-8",
+        headers: {
+          "content-disposition": 'attachment; filename="flashin_customer_export.json"',
+          "access-control-expose-headers": "Content-Disposition",
+          "cache-control": "no-store, max-age=0",
+        },
+        body: JSON.stringify({
+          schema_version: "flashin.customer-data-export.v1",
+          generated_at: "2026-09-19T13:00:00.000000Z",
+          customer: { id: 101, first_name: "Pilot" },
+          orders: [{ id: 9002, total_amount: "12000.00" }],
+        }),
       });
     }
     if (path === "/api/privacy/requests" && method === "GET") return json(privacyRequests);
@@ -475,6 +485,11 @@ test("Mini App profile, support, privacy and return journey", async ({ page }) =
   await page.getByRole("button", { name: "Скачать мои данные" }).click();
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toBe("flashin_customer_export.json");
+  const downloadPath = await download.path();
+  expect(downloadPath).toBeTruthy();
+  const exported = JSON.parse(await readFile(downloadPath, "utf8"));
+  expect(exported.schema_version).toBe("flashin.customer-data-export.v1");
+  expect(exported.orders[0].total_amount).toBe("12000.00");
   await expect(page.getByRole("status")).toContainText("Архив персональных данных сформирован");
 
   page.once("dialog", (dialog) => dialog.accept());
