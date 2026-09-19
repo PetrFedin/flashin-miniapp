@@ -274,7 +274,7 @@ def main() -> int:
         assert response.headers["content-type"].startswith("application/json")
         disposition = response.headers.get("content-disposition", "")
         assert "attachment;" in disposition
-        assert 'filename="flashin_customer_export.json"' in disposition
+        assert 'filename="flashin_customer_export_v1.json"' in disposition
         assert response.headers.get("cache-control") == "no-store, max-age=0"
         assert int(response.headers["content-length"]) == len(response.content)
 
