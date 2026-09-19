@@ -195,7 +195,7 @@ def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(
         (
             "scripts/reverse_logistics_downgrade_guard_smoke.py",
             "def main(): return 0\n",
-            "0042_moysklad_stock_evidence_concurrency",
+            "0043_moysklad_variant_identity_authority",
         ),
         (
             "backend/tests/test_pilot_database_evidence.py",
