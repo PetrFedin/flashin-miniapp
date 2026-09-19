@@ -3,6 +3,7 @@ from decimal import Decimal
 import json
 
 import pytest
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -28,6 +29,7 @@ from backend.models import (
     ReturnRequest,
     SupportTicket,
 )
+from backend.main import app
 from backend.services.privacy_export import (
     PRIVACY_EXPORT_SCHEMA_VERSION,
     PrivacyExportUnavailable,
@@ -346,3 +348,12 @@ def test_anonymized_customer_export_is_explicitly_unavailable():
         match="Anonymized customer identities cannot be exported",
     ):
         build_customer_export(db, customer)
+
+
+def test_privacy_download_filename_header_is_cors_exposed():
+    cors = next(
+        middleware
+        for middleware in app.user_middleware
+        if middleware.cls is CORSMiddleware
+    )
+    assert "Content-Disposition" in cors.kwargs["expose_headers"]
