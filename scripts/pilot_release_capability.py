@@ -170,11 +170,24 @@ AUTHORITY_REQUIRED_FILES = {
 }
 REQUIRED_FILES |= AUTHORITY_REQUIRED_FILES
 
+# MoySklad provider identity is part of the immutable runtime and rollback contract.
+MOYSKLAD_IDENTITY_REQUIRED_FILES = {
+    ".github/workflows/ci.yml",
+    "backend/alembic/versions/0043_moysklad_variant_identity_authority.py",
+    "backend/database.py",
+    "backend/services/moysklad.py",
+    "backend/services/moysklad_outbound.py",
+    "backend/services/moysklad_reverse_return.py",
+    "backend/tests/test_moysklad_variant_identity_authority.py",
+    "scripts/reverse_logistics_downgrade_guard_smoke.py",
+}
+REQUIRED_FILES |= MOYSKLAD_IDENTITY_REQUIRED_FILES
+
 # Keep immutable capability semantics inspectable and maintainable. Every tuple
 # binds one packaged runtime/test surface to concrete behavior, not just presence.
 MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("backend/api/orders.py", ("acquire_pilot_checkout(", "record_pilot_order(")),
-    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 23",)),
+    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 24",)),
     (
         "scripts/pilot_release_capability.py",
         (
@@ -183,6 +196,8 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "REQUIRED_FILES |= PRODUCTION_CAPABILITY_REQUIRED_FILES",
             "AUTHORITY_REQUIRED_FILES",
             "REQUIRED_FILES |= AUTHORITY_REQUIRED_FILES",
+            "MOYSKLAD_IDENTITY_REQUIRED_FILES",
+            "REQUIRED_FILES |= MOYSKLAD_IDENTITY_REQUIRED_FILES",
             "MARKER_REQUIREMENTS",
         ),
     ),
@@ -283,6 +298,76 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             "test_provider_disabled_production_does_not_require_commerce_credentials_or_pilot_state",
             "test_production_rejects_enabled_payments_when_checkout_is_disabled",
+        ),
+    ),
+    (
+        "backend/alembic/versions/0043_moysklad_variant_identity_authority.py",
+        (
+            "0043_moysklad_variant_identity_authority",
+            "0042_moysklad_stock_evidence_concurrency",
+            "def _assert_unique_provider_id_data(",
+            "uq_products_moysklad_id_nonempty",
+            "uq_product_variants_moysklad_id_nonempty",
+            "resolve identity evidence explicitly before migration",
+        ),
+    ),
+    (
+        "backend/database.py",
+        (
+            "uq_products_moysklad_id_nonempty",
+            "uq_product_variants_moysklad_id_nonempty",
+            "moysklad_id <> ''",
+        ),
+    ),
+    (
+        "backend/services/moysklad.py",
+        (
+            "class MoySkladIdentityConflict",
+            "def _resolve_assortment_identity(",
+            "missing_parent_identity",
+            "parent_reassignment",
+            "provider_id_collision",
+            "def _placeholder_parent_sku(",
+            "sku_variant.moysklad_id = row_provider_id",
+        ),
+    ),
+    (
+        "backend/services/moysklad_outbound.py",
+        (
+            'str(variant.moysklad_id or "").strip()',
+            "exact MoySklad assortment id",
+        ),
+    ),
+    (
+        "backend/services/moysklad_reverse_return.py",
+        (
+            'str(variant.moysklad_id or "").strip()',
+            "Physical return variant has no exact MoySklad assortment mapping",
+        ),
+    ),
+    (
+        "backend/tests/test_moysklad_variant_identity_authority.py",
+        (
+            "test_two_provider_variants_share_one_authoritative_parent_product",
+            "test_provider_variant_sku_rename_updates_same_local_identity",
+            "test_same_provider_variant_under_another_parent_fails_closed_without_phantom_product",
+            "test_migration_rejects_duplicate_legacy_provider_identity_without_mutating_rows",
+        ),
+    ),
+    (
+        ".github/workflows/ci.yml",
+        (
+            "Prove MoySklad variant identity authority",
+            "backend/tests/test_moysklad_variant_identity_authority.py",
+        ),
+    ),
+    (
+        "scripts/reverse_logistics_downgrade_guard_smoke.py",
+        (
+            "0043_moysklad_variant_identity_authority",
+            "uq_products_moysklad_id_nonempty",
+            "uq_product_variants_moysklad_id_nonempty",
+            "provider_identity_indexes_preserved",
         ),
     ),
     (
@@ -460,8 +545,11 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "downgrade",
             "0041",
             "0042_moysklad_stock_evidence_concurrency",
+            "0043_moysklad_variant_identity_authority",
             "uq_moysklad_conflict_open_stale_physical_return",
             "uq_stock_reconciliation_open_blocked_physical_return",
+            "uq_products_moysklad_id_nonempty",
+            "uq_product_variants_moysklad_id_nonempty",
         ),
     ),
     (
