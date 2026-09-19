@@ -544,7 +544,6 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             "downgrade",
             "0041",
-            "0042_moysklad_stock_evidence_concurrency",
             "0043_moysklad_variant_identity_authority",
             "uq_moysklad_conflict_open_stale_physical_return",
             "uq_stock_reconciliation_open_blocked_physical_return",
