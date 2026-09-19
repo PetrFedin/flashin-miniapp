@@ -673,7 +673,8 @@ def _sync_assortment_row(
                     "missing_size",
                     "Variant has no configured size attribute; ONE SIZE fallback applied",
                 )
-            size = apply_mapping(db, "size", raw_size or "ONE SIZE", "ONE SIZE")
+            size_source = raw_size or "ONE SIZE"
+            size = apply_mapping(db, "size", size_source, size_source)
             raw_color = _attribute_value(
                 row,
                 settings.moysklad_color_attribute_names,
