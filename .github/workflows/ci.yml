@@ -104,6 +104,8 @@ jobs:
         run: alembic -c backend/alembic.ini upgrade head
       - name: Verify migration state
         run: alembic -c backend/alembic.ini current
+      - name: Prove MoySklad variant identity authority
+        run: python -m pytest -q backend/tests/test_moysklad_variant_identity_authority.py
       - name: Run provider integration spine smoke
         env:
           INTEGRATION_SPINE_SMOKE: "1"

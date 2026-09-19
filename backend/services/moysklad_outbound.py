@@ -199,8 +199,8 @@ def _load_order_items(
             raise MoySkladReviewRequired(f"Order item {item.id} has a broken catalog link")
         if variant.product_id != product.id:
             raise MoySkladReviewRequired(f"Order item {item.id} variant/product mismatch")
-        if not str(variant.moysklad_id or product.moysklad_id or "").strip():
-            raise MoySkladReviewRequired(f"Order item {item.id} is not mapped to MoySklad")
+        if not str(variant.moysklad_id or "").strip():
+            raise MoySkladReviewRequired(f"Order item {item.id} variant is not mapped to an exact MoySklad assortment id")
         if isinstance(item.quantity, bool) or not isinstance(item.quantity, int) or item.quantity <= 0:
             raise MoySkladReviewRequired(f"Order item {item.id} has invalid quantity")
         items.append((item, variant, product))
@@ -261,7 +261,11 @@ def _snapshot_order(
     line_totals = _allocate_net_line_totals(order, items)
     lines: list[_OrderLineSnapshot] = []
     for (item, variant, product), line_total in zip(items, line_totals, strict=True):
-        moysklad_id = str(variant.moysklad_id or product.moysklad_id or "").strip()
+        moysklad_id = str(variant.moysklad_id or "").strip()
+        if not moysklad_id:
+            raise MoySkladReviewRequired(
+                f"Order item {item.id} variant is not mapped to an exact MoySklad assortment id"
+            )
         lines.append(
             _OrderLineSnapshot(
                 moysklad_id=moysklad_id,
