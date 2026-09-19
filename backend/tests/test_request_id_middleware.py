@@ -81,5 +81,8 @@ def test_browser_clients_can_read_request_id_through_cors():
         encoding="utf-8"
     )
 
-    assert 'expose_headers=["X-Request-ID"]' in main_source
+    assert re.search(
+        r'expose_headers=\\[[^\\]]*"X-Request-ID"[^\\]]*\\]',
+        main_source,
+    )
     assert "app.add_middleware(RequestIdMiddleware)" in main_source
