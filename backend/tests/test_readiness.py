@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from backend.api import health
 
 
-CURRENT_HEAD = "0042_moysklad_stock_evidence_concurrency"
+CURRENT_HEAD = "0043_moysklad_variant_identity_authority"
 
 
 class ScalarResult:

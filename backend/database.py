@@ -55,12 +55,31 @@ def _upgrade_legacy_authority_schema(mapper: Mapper, _class) -> None:
 
     Production is migrated by Alembic, while deterministic unit tests often use
     ``Base.metadata.create_all`` against SQLite. The metadata adapter therefore
-    mirrors the 0041 inventory-movement contract and the 0042 single-open
-    MoySklad evidence invariants so tests never run against a weaker schema.
+    mirrors the 0041 inventory-movement contract, the 0042 single-open
+    MoySklad evidence invariants and the 0043 provider-identity uniqueness
+    contract so tests never run against a weaker schema.
     """
 
     table = mapper.local_table
     table_name = getattr(table, "name", "")
+
+    if table_name == "products":
+        _append_partial_unique_index(
+            table,
+            name="uq_products_moysklad_id_nonempty",
+            columns=("moysklad_id",),
+            predicate="moysklad_id <> ''",
+        )
+        return
+
+    if table_name == "product_variants":
+        _append_partial_unique_index(
+            table,
+            name="uq_product_variants_moysklad_id_nonempty",
+            columns=("moysklad_id",),
+            predicate="moysklad_id <> ''",
+        )
+        return
 
     if table_name == "moysklad_conflicts":
         _append_partial_unique_index(

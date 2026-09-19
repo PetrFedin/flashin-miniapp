@@ -389,9 +389,9 @@ def _prepare_physical_return_snapshot(db: Session, case_id: int) -> _PhysicalRet
             order_item, variant, product = loaded
             if int(order_item.variant_id) != int(physical.variant_id):
                 raise MoySkladReviewRequired("Physical return variant differs from original order")
-            moysklad_id = str(variant.moysklad_id or product.moysklad_id or "").strip()
+            moysklad_id = str(variant.moysklad_id or "").strip()
             if not moysklad_id:
-                raise MoySkladReviewRequired("Physical return item has no MoySklad mapping")
+                raise MoySkladReviewRequired("Physical return variant has no exact MoySklad assortment mapping")
 
             expected_item_ids.add(int(order_item.id))
             allocated = allocation_by_item.get(int(order_item.id))
