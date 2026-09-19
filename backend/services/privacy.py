@@ -7,11 +7,13 @@ from .privacy_export import build_customer_export
 from ..models import (
     Cart,
     ConsentRecord,
+    CrmProfile,
     Customer,
     CustomerTimelineEvent,
     Notification,
     Order,
     PrivacyRequest,
+    ReferralCode,
     RestockSubscription,
     ReturnRequest,
     SupportTicket,
