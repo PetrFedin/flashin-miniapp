@@ -183,11 +183,25 @@ MOYSKLAD_IDENTITY_REQUIRED_FILES = {
 }
 REQUIRED_FILES |= MOYSKLAD_IDENTITY_REQUIRED_FILES
 
+# Customer privacy export is part of the immutable production/rollback contract.
+PRIVACY_EXPORT_REQUIRED_FILES = {
+    ".github/workflows/ci.yml",
+    "backend/api/privacy.py",
+    "backend/main.py",
+    "backend/services/privacy_export.py",
+    "backend/tests/test_privacy_export_contract.py",
+    "e2e/tests/storefront.spec.js",
+    "frontend/src/App.jsx",
+    "frontend/src/api.js",
+    "scripts/privacy_export_postgres_smoke.py",
+}
+REQUIRED_FILES |= PRIVACY_EXPORT_REQUIRED_FILES
+
 # Keep immutable capability semantics inspectable and maintainable. Every tuple
 # binds one packaged runtime/test surface to concrete behavior, not just presence.
 MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("backend/api/orders.py", ("acquire_pilot_checkout(", "record_pilot_order(")),
-    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 24",)),
+    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 25",)),
     (
         "scripts/pilot_release_capability.py",
         (
@@ -198,6 +212,8 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "REQUIRED_FILES |= AUTHORITY_REQUIRED_FILES",
             "MOYSKLAD_IDENTITY_REQUIRED_FILES",
             "REQUIRED_FILES |= MOYSKLAD_IDENTITY_REQUIRED_FILES",
+            "PRIVACY_EXPORT_REQUIRED_FILES",
+            "REQUIRED_FILES |= PRIVACY_EXPORT_REQUIRED_FILES",
             "MARKER_REQUIREMENTS",
         ),
     ),
@@ -368,6 +384,83 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "uq_products_moysklad_id_nonempty",
             "uq_product_variants_moysklad_id_nonempty",
             "provider_identity_indexes_preserved",
+        ),
+    ),
+    (
+        "backend/services/privacy_export.py",
+        (
+            'PRIVACY_EXPORT_SCHEMA_VERSION = "flashin.customer-data-export.v1"',
+            "PRIVACY_EXPORT_BATCH_SIZE = 200",
+            "def _decimal_string(",
+            '"money": "decimal-string-2dp"',
+            '"loyalty_points": "decimal-string-4dp"',
+            "def _iter_customer_rows(",
+            "def write_customer_export(",
+            "Anonymized customer identities cannot be exported",
+        ),
+    ),
+    (
+        "backend/api/privacy.py",
+        (
+            "SpooledTemporaryFile",
+            "write_customer_export(db, customer, export_file)",
+            "StreamingResponse(",
+            '"Content-Disposition"',
+            '"Content-Length"',
+            '"Cache-Control": "no-store, max-age=0"',
+        ),
+    ),
+    (
+        "backend/main.py",
+        ('expose_headers=["X-Request-ID", "Content-Disposition"]',),
+    ),
+    (
+        "backend/tests/test_privacy_export_contract.py",
+        (
+            "test_privacy_export_contract_is_exact_unicode_safe_and_customer_scoped",
+            "test_privacy_export_batch_iterator_is_keyset_bounded_and_stable",
+            "test_anonymized_customer_export_is_explicitly_unavailable",
+        ),
+    ),
+    (
+        "scripts/privacy_export_postgres_smoke.py",
+        (
+            "privacy export smoke requires PostgreSQL",
+            'client.get("/api/privacy/export")',
+            '"decimal_exact": True',
+            '"ownership_isolated": True',
+        ),
+    ),
+    (
+        ".github/workflows/ci.yml",
+        (
+            "Prove PostgreSQL privacy export contract",
+            "backend/tests/test_privacy_export_contract.py",
+            "python scripts/privacy_export_postgres_smoke.py",
+        ),
+    ),
+    (
+        "frontend/src/api.js",
+        (
+            "export async function downloadPrivacyData()",
+            'response.headers.get("content-disposition")',
+            '"flashin_customer_export.json"',
+        ),
+    ),
+    (
+        "frontend/src/App.jsx",
+        (
+            "handlePrivacyExport",
+            "URL.createObjectURL(exported.blob)",
+            "Скачать мои данные",
+        ),
+    ),
+    (
+        "e2e/tests/storefront.spec.js",
+        (
+            "flashin.customer-data-export.v1",
+            "download.suggestedFilename()",
+            'readFile(downloadPath, "utf8")',
         ),
     ),
     (
