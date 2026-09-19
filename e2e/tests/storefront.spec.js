@@ -250,7 +250,7 @@ async function mockApi(page, options = {}) {
         status: 200,
         contentType: "application/json; charset=utf-8",
         headers: {
-          "content-disposition": 'attachment; filename="flashin_customer_export.json"',
+          "content-disposition": 'attachment; filename="flashin_customer_export_v1.json"',
           "access-control-expose-headers": "Content-Disposition",
           "cache-control": "no-store, max-age=0",
         },
@@ -484,7 +484,7 @@ test("Mini App profile, support, privacy and return journey", async ({ page }) =
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "Скачать мои данные" }).click();
   const download = await downloadPromise;
-  expect(download.suggestedFilename()).toBe("flashin_customer_export.json");
+  expect(download.suggestedFilename()).toBe("flashin_customer_export_v1.json");
   const downloadPath = await download.path();
   expect(downloadPath).toBeTruthy();
   const exported = JSON.parse(await readFile(downloadPath, "utf8"));
