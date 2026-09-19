@@ -584,160 +584,161 @@ def _sync_assortment_row(
         )
 
     try:
-        product, variant, parent_provider_id, is_variant = _resolve_assortment_identity(
-            db,
-            row,
-            sku,
-        )
-        product_created = 0
-        name = str(row.get("name") or sku).strip()[:255]
-        price = _price_from_moysklad(row, settings.moysklad_sale_price_type)
-        external_stock = _stock_from_moysklad(row)
-        missing_price_message = (
-            f"Configured sale price type '{settings.moysklad_sale_price_type}' is missing or invalid"
-            if settings.moysklad_sale_price_type.strip()
-            else "No positive sale price was supplied"
-        )
-
-        if product is None:
-            product_sku = (
-                _placeholder_parent_sku(parent_provider_id) if is_variant else sku
-            )
-            existing_product_sku = _sku_identity_row(db, Product, product_sku)
-            if existing_product_sku is not None:
-                raise _identity_conflict(
-                    "parent_placeholder_collision" if is_variant else "sku_collision",
-                    row_provider_id,
-                    sku,
-                    f"Local product SKU {product_sku} is already occupied",
-                )
-            if price <= 0:
-                log_conflict(
-                    db,
-                    row_provider_id,
-                    sku,
-                    "missing_price",
-                    f"Product imported inactive because {missing_price_message.lower()}",
-                )
-            product = Product(
-                sku=product_sku,
-                moysklad_id=parent_provider_id,
-                title=name,
-                slug=_unique_slug(db, product_sku, parent_provider_id),
-                brand="FLASHIN",
-                description=str(row.get("description") or ""),
-                price=price,
-                currency=settings.moysklad_default_currency,
-                category=apply_mapping(
-                    db,
-                    "category",
-                    row.get("pathName", "Clothing"),
-                    "Clothing",
-                ),
-                active=price > 0,
-            )
-            db.add(product)
-            db.flush()
-            product_created = 1
-        else:
-            product.title = name
-            product.description = str(row.get("description") or product.description or "")
-            if price > 0:
-                product.price = price
-            else:
-                log_conflict(
-                    db,
-                    row_provider_id,
-                    sku,
-                    "missing_price",
-                    f"Existing local price preserved because {missing_price_message.lower()}",
-                )
-            product.category = apply_mapping(
+        with db.begin_nested():
+            product, variant, parent_provider_id, is_variant = _resolve_assortment_identity(
                 db,
-                "category",
-                row.get("pathName", product.category),
-                product.category,
-            )
-
-        raw_size = _attribute_value(
-            row,
-            settings.moysklad_size_attribute_names,
-            direct_keys=("size",),
-        )
-        if not raw_size and is_variant:
-            log_conflict(
-                db,
-                row_provider_id,
+                row,
                 sku,
-                "missing_size",
-                "Variant has no configured size attribute; ONE SIZE fallback applied",
             )
-        size = apply_mapping(db, "size", raw_size or "ONE SIZE", "ONE SIZE")
-        raw_color = _attribute_value(
-            row,
-            settings.moysklad_color_attribute_names,
-            direct_keys=("color",),
-        )
-        color = apply_mapping(db, "color", raw_color, "") if raw_color else ""
+            product_created = 0
+            name = str(row.get("name") or sku).strip()[:255]
+            price = _price_from_moysklad(row, settings.moysklad_sale_price_type)
+            external_stock = _stock_from_moysklad(row)
+            missing_price_message = (
+                f"Configured sale price type '{settings.moysklad_sale_price_type}' is missing or invalid"
+                if settings.moysklad_sale_price_type.strip()
+                else "No positive sale price was supplied"
+            )
 
-        variant_upserted = 0
-        if variant is None:
-            if external_stock is None:
-                log_conflict(
-                    db,
-                    row_provider_id,
-                    sku,
-                    "missing_stock",
-                    "Provider did not supply stock; new variant starts at zero",
+            if product is None:
+                product_sku = (
+                    _placeholder_parent_sku(parent_provider_id) if is_variant else sku
                 )
-            variant = ProductVariant(
-                product_id=product.id,
-                size=str(size)[:32],
-                color=str(color)[:64],
-                sku=sku,
-                moysklad_id=row_provider_id,
-                stock_qty=0,
-                reserved_qty=0,
-            )
-            db.add(variant)
-            db.flush()
-            if external_stock is not None:
-                variant = _apply_synced_stock(
-                    db,
-                    variant,
-                    external_stock,
-                    sync_type=sync_type,
-                    admin_id=admin_id,
-                )
-            variant_upserted = 1
-        else:
-            if int(variant.product_id) != int(product.id):
-                raise _identity_conflict(
-                    "parent_reassignment",
-                    row_provider_id,
-                    sku,
-                    "Resolved MoySklad variant no longer belongs to the authoritative parent product",
-                )
-            variant.size = str(size)[:32]
-            variant.color = str(color)[:64]
-            if external_stock is not None:
-                if external_stock < variant.reserved_qty:
+                existing_product_sku = _sku_identity_row(db, Product, product_sku)
+                if existing_product_sku is not None:
+                    raise _identity_conflict(
+                        "parent_placeholder_collision" if is_variant else "sku_collision",
+                        row_provider_id,
+                        sku,
+                        f"Local product SKU {product_sku} is already occupied",
+                    )
+                if price <= 0:
                     log_conflict(
                         db,
                         row_provider_id,
                         sku,
-                        "stock_below_reserved",
-                        "External stock is below the local reserved quantity; reservation preserved",
+                        "missing_price",
+                        f"Product imported inactive because {missing_price_message.lower()}",
                     )
-                variant = _apply_synced_stock(
-                    db,
-                    variant,
-                    external_stock,
-                    sync_type=sync_type,
-                    admin_id=admin_id,
+                product = Product(
+                    sku=product_sku,
+                    moysklad_id=parent_provider_id,
+                    title=name,
+                    slug=_unique_slug(db, product_sku, parent_provider_id),
+                    brand="FLASHIN",
+                    description=str(row.get("description") or ""),
+                    price=price,
+                    currency=settings.moysklad_default_currency,
+                    category=apply_mapping(
+                        db,
+                        "category",
+                        row.get("pathName", "Clothing"),
+                        "Clothing",
+                    ),
+                    active=price > 0,
                 )
+                db.add(product)
+                db.flush()
+                product_created = 1
+            else:
+                product.title = name
+                product.description = str(row.get("description") or product.description or "")
+                if price > 0:
+                    product.price = price
+                else:
+                    log_conflict(
+                        db,
+                        row_provider_id,
+                        sku,
+                        "missing_price",
+                        f"Existing local price preserved because {missing_price_message.lower()}",
+                    )
+                product.category = apply_mapping(
+                    db,
+                    "category",
+                    row.get("pathName", product.category),
+                    product.category,
+                )
+
+            raw_size = _attribute_value(
+                row,
+                settings.moysklad_size_attribute_names,
+                direct_keys=("size",),
+            )
+            if not raw_size and is_variant:
+                log_conflict(
+                    db,
+                    row_provider_id,
+                    sku,
+                    "missing_size",
+                    "Variant has no configured size attribute; ONE SIZE fallback applied",
+                )
+            size = apply_mapping(db, "size", raw_size or "ONE SIZE", "ONE SIZE")
+            raw_color = _attribute_value(
+                row,
+                settings.moysklad_color_attribute_names,
+                direct_keys=("color",),
+            )
+            color = apply_mapping(db, "color", raw_color, "") if raw_color else ""
+
+            variant_upserted = 0
+            if variant is None:
+                if external_stock is None:
+                    log_conflict(
+                        db,
+                        row_provider_id,
+                        sku,
+                        "missing_stock",
+                        "Provider did not supply stock; new variant starts at zero",
+                    )
+                variant = ProductVariant(
+                    product_id=product.id,
+                    size=str(size)[:32],
+                    color=str(color)[:64],
+                    sku=sku,
+                    moysklad_id=row_provider_id,
+                    stock_qty=0,
+                    reserved_qty=0,
+                )
+                db.add(variant)
+                db.flush()
+                if external_stock is not None:
+                    variant = _apply_synced_stock(
+                        db,
+                        variant,
+                        external_stock,
+                        sync_type=sync_type,
+                        admin_id=admin_id,
+                    )
                 variant_upserted = 1
-        return product_created, variant_upserted
+            else:
+                if int(variant.product_id) != int(product.id):
+                    raise _identity_conflict(
+                        "parent_reassignment",
+                        row_provider_id,
+                        sku,
+                        "Resolved MoySklad variant no longer belongs to the authoritative parent product",
+                    )
+                variant.size = str(size)[:32]
+                variant.color = str(color)[:64]
+                if external_stock is not None:
+                    if external_stock < variant.reserved_qty:
+                        log_conflict(
+                            db,
+                            row_provider_id,
+                            sku,
+                            "stock_below_reserved",
+                            "External stock is below the local reserved quantity; reservation preserved",
+                        )
+                    variant = _apply_synced_stock(
+                        db,
+                        variant,
+                        external_stock,
+                        sync_type=sync_type,
+                        admin_id=admin_id,
+                    )
+                    variant_upserted = 1
+            return product_created, variant_upserted
     except MoySkladIdentityConflict as exc:
         log_conflict(
             db,
