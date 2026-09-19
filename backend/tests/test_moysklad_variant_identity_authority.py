@@ -264,6 +264,54 @@ def test_mapped_variant_sku_rename_cannot_take_another_local_variant_sku():
     ).count() == 1
 
 
+def test_identity_conflict_rolls_back_partial_parent_adoption_before_logging_evidence():
+    _engine, db = _db()
+    product = Product(
+        sku="UNMAPPED-PARENT",
+        moysklad_id="",
+        title="Unmapped",
+        slug="unmapped-parent",
+        price=1000,
+    )
+    other_product = Product(
+        sku="OTHER-PARENT",
+        title="Other",
+        slug="other-parent-savepoint",
+        price=1000,
+    )
+    db.add_all([product, other_product])
+    db.flush()
+    mapped = ProductVariant(
+        product_id=product.id,
+        size="M",
+        sku="OLD-SKU",
+        moysklad_id="variant-1",
+        stock_qty=0,
+        reserved_qty=0,
+    )
+    occupied = ProductVariant(
+        product_id=other_product.id,
+        size="L",
+        sku="TAKEN-SKU",
+        moysklad_id="",
+        stock_qty=0,
+        reserved_qty=0,
+    )
+    db.add_all([mapped, occupied])
+    db.commit()
+    product_id = product.id
+
+    _sync(db, _variant_row("variant-1", "parent-1", "TAKEN-SKU"))
+
+    db.expire_all()
+    assert db.get(Product, product_id).moysklad_id == ""
+    assert db.query(ProductVariant).filter(ProductVariant.moysklad_id == "variant-1").one().sku == "OLD-SKU"
+    assert db.query(MoySkladConflict).filter(
+        MoySkladConflict.conflict_type == "variant_sku_collision",
+        MoySkladConflict.status == "open",
+    ).count() == 1
+
+
 def test_outbound_order_mapping_requires_exact_variant_provider_id_not_parent_fallback():
     _engine, db = _db()
     customer = Customer(telegram_id="identity-outbound")
