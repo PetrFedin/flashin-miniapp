@@ -1,3 +1,4 @@
+import ast
 import asyncio
 import re
 from pathlib import Path
@@ -81,5 +82,16 @@ def test_browser_clients_can_read_request_id_through_cors():
         encoding="utf-8"
     )
 
-    assert 'expose_headers=["X-Request-ID"]' in main_source
+    tree = ast.parse(main_source)
+    exposed_headers = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.keyword) or node.arg != "expose_headers":
+            continue
+        if not isinstance(node.value, (ast.List, ast.Tuple)):
+            continue
+        for item in node.value.elts:
+            if isinstance(item, ast.Constant) and isinstance(item.value, str):
+                exposed_headers.add(item.value)
+
+    assert "X-Request-ID" in exposed_headers
     assert "app.add_middleware(RequestIdMiddleware)" in main_source

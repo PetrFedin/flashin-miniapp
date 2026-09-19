@@ -106,6 +106,10 @@ jobs:
         run: alembic -c backend/alembic.ini current
       - name: Prove MoySklad variant identity authority
         run: python -m pytest -q backend/tests/test_moysklad_variant_identity_authority.py
+      - name: Prove PostgreSQL privacy export contract
+        run: |
+          python -m pytest -q backend/tests/test_privacy_export_contract.py
+          python scripts/privacy_export_postgres_smoke.py
       - name: Run provider integration spine smoke
         env:
           INTEGRATION_SPINE_SMOKE: "1"
