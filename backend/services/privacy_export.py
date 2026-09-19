@@ -27,7 +27,7 @@ from ..models import (
 )
 
 PRIVACY_EXPORT_SCHEMA_VERSION = "flashin.customer-data-export.v1"
-PRIVACY_EXPORT_FILENAME = "flashin_customer_export.json"
+PRIVACY_EXPORT_FILENAME = "flashin_customer_export_v1.json"
 PRIVACY_EXPORT_BATCH_SIZE = 200
 MONEY_SCALE = 2
 POINTS_SCALE = 4
