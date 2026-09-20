@@ -197,11 +197,28 @@ PRIVACY_EXPORT_REQUIRED_FILES = {
 }
 REQUIRED_FILES |= PRIVACY_EXPORT_REQUIRED_FILES
 
+# Media upload post-commit authority is part of the immutable rollback contract.
+MEDIA_UPLOAD_AUTHORITY_REQUIRED_FILES = {
+    ".github/workflows/ci.yml",
+    "admin/src/api.js",
+    "admin/src/apiSource.test.js",
+    "backend/alembic/versions/0044_media_upload_commit_authority.py",
+    "backend/api/media.py",
+    "backend/database.py",
+    "backend/model_constraints.py",
+    "backend/models.py",
+    "backend/tests/test_media_storage_transaction_boundary.py",
+    "backend/tests/test_media_upload_commit_authority.py",
+    "scripts/media_storage_transaction_boundary_smoke.py",
+    "scripts/reverse_logistics_downgrade_guard_smoke.py",
+}
+REQUIRED_FILES |= MEDIA_UPLOAD_AUTHORITY_REQUIRED_FILES
+
 # Keep immutable capability semantics inspectable and maintainable. Every tuple
 # binds one packaged runtime/test surface to concrete behavior, not just presence.
 MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("backend/api/orders.py", ("acquire_pilot_checkout(", "record_pilot_order(")),
-    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 25",)),
+    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 26",)),
     (
         "scripts/pilot_release_capability.py",
         (
@@ -214,6 +231,8 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "REQUIRED_FILES |= MOYSKLAD_IDENTITY_REQUIRED_FILES",
             "PRIVACY_EXPORT_REQUIRED_FILES",
             "REQUIRED_FILES |= PRIVACY_EXPORT_REQUIRED_FILES",
+            "MEDIA_UPLOAD_AUTHORITY_REQUIRED_FILES",
+            "REQUIRED_FILES |= MEDIA_UPLOAD_AUTHORITY_REQUIRED_FILES",
             "MARKER_REQUIREMENTS",
         ),
     ),
@@ -380,9 +399,10 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "scripts/reverse_logistics_downgrade_guard_smoke.py",
         (
-            "0043_moysklad_variant_identity_authority",
+            "0044_media_upload_commit_authority",
             "uq_products_moysklad_id_nonempty",
             "uq_product_variants_moysklad_id_nonempty",
+            "uq_media_assets_upload_key_nonempty",
             "provider_identity_indexes_preserved",
         ),
     ),
@@ -461,6 +481,68 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "flashin.customer-data-export.v1",
             "download.suggestedFilename()",
             'readFile(downloadPath, "utf8")',
+        ),
+    ),
+    (
+        "backend/alembic/versions/0044_media_upload_commit_authority.py",
+        (
+            "0044_media_upload_commit_authority",
+            "0043_moysklad_variant_identity_authority",
+            "uq_media_assets_upload_key_nonempty",
+            "upload_key <> ''",
+        ),
+    ),
+    (
+        "backend/api/media.py",
+        (
+            "authoritative_commit_reached = False",
+            "db.commit()",
+            "authoritative_commit_reached = True",
+            "return _committed_media_response(response)",
+            "if storage_key and not authoritative_commit_reached",
+            '@router.get("/uploads/{upload_key}"',
+            "MediaAsset.upload_key == upload_key",
+        ),
+    ),
+    (
+        "admin/src/api.js",
+        (
+            'MEDIA_UPLOAD_KEY_PREFIX = "flashin_media_upload_key:"',
+            'headers: { "Idempotency-Key": uploadKey }',
+            "setStoredUploadKey(storageName, uploadKey)",
+            "clearStoredUploadKey(storageName)",
+        ),
+    ),
+    (
+        "backend/tests/test_media_storage_transaction_boundary.py",
+        (
+            "test_postcommit_response_failure_never_deletes_or_requeues_committed_object",
+            "test_same_upload_key_recovers_committed_asset_without_second_provider_write",
+            "test_recovery_lookup_is_authorized_and_bound_to_upload_key",
+        ),
+    ),
+    (
+        "backend/tests/test_media_upload_commit_authority.py",
+        (
+            "test_create_all_mirrors_media_upload_key_partial_uniqueness",
+            "test_duplicate_nonempty_upload_key_is_rejected_but_legacy_empty_keys_can_coexist",
+        ),
+    ),
+    (
+        "scripts/media_storage_transaction_boundary_smoke.py",
+        (
+            "postcommit_object_deleted",
+            "postcommit_asset_recovered",
+            "retry_provider_write_created",
+            "simulated post-commit response failure",
+        ),
+    ),
+    (
+        ".github/workflows/ci.yml",
+        (
+            "Prove media post-commit authority",
+            "backend/tests/test_media_upload_commit_authority.py",
+            "scripts/media_storage_transaction_boundary_smoke.py",
         ),
     ),
     (
