@@ -70,7 +70,7 @@ def _release(repo: Path, tmp_path: Path, release_id: str, created_at: str) -> Pa
 
 
 def test_signed_release_capability_is_bound_to_exact_release():
-    assert CAPABILITY_VERSION == 24
+    assert CAPABILITY_VERSION == 25
     secret = "s" * 48
     state = _release_state()
     state["capabilities"] = {
@@ -119,6 +119,10 @@ def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(
         ("scripts/preflight.py", "print('Preflight OK')\n", "validate_admin_password_contract"),
         ("backend/tests/test_preflight_admin_password_contract.py", "def test_placeholder(): pass\n", "test_production_preflight_rejects_persisted_admin_password"),
         ("backend/services/runtime_capabilities.py", "def public_runtime_capabilities(): return {}\n", "require_payment_execution"),
+        ("backend/services/privacy_export.py", "def write_customer_export(*args, **kwargs): pass\n", "decimal-string-2dp"),
+        ("backend/api/privacy.py", "router = object()\n", "SpooledTemporaryFile"),
+        ("scripts/privacy_export_postgres_smoke.py", "def main(): return 0\n", "privacy export smoke requires PostgreSQL"),
+        ("backend/tests/test_privacy_export_contract.py", "def test_placeholder(): pass\n", "test_privacy_export_contract_is_exact_unicode_safe_and_customer_scoped"),
         ("backend/alembic/versions/0043_moysklad_variant_identity_authority.py", "revision = '0043_moysklad_variant_identity_authority'\n", "uq_products_moysklad_id_nonempty"),
         ("backend/services/moysklad.py", "async def fetch_assortment(): pass\n", "MoySkladIdentityConflict"),
         ("backend/services/moysklad_outbound.py", "class MoySkladReviewRequired: pass\n", "exact MoySklad assortment id"),
@@ -136,7 +140,7 @@ def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(
         ("scripts/restore_postgres.sh", "#!/usr/bin/env bash\nexit 0\n", "verify-live"),
         ("scripts/deploy_release_gate.py", "#!/usr/bin/env python3\n", "retained under deploy/release/builds"),
         ("scripts/deploy_production.sh", "#!/usr/bin/env bash\n", "deploy_release_gate.py"),
-        ("scripts/pilot_release_contract.py", "CAPABILITY_VERSION = 23\n", "CAPABILITY_VERSION = 24"),
+        ("scripts/pilot_release_contract.py", "CAPABILITY_VERSION = 24\n", "CAPABILITY_VERSION = 25"),
         (
             "backend/services/inventory_movement_contract.py",
             "def movement_transition_valid(movement): return True\n",
