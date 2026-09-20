@@ -56,12 +56,22 @@ def _upgrade_legacy_authority_schema(mapper: Mapper, _class) -> None:
     Production is migrated by Alembic, while deterministic unit tests often use
     ``Base.metadata.create_all`` against SQLite. The metadata adapter therefore
     mirrors the 0041 inventory-movement contract, the 0042 single-open
-    MoySklad evidence invariants and the 0043 provider-identity uniqueness
-    contract so tests never run against a weaker schema.
+    MoySklad evidence invariants, the 0043 provider-identity uniqueness and
+    the 0044 media upload idempotency authority so tests never run against a
+    weaker schema.
     """
 
     table = mapper.local_table
     table_name = getattr(table, "name", "")
+
+    if table_name == "media_assets":
+        _append_partial_unique_index(
+            table,
+            name="uq_media_assets_upload_key_nonempty",
+            columns=("upload_key",),
+            predicate="upload_key <> ''",
+        )
+        return
 
     if table_name == "products":
         _append_partial_unique_index(
