@@ -30,6 +30,7 @@ from .models import (
     InventoryMovement,
     LoyaltyRedemptionHold,
     LoyaltyTransaction,
+    MediaAsset,
     Order,
     OrderItem,
     Payment,
@@ -198,6 +199,12 @@ def apply_model_constraints() -> None:
         ],
     )
 
+    _partial_unique_index(
+        MediaAsset.__table__,
+        "uq_media_assets_upload_key_nonempty",
+        [MediaAsset.__table__.c.upload_key],
+        "upload_key <> ''",
+    )
     _partial_unique_index(
         Cart.__table__,
         "uq_carts_one_active_per_customer",
