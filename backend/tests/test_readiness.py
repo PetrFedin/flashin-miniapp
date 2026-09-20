@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from backend.api import health
 
 
-CURRENT_HEAD = "0043_moysklad_variant_identity_authority"
+CURRENT_HEAD = "0044_media_upload_commit_authority"
 
 
 class ScalarResult:

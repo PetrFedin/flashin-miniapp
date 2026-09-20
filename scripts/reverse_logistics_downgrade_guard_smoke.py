@@ -16,7 +16,7 @@ if str(ROOT) not in sys.path:
 
 from backend.database import engine
 
-EXPECTED_HEAD = "0043_moysklad_variant_identity_authority"
+EXPECTED_HEAD = "0044_media_upload_commit_authority"
 TARGET = "0040_delivery_authority"
 ERROR_FRAGMENT = "0041 downgrade blocked: reverse-logistics evidence exists"
 
@@ -82,6 +82,10 @@ def main() -> int:
             index["name"]
             for index in inspect(connection).get_indexes("product_variants")
         }
+        media_indexes = {
+            index["name"]
+            for index in inspect(connection).get_indexes("media_assets")
+        }
         cases_after = int(connection.execute(text("SELECT count(*) FROM return_logistics_cases")).scalar_one())
         evidence_after = int(
             connection.execute(
@@ -96,8 +100,8 @@ def main() -> int:
         )
 
     # PostgreSQL transactional DDL must restore 0041 physical authority, the
-    # 0042 concurrency indexes and 0043 provider-identity uniqueness after 0041
-    # rejects the downgrade chain.
+    # 0042 concurrency indexes, 0043 provider-identity uniqueness and 0044 media
+    # upload authority after 0041 rejects the downgrade chain.
     assert revision == EXPECTED_HEAD, revision
     assert {
         "return_logistics_cases",
@@ -110,6 +114,7 @@ def main() -> int:
     assert "uq_stock_reconciliation_open_blocked_physical_return" in reconciliation_indexes
     assert "uq_products_moysklad_id_nonempty" in product_indexes
     assert "uq_product_variants_moysklad_id_nonempty" in variant_indexes
+    assert "uq_media_assets_upload_key_nonempty" in media_indexes
     assert cases_after == cases
     assert evidence_after == evidence_movements
 
@@ -122,6 +127,7 @@ def main() -> int:
             "physical_movements_preserved": evidence_after,
             "concurrency_indexes_preserved": True,
             "provider_identity_indexes_preserved": True,
+            "media_upload_authority_preserved": True,
             "transactional_ddl_preserved": True,
         }
     )
