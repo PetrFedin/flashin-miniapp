@@ -75,6 +75,7 @@ class MediaAsset(Base):
     __tablename__ = "media_assets"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    upload_key: Mapped[str] = mapped_column(String(255), default="", index=True)
     url: Mapped[str] = mapped_column(String(2048))
     storage_key: Mapped[str] = mapped_column(String(1024), index=True)
     filename: Mapped[str] = mapped_column(String(255))
