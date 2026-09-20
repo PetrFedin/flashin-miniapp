@@ -80,3 +80,18 @@ test("admin downloads reject a response if the admin session changes mid-flight"
   assert.equal(source.includes("if (response.status === 401) clearAdminTokenIfCurrent(tokenAtStart)"), true);
   assert.equal(source.match(/assertAdminSessionUnchanged\(true, tokenAtStart\)/g)?.length >= 2, true);
 });
+
+
+test("media upload preserves one idempotency key across ambiguous retries", () => {
+  assert.equal(source.includes('const MEDIA_UPLOAD_KEY_PREFIX = "flashin_media_upload_key:"'), true);
+  assert.equal(source.includes('if (path !== "/api/media/upload")'), true);
+  assert.equal(source.includes('headers: { "Idempotency-Key": uploadKey }'), true);
+  assert.equal(source.includes("setStoredUploadKey(storageName, uploadKey)"), true);
+  assert.equal(source.includes("clearStoredUploadKey(storageName)"), true);
+  const uploadBlock = source
+    .split('export async function uploadAdminFile(path, file, field = "file")', 2)[1]
+    .split("export async function downloadAdminFile", 1)[0];
+  assert.equal(uploadBlock.includes("clearStoredUploadKey(storageName);\n    return result;"), true);
+  assert.equal(uploadBlock.includes("catch (error)"), true);
+  assert.equal(uploadBlock.includes("clearStoredUploadKey(storageName);\n    throw error;"), false);
+});
