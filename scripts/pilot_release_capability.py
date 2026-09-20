@@ -719,11 +719,12 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             "downgrade",
             "0041",
-            "0043_moysklad_variant_identity_authority",
+            "0044_media_upload_commit_authority",
             "uq_moysklad_conflict_open_stale_physical_return",
             "uq_stock_reconciliation_open_blocked_physical_return",
             "uq_products_moysklad_id_nonempty",
             "uq_product_variants_moysklad_id_nonempty",
+            "uq_media_assets_upload_key_nonempty",
         ),
     ),
     (
