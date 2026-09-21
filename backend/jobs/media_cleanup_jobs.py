@@ -39,6 +39,17 @@ def _requires_operator_review(exc: Exception) -> bool:
     return code in _PERMANENT_STORAGE_CODES
 
 
+def _authoritative_media_asset_id(db: Session, storage_key: str) -> int | None:
+    row = (
+        db.query(MediaAsset.id)
+        .filter(MediaAsset.storage_key == storage_key)
+        .first()
+    )
+    asset_id = int(row[0]) if row is not None else None
+    db.rollback()
+    return asset_id
+
+
 def process_media_cleanup_commands(
     db: Session,
     limit: int = 50,
@@ -68,23 +79,17 @@ def process_media_cleanup_commands(
             # Never delete a provider object that is already authoritative in
             # PostgreSQL. This also protects against an ambiguous DB commit
             # outcome where recovery work exists but MediaAsset committed.
-            referenced_asset = (
-                db.query(MediaAsset.id)
-                .filter(MediaAsset.storage_key == storage_key)
-                .first()
-            )
-            if referenced_asset is not None:
-                db.rollback()
+            referenced_asset_id = _authoritative_media_asset_id(db, storage_key)
+            if referenced_asset_id is not None:
                 state = fail_provider_command(
                     db,
                     command_id,
                     lease_token,
-                    f"cleanup blocked: storage object is referenced by MediaAsset {referenced_asset[0]}",
+                    f"cleanup blocked: storage object is referenced by MediaAsset {referenced_asset_id}",
                     review_required=True,
                 )
                 result[state] = result.get(state, 0) + 1
                 continue
-            db.rollback()
 
             if db.in_transaction():
                 raise RuntimeError(
