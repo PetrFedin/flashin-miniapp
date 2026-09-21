@@ -4,10 +4,13 @@ import time
 from typing import Any, TYPE_CHECKING
 
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
+from sqlalchemy import func
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
+from ..models import WebhookOutbox
 from ..services.pilot_observability import build_pilot_operations_status
+from ..services.webhook_delivery import WEBHOOK_DELIVERY_CLASSIFICATIONS
 from ..services.provider_observability import (
     PROVIDER_COMMAND_MONITORED_PROVIDERS,
     PROVIDER_COMMAND_STATUSES,
@@ -111,6 +114,20 @@ PROVIDER_COMMAND_DUE = Gauge(
     ["provider", "kind"],
 )
 
+WEBHOOK_OUTBOX_METRICS_COLLECTION_SUCCESS = Gauge(
+    "flashin_webhook_outbox_metrics_collection_success",
+    "Whether webhook outbox review metrics were collected successfully",
+)
+WEBHOOK_OUTBOX_REVIEW_REQUIRED_TOTAL = Gauge(
+    "flashin_webhook_outbox_review_required_total",
+    "Webhook outbox rows requiring operator reconciliation",
+)
+WEBHOOK_OUTBOX_REVIEW_REQUIRED = Gauge(
+    "flashin_webhook_outbox_review_required",
+    "Webhook outbox review rows by bounded delivery classification",
+    ["classification"],
+)
+
 _RUNTIME_STATUSES = ("not_armed", "active", "stopped", "completed", "unknown")
 _MONEY_KINDS = (
     "payment_review",
@@ -192,6 +209,39 @@ def collect_provider_command_metrics(db: "Session") -> bool:
                 kind="expired_processing",
             ).set(int(snapshot["expired_processing"]))
         PROVIDER_COMMAND_METRICS_COLLECTION_SUCCESS.set(1)
+        return True
+    except Exception:
+        return False
+
+
+def collect_webhook_outbox_metrics(db: "Session") -> bool:
+    WEBHOOK_OUTBOX_METRICS_COLLECTION_SUCCESS.set(0)
+    WEBHOOK_OUTBOX_REVIEW_REQUIRED_TOTAL.set(0)
+    for classification in WEBHOOK_DELIVERY_CLASSIFICATIONS:
+        WEBHOOK_OUTBOX_REVIEW_REQUIRED.labels(classification=classification).set(0)
+
+    try:
+        total = (
+            db.query(func.count(WebhookOutbox.id))
+            .filter(WebhookOutbox.status == "review_required")
+            .scalar()
+        )
+        WEBHOOK_OUTBOX_REVIEW_REQUIRED_TOTAL.set(int(total or 0))
+        for classification in WEBHOOK_DELIVERY_CLASSIFICATIONS:
+            count = (
+                db.query(func.count(WebhookOutbox.id))
+                .filter(
+                    WebhookOutbox.status == "review_required",
+                    WebhookOutbox.last_error.like(
+                        f"classification={classification};%"
+                    ),
+                )
+                .scalar()
+            )
+            WEBHOOK_OUTBOX_REVIEW_REQUIRED.labels(
+                classification=classification
+            ).set(int(count or 0))
+        WEBHOOK_OUTBOX_METRICS_COLLECTION_SUCCESS.set(1)
         return True
     except Exception:
         return False
