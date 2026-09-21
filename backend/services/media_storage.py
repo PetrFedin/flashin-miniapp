@@ -95,8 +95,12 @@ async def _run_s3_transport(operation, *, concurrency: int):
     except asyncio.CancelledError:
         release_in_callback = True
 
-        def _release_when_finished(_future):
-            loop.call_soon_threadsafe(limiter.release)
+        def _release_when_finished(done_future):
+            try:
+                done_future.exception()
+            except BaseException:
+                pass
+            limiter.release()
 
         future.add_done_callback(_release_when_finished)
         raise
