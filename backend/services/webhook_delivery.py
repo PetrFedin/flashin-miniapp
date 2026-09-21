@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import socket
+
+import httpx
+
 SAFE_RETRY_PRE_DISPATCH = "safe_retry_pre_dispatch"
 AMBIGUOUS_TRANSPORT = "ambiguous_transport"
 AMBIGUOUS_CANCELLED = "ambiguous_cancelled"
@@ -68,3 +72,32 @@ def public_delivery_error(status: str, error: str) -> str:
     if str(status or "").strip().lower() == "review_required":
         return "Webhook delivery outcome requires review"
     return "Webhook delivery failed"
+
+
+def classify_pre_dispatch_exception(exc: Exception) -> str:
+    """Classify failures before HTTP dispatch can have reached the receiver."""
+
+    if isinstance(exc, ValueError):
+        if isinstance(exc.__cause__, socket.gaierror):
+            return SAFE_RETRY_PRE_DISPATCH
+        return PERMANENT_CONTRACT
+    if isinstance(exc, RuntimeError):
+        return PERMANENT_CONTRACT
+    return SAFE_RETRY_PRE_DISPATCH
+
+
+def classify_transport_exception(exc: Exception) -> str:
+    """Classify httpx transport failures conservatively around dispatch ambiguity."""
+
+    if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)):
+        return SAFE_RETRY_PRE_DISPATCH
+    if isinstance(exc, httpx.TransportError):
+        return AMBIGUOUS_TRANSPORT
+    return AMBIGUOUS_TRANSPORT
+
+
+def classify_http_status(status_code: int) -> str:
+    code = int(status_code)
+    if 400 <= code < 500 and code not in {408, 425, 429}:
+        return PERMANENT_HTTP
+    return AMBIGUOUS_HTTP
