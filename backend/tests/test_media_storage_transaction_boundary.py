@@ -170,7 +170,6 @@ def test_s3_put_runs_after_request_transaction_ends_and_finalize_is_fresh(monkey
             put_calls.append(kwargs)
 
     monkeypatch.setattr(media_storage, "_s3_client", lambda: _S3())
-    monkeypatch.setattr(media_api, "delete_media", lambda _key: None)
     upload = _Upload(_png_bytes())
 
     asset = asyncio.run(media_api.upload_media(file=upload, idempotency_key="media-upload-key-0007", admin=initial_admin, db=db))
@@ -200,11 +199,28 @@ def test_storage_timeout_never_enters_db_finalize(monkeypatch):
             raise TimeoutError("simulated object-store timeout")
 
     monkeypatch.setattr(media_storage, "_s3_client", lambda: _FailingS3())
+    cleanup_keys = []
+    monkeypatch.setattr(
+        media_api,
+        "_persist_uploaded_media_cleanup_or_raise",
+        lambda _db, key: cleanup_keys.append(key),
+    )
     upload = _Upload(_png_bytes())
 
-    with pytest.raises(TimeoutError, match="object-store timeout"):
-        asyncio.run(media_api.upload_media(file=upload, idempotency_key="media-upload-key-0008", admin=initial_admin, db=db))
+    with pytest.raises(media_storage.MediaStorageWriteError) as exc_info:
+        asyncio.run(
+            media_api.upload_media(
+                file=upload,
+                idempotency_key="media-upload-key-0008",
+                admin=initial_admin,
+                db=db,
+            )
+        )
 
+    assert isinstance(exc_info.value.__cause__, TimeoutError)
+    assert cleanup_keys == [exc_info.value.storage_key]
+    assert exc_info.value.storage_key.endswith(".png")
+    assert len(exc_info.value.storage_key) == 36
     assert db.query_calls == 0
     assert db.commits == 0
     assert db.in_transaction() is False
@@ -226,49 +242,91 @@ def test_authorization_change_after_provider_success_fails_closed_and_cleans_up(
             "size_bytes": 42,
         }
 
-    deleted = []
+    cleanup_keys = []
     monkeypatch.setattr(media_api, "save_media", save_media)
-    monkeypatch.setattr(media_api, "delete_media", deleted.append)
+    monkeypatch.setattr(
+        media_api,
+        "_persist_uploaded_media_cleanup_or_raise",
+        lambda _db, key: cleanup_keys.append(key),
+    )
     upload = _Upload(b"ignored")
 
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(media_api.upload_media(file=upload, idempotency_key="media-upload-key-0009", admin=initial_admin, db=db))
 
     assert exc_info.value.status_code == 403
-    assert deleted == ["object.png"]
+    assert cleanup_keys == ["object.png"]
     assert db.commits == 0
     assert db.in_transaction() is False
 
 
-def test_cleanup_failure_is_never_silently_swallowed(monkeypatch):
+def test_cleanup_persistence_failure_is_never_silently_swallowed(monkeypatch):
+    class _CleanupDb:
+        def __init__(self):
+            self.rollbacks = 0
+
+        def rollback(self):
+            self.rollbacks += 1
+
+    db = _CleanupDb()
+    monkeypatch.setattr(
+        media_api,
+        "enqueue_media_cleanup",
+        lambda _db, _key: (_ for _ in ()).throw(
+            OSError("simulated PostgreSQL outage")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="failed to persist media cleanup recovery command") as exc_info:
+        media_api._persist_uploaded_media_cleanup_or_raise(
+            db,
+            "a" * 32 + ".png",
+        )
+
+    assert isinstance(exc_info.value.__cause__, OSError)
+    assert db.rollbacks == 1
+
+
+def test_precommit_finalize_failure_persists_exact_cleanup_key(monkeypatch):
     initial_admin = SimpleNamespace(id=10)
-    db = _Session(finalize_admin=SimpleNamespace(id=10, active=True), fail_flush=True)
+    db = _Session(
+        finalize_admin=SimpleNamespace(id=10, active=True),
+        fail_flush=True,
+    )
     monkeypatch.setattr(media_api, "require_permission", lambda *_args, **_kwargs: None)
 
     async def save_media(_file):
         assert db.in_transaction() is False
         return {
-            "url": "https://cdn.flashin.test/object.png",
-            "storage_key": "object.png",
+            "url": "https://cdn.flashin.test/" + "b" * 32 + ".png",
+            "storage_key": "b" * 32 + ".png",
             "filename": "upload.png",
             "content_type": "image/png",
             "size_bytes": 42,
         }
 
+    cleanup_keys = []
     monkeypatch.setattr(media_api, "save_media", save_media)
     monkeypatch.setattr(
         media_api,
-        "delete_media",
-        lambda _key: (_ for _ in ()).throw(OSError("storage delete failed")),
+        "_persist_uploaded_media_cleanup_or_raise",
+        lambda _db, key: cleanup_keys.append(key),
     )
     upload = _Upload(b"ignored")
 
-    with pytest.raises(RuntimeError, match="media cleanup failed") as exc_info:
-        asyncio.run(media_api.upload_media(file=upload, idempotency_key="media-upload-key-0010", admin=initial_admin, db=db))
+    with pytest.raises(RuntimeError, match="simulated DB finalize failure"):
+        asyncio.run(
+            media_api.upload_media(
+                file=upload,
+                idempotency_key="media-upload-key-0010",
+                admin=initial_admin,
+                db=db,
+            )
+        )
 
-    assert isinstance(exc_info.value.__cause__, OSError)
+    assert cleanup_keys == ["b" * 32 + ".png"]
     assert db.commits == 0
-    assert db.in_transaction() is False
+    assert upload.closed is True
 
 
 def test_postcommit_response_failure_never_deletes_or_requeues_committed_object(monkeypatch):
@@ -288,9 +346,13 @@ def test_postcommit_response_failure_never_deletes_or_requeues_committed_object(
             "size_bytes": 42,
         }
 
-    deleted = []
+    cleanup_keys = []
     monkeypatch.setattr(media_api, "save_media", save_media)
-    monkeypatch.setattr(media_api, "delete_media", deleted.append)
+    monkeypatch.setattr(
+        media_api,
+        "_persist_uploaded_media_cleanup_or_raise",
+        lambda _db, key: cleanup_keys.append(key),
+    )
     monkeypatch.setattr(
         media_api,
         "_committed_media_response",
@@ -312,7 +374,7 @@ def test_postcommit_response_failure_never_deletes_or_requeues_committed_object(
     assert db.existing_asset is not None
     assert db.existing_asset.upload_key == "media-upload-key-0011"
     assert db.existing_asset.storage_key == "committed.png"
-    assert deleted == []
+    assert cleanup_keys == []
     assert upload.closed is True
 
 
