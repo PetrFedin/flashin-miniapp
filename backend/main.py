@@ -74,6 +74,7 @@ from .middleware.metrics import (
     MetricsMiddleware,
     collect_pilot_metrics,
     collect_provider_command_metrics,
+    collect_webhook_outbox_metrics,
     metrics_response,
 )
 from .middleware.rate_limit import InMemoryRateLimitMiddleware
@@ -202,6 +203,7 @@ if settings.metrics_enabled:
     def metrics(db: Session = Depends(get_db)):
         collect_pilot_metrics(db, settings)
         collect_provider_command_metrics(db)
+        collect_webhook_outbox_metrics(db)
         return metrics_response()
 
 
