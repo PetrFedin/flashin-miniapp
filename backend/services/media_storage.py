@@ -165,7 +165,10 @@ async def save_media(file: UploadFile) -> dict:
         target = (media_dir / storage_key).resolve()
         if target.parent != media_dir:
             raise ValueError("Invalid media storage path")
-        target.write_bytes(sanitized)
+        try:
+            target.write_bytes(sanitized)
+        except Exception as exc:
+            raise MediaStorageWriteError(storage_key) from exc
         url = f"{settings.media_public_base_url.rstrip('/')}/{storage_key}"
 
     return {
