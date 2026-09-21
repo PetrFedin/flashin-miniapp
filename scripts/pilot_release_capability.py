@@ -786,7 +786,7 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "docs/runbooks/MEDIA_STORAGE_FAILURE.md",
         (
             "## S3/R2 request execution",
-            "Do not interpret client cancellation as proof that S3/R2 rejected the write.",
+            "racing ahead of a late provider write.",
             "deliberately capped at 8",
         ),
     ),
