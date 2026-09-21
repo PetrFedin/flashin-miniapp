@@ -21,6 +21,7 @@ Required provider settings are:
 - `S3_CONNECT_TIMEOUT_SECONDS`
 - `S3_READ_TIMEOUT_SECONDS`
 - `S3_MAX_ATTEMPTS`
+- `MEDIA_IO_MAX_CONCURRENCY` (1-8; default 4)
 
 Credentials belong in the approved production secret mechanism and must never
 be returned to clients, cleanup endpoints or logs.
@@ -130,17 +131,36 @@ objects against committed `MediaAsset.storage_key` values after database
 recovery; do not invent DB rows and do not bulk-delete unmatched keys without
 evidence.
 
-## Remaining async limitation
+## Async transport execution
 
-S3/R2 boto3 calls are still synchronous and can block the FastAPI event loop.
-Bounded offload/concurrency is separate issue #223. Durable cleanup does not
-claim to close that risk.
+S3/R2 uses synchronous boto3 internally, but the request path never executes
+that transport on the FastAPI event-loop thread. Client construction and
+`put_object` run in a dedicated bounded executor.
+
+- executor hard cap: 8 threads per backend process;
+- runtime admission cap: `MEDIA_IO_MAX_CONCURRENCY` (1-8, default 4);
+- calls waiting for capacity remain coroutines and do not create provider threads;
+- boto3 connect/read timeout and bounded standard retry settings remain authoritative;
+- request cancellation does not free a concurrency slot while the provider
+  thread is still running;
+- once provider execution has started, cancellation waits asynchronously for
+  that bounded boto3 call to reach a terminal local outcome before cleanup can
+  become eligible; this prevents delete-before-late-write races;
+- after that drain completes, cancellation propagates while carrying the
+  generated key into the durable #222 cleanup boundary;
+- the drained provider result/exception is consumed so no detached provider
+  exception becomes unobserved.
+
+Local filesystem mode is unchanged and does not use the S3/R2 executor.
+The dedicated cleanup worker remains synchronous under the blocking scheduler;
+its object deletion path is therefore not a FastAPI event-loop call.
 
 ## Evidence
 
 Mandatory evidence includes:
 
 - `backend/tests/test_media_storage_transaction_boundary.py`
+- `backend/tests/test_media_async_transport.py`
 - `backend/tests/test_media_cleanup_recovery.py`
 - `scripts/media_storage_transaction_boundary_smoke.py`
 - `scripts/media_cleanup_recovery_smoke.py`

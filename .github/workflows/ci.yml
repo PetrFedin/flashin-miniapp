@@ -118,6 +118,8 @@ jobs:
         run: |
           python -m pytest -q backend/tests/test_media_cleanup_recovery.py
           python scripts/media_cleanup_recovery_smoke.py
+      - name: Prove bounded async media transport
+        run: python -m pytest -q backend/tests/test_media_async_transport.py backend/tests/test_media_storage_transaction_boundary.py
       - name: Run provider integration spine smoke
         env:
           INTEGRATION_SPINE_SMOKE: "1"
