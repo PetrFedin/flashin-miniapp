@@ -15,7 +15,11 @@ from ..services.media_cleanup import (
     requeue_media_cleanup_command,
 )
 from ..services.media_pipeline import generate_local_derivatives
-from ..services.media_storage import MediaStorageWriteError, save_media
+from ..services.media_storage import (
+    MediaStorageCancelled,
+    MediaStorageWriteError,
+    save_media,
+)
 from ..services.rbac import require_permission
 
 router = APIRouter(prefix="/media", tags=["media"])
@@ -176,6 +180,11 @@ async def upload_media(
         db.commit()
         authoritative_commit_reached = True
         return _committed_media_response(response)
+    except MediaStorageCancelled as exc:
+        db.rollback()
+        if not authoritative_commit_reached:
+            _persist_uploaded_media_cleanup_or_raise(db, exc.storage_key)
+        raise
     except MediaStorageWriteError as exc:
         db.rollback()
         if not authoritative_commit_reached:
