@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
+from ..models import MediaAsset
 from ..services.media_cleanup import (
     MEDIA_CLEANUP_PROVIDER,
     MediaCleanupReviewRequired,
@@ -63,6 +64,28 @@ def process_media_cleanup_commands(
         lease_token = str(command["lease_token"])
         try:
             storage_key = parse_media_cleanup_command(command)
+
+            # Never delete a provider object that is already authoritative in
+            # PostgreSQL. This also protects against an ambiguous DB commit
+            # outcome where recovery work exists but MediaAsset committed.
+            referenced_asset = (
+                db.query(MediaAsset.id)
+                .filter(MediaAsset.storage_key == storage_key)
+                .first()
+            )
+            if referenced_asset is not None:
+                db.rollback()
+                state = fail_provider_command(
+                    db,
+                    command_id,
+                    lease_token,
+                    f"cleanup blocked: storage object is referenced by MediaAsset {referenced_asset[0]}",
+                    review_required=True,
+                )
+                result[state] = result.get(state, 0) + 1
+                continue
+            db.rollback()
+
             if db.in_transaction():
                 raise RuntimeError(
                     "database transaction must be closed before media cleanup I/O"
