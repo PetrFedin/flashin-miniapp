@@ -12,6 +12,45 @@ const REQUEST_TIMEOUT_MS = Number.isFinite(configuredTimeout) && configuredTimeo
   : DEFAULT_REQUEST_TIMEOUT_MS;
 const requestCoordinator = createRequestCoordinator();
 const PUBLIC_REQUEST_SCOPE = Symbol("public-admin-request-scope");
+const MEDIA_UPLOAD_KEY_PREFIX = "flashin_media_upload_key:";
+const uploadKeyFallback = new Map();
+
+function createUploadKey() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `media-${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function uploadKeyStorageName(path, field, fileIdentity) {
+  return `${MEDIA_UPLOAD_KEY_PREFIX}${path}:${field}:${fileIdentity}`;
+}
+
+function getStoredUploadKey(storageName) {
+  try {
+    const stored = globalThis.sessionStorage?.getItem(storageName);
+    if (stored) return stored;
+  } catch {
+    // Fall back to in-memory state when browser storage is unavailable.
+  }
+  return uploadKeyFallback.get(storageName) || "";
+}
+
+function setStoredUploadKey(storageName, value) {
+  uploadKeyFallback.set(storageName, value);
+  try {
+    globalThis.sessionStorage?.setItem(storageName, value);
+  } catch {
+    // In-memory retry identity still protects this page session.
+  }
+}
+
+function clearStoredUploadKey(storageName) {
+  uploadKeyFallback.delete(storageName);
+  try {
+    globalThis.sessionStorage?.removeItem(storageName);
+  } catch {
+    // Nothing else to do.
+  }
+}
 
 export class AdminApiError extends Error {
   constructor(message, status = 0, options = {}) {
@@ -168,11 +207,33 @@ export async function uploadAdminFile(path, file, field = "file") {
   const form = new FormData();
   form.append(field, file);
   const fileIdentity = [file.name, file.size, file.lastModified, file.type].join(":");
-  return adminRequest(path, {
-    method: "POST",
-    body: form,
-    dedupeKey: `UPLOAD:${path}:${field}:${fileIdentity}`,
-  });
+  const dedupeKey = `UPLOAD:${path}:${field}:${fileIdentity}`;
+
+  if (path !== "/api/media/upload") {
+    return adminRequest(path, {
+      method: "POST",
+      body: form,
+      dedupeKey,
+    });
+  }
+
+  const storageName = uploadKeyStorageName(path, field, fileIdentity);
+  const uploadKey = getStoredUploadKey(storageName) || createUploadKey();
+  setStoredUploadKey(storageName, uploadKey);
+  try {
+    const result = await adminRequest(path, {
+      method: "POST",
+      body: form,
+      headers: { "Idempotency-Key": uploadKey },
+      dedupeKey,
+    });
+    clearStoredUploadKey(storageName);
+    return result;
+  } catch (error) {
+    // Preserve the key after timeout/network/5xx ambiguity so a retry resolves
+    // the already-committed MediaAsset instead of creating a second object.
+    throw error;
+  }
 }
 
 export async function downloadAdminFile(path, fallbackFilename) {

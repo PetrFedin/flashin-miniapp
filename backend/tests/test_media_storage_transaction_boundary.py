@@ -42,12 +42,24 @@ class _FinalizeQuery:
         return self.db.finalize_admin
 
 
+class _MediaQuery:
+    def __init__(self, db):
+        self.db = db
+
+    def filter(self, *_args, **_kwargs):
+        return self
+
+    def one_or_none(self):
+        return self.db.existing_asset
+
+
 class _Session:
-    def __init__(self, *, finalize_admin=None, fail_flush: bool = False):
+    def __init__(self, *, finalize_admin=None, fail_flush: bool = False, existing_asset=None):
         # Simulate the request transaction opened by get_current_admin.
         self.active = True
         self.finalize_admin = finalize_admin
         self.fail_flush = fail_flush
+        self.existing_asset = existing_asset
         self.rollbacks = 0
         self.commits = 0
         self.query_calls = 0
@@ -61,6 +73,9 @@ class _Session:
         self.active = False
 
     def query(self, entity):
+        if entity is MediaAsset:
+            assert self.active is True
+            return _MediaQuery(self)
         assert entity is AdminUser
         assert self.active is False
         self.query_calls += 1
@@ -82,6 +97,9 @@ class _Session:
     def commit(self):
         assert self.active is True
         self.commits += 1
+        for value in self.added:
+            if isinstance(value, MediaAsset):
+                self.existing_asset = value
         self.active = False
 
     def refresh(self, _value):
@@ -155,9 +173,8 @@ def test_s3_put_runs_after_request_transaction_ends_and_finalize_is_fresh(monkey
     monkeypatch.setattr(media_api, "delete_media", lambda _key: None)
     upload = _Upload(_png_bytes())
 
-    asset = asyncio.run(media_api.upload_media(file=upload, admin=initial_admin, db=db))
+    asset = asyncio.run(media_api.upload_media(file=upload, idempotency_key="media-upload-key-0007", admin=initial_admin, db=db))
 
-    assert isinstance(asset, MediaAsset)
     assert asset.id == 101
     assert asset.storage_key.endswith(".png")
     assert asset.url.startswith("https://cdn.flashin.test/")
@@ -186,7 +203,7 @@ def test_storage_timeout_never_enters_db_finalize(monkeypatch):
     upload = _Upload(_png_bytes())
 
     with pytest.raises(TimeoutError, match="object-store timeout"):
-        asyncio.run(media_api.upload_media(file=upload, admin=initial_admin, db=db))
+        asyncio.run(media_api.upload_media(file=upload, idempotency_key="media-upload-key-0008", admin=initial_admin, db=db))
 
     assert db.query_calls == 0
     assert db.commits == 0
@@ -215,7 +232,7 @@ def test_authorization_change_after_provider_success_fails_closed_and_cleans_up(
     upload = _Upload(b"ignored")
 
     with pytest.raises(HTTPException) as exc_info:
-        asyncio.run(media_api.upload_media(file=upload, admin=initial_admin, db=db))
+        asyncio.run(media_api.upload_media(file=upload, idempotency_key="media-upload-key-0009", admin=initial_admin, db=db))
 
     assert exc_info.value.status_code == 403
     assert deleted == ["object.png"]
@@ -247,11 +264,123 @@ def test_cleanup_failure_is_never_silently_swallowed(monkeypatch):
     upload = _Upload(b"ignored")
 
     with pytest.raises(RuntimeError, match="media cleanup failed") as exc_info:
-        asyncio.run(media_api.upload_media(file=upload, admin=initial_admin, db=db))
+        asyncio.run(media_api.upload_media(file=upload, idempotency_key="media-upload-key-0010", admin=initial_admin, db=db))
 
     assert isinstance(exc_info.value.__cause__, OSError)
     assert db.commits == 0
     assert db.in_transaction() is False
+
+
+def test_postcommit_response_failure_never_deletes_or_requeues_committed_object(monkeypatch):
+    initial_admin = SimpleNamespace(id=11)
+    finalize_admin = SimpleNamespace(id=11, active=True)
+    db = _Session(finalize_admin=finalize_admin)
+    permission_admin_ids = []
+    _patch_finalize_side_effects(monkeypatch, db, permission_admin_ids)
+
+    async def save_media(_file):
+        assert db.in_transaction() is False
+        return {
+            "url": "https://cdn.flashin.test/committed.png",
+            "storage_key": "committed.png",
+            "filename": "committed.png",
+            "content_type": "image/png",
+            "size_bytes": 42,
+        }
+
+    deleted = []
+    monkeypatch.setattr(media_api, "save_media", save_media)
+    monkeypatch.setattr(media_api, "delete_media", deleted.append)
+    monkeypatch.setattr(
+        media_api,
+        "_committed_media_response",
+        lambda _response: (_ for _ in ()).throw(RuntimeError("simulated response failure")),
+    )
+
+    upload = _Upload(b"ignored")
+    with pytest.raises(RuntimeError, match="response failure"):
+        asyncio.run(
+            media_api.upload_media(
+                file=upload,
+                idempotency_key="media-upload-key-0011",
+                admin=initial_admin,
+                db=db,
+            )
+        )
+
+    assert db.commits == 1
+    assert db.existing_asset is not None
+    assert db.existing_asset.upload_key == "media-upload-key-0011"
+    assert db.existing_asset.storage_key == "committed.png"
+    assert deleted == []
+    assert upload.closed is True
+
+
+def test_same_upload_key_recovers_committed_asset_without_second_provider_write(monkeypatch):
+    existing = MediaAsset(
+        id=777,
+        upload_key="media-upload-key-0012",
+        url="https://cdn.flashin.test/existing.png",
+        storage_key="existing.png",
+        filename="existing.png",
+        content_type="image/png",
+        size_bytes=99,
+    )
+    db = _Session(
+        finalize_admin=SimpleNamespace(id=12, active=True),
+        existing_asset=existing,
+    )
+    initial_admin = SimpleNamespace(id=12)
+    monkeypatch.setattr(media_api, "require_permission", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        media_api,
+        "save_media",
+        lambda _file: (_ for _ in ()).throw(AssertionError("retry must not write storage")),
+    )
+
+    upload = _Upload(b"ignored")
+    recovered = asyncio.run(
+        media_api.upload_media(
+            file=upload,
+            idempotency_key="media-upload-key-0012",
+            admin=initial_admin,
+            db=db,
+        )
+    )
+
+    assert recovered.id == 777
+    assert recovered.storage_key == "existing.png"
+    assert db.commits == 0
+    assert upload.closed is True
+
+
+def test_recovery_lookup_is_authorized_and_bound_to_upload_key(monkeypatch):
+    existing = MediaAsset(
+        id=778,
+        upload_key="media-upload-key-0013",
+        url="https://cdn.flashin.test/recover.png",
+        storage_key="recover.png",
+        filename="recover.png",
+        content_type="image/png",
+        size_bytes=100,
+    )
+    db = _Session(existing_asset=existing)
+    admin = SimpleNamespace(id=13)
+    calls = []
+    monkeypatch.setattr(
+        media_api,
+        "require_permission",
+        lambda _db, _admin, permission: calls.append(permission),
+    )
+
+    recovered = media_api.recover_media_upload(
+        "media-upload-key-0013",
+        admin=admin,
+        db=db,
+    )
+
+    assert recovered is existing
+    assert calls == ["media.write"]
 
 
 def test_s3_client_uses_bounded_standard_retry_configuration(monkeypatch):
