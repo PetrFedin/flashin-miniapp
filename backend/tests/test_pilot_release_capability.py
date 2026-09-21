@@ -70,7 +70,7 @@ def _release(repo: Path, tmp_path: Path, release_id: str, created_at: str) -> Pa
 
 
 def test_signed_release_capability_is_bound_to_exact_release():
-    assert CAPABILITY_VERSION == 28
+    assert CAPABILITY_VERSION == 29
     secret = "s" * 48
     state = _release_state()
     state["capabilities"] = {
@@ -133,6 +133,10 @@ def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(
         ("backend/jobs/media_cleanup_jobs.py", "def process_media_cleanup_commands(*args, **kwargs): return {}\n", "authoritative_media_asset_id"),
         ("backend/services/media_storage.py", "async def save_media(*args, **kwargs): return {}\n", "MediaStorageWriteError"),
         ("backend/tests/test_media_async_transport.py", "def test_placeholder(): pass\n", "test_slow_s3_upload_does_not_block_event_loop"),
+        ("backend/services/webhook_delivery.py", "SAFE_RETRY_PRE_DISPATCH = 'broken'\n", "ambiguous_transport"),
+        ("backend/tests/test_webhook_outbox_ambiguity.py", "def test_placeholder(): pass\n", "test_non_2xx_http_outcomes_never_blindly_replay"),
+        ("scripts/webhook_outbox_ambiguity_smoke.py", "def main(): return 0\n", "blind_replay_blocked"),
+        ("docs/IDEMPOTENCY_CONTRACTS.md", "# Idempotency\n", "Receiver idempotency is not assumed"),
         ("scripts/media_cleanup_recovery_smoke.py", "def main(): return 0\n", "authoritative_media_reference_blocks_delete"),
         ("scripts/run_media_cleanup_jobs.py", "def main(): return 0\n", "media-cleanup"),
         ("docs/providers/object-storage.md", "# Object storage\n", "Durable cleanup command"),
@@ -154,7 +158,7 @@ def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(
         ("scripts/restore_postgres.sh", "#!/usr/bin/env bash\nexit 0\n", "verify-live"),
         ("scripts/deploy_release_gate.py", "#!/usr/bin/env python3\n", "retained under deploy/release/builds"),
         ("scripts/deploy_production.sh", "#!/usr/bin/env bash\n", "deploy_release_gate.py"),
-        ("scripts/pilot_release_contract.py", "CAPABILITY_VERSION = 27\n", "CAPABILITY_VERSION = 28"),
+        ("scripts/pilot_release_contract.py", "CAPABILITY_VERSION = 28\n", "CAPABILITY_VERSION = 29"),
         (
             "backend/services/inventory_movement_contract.py",
             "def movement_transition_valid(movement): return True\n",
