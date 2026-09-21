@@ -1,7 +1,10 @@
+import asyncio
 import io
 import warnings
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from weakref import WeakKeyDictionary
 
 from fastapi import UploadFile
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -20,6 +23,28 @@ _MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 _MAX_IMAGE_PIXELS = 40_000_000
 _MAX_IMAGE_DIMENSION = 12_000
 _READ_CHUNK_BYTES = 1024 * 1024
+_MEDIA_IO_EXECUTOR_MAX_WORKERS = 8
+_MEDIA_IO_EXECUTOR = ThreadPoolExecutor(
+    max_workers=_MEDIA_IO_EXECUTOR_MAX_WORKERS,
+    thread_name_prefix="flashin-media-io",
+)
+_MEDIA_IO_LIMITERS: WeakKeyDictionary[
+    asyncio.AbstractEventLoop,
+    tuple[int, asyncio.Semaphore],
+] = WeakKeyDictionary()
+
+class MediaStorageCancelled(asyncio.CancelledError):
+    """Cancellation after a generated key entered provider execution.
+
+    The provider call may still complete in its bounded worker thread. The key
+    is carried back to the request boundary so #222 durable cleanup can reconcile
+    the ambiguous write before cancellation propagates.
+    """
+
+    def __init__(self, storage_key: str):
+        super().__init__("media storage provider execution was cancelled")
+        self.storage_key = storage_key
+
 
 class MediaStorageWriteError(RuntimeError):
     """External storage write failed after FLASHIN generated an immutable key.
@@ -33,6 +58,51 @@ class MediaStorageWriteError(RuntimeError):
         super().__init__(message)
         self.storage_key = storage_key
 
+
+
+def _media_io_limiter(limit: int) -> asyncio.Semaphore:
+    """Return one loop-local limiter so tests/workers never share loop-bound state."""
+
+    normalized_limit = int(limit)
+    if not 1 <= normalized_limit <= _MEDIA_IO_EXECUTOR_MAX_WORKERS:
+        raise ValueError(
+            f"MEDIA_IO_MAX_CONCURRENCY must be between 1 and {_MEDIA_IO_EXECUTOR_MAX_WORKERS}"
+        )
+    loop = asyncio.get_running_loop()
+    current = _MEDIA_IO_LIMITERS.get(loop)
+    if current is None or current[0] != normalized_limit:
+        current = (normalized_limit, asyncio.Semaphore(normalized_limit))
+        _MEDIA_IO_LIMITERS[loop] = current
+    return current[1]
+
+
+async def _run_s3_transport(operation, *, concurrency: int):
+    """Run one synchronous boto3 call outside the event loop with bounded fan-out.
+
+    If the caller is cancelled, the provider thread is intentionally not
+    cancelled (Python cannot safely stop it). Its limiter slot stays occupied
+    until the real provider call finishes, preventing cancellation from
+    bypassing the concurrency bound.
+    """
+
+    limiter = _media_io_limiter(concurrency)
+    await limiter.acquire()
+    loop = asyncio.get_running_loop()
+    future = loop.run_in_executor(_MEDIA_IO_EXECUTOR, operation)
+    release_in_callback = False
+    try:
+        return await asyncio.shield(future)
+    except asyncio.CancelledError:
+        release_in_callback = True
+
+        def _release_when_finished(_future):
+            loop.call_soon_threadsafe(limiter.release)
+
+        future.add_done_callback(_release_when_finished)
+        raise
+    finally:
+        if not release_in_callback:
+            limiter.release()
 
 
 async def _read_limited(file: UploadFile) -> bytes:
@@ -147,15 +217,23 @@ async def save_media(file: UploadFile) -> dict:
     storage_key = f"{uuid.uuid4().hex}{extension}"
 
     if settings.media_storage in {"s3", "r2"}:
-        client = _s3_client()
-        try:
-            client.put_object(
+        def _put_object():
+            client = _s3_client()
+            return client.put_object(
                 Bucket=settings.s3_bucket,
                 Key=storage_key,
                 Body=sanitized,
                 ContentType=content_type,
                 CacheControl="public, max-age=31536000, immutable",
             )
+
+        try:
+            await _run_s3_transport(
+                _put_object,
+                concurrency=settings.media_io_max_concurrency,
+            )
+        except asyncio.CancelledError as exc:
+            raise MediaStorageCancelled(storage_key) from exc
         except Exception as exc:
             raise MediaStorageWriteError(storage_key) from exc
         url = f"{settings.media_public_base_url.rstrip('/')}/{storage_key}"
