@@ -250,11 +250,30 @@ MEDIA_ASYNC_TRANSPORT_REQUIRED_FILES = {
 }
 REQUIRED_FILES |= MEDIA_ASYNC_TRANSPORT_REQUIRED_FILES
 
+# External webhook ambiguity quarantine is part of the immutable delivery contract.
+WEBHOOK_AMBIGUITY_REQUIRED_FILES = {
+    ".github/workflows/ci.yml",
+    "backend/api/outbox.py",
+    "backend/jobs/outbox_jobs.py",
+    "backend/main.py",
+    "backend/middleware/metrics.py",
+    "backend/schemas.py",
+    "backend/services/webhook_delivery.py",
+    "backend/tests/test_webhook_outbox_ambiguity.py",
+    "backend/tests/test_webhook_outbox_lease_architecture.py",
+    "deploy/monitoring/rules/flashin_pilot.yml",
+    "docs/IDEMPOTENCY_CONTRACTS.md",
+    "docs/runbooks/WEBHOOK_DELIVERY_REVIEW.md",
+    "scripts/webhook_outbox_ambiguity_smoke.py",
+    "scripts/webhook_outbox_lease_smoke.py",
+}
+REQUIRED_FILES |= WEBHOOK_AMBIGUITY_REQUIRED_FILES
+
 # Keep immutable capability semantics inspectable and maintainable. Every tuple
 # binds one packaged runtime/test surface to concrete behavior, not just presence.
 MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("backend/api/orders.py", ("acquire_pilot_checkout(", "record_pilot_order(")),
-    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 28",)),
+    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 29",)),
     (
         "scripts/pilot_release_capability.py",
         (
@@ -273,6 +292,8 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "REQUIRED_FILES |= MEDIA_CLEANUP_REQUIRED_FILES",
             "MEDIA_ASYNC_TRANSPORT_REQUIRED_FILES",
             "REQUIRED_FILES |= MEDIA_ASYNC_TRANSPORT_REQUIRED_FILES",
+            "WEBHOOK_AMBIGUITY_REQUIRED_FILES",
+            "REQUIRED_FILES |= WEBHOOK_AMBIGUITY_REQUIRED_FILES",
             "MARKER_REQUIREMENTS",
         ),
     ),
@@ -788,6 +809,111 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "## S3/R2 request execution",
             "racing ahead of a late provider write.",
             "deliberately capped at 8",
+        ),
+    ),
+    (
+        "backend/services/webhook_delivery.py",
+        (
+            'SAFE_RETRY_PRE_DISPATCH = "safe_retry_pre_dispatch"',
+            'AMBIGUOUS_TRANSPORT = "ambiguous_transport"',
+            'PERMANENT_HTTP = "permanent_http"',
+            "def classify_transport_exception(",
+            "def classify_http_status(",
+            "def encode_delivery_error(",
+        ),
+    ),
+    (
+        "backend/jobs/outbox_jobs.py",
+        (
+            "def _review_outbox(",
+            "status = 'review_required'",
+            "except asyncio.CancelledError:",
+            "classification=AMBIGUOUS_CANCELLED",
+            "classification = classify_transport_exception(exc)",
+            "classification = classify_http_status(status_code)",
+            '"X-Flashin-Event-Id": str(row_id)',
+        ),
+    ),
+    (
+        "backend/api/outbox.py",
+        (
+            '"review_required"',
+            '@router.post("/{row_id}/review/retry")',
+            '@router.post("/{row_id}/review/mark-sent")',
+            "Webhook event confirmation does not match row id",
+            '"webhook_outbox.review_replay"',
+            '"webhook_outbox.review_mark_sent"',
+            "Processing webhook cannot be discarded",
+        ),
+    ),
+    (
+        "backend/middleware/metrics.py",
+        (
+            "flashin_webhook_outbox_metrics_collection_success",
+            "flashin_webhook_outbox_review_required_total",
+            "def collect_webhook_outbox_metrics(",
+        ),
+    ),
+    (
+        "backend/main.py",
+        (
+            "collect_webhook_outbox_metrics",
+            "collect_webhook_outbox_metrics(db)",
+        ),
+    ),
+    (
+        "deploy/monitoring/rules/flashin_pilot.yml",
+        (
+            "FlashinWebhookOutboxMetricsUnavailable",
+            "FlashinWebhookOutboxReviewRequired",
+        ),
+    ),
+    (
+        "backend/tests/test_webhook_outbox_ambiguity.py",
+        (
+            "test_connect_failures_are_the_only_transport_failures_safe_for_automatic_retry",
+            "test_non_2xx_http_outcomes_never_blindly_replay",
+            "test_generic_retry_cannot_bypass_review_required",
+        ),
+    ),
+    (
+        "scripts/webhook_outbox_ambiguity_smoke.py",
+        (
+            "blind_replay_blocked",
+            "stable_event_identity",
+            "operator_mark_sent_without_resend",
+            "structured_audit_visible",
+        ),
+    ),
+    (
+        "scripts/webhook_outbox_lease_smoke.py",
+        (
+            "stale_review_rejected",
+            "_review_outbox(",
+        ),
+    ),
+    (
+        ".github/workflows/ci.yml",
+        (
+            "Prove webhook ambiguity quarantine",
+            "backend/tests/test_webhook_outbox_ambiguity.py",
+            "scripts/webhook_outbox_ambiguity_smoke.py",
+        ),
+    ),
+    (
+        "docs/IDEMPOTENCY_CONTRACTS.md",
+        (
+            "Receiver idempotency is not assumed",
+            "X-Flashin-Event-Id",
+            "A non-2xx response is never blindly retried.",
+        ),
+    ),
+    (
+        "docs/runbooks/WEBHOOK_DELIVERY_REVIEW.md",
+        (
+            "Do not replay merely because FLASHIN did not receive a successful response.",
+            "review/mark-sent",
+            "receiver_confirmed_not_processed",
         ),
     ),
     (

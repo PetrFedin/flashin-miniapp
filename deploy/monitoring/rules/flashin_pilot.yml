@@ -79,6 +79,28 @@ groups:
           summary: Controlled pilot is close to the 20-order limit
           description: Three or fewer controlled checkout slots remain. Prepare final reconciliation and closure.
 
+      - alert: FlashinWebhookOutboxMetricsUnavailable
+        expr: absent(flashin_webhook_outbox_metrics_collection_success) or flashin_webhook_outbox_metrics_collection_success == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: flashin-backend
+          component: webhook-delivery
+        annotations:
+          summary: Webhook outbox review metrics are unavailable
+          description: FLASHIN cannot confirm whether ambiguous webhook deliveries require operator reconciliation.
+
+      - alert: FlashinWebhookOutboxReviewRequired
+        expr: flashin_webhook_outbox_review_required_total > 0
+        for: 0m
+        labels:
+          severity: critical
+          service: flashin-backend
+          component: webhook-delivery
+        annotations:
+          summary: Webhook delivery requires operator reconciliation
+          description: At least one external webhook has an ambiguous or permanent post-dispatch outcome and automatic replay is quarantined.
+
       - alert: FlashinProviderCommandMetricsUnavailable
         expr: absent(flashin_provider_command_metrics_collection_success) or flashin_provider_command_metrics_collection_success == 0
         for: 1m
