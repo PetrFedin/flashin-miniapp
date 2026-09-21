@@ -1,7 +1,13 @@
+import asyncio
 import io
+import logging
+import time
 import warnings
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Lock
+from weakref import WeakKeyDictionary
 
 from fastapi import UploadFile
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -20,6 +26,27 @@ _MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 _MAX_IMAGE_PIXELS = 40_000_000
 _MAX_IMAGE_DIMENSION = 12_000
 _READ_CHUNK_BYTES = 1024 * 1024
+_S3_TRANSPORT_MAX_INFLIGHT = 4
+_S3_TRANSPORT_EXECUTOR = ThreadPoolExecutor(
+    max_workers=_S3_TRANSPORT_MAX_INFLIGHT,
+    thread_name_prefix="flashin-s3",
+)
+_S3_TRANSPORT_GATES = WeakKeyDictionary()
+_S3_TRANSPORT_GATES_LOCK = Lock()
+logger = logging.getLogger(__name__)
+
+class MediaStorageWriteCancelled(asyncio.CancelledError):
+    """Request cancellation after provider write started.
+
+    The sync provider operation is allowed to reach a bounded terminal outcome
+    before this cancellation propagates so durable orphan cleanup cannot race a
+    still-running put_object.
+    """
+
+    def __init__(self, storage_key: str):
+        super().__init__("media storage write cancelled")
+        self.storage_key = storage_key
+
 
 class MediaStorageWriteError(RuntimeError):
     """External storage write failed after FLASHIN generated an immutable key.
@@ -116,8 +143,8 @@ def _sanitize_image(content: bytes, declared_content_type: str) -> tuple[bytes, 
         Image.MAX_IMAGE_PIXELS = previous_limit
 
 
-def _s3_client():
-    settings = get_settings()
+def _s3_client(settings=None):
+    settings = settings or get_settings()
     import boto3
     from botocore.config import Config
 
@@ -139,6 +166,106 @@ def _s3_client():
     )
 
 
+def _s3_transport_gate() -> asyncio.BoundedSemaphore:
+    loop = asyncio.get_running_loop()
+    with _S3_TRANSPORT_GATES_LOCK:
+        gate = _S3_TRANSPORT_GATES.get(loop)
+        if gate is None:
+            gate = asyncio.BoundedSemaphore(_S3_TRANSPORT_MAX_INFLIGHT)
+            _S3_TRANSPORT_GATES[loop] = gate
+        return gate
+
+
+def _put_s3_object_sync(
+    settings,
+    *,
+    storage_key: str,
+    body: bytes,
+    content_type: str,
+) -> None:
+    client = _s3_client(settings)
+    client.put_object(
+        Bucket=settings.s3_bucket,
+        Key=storage_key,
+        Body=body,
+        ContentType=content_type,
+        CacheControl="public, max-age=31536000, immutable",
+    )
+
+
+async def _put_s3_object_bounded(
+    settings,
+    *,
+    storage_key: str,
+    body: bytes,
+    content_type: str,
+) -> None:
+    """Run blocking boto3 I/O off-loop with bounded admission.
+
+    Once the provider call has been submitted, cancellation is deliberately
+    delayed until that bounded synchronous call finishes. This prevents release
+    of the concurrency slot and durable cleanup while put_object is still
+    capable of completing afterwards.
+    """
+
+    gate = _s3_transport_gate()
+    queued_at = time.monotonic()
+    await gate.acquire()
+    acquired_at = time.monotonic()
+    loop = asyncio.get_running_loop()
+    try:
+        future = loop.run_in_executor(
+            _S3_TRANSPORT_EXECUTOR,
+            _put_s3_object_sync,
+            settings,
+            storage_key=storage_key,
+            body=body,
+            content_type=content_type,
+        )
+    except BaseException:
+        gate.release()
+        raise
+
+    cancelled = False
+    try:
+        while True:
+            try:
+                await asyncio.shield(future)
+                break
+            except asyncio.CancelledError:
+                cancelled = True
+                if future.done():
+                    break
+                continue
+
+        elapsed_ms = round((time.monotonic() - acquired_at) * 1000)
+        queue_ms = round((acquired_at - queued_at) * 1000)
+        if cancelled:
+            provider_error = ""
+            try:
+                future.result()
+            except Exception as exc:
+                provider_error = exc.__class__.__name__
+            logger.info(
+                "media_s3_put_cancelled_after_provider_terminal queue_ms=%s elapsed_ms=%s provider_error=%s",
+                queue_ms,
+                elapsed_ms,
+                provider_error,
+            )
+            raise MediaStorageWriteCancelled(storage_key)
+
+        # Re-raise provider exceptions on the event-loop task after the worker
+        # has finished. save_media converts them into MediaStorageWriteError.
+        future.result()
+        logger.info(
+            "media_s3_put_complete queue_ms=%s elapsed_ms=%s",
+            queue_ms,
+            elapsed_ms,
+        )
+    finally:
+        gate.release()
+
+
 async def save_media(file: UploadFile) -> dict:
     settings = get_settings()
     declared_content_type = (file.content_type or "").split(";", 1)[0].strip().lower()
@@ -147,15 +274,15 @@ async def save_media(file: UploadFile) -> dict:
     storage_key = f"{uuid.uuid4().hex}{extension}"
 
     if settings.media_storage in {"s3", "r2"}:
-        client = _s3_client()
         try:
-            client.put_object(
-                Bucket=settings.s3_bucket,
-                Key=storage_key,
-                Body=sanitized,
-                ContentType=content_type,
-                CacheControl="public, max-age=31536000, immutable",
+            await _put_s3_object_bounded(
+                settings,
+                storage_key=storage_key,
+                body=sanitized,
+                content_type=content_type,
             )
+        except MediaStorageWriteCancelled:
+            raise
         except Exception as exc:
             raise MediaStorageWriteError(storage_key) from exc
         url = f"{settings.media_public_base_url.rstrip('/')}/{storage_key}"
