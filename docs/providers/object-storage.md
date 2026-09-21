@@ -143,10 +143,13 @@ that transport on the FastAPI event-loop thread. Client construction and
 - boto3 connect/read timeout and bounded standard retry settings remain authoritative;
 - request cancellation does not free a concurrency slot while the provider
   thread is still running;
-- cancellation after a generated key enters provider execution propagates as
-  cancellation while carrying that key into the durable #222 cleanup boundary;
-- a provider exception that finishes after request cancellation is consumed by
-  the completion callback so it cannot become an unobserved task exception.
+- once provider execution has started, cancellation waits asynchronously for
+  that bounded boto3 call to reach a terminal local outcome before cleanup can
+  become eligible; this prevents delete-before-late-write races;
+- after that drain completes, cancellation propagates while carrying the
+  generated key into the durable #222 cleanup boundary;
+- the drained provider result/exception is consumed so no detached provider
+  exception becomes unobserved.
 
 Local filesystem mode is unchanged and does not use the S3/R2 executor.
 The dedicated cleanup worker remains synchronous under the blocking scheduler;
