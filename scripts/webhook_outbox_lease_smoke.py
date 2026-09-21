@@ -21,6 +21,7 @@ from backend.jobs.outbox_jobs import (
     _claim_outbox,
     _finish_outbox,
     _renew_outbox_lease,
+    _review_outbox,
 )
 from backend.models import WebhookOutbox
 
@@ -114,6 +115,16 @@ def main() -> int:
 
         assert _renew_outbox_lease(db, row_id, first_token) is False
         assert (
+            _review_outbox(
+                db,
+                row_id,
+                first_token,
+                classification="ambiguous_transport",
+                error_type="ReadTimeout",
+            )
+            is False
+        )
+        assert (
             _finish_outbox(
                 db,
                 row_id,
@@ -206,6 +217,7 @@ def main() -> int:
                     "row_id": row_id,
                     "lease_rotations": 3,
                     "stale_finish_rejected": True,
+                    "stale_review_rejected": True,
                     "attempts": final_state["attempts"],
                     "final_status": final_state["status"],
                 },
