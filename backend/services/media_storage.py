@@ -33,6 +33,10 @@ _MEDIA_IO_LIMITERS: WeakKeyDictionary[
     tuple[int, asyncio.Semaphore],
 ] = WeakKeyDictionary()
 
+class _ProviderExecutionCancelled(asyncio.CancelledError):
+    """Cancellation after provider execution has already been submitted."""
+
+
 class MediaStorageCancelled(asyncio.CancelledError):
     """Cancellation after a generated key entered provider execution.
 
@@ -92,7 +96,7 @@ async def _run_s3_transport(operation, *, concurrency: int):
     release_in_callback = False
     try:
         return await asyncio.shield(future)
-    except asyncio.CancelledError:
+    except asyncio.CancelledError as exc:
         release_in_callback = True
 
         def _release_when_finished(done_future):
@@ -103,7 +107,7 @@ async def _run_s3_transport(operation, *, concurrency: int):
             limiter.release()
 
         future.add_done_callback(_release_when_finished)
-        raise
+        raise _ProviderExecutionCancelled() from exc
     finally:
         if not release_in_callback:
             limiter.release()
@@ -236,7 +240,7 @@ async def save_media(file: UploadFile) -> dict:
                 _put_object,
                 concurrency=settings.media_io_max_concurrency,
             )
-        except asyncio.CancelledError as exc:
+        except _ProviderExecutionCancelled as exc:
             raise MediaStorageCancelled(storage_key) from exc
         except Exception as exc:
             raise MediaStorageWriteError(storage_key) from exc
