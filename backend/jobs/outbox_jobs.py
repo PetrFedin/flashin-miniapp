@@ -466,33 +466,36 @@ async def process_outbox(db: Session) -> int:
                 continue
 
             status_code = int(response.status_code)
-            try:
-                await response.aclose()
-            except Exception:
-                # Delivery authority is the received HTTP status. Closing a
-                # streamed response cannot retroactively make receiver acceptance unknown.
-                pass
-
             if 200 <= status_code < 300:
-                if _finish_outbox(
+                finalized = _finish_outbox(
                     db,
                     row_id,
                     lease_token,
                     success=True,
                     destination=normalized_destination,
-                ):
+                )
+                if finalized:
                     sent += 1
-                continue
+            else:
+                classification = classify_http_status(status_code)
+                _review_outbox(
+                    db,
+                    row_id,
+                    lease_token,
+                    classification=classification,
+                    error_type=f"HTTP{status_code}",
+                    destination=normalized_destination,
+                )
 
-            classification = classify_http_status(status_code)
-            _review_outbox(
-                db,
-                row_id,
-                lease_token,
-                classification=classification,
-                error_type=f"HTTP{status_code}",
-                destination=normalized_destination,
-            )
+            try:
+                await response.aclose()
+            except asyncio.CancelledError:
+                # Durable outcome is already recorded from the received HTTP status.
+                raise
+            except Exception:
+                # Closing a streamed response cannot retroactively change the
+                # already durable receiver outcome.
+                pass
 
     return sent
 
