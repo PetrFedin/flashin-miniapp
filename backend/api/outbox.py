@@ -23,6 +23,12 @@ router = APIRouter(prefix="/outbox", tags=["outbox"])
 
 _RETRYABLE_STATUSES = {"pending", "failed"}
 _LISTABLE_STATUSES = _RETRYABLE_STATUSES | {"sent", "discarded", "review_required"}
+_REVIEW_REASON_CODES = {
+    "receiver_confirmed_not_processed",
+    "receiver_confirmed_processed",
+    "receiver_support_authorized_replay",
+    "configuration_corrected",
+}
 
 
 def _reset_for_retry(row: WebhookOutbox, now: datetime) -> None:
@@ -181,10 +187,10 @@ def retry_outbox(
 def _validate_review_action(row_id: int, payload: WebhookReviewActionIn) -> str:
     if payload.event_id != row_id:
         raise HTTPException(status_code=400, detail="Webhook event confirmation does not match row id")
-    reason = payload.reason.strip()
-    if len(reason) < 8:
-        raise HTTPException(status_code=400, detail="Webhook review reason is too short")
-    return reason
+    reason_code = payload.reason_code.strip().lower()
+    if reason_code not in _REVIEW_REASON_CODES:
+        raise HTTPException(status_code=400, detail="Invalid webhook review reason code")
+    return reason_code
 
 
 def _review_row_or_409(db: Session, row_id: int) -> WebhookOutbox:
@@ -216,7 +222,7 @@ def retry_review_outbox(
 ):
     require_permission(db, admin, "webhooks.write")
     try:
-        reason = _validate_review_action(row_id, payload)
+        reason_code = _validate_review_action(row_id, payload)
         row = _review_row_or_409(db, row_id)
         classification = delivery_classification_from_error(row.last_error)
 
@@ -241,7 +247,7 @@ def retry_review_outbox(
             {
                 "event_id": row.id,
                 "classification": classification,
-                "reason": reason,
+                "reason_code": reason_code,
                 "attempts": row.attempts,
             },
         )
@@ -270,7 +276,7 @@ def mark_review_outbox_sent(
 ):
     require_permission(db, admin, "webhooks.write")
     try:
-        reason = _validate_review_action(row_id, payload)
+        reason_code = _validate_review_action(row_id, payload)
         row = _review_row_or_409(db, row_id)
         classification = delivery_classification_from_error(row.last_error)
         row.status = "sent"
@@ -285,7 +291,7 @@ def mark_review_outbox_sent(
             {
                 "event_id": row.id,
                 "classification": classification,
-                "reason": reason,
+                "reason_code": reason_code,
                 "attempts": row.attempts,
             },
         )
