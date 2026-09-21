@@ -913,7 +913,7 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             "Do not replay merely because FLASHIN did not receive a successful response.",
             "review/mark-sent",
-            "review/retry",
+            "receiver_confirmed_not_processed",
         ),
     ),
     (
