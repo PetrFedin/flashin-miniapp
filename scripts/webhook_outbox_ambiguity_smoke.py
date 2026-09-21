@@ -30,10 +30,13 @@ from backend.schemas import WebhookReviewActionIn
 
 
 class _Response:
-    def __init__(self, status_code: int):
+    def __init__(self, status_code: int, *, cancel_on_close: bool = False):
         self.status_code = status_code
+        self.cancel_on_close = cancel_on_close
 
     async def aclose(self):
+        if self.cancel_on_close:
+            raise asyncio.CancelledError()
         return None
 
 
@@ -66,6 +69,8 @@ class _FakeClient:
             return _Response(400)
         if self.mode == "success":
             return _Response(204)
+        if self.mode == "success_close_cancel":
+            return _Response(204, cancel_on_close=True)
         raise AssertionError(f"unsupported fake mode: {self.mode}")
 
 
@@ -200,7 +205,27 @@ def main() -> int:
             str(ambiguous_id),
         ]
 
-        # 2) Connect failure is known pre-dispatch and remains safely retryable.
+        # 2) Once a 2xx status is received, cancellation during response close
+        # cannot return the row to retryable processing.
+        close_cancel = _new_outbox(db, token=token, suffix="close-cancel")
+        close_cancel_id = int(close_cancel.id)
+        sends_before_close_cancel = len(_FakeClient.receiver_event_ids)
+        _FakeClient.mode = "success_close_cancel"
+        try:
+            asyncio.run(outbox_jobs.process_outbox(db))
+        except asyncio.CancelledError:
+            pass
+        else:
+            raise AssertionError("response-close cancellation did not propagate")
+        close_cancel_state = _state(db, close_cancel_id)
+        assert close_cancel_state["status"] == "sent"
+        assert close_cancel_state["next_attempt_at"] is None
+        assert len(_FakeClient.receiver_event_ids) == sends_before_close_cancel + 1
+        _FakeClient.mode = "success"
+        assert asyncio.run(outbox_jobs.process_outbox(db)) == 0
+        assert len(_FakeClient.receiver_event_ids) == sends_before_close_cancel + 1
+
+        # 3) Connect failure is known pre-dispatch and remains safely retryable.
         connect = _new_outbox(db, token=token, suffix="connect")
         connect_id = int(connect.id)
         before_receiver_count = len(_FakeClient.receiver_event_ids)
@@ -214,7 +239,7 @@ def main() -> int:
         )
         assert len(_FakeClient.receiver_event_ids) == before_receiver_count
 
-        # 3) Permanent 4xx is terminal review, and reconciliation can mark sent
+        # 4) Permanent 4xx is terminal review, and reconciliation can mark sent
         # without creating another provider call.
         permanent = _new_outbox(db, token=token, suffix="http400")
         permanent_id = int(permanent.id)
@@ -259,6 +284,7 @@ def main() -> int:
                     "ambiguous_send_count": 2,
                     "blind_replay_blocked": True,
                     "stable_event_identity": True,
+                    "response_close_cancellation_safe": True,
                     "connect_failure_retryable": True,
                     "permanent_http_quarantined": True,
                     "operator_mark_sent_without_resend": True,
