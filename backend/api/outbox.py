@@ -197,6 +197,7 @@ def _review_row_or_409(db: Session, row_id: int) -> WebhookOutbox:
     row = (
         db.query(WebhookOutbox)
         .filter(WebhookOutbox.id == row_id)
+        .populate_existing()
         .with_for_update()
         .first()
     )
