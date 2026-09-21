@@ -206,6 +206,48 @@ def test_cancellation_keeps_capacity_reserved_until_provider_call_finishes(monke
         first_release.set()
 
 
+def test_cancellation_while_waiting_for_capacity_never_enters_provider(monkeypatch):
+    _patch_payload(monkeypatch, concurrency=1)
+    first_started = threading.Event()
+    first_release = threading.Event()
+    lock = threading.Lock()
+    calls = {"count": 0}
+
+    class _BlockingS3:
+        def put_object(self, **_kwargs):
+            with lock:
+                calls["count"] += 1
+                call_number = calls["count"]
+            if call_number == 1:
+                first_started.set()
+                first_release.wait(timeout=2.0)
+            return {"ETag": f'"{call_number}"'}
+
+    provider = _BlockingS3()
+    monkeypatch.setattr(media_storage, "_s3_client", lambda: provider)
+
+    async def scenario():
+        first = asyncio.create_task(media_storage.save_media(_Upload()))
+        await _wait_thread_event(first_started)
+
+        queued = asyncio.create_task(media_storage.save_media(_Upload()))
+        await asyncio.sleep(0.03)
+        queued.cancel()
+        with pytest.raises(asyncio.CancelledError) as exc_info:
+            await queued
+        assert isinstance(exc_info.value, media_storage.MediaStorageCancelled) is False
+        with lock:
+            assert calls["count"] == 1
+
+        first_release.set()
+        await asyncio.wait_for(first, timeout=1.0)
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        first_release.set()
+
+
 def test_media_io_concurrency_configuration_is_bounded():
     with pytest.raises(ValueError, match="MEDIA_IO_MAX_CONCURRENCY must be between 1 and 8"):
         Settings(
