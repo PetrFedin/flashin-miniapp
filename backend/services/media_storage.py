@@ -80,6 +80,26 @@ def _media_io_limiter(limit: int) -> asyncio.Semaphore:
     return current[1]
 
 
+async def _drain_cancelled_provider_future(future) -> None:
+    """Wait non-blockingly until an already-submitted provider call is terminal.
+
+    A second cancellation request cannot make it safe to race cleanup ahead of
+    the provider write. boto3 timeouts/retries keep this wait bounded.
+    """
+
+    while not future.done():
+        try:
+            await asyncio.shield(future)
+        except asyncio.CancelledError:
+            continue
+        except Exception:
+            break
+    try:
+        future.result()
+    except BaseException:
+        pass
+
+
 async def _run_s3_transport(operation, *, concurrency: int):
     """Run one synchronous boto3 call outside the event loop with bounded fan-out.
 
@@ -93,24 +113,13 @@ async def _run_s3_transport(operation, *, concurrency: int):
     await limiter.acquire()
     loop = asyncio.get_running_loop()
     future = loop.run_in_executor(_MEDIA_IO_EXECUTOR, operation)
-    release_in_callback = False
     try:
         return await asyncio.shield(future)
     except asyncio.CancelledError as exc:
-        release_in_callback = True
-
-        def _release_when_finished(done_future):
-            try:
-                done_future.exception()
-            except BaseException:
-                pass
-            limiter.release()
-
-        future.add_done_callback(_release_when_finished)
+        await _drain_cancelled_provider_future(future)
         raise _ProviderExecutionCancelled() from exc
     finally:
-        if not release_in_callback:
-            limiter.release()
+        limiter.release()
 
 
 async def _read_limited(file: UploadFile) -> bytes:
