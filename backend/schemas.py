@@ -325,7 +325,7 @@ class WebhookOutboxOut(BaseModel):
 
 class WebhookReviewActionIn(BaseModel):
     event_id: int = Field(gt=0)
-    reason: str = Field(min_length=8, max_length=500)
+    reason_code: str = Field(min_length=8, max_length=64)
 
 
 
