@@ -235,11 +235,26 @@ MEDIA_CLEANUP_REQUIRED_FILES = {
 }
 REQUIRED_FILES |= MEDIA_CLEANUP_REQUIRED_FILES
 
+# Bounded S3/R2 request transport is part of the immutable runtime contract.
+MEDIA_ASYNC_TRANSPORT_REQUIRED_FILES = {
+    ".env.production.example",
+    ".github/workflows/ci.yml",
+    "backend/api/media.py",
+    "backend/config.py",
+    "backend/services/media_storage.py",
+    "backend/tests/test_media_async_transport.py",
+    "backend/tests/test_media_storage_transaction_boundary.py",
+    "docs/providers/object-storage.md",
+    "docs/runbooks/MEDIA_STORAGE_FAILURE.md",
+    "scripts/media_storage_transaction_boundary_smoke.py",
+}
+REQUIRED_FILES |= MEDIA_ASYNC_TRANSPORT_REQUIRED_FILES
+
 # Keep immutable capability semantics inspectable and maintainable. Every tuple
 # binds one packaged runtime/test surface to concrete behavior, not just presence.
 MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("backend/api/orders.py", ("acquire_pilot_checkout(", "record_pilot_order(")),
-    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 27",)),
+    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 28",)),
     (
         "scripts/pilot_release_capability.py",
         (
@@ -256,6 +271,8 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "REQUIRED_FILES |= MEDIA_UPLOAD_AUTHORITY_REQUIRED_FILES",
             "MEDIA_CLEANUP_REQUIRED_FILES",
             "REQUIRED_FILES |= MEDIA_CLEANUP_REQUIRED_FILES",
+            "MEDIA_ASYNC_TRANSPORT_REQUIRED_FILES",
+            "REQUIRED_FILES |= MEDIA_ASYNC_TRANSPORT_REQUIRED_FILES",
             "MARKER_REQUIREMENTS",
         ),
     ),
@@ -679,7 +696,7 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "provider=object_storage",
             "command_type=object_storage.media.delete",
             "## Database-outage residual recovery",
-            "issue #223",
+            "## Async transport execution",
         ),
     ),
     (
@@ -688,6 +705,87 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "## Cleanup command states",
             "## PostgreSQL outage / disaster recovery",
             "A committed `MediaAsset` object must never be deleted by orphan cleanup.",
+        ),
+    ),
+    (
+        ".env.production.example",
+        ("MEDIA_IO_MAX_CONCURRENCY=4",),
+    ),
+    (
+        "backend/config.py",
+        (
+            "media_io_max_concurrency: int = 4",
+            "MEDIA_IO_MAX_CONCURRENCY must be between 1 and 8",
+        ),
+    ),
+    (
+        "backend/services/media_storage.py",
+        (
+            "_MEDIA_IO_EXECUTOR_MAX_WORKERS = 8",
+            "ThreadPoolExecutor(",
+            "def _media_io_limiter(",
+            "async def _run_s3_transport(",
+            "return await asyncio.shield(future)",
+            "class MediaStorageCancelled",
+            "done_future.exception()",
+            "concurrency=settings.media_io_max_concurrency",
+        ),
+    ),
+    (
+        "backend/api/media.py",
+        (
+            "MediaStorageCancelled",
+            "except MediaStorageCancelled as exc:",
+            "_persist_uploaded_media_cleanup_or_raise(db, exc.storage_key)",
+        ),
+    ),
+    (
+        "backend/tests/test_media_async_transport.py",
+        (
+            "test_slow_s3_upload_does_not_block_event_loop",
+            "test_provider_exception_propagates_from_offloaded_s3_call",
+            "test_s3_transport_concurrency_is_hard_bounded",
+            "test_cancellation_keeps_capacity_reserved_until_provider_call_finishes",
+            "test_media_io_concurrency_configuration_is_bounded",
+        ),
+    ),
+    (
+        "backend/tests/test_media_storage_transaction_boundary.py",
+        (
+            "test_cancelled_provider_write_persists_exact_cleanup_key_before_cancellation_propagates",
+            "MediaStorageCancelled",
+        ),
+    ),
+    (
+        "scripts/media_storage_transaction_boundary_smoke.py",
+        (
+            "provider_offloaded",
+            "threading.get_ident() not in transport.thread_ids",
+            "media_io_max_concurrency=2",
+        ),
+    ),
+    (
+        ".github/workflows/ci.yml",
+        (
+            "Prove bounded async media transport",
+            "backend/tests/test_media_async_transport.py",
+        ),
+    ),
+    (
+        "docs/providers/object-storage.md",
+        (
+            "## Async transport execution",
+            "MEDIA_IO_MAX_CONCURRENCY",
+            "executor hard cap: 8 threads per backend process",
+            "Local filesystem mode is unchanged",
+        ),
+    ),
+    (
+        "docs/runbooks/MEDIA_STORAGE_FAILURE.md",
+        (
+            "## S3/R2 request execution",
+            "Do not interpret client cancellation as proof that S3/R2 rejected the write.",
+            "deliberately capped at 8",
         ),
     ),
     (
