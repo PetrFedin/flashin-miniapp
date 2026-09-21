@@ -8,8 +8,14 @@ from ..models import AdminUser, MediaAsset
 from ..schemas import MediaOut
 from ..security import get_current_admin
 from ..services.audit import log_admin_action
+from ..services.media_cleanup import (
+    MediaCleanupReviewRequired,
+    enqueue_media_cleanup,
+    list_media_cleanup_commands,
+    requeue_media_cleanup_command,
+)
 from ..services.media_pipeline import generate_local_derivatives
-from ..services.media_storage import delete_media, save_media
+from ..services.media_storage import MediaStorageWriteError, save_media
 from ..services.rbac import require_permission
 
 router = APIRouter(prefix="/media", tags=["media"])
@@ -62,21 +68,23 @@ def _reload_media_admin_for_finalize(db: Session, admin_id: int) -> AdminUser:
     return admin
 
 
-def _delete_uploaded_media_or_raise(storage_key: str) -> None:
-    """Compensate a failed DB finalize without hiding storage failure.
+def _persist_uploaded_media_cleanup_or_raise(db: Session, storage_key: str) -> None:
+    """Durably record cleanup for one exact FLASHIN-generated storage key.
 
-    Durable retry/review for a failed compensation is tracked separately by
-    #222. Until that exists, a cleanup failure must remain an explicit error,
-    never a swallowed exception.
+    This runs only before authoritative MediaAsset commit. The dedicated worker
+    later claims and commits the command lease before object-storage I/O. If the
+    recovery command itself cannot be persisted, fail loudly: PostgreSQL-backed
+    recovery cannot prove durability while PostgreSQL is unavailable.
     """
 
     if not storage_key:
         return
     try:
-        delete_media(storage_key)
+        enqueue_media_cleanup(db, storage_key)
     except Exception as cleanup_exc:
+        db.rollback()
         raise RuntimeError(
-            f"media cleanup failed for storage object {storage_key}"
+            "failed to persist media cleanup recovery command"
         ) from cleanup_exc
 
 
@@ -139,7 +147,7 @@ async def upload_media(
         if existing is not None:
             response = _media_response(existing)
             db.rollback()
-            _delete_uploaded_media_or_raise(storage_key)
+            _persist_uploaded_media_cleanup_or_raise(db, storage_key)
             storage_key = ""
             return response
 
@@ -168,21 +176,72 @@ async def upload_media(
         db.commit()
         authoritative_commit_reached = True
         return _committed_media_response(response)
+    except MediaStorageWriteError as exc:
+        db.rollback()
+        if not authoritative_commit_reached:
+            _persist_uploaded_media_cleanup_or_raise(db, exc.storage_key)
+        raise
     except ValueError as exc:
         db.rollback()
         if storage_key and not authoritative_commit_reached:
-            _delete_uploaded_media_or_raise(storage_key)
+            _persist_uploaded_media_cleanup_or_raise(db, storage_key)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except HTTPException:
         db.rollback()
         if storage_key and not authoritative_commit_reached:
-            _delete_uploaded_media_or_raise(storage_key)
+            _persist_uploaded_media_cleanup_or_raise(db, storage_key)
         raise
     except Exception:
         db.rollback()
         if storage_key and not authoritative_commit_reached:
-            _delete_uploaded_media_or_raise(storage_key)
+            _persist_uploaded_media_cleanup_or_raise(db, storage_key)
         raise
     finally:
         await file.close()
+
+@router.get("/cleanup")
+def media_cleanup_queue(
+    limit: int = 100,
+    admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    require_permission(db, admin, "media.write")
+    return {"items": list_media_cleanup_commands(db, limit=limit)}
+
+
+@router.post("/cleanup/{command_id}/retry")
+def retry_media_cleanup(
+    command_id: int,
+    admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    require_permission(db, admin, "media.write")
+    try:
+        command, previous_status = requeue_media_cleanup_command(db, command_id)
+        log_admin_action(
+            db,
+            admin,
+            "media.cleanup.retry",
+            "provider_command",
+            command.id,
+            {
+                "previous_status": previous_status,
+                "object_fingerprint": command.aggregate_id,
+            },
+        )
+        db.commit()
+        return {
+            "id": command.id,
+            "status": command.status,
+            "object_fingerprint": command.aggregate_id,
+        }
+    except LookupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (ValueError, MediaCleanupReviewRequired) as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception:
+        db.rollback()
+        raise
 
