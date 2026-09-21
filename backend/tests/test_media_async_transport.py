@@ -184,17 +184,19 @@ def test_cancellation_keeps_capacity_reserved_until_provider_call_finishes(monke
         first = asyncio.create_task(media_storage.save_media(_Upload()))
         await _wait_thread_event(first_started)
         first.cancel()
-        with pytest.raises(media_storage.MediaStorageCancelled) as exc_info:
-            await first
-        assert exc_info.value.storage_key.endswith(".png")
 
         second = asyncio.create_task(media_storage.save_media(_Upload()))
         await asyncio.sleep(0.06)
+        assert first.done() is False
         assert second_started.is_set() is False
         with lock:
             assert calls["count"] == 1
 
         first_release.set()
+        with pytest.raises(media_storage.MediaStorageCancelled) as exc_info:
+            await asyncio.wait_for(first, timeout=1.0)
+        assert exc_info.value.storage_key.endswith(".png")
+
         await _wait_thread_event(second_started)
         await asyncio.wait_for(second, timeout=1.0)
         with lock:
