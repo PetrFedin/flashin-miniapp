@@ -554,7 +554,7 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "scripts/media_storage_transaction_boundary_smoke.py",
         (
-            "postcommit_object_deleted",
+            "postcommit_cleanup_queued",
             "postcommit_asset_recovered",
             "retry_provider_write_created",
             "simulated post-commit response failure",
@@ -577,7 +577,7 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "def enqueue_media_cleanup(",
             "def parse_media_cleanup_command(",
             "def requeue_media_cleanup_command(",
-            "There is intentionally no storage_key argument",
+            "is intentionally no storage_key argument in the operator replay API",
         ),
     ),
     (
