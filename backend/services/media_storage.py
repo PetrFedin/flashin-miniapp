@@ -21,6 +21,19 @@ _MAX_IMAGE_PIXELS = 40_000_000
 _MAX_IMAGE_DIMENSION = 12_000
 _READ_CHUNK_BYTES = 1024 * 1024
 
+class MediaStorageWriteError(RuntimeError):
+    """External storage write failed after FLASHIN generated an immutable key.
+
+    The provider may have accepted the object before the client observed the
+    exception. Carrying only the server-generated key lets the upload route
+    enqueue safe compensating deletion without accepting an operator/client key.
+    """
+
+    def __init__(self, storage_key: str, message: str = "media storage write failed"):
+        super().__init__(message)
+        self.storage_key = storage_key
+
+
 
 async def _read_limited(file: UploadFile) -> bytes:
     content = bytearray()
@@ -135,13 +148,16 @@ async def save_media(file: UploadFile) -> dict:
 
     if settings.media_storage in {"s3", "r2"}:
         client = _s3_client()
-        client.put_object(
-            Bucket=settings.s3_bucket,
-            Key=storage_key,
-            Body=sanitized,
-            ContentType=content_type,
-            CacheControl="public, max-age=31536000, immutable",
-        )
+        try:
+            client.put_object(
+                Bucket=settings.s3_bucket,
+                Key=storage_key,
+                Body=sanitized,
+                ContentType=content_type,
+                CacheControl="public, max-age=31536000, immutable",
+            )
+        except Exception as exc:
+            raise MediaStorageWriteError(storage_key) from exc
         url = f"{settings.media_public_base_url.rstrip('/')}/{storage_key}"
     else:
         media_dir = Path(settings.media_local_dir).resolve()
