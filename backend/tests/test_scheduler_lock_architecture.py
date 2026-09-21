@@ -14,6 +14,7 @@ WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 ENTRYPOINTS = {
     "scripts/run_campaign_jobs.py": 'run_locked_db_job("campaigns"',
     "scripts/run_event_jobs.py": 'run_locked_db_job("events"',
+    "scripts/run_media_cleanup_jobs.py": 'run_locked_db_job("media-cleanup"',
     "scripts/run_sla_jobs.py": 'run_locked_db_job("sla"',
     "scripts/run_outbox_jobs.py": 'run_locked_async_db_job("outbox"',
     "scripts/run_provider_command_jobs.py": 'run_locked_async_db_job("provider-commands"',
@@ -54,6 +55,7 @@ def test_scheduler_wraps_every_business_job_and_registers_one_logical_heartbeat(
         "abandoned-carts",
         "inventory-snapshot",
         "sla",
+        "media-cleanup",
     )
     async_jobs = (
         "outbox",
@@ -77,6 +79,7 @@ def test_scheduler_wraps_every_business_job_and_registers_one_logical_heartbeat(
     assert "record_worker_heartbeat(SCHEDULER_WORKER)" in source
     assert source.count('id="delivery-provider-commands"') == 1
     assert source.count('id="payment-reconciliation"') == 1
+    assert source.count('id="media-cleanup"') == 1
     assert '"max_instances": 1' in source
 
 
