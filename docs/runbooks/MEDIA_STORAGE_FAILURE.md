@@ -103,6 +103,8 @@ Verify:
 - no cleanup command deleted an object referenced by `MediaAsset`;
 - retry with a known upload key returns the committed asset without another provider write;
 - storage calls did not run inside an active SQLAlchemy transaction;
+- S3/R2 upload calls executed off the FastAPI event-loop thread;
+- cancellation did not release provider concurrency before the in-flight call finished;
 - no credentials/raw provider payloads appear in operator responses or logs.
 
 ## Escalation
@@ -112,7 +114,18 @@ Verify:
 - evidence of cleanup deleting referenced media: immediate data-integrity escalation;
 - credential compromise/unauthorized object access: security incident process.
 
-## Remaining separate risk
+## S3/R2 request execution
 
-Synchronous boto3 transport still blocks the FastAPI event loop. That is issue
-#223 and must be closed independently.
+Upload transport is offloaded from the FastAPI event loop through the bounded
+media I/O executor. If a request is cancelled while boto3 is still running, FLASHIN keeps the
+concurrency slot occupied and waits asynchronously for that bounded provider
+call to reach a terminal local outcome. Only then can the generated storage key
+enter the normal durable cleanup boundary when no authoritative `MediaAsset`
+committed, after which cancellation propagates. This prevents cleanup from
+racing ahead of a late provider write. Do not interpret client cancellation as
+proof that S3/R2 rejected the write.
+
+If uploads queue behind the media I/O concurrency limit, investigate provider
+latency/timeouts before raising `MEDIA_IO_MAX_CONCURRENCY`. The value is
+deliberately capped at 8 so operator tuning cannot create unbounded provider
+thread fan-out.

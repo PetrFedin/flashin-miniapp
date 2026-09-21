@@ -126,6 +126,7 @@ def _s3_settings(**overrides):
         "s3_connect_timeout_seconds": 5,
         "s3_read_timeout_seconds": 20,
         "s3_max_attempts": 3,
+        "media_io_max_concurrency": 4,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -443,6 +444,41 @@ def test_recovery_lookup_is_authorized_and_bound_to_upload_key(monkeypatch):
 
     assert recovered is existing
     assert calls == ["media.write"]
+
+
+def test_cancelled_provider_write_persists_exact_cleanup_key_before_cancellation_propagates(monkeypatch):
+    initial_admin = SimpleNamespace(id=14)
+    db = _Session(finalize_admin=SimpleNamespace(id=14, active=True))
+    monkeypatch.setattr(media_api, "require_permission", lambda *_args, **_kwargs: None)
+    key = "c" * 32 + ".png"
+
+    async def cancelled_save(_file):
+        assert db.in_transaction() is False
+        raise media_storage.MediaStorageCancelled(key)
+
+    cleanup_keys = []
+    monkeypatch.setattr(media_api, "save_media", cancelled_save)
+    monkeypatch.setattr(
+        media_api,
+        "_persist_uploaded_media_cleanup_or_raise",
+        lambda _db, storage_key: cleanup_keys.append(storage_key),
+    )
+    upload = _Upload(b"ignored")
+
+    with pytest.raises(media_storage.MediaStorageCancelled) as exc_info:
+        asyncio.run(
+            media_api.upload_media(
+                file=upload,
+                idempotency_key="media-upload-key-0014",
+                admin=initial_admin,
+                db=db,
+            )
+        )
+
+    assert exc_info.value.storage_key == key
+    assert cleanup_keys == [key]
+    assert db.commits == 0
+    assert upload.closed is True
 
 
 def test_s3_client_uses_bounded_standard_retry_configuration(monkeypatch):

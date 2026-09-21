@@ -18,6 +18,7 @@ import asyncio
 import io
 import json
 import sys
+import threading
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -62,8 +63,10 @@ class RecordingS3:
         self.calls: list[dict] = []
         self.failure: Exception | None = None
         self.transaction_clean_checks = 0
+        self.thread_ids: set[int] = set()
 
     def put_object(self, **kwargs):
+        self.thread_ids.add(threading.get_ident())
         assert self.db.in_transaction() is False
         self.transaction_clean_checks += 1
         self.calls.append(dict(kwargs))
@@ -106,6 +109,7 @@ def main() -> int:
         s3_connect_timeout_seconds=5,
         s3_read_timeout_seconds=20,
         s3_max_attempts=3,
+        media_io_max_concurrency=2,
     )
     transport = RecordingS3(db)
 
@@ -142,6 +146,7 @@ def main() -> int:
         first_asset_id = int(first_asset.id)
         assert first_upload.closed is True
         assert transport.transaction_clean_checks == 1
+        assert threading.get_ident() not in transport.thread_ids
         assert len(transport.calls) == 1
         assert transport.calls[0]["Bucket"] == "flashin-media-smoke"
         assert transport.calls[0]["Key"] == first_asset.storage_key
@@ -278,6 +283,7 @@ def main() -> int:
                     "admin_id": admin_id,
                     "media_asset_id": first_asset_id,
                     "transaction_clean_checks": transport.transaction_clean_checks,
+                    "provider_offloaded": True,
                     "provider_calls": len(transport.calls),
                     "successful_finalize_persisted": True,
                     "audit_persisted": True,
