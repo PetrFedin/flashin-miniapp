@@ -214,11 +214,32 @@ MEDIA_UPLOAD_AUTHORITY_REQUIRED_FILES = {
 }
 REQUIRED_FILES |= MEDIA_UPLOAD_AUTHORITY_REQUIRED_FILES
 
+# Durable orphan cleanup is part of the immutable object-storage recovery contract.
+MEDIA_CLEANUP_REQUIRED_FILES = {
+    ".github/workflows/ci.yml",
+    "backend/api/media.py",
+    "backend/jobs/media_cleanup_jobs.py",
+    "backend/jobs/scheduler_app.py",
+    "backend/provider_models.py",
+    "backend/services/media_cleanup.py",
+    "backend/services/media_storage.py",
+    "backend/services/provider_commands.py",
+    "backend/tests/test_media_cleanup_recovery.py",
+    "backend/tests/test_media_storage_transaction_boundary.py",
+    "backend/tests/test_scheduler_lock_architecture.py",
+    "docs/providers/object-storage.md",
+    "docs/runbooks/MEDIA_STORAGE_FAILURE.md",
+    "scripts/media_cleanup_recovery_smoke.py",
+    "scripts/media_storage_transaction_boundary_smoke.py",
+    "scripts/run_media_cleanup_jobs.py",
+}
+REQUIRED_FILES |= MEDIA_CLEANUP_REQUIRED_FILES
+
 # Keep immutable capability semantics inspectable and maintainable. Every tuple
 # binds one packaged runtime/test surface to concrete behavior, not just presence.
 MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("backend/api/orders.py", ("acquire_pilot_checkout(", "record_pilot_order(")),
-    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 26",)),
+    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 27",)),
     (
         "scripts/pilot_release_capability.py",
         (
@@ -233,6 +254,8 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "REQUIRED_FILES |= PRIVACY_EXPORT_REQUIRED_FILES",
             "MEDIA_UPLOAD_AUTHORITY_REQUIRED_FILES",
             "REQUIRED_FILES |= MEDIA_UPLOAD_AUTHORITY_REQUIRED_FILES",
+            "MEDIA_CLEANUP_REQUIRED_FILES",
+            "REQUIRED_FILES |= MEDIA_CLEANUP_REQUIRED_FILES",
             "MARKER_REQUIREMENTS",
         ),
     ),
@@ -531,7 +554,7 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "scripts/media_storage_transaction_boundary_smoke.py",
         (
-            "postcommit_object_deleted",
+            "postcommit_cleanup_queued",
             "postcommit_asset_recovered",
             "retry_provider_write_created",
             "simulated post-commit response failure",
@@ -543,6 +566,128 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "Prove media post-commit authority",
             "backend/tests/test_media_upload_commit_authority.py",
             "scripts/media_storage_transaction_boundary_smoke.py",
+        ),
+    ),
+    (
+        "backend/services/media_cleanup.py",
+        (
+            'MEDIA_CLEANUP_PROVIDER = "object_storage"',
+            'MEDIA_CLEANUP_COMMAND = "object_storage.media.delete"',
+            "def validate_generated_media_storage_key(",
+            "def enqueue_media_cleanup(",
+            "def parse_media_cleanup_command(",
+            "def requeue_media_cleanup_command(",
+            "is intentionally no storage_key argument in the operator replay API",
+        ),
+    ),
+    (
+        "backend/jobs/media_cleanup_jobs.py",
+        (
+            "claim_provider_commands(",
+            "provider=MEDIA_CLEANUP_PROVIDER",
+            "def _authoritative_media_asset_id(",
+            "cleanup blocked: storage object is referenced by MediaAsset",
+            "database transaction must be closed before media cleanup I/O",
+            "finish_provider_command(",
+            "fail_provider_command(",
+        ),
+    ),
+    (
+        "backend/services/media_storage.py",
+        (
+            "class MediaStorageWriteError",
+            "raise MediaStorageWriteError(storage_key) from exc",
+            "client.put_object(",
+            "target.write_bytes(sanitized)",
+        ),
+    ),
+    (
+        "backend/api/media.py",
+        (
+            "def _persist_uploaded_media_cleanup_or_raise(",
+            "enqueue_media_cleanup(db, storage_key)",
+            "except MediaStorageWriteError as exc:",
+            "_persist_uploaded_media_cleanup_or_raise(db, exc.storage_key)",
+            '@router.get("/cleanup")',
+            '@router.post("/cleanup/{command_id}/retry")',
+            '"media.cleanup.retry"',
+        ),
+    ),
+    (
+        "backend/jobs/scheduler_app.py",
+        (
+            "process_media_cleanup_commands",
+            '_run_db_job("media-cleanup", process_media_cleanup_commands)',
+            'id="media-cleanup"',
+        ),
+    ),
+    (
+        "scripts/run_media_cleanup_jobs.py",
+        (
+            'run_locked_db_job("media-cleanup", process_media_cleanup_commands)',
+            "def main()",
+        ),
+    ),
+    (
+        "backend/tests/test_media_cleanup_recovery.py",
+        (
+            "test_generated_media_key_allowlist_rejects_arbitrary_paths",
+            "test_worker_deletes_only_after_claim_commit_and_reference_check",
+            "test_malformed_command_enters_review_before_delete",
+            "test_authoritative_media_reference_blocks_provider_delete",
+        ),
+    ),
+    (
+        "scripts/media_cleanup_recovery_smoke.py",
+        (
+            "media cleanup recovery smoke requires PostgreSQL",
+            "transaction_clean_delete",
+            "duplicate_enqueue_idempotent",
+            "retry_scheduled_and_recovered",
+            "manual_replay_preserves_storage_key",
+            "authoritative_media_reference_blocks_delete",
+        ),
+    ),
+    (
+        "backend/tests/test_media_storage_transaction_boundary.py",
+        (
+            "test_precommit_finalize_failure_persists_exact_cleanup_key",
+            "test_cleanup_persistence_failure_is_never_silently_swallowed",
+            "test_postcommit_response_failure_never_deletes_or_requeues_committed_object",
+        ),
+    ),
+    (
+        "scripts/media_storage_transaction_boundary_smoke.py",
+        (
+            "ambiguous_write_cleanup_persisted",
+            "postcommit_cleanup_queued",
+            "media_cleanup_idempotency_key",
+        ),
+    ),
+    (
+        ".github/workflows/ci.yml",
+        (
+            "Prove durable media cleanup recovery",
+            "backend/tests/test_media_cleanup_recovery.py",
+            "python scripts/media_cleanup_recovery_smoke.py",
+        ),
+    ),
+    (
+        "docs/providers/object-storage.md",
+        (
+            "## Durable cleanup command",
+            "provider=object_storage",
+            "command_type=object_storage.media.delete",
+            "## Database-outage residual recovery",
+            "issue #223",
+        ),
+    ),
+    (
+        "docs/runbooks/MEDIA_STORAGE_FAILURE.md",
+        (
+            "## Cleanup command states",
+            "## PostgreSQL outage / disaster recovery",
+            "A committed `MediaAsset` object must never be deleted by orphan cleanup.",
         ),
     ),
     (

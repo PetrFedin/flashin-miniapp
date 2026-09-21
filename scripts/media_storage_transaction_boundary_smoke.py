@@ -7,8 +7,8 @@ The smoke proves:
 - an auth/request transaction exists before upload handling;
 - S3 put_object runs with no active SQLAlchemy transaction;
 - finalize re-enters PostgreSQL and atomically persists media + audit;
-- a storage timeout never enters DB finalize or creates a MediaAsset;
-- a failure after authoritative commit never deletes the committed object;
+- an ambiguous storage timeout never enters DB finalize, creates no MediaAsset and durably queues exact-key cleanup;
+- a failure after authoritative commit never queues cleanup for the committed object;
 - retry with the same upload key re-reads the committed MediaAsset without a second provider write.
 """
 
@@ -32,7 +32,9 @@ if str(ROOT) not in sys.path:
 from backend.api import media as media_api
 from backend.database import engine
 from backend.models import AdminUser, AuditLog, MediaAsset
+from backend.provider_models import ProviderCommand
 from backend.services import media_storage
+from backend.services.media_cleanup import MEDIA_CLEANUP_PROVIDER, media_cleanup_idempotency_key
 
 
 class Upload:
@@ -90,7 +92,6 @@ def main() -> int:
     original_get_settings = media_storage.get_settings
     original_s3_client = media_storage._s3_client
     original_generate_derivatives = media_api.generate_local_derivatives
-    original_delete_media = media_api.delete_media
     original_committed_response = media_api._committed_media_response
 
     settings = SimpleNamespace(
@@ -170,6 +171,7 @@ def main() -> int:
         assert db.in_transaction() is True
         transport.failure = TimeoutError("simulated object-store timeout")
         second_upload = Upload(_png_bytes(), f"media-boundary-timeout-{token}.png")
+        ambiguous_storage_key = ""
         try:
             asyncio.run(
                 media_api.upload_media(
@@ -179,23 +181,38 @@ def main() -> int:
                     db=db,
                 )
             )
-        except TimeoutError as exc:
-            assert "object-store timeout" in str(exc)
+        except media_storage.MediaStorageWriteError as exc:
+            assert isinstance(exc.__cause__, TimeoutError)
+            ambiguous_storage_key = exc.storage_key
         else:
-            raise AssertionError("storage timeout must propagate")
+            raise AssertionError("ambiguous storage write must propagate")
 
         assert second_upload.closed is True
         assert transport.transaction_clean_checks == 2
         assert db.in_transaction() is False
         assert db.query(MediaAsset).count() == first_count
+        cleanup_row = (
+            db.query(ProviderCommand)
+            .filter(
+                ProviderCommand.provider == MEDIA_CLEANUP_PROVIDER,
+                ProviderCommand.idempotency_key
+                == media_cleanup_idempotency_key(ambiguous_storage_key),
+            )
+            .one()
+        )
+        assert cleanup_row.status == "pending"
+        assert ambiguous_storage_key in cleanup_row.payload_json
+        cleanup_count_before_postcommit = (
+            db.query(ProviderCommand)
+            .filter(ProviderCommand.provider == MEDIA_CLEANUP_PROVIDER)
+            .count()
+        )
         db.rollback()
 
         # A response-side failure after commit must not compensate the provider
         # object. The same key must recover the committed row on retry without
         # another provider write.
         transport.failure = None
-        deleted_keys: list[str] = []
-        media_api.delete_media = deleted_keys.append
         media_api._committed_media_response = lambda _response: (_ for _ in ()).throw(
             RuntimeError("simulated post-commit response failure")
         )
@@ -219,7 +236,13 @@ def main() -> int:
 
         assert postcommit_upload.closed is True
         assert len(transport.calls) == provider_calls_before_postcommit + 1
-        assert deleted_keys == []
+        db.rollback()
+        assert (
+            db.query(ProviderCommand)
+            .filter(ProviderCommand.provider == MEDIA_CLEANUP_PROVIDER)
+            .count()
+            == cleanup_count_before_postcommit
+        )
         db.rollback()
         committed_after_failure = (
             db.query(MediaAsset)
@@ -259,7 +282,8 @@ def main() -> int:
                     "successful_finalize_persisted": True,
                     "audit_persisted": True,
                     "timeout_finalize_created": False,
-                    "postcommit_object_deleted": False,
+                    "ambiguous_write_cleanup_persisted": True,
+                    "postcommit_cleanup_queued": False,
                     "postcommit_asset_recovered": True,
                     "retry_provider_write_created": False,
                 },
@@ -272,7 +296,6 @@ def main() -> int:
         media_storage.get_settings = original_get_settings
         media_storage._s3_client = original_s3_client
         media_api.generate_local_derivatives = original_generate_derivatives
-        media_api.delete_media = original_delete_media
         media_api._committed_media_response = original_committed_response
         db.close()
         if outer_transaction.is_active:

@@ -2,12 +2,14 @@
 
 ## Scope
 
-This contract covers FLASHIN media object storage when `MEDIA_STORAGE=s3|r2`.
-PostgreSQL remains authoritative for `MediaAsset` metadata. S3/R2 stores the binary object referenced by the database record.
+This contract covers FLASHIN media storage when `MEDIA_STORAGE=s3|r2`.
+PostgreSQL is authoritative for `MediaAsset`; S3/R2 stores binary objects.
+Local filesystem mode keeps the same generated-key cleanup safety rules but is
+not an external provider.
 
-Local filesystem mode is a development/runtime alternative and does not use the external provider boundary described below.
+## Configuration and secrets
 
-## Configuration
+Required provider settings are:
 
 - `MEDIA_STORAGE=local|s3|r2`
 - `MEDIA_PUBLIC_BASE_URL`
@@ -16,100 +18,131 @@ Local filesystem mode is a development/runtime alternative and does not use the 
 - `S3_REGION`
 - `S3_ACCESS_KEY_ID`
 - `S3_SECRET_ACCESS_KEY`
-- `S3_CONNECT_TIMEOUT_SECONDS` (default `5`, allowed `1..60`)
-- `S3_READ_TIMEOUT_SECONDS` (default `20`, allowed `1..120`)
-- `S3_MAX_ATTEMPTS` (default `3`, allowed `1..10`)
+- `S3_CONNECT_TIMEOUT_SECONDS`
+- `S3_READ_TIMEOUT_SECONDS`
+- `S3_MAX_ATTEMPTS`
 
-Production validation already requires complete S3/R2 endpoint, bucket and credentials when external object storage is selected.
+Credentials belong in the approved production secret mechanism and must never
+be returned to clients, cleanup endpoints or logs.
 
-## Authentication and secrets
+## Upload authority
 
-Credentials are configuration secrets and must be supplied by the approved production secret mechanism. They must not be committed, returned to clients or written to logs.
+`POST /media/upload` requires a client `Idempotency-Key`. The admin client
+persists one key across ambiguous network retries.
 
-## Transport policy
+The authoritative path is:
 
-The shared boto3 S3 client uses Botocore `Config` with:
+1. authenticate/authorize `media.write`;
+2. look up an already committed `MediaAsset.upload_key`; a retry returns it
+   before object storage is touched;
+3. end the request DB transaction;
+4. sanitize the image and call object storage with no active SQLAlchemy transaction;
+5. start a fresh DB phase, re-read the active admin and re-check `media.write`;
+6. re-check the upload key to close the concurrent retry race;
+7. persist `MediaAsset`, derivative metadata and audit in one DB transaction;
+8. materialize the response before commit;
+9. commit; from this point the object is authoritative and is never eligible
+   for orphan cleanup because of later response/serialization failure.
 
-- bounded connect timeout;
-- bounded read timeout;
-- `standard` retry mode;
-- a bounded `total_max_attempts` value.
+Alembic 0044 enforces partial uniqueness for non-empty
+`MediaAsset.upload_key`.
 
-There is no application-level unbounded retry loop.
+## Media validation and storage keys
 
-The storage key is generated once per `save_media` operation before the S3/R2 request. SDK retries for that operation therefore retain the same object key and payload.
+Uploads are decoded and re-encoded JPEG/PNG/WebP only. MIME must match decoded
+format. Animated images, invalid images, excessive dimensions/pixel counts and
+oversized input/output are rejected.
 
-## Database/provider transaction boundary
+Storage keys are generated server-side as 32 lowercase hexadecimal characters
+plus `.jpg`, `.png` or `.webp`. Cleanup never accepts a client/operator
+supplied key.
 
-`POST /media/upload` uses three phases:
+## Ambiguous provider writes
 
-1. **Prepare / authorization**
-   - authenticate and authorize the admin;
-   - snapshot only the primitive `admin_id` required across the boundary;
-   - end the request-owned SQLAlchemy transaction.
-2. **Object storage I/O**
-   - read and sanitize the image;
-   - perform `put_object` with no active SQLAlchemy transaction.
-3. **Fresh finalize**
-   - re-read the admin in a new transaction;
-   - fail closed if the admin is inactive or no longer has `media.write`;
-   - persist `MediaAsset`, local derivatives where applicable and `AuditLog` atomically;
-   - commit.
+For S3/R2, the storage key exists before `put_object`. A provider can accept
+an object and then lose the response. External write exceptions are therefore
+wrapped as `MediaStorageWriteError` carrying only the generated storage key.
 
-No live ORM admin object is used across the provider phase.
+The failed request remains failed. FLASHIN persists durable cleanup work for
+that exact generated key before control leaves the request. If PostgreSQL is
+unavailable and the cleanup command itself cannot be committed, the application
+fails loudly; it does not claim durable recovery.
 
-## Validation before upload
+## Durable cleanup command
 
-The application continues to enforce:
+A non-authoritative uploaded object is represented by one idempotent
+`ProviderCommand`:
 
-- JPEG/PNG/WebP only;
-- declared MIME must match decoded image format;
-- no animated images;
-- upload and sanitized output size limits;
-- dimension/pixel limits;
-- image decode/verify;
-- EXIF orientation normalization and re-encoding;
-- generated safe storage key rather than a client-controlled path.
+- `provider=object_storage`
+- `command_type=object_storage.media.delete`
+- `aggregate_type=media_cleanup`
+- `aggregate_id=SHA-256(storage_key)`
+- idempotency key derived from the same SHA-256
+- payload contains only the generated storage key and fixed reason
+  `upload_finalize_failed`
 
-## Failure semantics
+This covers ambiguous `put_object`, DB/RBAC finalize failure and a losing
+concurrent upload retry. A successful authoritative commit is excluded.
 
-### Provider fails before returning success
+## Cleanup worker transaction boundary
 
-The request fails and no `MediaAsset` finalize is written. The DB request transaction was already released before the provider call.
+The dedicated media-cleanup worker is independent from the MoySklad worker.
 
-### Provider succeeds, DB finalize fails
+1. claim `provider=object_storage` commands with the generic PostgreSQL
+   `FOR UPDATE SKIP LOCKED` lease mechanism;
+2. commit the claim before external I/O;
+3. validate provider/type/payload/hash/idempotency bindings;
+4. query PostgreSQL for any committed `MediaAsset.storage_key` reference;
+5. close that read transaction;
+6. if referenced, move the command to `review_required` and do not delete;
+7. otherwise call storage deletion with `db.in_transaction() == False`;
+8. lease-fenced finalize as `sent`, or use bounded generic retry/backoff;
+9. permanent provider configuration/auth failures become `review_required`.
 
-The route rolls back the fresh DB transaction and invokes compensating object deletion using the returned storage key.
+Deleting the same exact generated key is replay-safe. Unknown/tampered commands
+fail closed before provider I/O.
 
-If compensating deletion itself fails, the exception is not swallowed: the request raises an explicit chained cleanup error. Durable cleanup retry/review/reconciliation is still incomplete and is tracked by issue #222.
+The scheduler runs this worker every minute under the distributed scheduler
+advisory lock. `scripts/run_media_cleanup_jobs.py` provides the same locked
+one-shot execution path.
 
-### Ambiguous provider timeout
+## Operator recovery
 
-A timeout can occur after an S3-compatible provider may have accepted the object. The current transaction-boundary fix does not claim a durable orphan-reconciliation system. That remaining recovery gap is tracked by issue #222 and keeps the broader media-storage contour `PARTIAL`.
+An authenticated admin with `media.write` can:
 
-## Async execution limitation
+- inspect `GET /media/cleanup` for command id, status, attempts, timestamps,
+  error and object fingerprint;
+- replay only an existing `failed` or `review_required` command through
+  `POST /media/cleanup/{command_id}/retry`.
 
-The current boto3 calls are synchronous. Moving them off the FastAPI event loop with bounded concurrency is a separate P1 tracked by issue #223. This contract does not claim that risk is closed by issue #221.
+The replay endpoint has no storage-key parameter. The persisted provider,
+command type, payload, aggregate digest and idempotency binding are revalidated
+before status changes. Replay is audited as `media.cleanup.retry`.
 
-## Idempotency
+Raw command payloads and storage credentials are not returned.
 
-The provider operation uses a unique generated storage key. Botocore retries inside one `put_object` operation reuse that key. There is no user-supplied upload idempotency key and no claim that two independent `/media/upload` requests collapse into one asset.
+## Database-outage residual recovery
 
-## Reconciliation / operator recovery
+A PostgreSQL-backed queue cannot persist new recovery evidence while PostgreSQL
+itself is unavailable. If storage may have accepted an object and recovery
+persistence cannot commit, treat the request as an incident. Reconcile provider
+objects against committed `MediaAsset.storage_key` values after database
+recovery; do not invent DB rows and do not bulk-delete unmatched keys without
+evidence.
 
-Until #222 is closed:
+## Remaining async limitation
 
-- treat DB-finalize/storage-cleanup failure as an operator-visible incident, not successful upload;
-- do not create a database row manually unless the actual remote object state is verified;
-- do not delete arbitrary provider keys; compensation may target only the key generated by the failed operation;
-- preserve request/correlation evidence and storage key where available.
+S3/R2 boto3 calls are still synchronous and can block the FastAPI event loop.
+Bounded offload/concurrency is separate issue #223. Durable cleanup does not
+claim to close that risk.
 
-## Tests / evidence
+## Evidence
 
-Issue #221 adds:
+Mandatory evidence includes:
 
-- unit regression tests for transaction-clean provider calls, fresh authorization finalize, provider timeout, cleanup failure and Botocore timeout/retry configuration;
-- `scripts/media_storage_transaction_boundary_smoke.py`, which uses real PostgreSQL state and a deterministic S3 transport to prove `db.in_transaction() is False` at `put_object` and that timeout does not create a second `MediaAsset`;
-- a mandatory CI step for that PostgreSQL smoke.
-
-Full exact-head CI, Security, Docker build, signed backup/restore, signed rollback and production Compose isolation remain mandatory before merge.
+- `backend/tests/test_media_storage_transaction_boundary.py`
+- `backend/tests/test_media_cleanup_recovery.py`
+- `scripts/media_storage_transaction_boundary_smoke.py`
+- `scripts/media_cleanup_recovery_smoke.py`
+- `backend/tests/test_scheduler_lock_architecture.py`
+- full exact-head CI, Security and release-safety gates.
