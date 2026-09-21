@@ -117,11 +117,13 @@ Verify:
 ## S3/R2 request execution
 
 Upload transport is offloaded from the FastAPI event loop through the bounded
-media I/O executor. If a request is cancelled while boto3 is still running,
-FLASHIN preserves the generated storage key, persists the normal durable cleanup
-command when no authoritative `MediaAsset` committed, and propagates
-cancellation. Do not interpret client cancellation as proof that S3/R2 rejected
-the write.
+media I/O executor. If a request is cancelled while boto3 is still running, FLASHIN keeps the
+concurrency slot occupied and waits asynchronously for that bounded provider
+call to reach a terminal local outcome. Only then can the generated storage key
+enter the normal durable cleanup boundary when no authoritative `MediaAsset`
+committed, after which cancellation propagates. This prevents cleanup from
+racing ahead of a late provider write. Do not interpret client cancellation as
+proof that S3/R2 rejected the write.
 
 If uploads queue behind the media I/O concurrency limit, investigate provider
 latency/timeouts before raising `MEDIA_IO_MAX_CONCURRENCY`. The value is
