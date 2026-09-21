@@ -178,7 +178,6 @@ def _s3_transport_gate() -> asyncio.BoundedSemaphore:
 
 def _put_s3_object_sync(
     settings,
-    *,
     storage_key: str,
     body: bytes,
     content_type: str,
@@ -218,9 +217,9 @@ async def _put_s3_object_bounded(
             _S3_TRANSPORT_EXECUTOR,
             _put_s3_object_sync,
             settings,
-            storage_key=storage_key,
-            body=body,
-            content_type=content_type,
+            storage_key,
+            body,
+            content_type,
         )
     except BaseException:
         gate.release()
