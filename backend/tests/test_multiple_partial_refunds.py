@@ -4,7 +4,7 @@ from sqlalchemy.orm import sessionmaker
 from backend import model_constraints  # noqa: F401
 from backend.database import Base
 from backend.models import Customer, Order, ReturnRequest
-from backend.services import refund_state
+from backend.services import refund_allocation, refund_state
 from backend.services.payments import _refund_idempotence_key
 
 
@@ -91,6 +91,11 @@ def test_second_refund_completes_order_cumulatively_without_inventory_side_effec
         refund_state,
         "apply_full_refund_loyalty",
         lambda *args, **kwargs: {"loyalty_reversed": True},
+    )
+    monkeypatch.setattr(
+        refund_allocation,
+        "validate_persisted_return_allocation",
+        lambda *args, **kwargs: {"allocated_cents": 7000},
     )
 
     result = refund_state.apply_provider_refund_status(db, second, order, "succeeded")
