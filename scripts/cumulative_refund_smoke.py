@@ -39,6 +39,7 @@ from backend.models import (
     LoyaltyTransaction,
     Notification,
     Order,
+    OrderItem,
     Payment,
     Product,
     ProductVariant,
@@ -278,6 +279,11 @@ def main() -> int:
         )
         order_id = int(order["id"])
         assert _money(order["total_amount"]) == Decimal("1700.00")
+        order_item = (
+            db.query(OrderItem)
+            .filter(OrderItem.order_id == order_id)
+            .one()
+        )
 
         payment = _expect(
             client.post("/api/payments", json={"order_id": order_id}),
@@ -303,7 +309,17 @@ def main() -> int:
         first_refund = _expect(
             client.post(
                 "/api/returns/admin/approve",
-                json={"return_id": first_return_id, "amount": 700},
+                json={
+                    "return_id": first_return_id,
+                    "amount": 700,
+                    "allocations": [
+                        {
+                            "component_kind": "item",
+                            "order_item_id": order_item.id,
+                            "amount": 700,
+                        }
+                    ],
+                },
             ),
             200,
             "approve partial refund",
@@ -316,7 +332,11 @@ def main() -> int:
         first_refund_replay = _expect(
             client.post(
                 "/api/returns/admin/approve",
-                json={"return_id": first_return_id, "amount": 700},
+                json={
+                    "return_id": first_return_id,
+                    "amount": 700,
+                    "allocations": [],
+                },
             ),
             200,
             "replay partial refund approval",
@@ -384,7 +404,17 @@ def main() -> int:
         second_refund = _expect(
             client.post(
                 "/api/returns/admin/approve",
-                json={"return_id": second_return_id, "amount": 1000},
+                json={
+                    "return_id": second_return_id,
+                    "amount": 1000,
+                    "allocations": [
+                        {
+                            "component_kind": "item",
+                            "order_item_id": order_item.id,
+                            "amount": 1000,
+                        }
+                    ],
+                },
             ),
             200,
             "approve remaining refund",
@@ -397,7 +427,11 @@ def main() -> int:
         second_refund_replay = _expect(
             client.post(
                 "/api/returns/admin/approve",
-                json={"return_id": second_return_id, "amount": 1000},
+                json={
+                    "return_id": second_return_id,
+                    "amount": 1000,
+                    "allocations": [],
+                },
             ),
             200,
             "replay full cumulative refund approval",
@@ -536,6 +570,7 @@ def main() -> int:
                     "return_movements_without_physical_evidence": len(return_movements),
                     "notifications": len(notifications),
                     "provider_refund_calls": len(refund_create_calls),
+                    "financial_item_allocation_evidence": True,
                 },
                 ensure_ascii=False,
                 indent=2,
