@@ -129,7 +129,7 @@ def test_partial_refund_requires_explicit_composition_and_persists_item_delivery
         ret=ret,
         requested_amount=700,
         raw_allocations=[
-            _spec("item", 500, item_id=items[0].id, quantity=1),
+            _spec("item", 500, item_id=items[0].id),
             _spec("delivery", 100),
             _spec("goodwill", 100),
         ],
@@ -194,7 +194,7 @@ def test_staged_allocations_cannot_exceed_original_line_delivery_or_quantity_evi
         ret=first,
         requested_amount=800,
         raw_allocations=[
-            _spec("item", 800, item_id=items[0].id, quantity=1),
+            _spec("item", 800, item_id=items[0].id),
         ],
     )
     first.refund_amount = 800
@@ -229,6 +229,82 @@ def test_staged_allocations_cannot_exceed_original_line_delivery_or_quantity_evi
             ret=second,
             requested_amount=151,
             raw_allocations=[_spec("delivery", 151)],
+        )
+
+
+def test_quantity_backed_staged_refunds_use_exact_sequential_rounding():
+    db = _db()
+    order, items = _order(db)
+    target = items[1]
+    # This three-unit line has exactly 85,000 net cents. Sequential quantity
+    # evidence must resolve to 28,333 + 28,334 + 28,333 under the same remaining
+    # cents/quantity rule used by physical valuation.
+    expected = [28333, 28334, 28333]
+    for index, cents in enumerate(expected):
+        ret = _ret(db, order)
+        evidence = ensure_refund_allocation(
+            db,
+            order=order,
+            ret=ret,
+            requested_amount=cents / 100,
+            raw_allocations=[
+                _spec(
+                    "item",
+                    cents / 100,
+                    item_id=target.id,
+                    quantity=1,
+                )
+            ],
+        )
+        ret.refund_amount = cents / 100
+        ret.status = "approved_partial"
+        db.commit()
+        assert evidence["item_cents"] == cents
+
+    options = refund_allocation_options(db, order=order)
+    line = next(row for row in options["items"] if row["order_item_id"] == target.id)
+    assert line["remaining_cents"] == 0
+    assert line["quantity_evidence_allocated"] == 3
+
+
+def test_quantity_evidence_rejects_wrong_line_value_and_mixed_value_only_history():
+    db = _db()
+    order, items = _order(db)
+    target = items[1]
+
+    first = _ret(db, order)
+    with pytest.raises(RefundAllocationError, match="quantity-backed line value"):
+        ensure_refund_allocation(
+            db,
+            order=order,
+            ret=first,
+            requested_amount=100,
+            raw_allocations=[
+                _spec("item", 100, item_id=target.id, quantity=1)
+            ],
+        )
+
+    ensure_refund_allocation(
+        db,
+        order=order,
+        ret=first,
+        requested_amount=100,
+        raw_allocations=[_spec("item", 100, item_id=target.id)],
+    )
+    first.refund_amount = 100
+    first.status = "approved_partial"
+    db.commit()
+
+    second = _ret(db, order)
+    with pytest.raises(RefundAllocationError, match="cannot follow value-only"):
+        ensure_refund_allocation(
+            db,
+            order=order,
+            ret=second,
+            requested_amount=283.33,
+            raw_allocations=[
+                _spec("item", 283.33, item_id=target.id, quantity=1)
+            ],
         )
 
 
@@ -340,7 +416,12 @@ def _one_line_order(db, *, financial_amount=500):
         ret=ret,
         requested_amount=financial_amount / 100,
         raw_allocations=[
-            _spec("item", financial_amount / 100, item_id=items[0].id, quantity=1),
+            _spec(
+                "item",
+                financial_amount / 100,
+                item_id=items[0].id,
+                quantity=1 if financial_amount == 500 else None,
+            ),
         ],
     )
     ret.refund_amount = financial_amount / 100
