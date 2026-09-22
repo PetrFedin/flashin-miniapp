@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from backend.services import refund_state
+from backend.services import refund_allocation, refund_state
 
 
 def _order(total=1000.0):
@@ -71,6 +71,11 @@ def test_full_refund_applies_loyalty_without_inventory_reversal(monkeypatch):
     monkeypatch.setattr(refund_state, "completed_refund_total", lambda *args, **kwargs: Decimal("0.00"))
     monkeypatch.setattr(refund_state, "apply_full_refund_loyalty", fake_apply)
     monkeypatch.setattr(refund_state, "queue_order_refund", fake_notification)
+    monkeypatch.setattr(
+        refund_allocation,
+        "validate_persisted_return_allocation",
+        lambda *args, **kwargs: {"allocated_cents": 100000},
+    )
     order = _order()
     ret = _return()
 
@@ -101,6 +106,11 @@ def test_partial_refund_does_not_silently_recalculate_loyalty_or_inventory(monke
     monkeypatch.setattr(refund_state, "completed_refund_total", lambda *args, **kwargs: Decimal("0.00"))
     monkeypatch.setattr(refund_state, "apply_full_refund_loyalty", fail_if_called)
     monkeypatch.setattr(refund_state, "queue_order_refund", fake_notification)
+    monkeypatch.setattr(
+        refund_allocation,
+        "validate_persisted_return_allocation",
+        lambda *args, **kwargs: {"allocated_cents": 25000},
+    )
     order = _order()
     ret = _return(250.0)
 
