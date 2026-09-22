@@ -15,6 +15,10 @@ from ..services.pilot_circuit_breaker import (
 )
 from ..services.rbac import REFUNDS_WRITE_PERMISSION, require_permission
 from ..services.runtime_capabilities import require_payment_execution
+from ..services.refund_allocation import (
+    RefundAllocationError,
+    ensure_refund_allocation,
+)
 from ..services.refund_locking import (
     lock_return_request_for_approval,
     lock_return_request_for_known_order,
@@ -314,6 +318,17 @@ async def approve_return(
         ) != requested_amount:
             raise HTTPException(status_code=409, detail="Refund amount is already fixed for this request")
 
+        try:
+            allocation_evidence = ensure_refund_allocation(
+                db,
+                order=order,
+                ret=ret,
+                requested_amount=requested_amount,
+                raw_allocations=payload.allocations,
+            )
+        except RefundAllocationError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
         ret.refund_amount = float(requested_amount)
         ret.status = "processing"
         order.status = "refund_requested"
@@ -399,6 +414,7 @@ async def approve_return(
                 "refund_id": provider_refund_id,
                 "refund_amount": float(requested_amount),
                 "provider_status": provider_status,
+                "financial_allocation": allocation_evidence,
                 "loyalty_adjustments": loyalty_adjustments,
             },
         )
