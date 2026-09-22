@@ -87,22 +87,35 @@ def test_outbox_read_surface_redacts_destination_and_raw_delivery_error():
     assert 'require_permission(db, admin, "webhooks.read")' in list_block
     assert "return [_public_outbox(row) for row in rows]" in list_block
     assert '"destination": redact_webhook_destination(row.destination)' in OUTBOX_SOURCE
-    assert '"last_error": _SAFE_DELIVERY_ERROR if row.last_error else ""' in OUTBOX_SOURCE
+    assert '"classification": delivery_classification_from_error(row.last_error)' in OUTBOX_SOURCE
+    assert '"last_error": public_delivery_error(row.status, row.last_error)' in OUTBOX_SOURCE
+    assert "Webhook delivery outcome requires review" not in OUTBOX_SOURCE
+    assert "row.last_error[:500]" not in list_block
     assert ".limit(limit).all()" not in list_block
 
 
-def test_outbox_retry_and_discard_remain_operational_webhook_write_actions():
+def test_outbox_retry_review_and_discard_remain_operational_webhook_write_actions():
     retry_block = OUTBOX_SOURCE.split('@router.post("/{row_id}/retry")', 1)[1].split(
+        'def _validate_review_action', 1
+    )[0]
+    review_retry_block = OUTBOX_SOURCE.split('@router.post("/{row_id}/review/retry")', 1)[1].split(
+        '@router.post("/{row_id}/review/mark-sent")', 1
+    )[0]
+    review_sent_block = OUTBOX_SOURCE.split('@router.post("/{row_id}/review/mark-sent")', 1)[1].split(
         '@router.post("/{row_id}/discard")', 1
     )[0]
     discard_block = OUTBOX_SOURCE.split('@router.post("/{row_id}/discard")', 1)[1]
 
-    assert 'require_permission(db, admin, "webhooks.write")' in retry_block
-    assert 'require_permission(db, admin, "webhooks.write")' in discard_block
-    assert "WEBHOOKS_CONFIGURE_PERMISSION" not in retry_block
-    assert "WEBHOOKS_CONFIGURE_PERMISSION" not in discard_block
+    for block in (retry_block, review_retry_block, review_sent_block, discard_block):
+        assert 'require_permission(db, admin, "webhooks.write")' in block
+        assert "WEBHOOKS_CONFIGURE_PERMISSION" not in block
+
     assert '"had_error": bool(row.last_error)' in retry_block
     assert "row.last_error[:500]" not in retry_block
+    assert '"event_id": row.id' in review_retry_block
+    assert '"event_id": row.id' in review_sent_block
+    assert "reason_code" in review_retry_block
+    assert "reason_code" in review_sent_block
 
 
 def test_default_operational_roles_do_not_inherit_destination_configuration():

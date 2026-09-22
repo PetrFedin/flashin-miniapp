@@ -154,6 +154,10 @@ jobs:
         run: python scripts/business_event_recovery_smoke.py
       - name: Run owned webhook outbox lease smoke
         run: python scripts/webhook_outbox_lease_smoke.py
+      - name: Prove webhook ambiguity quarantine
+        run: |
+          python -m pytest -q backend/tests/test_webhook_outbox_ambiguity.py backend/tests/test_webhook_outbox_lease_architecture.py
+          python scripts/webhook_outbox_ambiguity_smoke.py
       - name: Run owned notification delivery lease smoke
         run: python scripts/notification_delivery_lease_smoke.py
       - name: Run Telegram notification transport smoke

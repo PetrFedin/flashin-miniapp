@@ -318,8 +318,14 @@ class WebhookOutboxOut(BaseModel):
     event_type: str
     status: str
     attempts: int
+    classification: str = ""
     last_error: str = ""
     model_config = {"from_attributes": True}
+
+
+class WebhookReviewActionIn(BaseModel):
+    event_id: int = Field(gt=0)
+    reason_code: str = Field(min_length=8, max_length=64)
 
 
 
