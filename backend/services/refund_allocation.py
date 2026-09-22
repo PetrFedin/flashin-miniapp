@@ -29,6 +29,9 @@ _RESERVING_REFUND_STATUSES = {
 }
 
 
+REFUND_ALLOCATION_REVIEW_DETAIL = "Refund financial allocation evidence requires review"
+
+
 class RefundAllocationError(ValueError):
     """Refund financial evidence is invalid or exceeds original paid value."""
 
