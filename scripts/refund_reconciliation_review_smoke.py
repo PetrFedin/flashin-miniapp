@@ -18,7 +18,8 @@ if str(ROOT) not in sys.path:
 from backend.api import returns as returns_api
 from backend.database import engine
 from backend.jobs import refund_jobs
-from backend.models import Customer, Order, ReturnRequest
+from backend.models import Customer, Order, OrderItem, Product, ProductVariant, ReturnRequest
+from backend.refund_allocation_models import ReturnRefundAllocation
 from backend.services.refund_state import apply_provider_refund_status
 
 
@@ -82,6 +83,42 @@ def main() -> int:
         db.add_all([currency_order, amount_order, valid_order])
         db.flush()
 
+        product = Product(
+            sku=f"REFUND-REVIEW-{token}",
+            title="Refund reconciliation smoke product",
+            slug=f"refund-reconciliation-{token}",
+            brand="FLASHIN",
+            price=1000.0,
+            currency="RUB",
+            category="Testing",
+            gender="unisex",
+            active=True,
+        )
+        variant = ProductVariant(
+            product=product,
+            size="M",
+            color="Black",
+            sku=f"REFUND-REVIEW-V-{token}",
+            stock_qty=3,
+            reserved_qty=0,
+        )
+        db.add_all([product, variant])
+        db.flush()
+        item_by_order: dict[int, OrderItem] = {}
+        for order in (currency_order, amount_order, valid_order):
+            item = OrderItem(
+                order_id=order.id,
+                product_id=product.id,
+                variant_id=variant.id,
+                title=product.title,
+                size="M",
+                quantity=1,
+                price=1000.0,
+            )
+            db.add(item)
+            db.flush()
+            item_by_order[int(order.id)] = item
+
         currency_return = ReturnRequest(
             order_id=currency_order.id,
             customer_id=customer.id,
@@ -107,6 +144,19 @@ def main() -> int:
             refund_amount=400.0,
         )
         db.add_all([currency_return, amount_return, valid_return])
+        db.flush()
+        db.add(
+            ReturnRefundAllocation(
+                return_request_id=valid_return.id,
+                order_id=valid_order.id,
+                order_item_id=item_by_order[int(valid_order.id)].id,
+                component_kind="item",
+                component_key=f"item:{item_by_order[int(valid_order.id)].id}",
+                quantity_evidence=None,
+                amount_cents=40000,
+                policy_version=1,
+            )
+        )
         db.commit()
 
         provider_payloads = {
@@ -246,6 +296,7 @@ def main() -> int:
                     "provider_calls": len(provider_calls),
                     "automatic_rechecks_after_review": 0,
                     "terminal_stale_observations_ignored": 4,
+                    "valid_refund_allocation_evidence": True,
                 },
                 ensure_ascii=False,
                 indent=2,
