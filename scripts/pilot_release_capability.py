@@ -269,11 +269,37 @@ WEBHOOK_AMBIGUITY_REQUIRED_FILES = {
 }
 REQUIRED_FILES |= WEBHOOK_AMBIGUITY_REQUIRED_FILES
 
+# Item-level refund money allocation is part of the immutable financial/reverse-logistics contract.
+REFUND_ITEM_ALLOCATION_REQUIRED_FILES = {
+    ".github/workflows/ci.yml",
+    "admin/src/ServiceOperationsPanel.jsx",
+    "admin/src/serviceOperations.js",
+    "admin/src/serviceOperations.test.js",
+    "backend/alembic/env.py",
+    "backend/alembic/versions/0045_refund_item_allocation.py",
+    "backend/api/admin_returns.py",
+    "backend/api/returns.py",
+    "backend/main.py",
+    "backend/refund_allocation_models.py",
+    "backend/schemas.py",
+    "backend/services/moysklad_outbound.py",
+    "backend/services/order_money_allocation.py",
+    "backend/services/refund_allocation.py",
+    "backend/services/refund_state.py",
+    "backend/tests/test_refund_item_allocation.py",
+    "docs/refunds/FINANCIAL_ITEM_ALLOCATION.md",
+    "e2e/tests/admin.spec.js",
+    "scripts/cumulative_refund_smoke.py",
+    "scripts/refund_item_allocation_postgres_smoke.py",
+    "scripts/reverse_logistics_downgrade_guard_smoke.py",
+}
+REQUIRED_FILES |= REFUND_ITEM_ALLOCATION_REQUIRED_FILES
+
 # Keep immutable capability semantics inspectable and maintainable. Every tuple
 # binds one packaged runtime/test surface to concrete behavior, not just presence.
 MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("backend/api/orders.py", ("acquire_pilot_checkout(", "record_pilot_order(")),
-    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 29",)),
+    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 30",)),
     (
         "scripts/pilot_release_capability.py",
         (
@@ -294,6 +320,8 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "REQUIRED_FILES |= MEDIA_ASYNC_TRANSPORT_REQUIRED_FILES",
             "WEBHOOK_AMBIGUITY_REQUIRED_FILES",
             "REQUIRED_FILES |= WEBHOOK_AMBIGUITY_REQUIRED_FILES",
+            "REFUND_ITEM_ALLOCATION_REQUIRED_FILES",
+            "REQUIRED_FILES |= REFUND_ITEM_ALLOCATION_REQUIRED_FILES",
             "MARKER_REQUIREMENTS",
         ),
     ),
@@ -460,10 +488,12 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "scripts/reverse_logistics_downgrade_guard_smoke.py",
         (
-            "0044_media_upload_commit_authority",
+            "0045_refund_item_allocation",
             "uq_products_moysklad_id_nonempty",
             "uq_product_variants_moysklad_id_nonempty",
             "uq_media_assets_upload_key_nonempty",
+            "return_refund_allocations",
+            "refund_allocation_authority_preserved",
             "provider_identity_indexes_preserved",
         ),
     ),
@@ -914,6 +944,120 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "Do not replay merely because FLASHIN did not receive a successful response.",
             "review/mark-sent",
             "receiver_confirmed_not_processed",
+        ),
+    ),
+    (
+        "backend/alembic/versions/0045_refund_item_allocation.py",
+        (
+            "0045_refund_item_allocation",
+            "0044_media_upload_commit_authority",
+            "return_refund_allocations",
+            "uq_return_refund_allocation_component",
+            "ck_return_refund_allocation_component_shape",
+        ),
+    ),
+    (
+        "backend/refund_allocation_models.py",
+        (
+            "class ReturnRefundAllocation",
+            "Financial allocation is accounting/client evidence only",
+            "component_kind IN ('item','delivery','goodwill')",
+        ),
+    ),
+    (
+        "backend/services/order_money_allocation.py",
+        (
+            "ORDER_MONEY_POLICY_VERSION = 1",
+            "def allocate_order_money(",
+            "def allocate_quantity_cents(",
+            "Order monetary breakdown does not reconcile",
+        ),
+    ),
+    (
+        "backend/services/refund_allocation.py",
+        (
+            "def ensure_refund_allocation(",
+            "Partial or goodwill refund requires explicit item/delivery/goodwill allocation",
+            "Quantity evidence cannot follow value-only allocation",
+            "does not match quantity-backed line value",
+            "def reconcile_refund_allocations(",
+            '"status": "BLOCKED"',
+        ),
+    ),
+    (
+        "backend/services/refund_state.py",
+        (
+            "validate_persisted_return_allocation",
+            "financial_allocation",
+            "none_financial_refund_is_not_physical_return",
+        ),
+    ),
+    (
+        "backend/api/returns.py",
+        (
+            "ensure_refund_allocation(",
+            "raw_allocations=payload.allocations",
+            '"financial_allocation": allocation_evidence',
+        ),
+    ),
+    (
+        "backend/api/admin_returns.py",
+        (
+            "financial_allocation",
+            "financial_allocation_options",
+            "financial_physical_reconciliation",
+        ),
+    ),
+    (
+        "admin/src/serviceOperations.js",
+        (
+            "buildRefundAllocationPayload",
+            "refundReconciliationLabel",
+            "Для частичного или goodwill refund",
+        ),
+    ),
+    (
+        "admin/src/ServiceOperationsPanel.jsx",
+        (
+            "Allocation товара",
+            "Goodwill / без физического товара",
+            "financial_physical_reconciliation",
+        ),
+    ),
+    (
+        "backend/tests/test_refund_item_allocation.py",
+        (
+            "test_shared_order_money_policy_handles_promo_loyalty_delivery_and_matches_moysklad",
+            "test_quantity_backed_staged_refunds_use_exact_sequential_rounding",
+            "test_inspected_physical_financial_mismatch_requires_review_not_silent_green",
+        ),
+    ),
+    (
+        "scripts/refund_item_allocation_postgres_smoke.py",
+        (
+            "refund item allocation smoke requires PostgreSQL",
+            "over_allocation_blocked",
+            "quantity_backed_rounding_exact",
+            "financial_physical_status",
+        ),
+    ),
+    (
+        ".github/workflows/ci.yml",
+        (
+            "Prove refund item allocation authority",
+            "backend/tests/test_refund_item_allocation.py",
+            "scripts/refund_item_allocation_postgres_smoke.py",
+        ),
+    ),
+    (
+        "docs/refunds/FINANCIAL_ITEM_ALLOCATION.md",
+        (
+            "A financial refund does not restore sellable inventory.",
+            "Partial refunds and goodwill require explicit composition.",
+            "PASS",
+            "PENDING",
+            "REVIEW",
+            "BLOCKED",
         ),
     ),
     (
