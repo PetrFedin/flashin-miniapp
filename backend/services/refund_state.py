@@ -104,6 +104,7 @@ def apply_provider_refund_status(
 
     if normalized_status == "succeeded":
         from .refund_allocation import (
+            REFUND_ALLOCATION_REVIEW_DETAIL,
             RefundAllocationError,
             validate_persisted_return_allocation,
         )
@@ -115,7 +116,10 @@ def apply_provider_refund_status(
                 ret=ret,
             )
         except RefundAllocationError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            raise HTTPException(
+                status_code=409,
+                detail=REFUND_ALLOCATION_REVIEW_DETAIL,
+            ) from exc
 
         order_total = refund_money(order.total_amount, "order total")
         previous_total = completed_refund_total(
