@@ -14,6 +14,7 @@ from .order_money_allocation import (
     ORDER_MONEY_POLICY_VERSION,
     OrderMoneyAllocationError,
     allocate_order_money,
+    allocate_quantity_cents,
     money_cents,
 )
 
@@ -219,10 +220,35 @@ def _validate_specs(
                     f"Refund allocation exceeds remaining value for order item {item_id}"
                 )
             if spec.quantity_evidence is not None:
-                remaining_qty = int(item.quantity) - int(prior_quantities.get(item_id, 0))
+                prior_item_rows = [
+                    row
+                    for row in prior
+                    if row.component_kind == "item"
+                    and int(row.order_item_id or 0) == item_id
+                ]
+                if any(row.quantity_evidence is None for row in prior_item_rows):
+                    raise RefundAllocationError(
+                        f"Quantity evidence cannot follow value-only allocation for order item {item_id}"
+                    )
+                consumed_qty = int(prior_quantities.get(item_id, 0))
+                remaining_qty = int(item.quantity) - consumed_qty
                 if spec.quantity_evidence > remaining_qty:
                     raise RefundAllocationError(
                         f"Refund quantity evidence exceeds remaining sold quantity for order item {item_id}"
+                    )
+                try:
+                    expected_cents = allocate_quantity_cents(
+                        line_total_cents=int(line_capacity[item_id]),
+                        total_quantity=int(item.quantity),
+                        quantity=int(spec.quantity_evidence),
+                        consumed_quantity=consumed_qty,
+                        consumed_cents=int(prior_item_cents.get(item_id, 0)),
+                    )
+                except OrderMoneyAllocationError as exc:
+                    raise RefundAllocationError(str(exc)) from exc
+                if int(spec.amount_cents) != int(expected_cents):
+                    raise RefundAllocationError(
+                        f"Refund amount for order item {item_id} does not match quantity-backed line value"
                     )
         elif spec.component_kind == "delivery":
             if spec.amount_cents > policy.delivery_cents - prior_delivery:
