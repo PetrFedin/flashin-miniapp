@@ -1,9 +1,15 @@
+import asyncio
+from types import SimpleNamespace
+
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from backend.api import refund_webhooks as refund_webhooks_api
 from backend.database import engine, get_db
 from backend.main import app
+from backend.refund_allocation_models import ReturnRefundAllocation
+from backend.services.refund_allocation import REFUND_ALLOCATION_REVIEW_DETAIL
 from backend.models import (
     Customer,
     InventoryMovement,
@@ -70,17 +76,17 @@ def test_refund_webhook_uses_authoritative_provider_state_is_idempotent_and_inve
         )
         db.add(order)
         db.flush()
-        db.add(
-            OrderItem(
-                order_id=order.id,
-                product_id=product.id,
-                variant_id=variant.id,
-                title=product.title,
-                size=variant.size,
-                quantity=1,
-                price=1000,
-            )
+        order_item = OrderItem(
+            order_id=order.id,
+            product_id=product.id,
+            variant_id=variant.id,
+            title=product.title,
+            size=variant.size,
+            quantity=1,
+            price=1000,
         )
+        db.add(order_item)
+        db.flush()
         db.add(
             InventoryMovement(
                 order_id=order.id,
@@ -103,6 +109,19 @@ def test_refund_webhook_uses_authoritative_provider_state_is_idempotent_and_inve
             refund_amount=1000,
         )
         db.add(ret)
+        db.flush()
+        db.add(
+            ReturnRefundAllocation(
+                return_request_id=ret.id,
+                order_id=order.id,
+                order_item_id=order_item.id,
+                component_kind="item",
+                component_key=f"item:{order_item.id}",
+                quantity_evidence=1,
+                amount_cents=100000,
+                policy_version=1,
+            )
+        )
         db.commit()
         order_id = order.id
         return_id = ret.id
@@ -184,3 +203,74 @@ def test_refund_webhook_uses_authoritative_provider_state_is_idempotent_and_inve
         if outer_transaction.is_active:
             outer_transaction.rollback()
         connection.close()
+
+
+def test_legacy_refund_webhook_missing_allocation_is_acknowledged_into_review(monkeypatch):
+    order = SimpleNamespace(id=91, currency="RUB")
+    ret = SimpleNamespace(
+        id=92,
+        order_id=91,
+        refund_amount=300.0,
+        provider_refund_id="refund-legacy-allocation",
+        status="refund_pending",
+    )
+    rollbacks = []
+    review_calls = []
+
+    class _Db:
+        def rollback(self):
+            rollbacks.append(True)
+
+    async def fake_fetch(refund_id):
+        assert refund_id == ret.provider_refund_id
+        return {
+            "id": refund_id,
+            "status": "succeeded",
+            "amount": {"value": "300.00", "currency": "RUB"},
+        }
+
+    monkeypatch.setattr(refund_webhooks_api, "require_payment_execution", lambda: None)
+    monkeypatch.setattr(refund_webhooks_api, "fetch_yookassa_refund", fake_fetch)
+    monkeypatch.setattr(
+        refund_webhooks_api,
+        "lock_return_request_for_provider_refund",
+        lambda _db, _refund_id: (order, ret),
+    )
+    monkeypatch.setattr(
+        refund_webhooks_api,
+        "apply_provider_refund_status",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            HTTPException(
+                status_code=409,
+                detail=REFUND_ALLOCATION_REVIEW_DETAIL,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        refund_webhooks_api,
+        "mark_refund_review_required",
+        lambda _db, *, return_id, order_id: (
+            review_calls.append((return_id, order_id)) or True
+        ),
+    )
+
+    result = asyncio.run(
+        refund_webhooks_api._process_refund_webhook(
+            {
+                "event": "refund.succeeded",
+                "object": {"id": ret.provider_refund_id},
+            },
+            _Db(),
+        )
+    )
+
+    assert result == {
+        "ok": True,
+        "refund_id": ret.provider_refund_id,
+        "return_id": ret.id,
+        "order_id": order.id,
+        "review_required": True,
+        "review_code": "financial_allocation_evidence",
+    }
+    assert rollbacks == [True]
+    assert review_calls == [(ret.id, order.id)]
