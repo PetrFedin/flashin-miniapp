@@ -13,6 +13,7 @@ from . import checkout_models as _checkout_models  # noqa: F401
 from . import model_constraints as _model_constraints  # noqa: F401
 from . import notification_models as _notification_models  # noqa: F401
 from . import provider_models as _provider_models  # noqa: F401
+from . import refund_allocation_models as _refund_allocation_models  # noqa: F401
 from .api.admin import router as admin_router
 from .api.admin_auth import router as admin_auth_router
 from .api.admin_notifications import router as admin_notifications_router
