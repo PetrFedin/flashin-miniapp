@@ -9,10 +9,12 @@ import {
   RETURN_STATUS_LABELS,
   SUPPORT_PRIORITY_LABELS,
   SUPPORT_STATUS_LABELS,
+  buildRefundAllocationPayload,
   canApproveReturn,
   canProcessPrivacy,
   normalizeAdminAssignment,
   normalizeRefundAmount,
+  refundReconciliationLabel,
   serviceAttentionCount,
   supportTransitions,
 } from "./serviceOperations.js";
@@ -53,6 +55,7 @@ export default function ServiceOperationsPanel({ onUnauthorized, session }) {
   const [sectionErrors, setSectionErrors] = useState({});
   const [supportDrafts, setSupportDrafts] = useState({});
   const [refundAmounts, setRefundAmounts] = useState({});
+  const [refundAllocationDrafts, setRefundAllocationDrafts] = useState({});
   const [busyKeys, setBusyKeys] = useState(() => new Set());
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -139,6 +142,20 @@ export default function ServiceOperationsPanel({ onUnauthorized, session }) {
     run("initial-service-load", load);
   }, [canSupport, canPrivacyRead, canReturnsRead]);
 
+  function refundAllocationDraft(returnId) {
+    return refundAllocationDrafts[returnId] || {};
+  }
+
+  function setRefundAllocationComponent(returnId, key, value) {
+    setRefundAllocationDrafts((current) => ({
+      ...current,
+      [returnId]: {
+        ...(current[returnId] || {}),
+        [key]: value,
+      },
+    }));
+  }
+
   function supportDraft(ticket) {
     return supportDrafts[ticket.id] || {
       status: ticket.status,
@@ -223,22 +240,42 @@ export default function ServiceOperationsPanel({ onUnauthorized, session }) {
       setError("Недостаточно прав: подтверждение refund требует refunds.write.");
       return;
     }
-    const rawAmount = refundAmounts[item.id] ?? item.refundable_balance;
+    const fixedAllocation = Number(item.financial_allocation?.allocated_cents || 0) > 0;
+    const rawAmount = refundAmounts[item.id]
+      ?? (fixedAllocation && Number(item.refund_amount) > 0
+        ? item.refund_amount
+        : item.refundable_balance);
     const validation = normalizeRefundAmount(rawAmount, item.refundable_balance);
     if (validation.error) {
       setError(validation.error);
       return;
     }
     const amount = validation.value;
+    const allocation = buildRefundAllocationPayload(
+      item,
+      refundAllocationDraft(item.id),
+      amount,
+    );
+    if (allocation.error) {
+      setError(allocation.error);
+      return;
+    }
+    const componentNote = allocation.allocations.length
+      ? ` Финансовых компонентов: ${allocation.allocations.length}.`
+      : " Полный остаток будет распределён по authoritative order-money policy.";
     if (!window.confirm(
-      `Подтвердить возврат #${item.id} по заказу #${item.order_id} на ${money(amount, item.currency)}?`,
+      `Подтвердить возврат #${item.id} по заказу #${item.order_id} на ${money(amount, item.currency)}?${componentNote}`,
     )) return;
 
     const result = await run(
       `return-${item.id}`,
       () => adminJson("/api/returns/admin/approve", {
         method: "POST",
-        body: JSON.stringify({ return_id: item.id, amount }),
+        body: JSON.stringify({
+          return_id: item.id,
+          amount,
+          allocations: allocation.allocations,
+        }),
       }),
       `Возврат #${item.id} передан платёжному провайдеру.`,
     );
