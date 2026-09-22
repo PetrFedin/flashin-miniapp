@@ -16,7 +16,6 @@ from .order_money_allocation import (
     allocate_order_money,
     money_cents,
 )
-from .refund_state import refund_money
 
 _FINAL_REFUND_STATUSES = {"approved", "approved_partial"}
 _RESERVING_REFUND_STATUSES = {
@@ -357,6 +356,31 @@ def ensure_refund_allocation(
     return allocation_summary(specs, requested_cents)
 
 
+def validate_persisted_return_allocation(
+    db: Session,
+    *,
+    order: Order,
+    ret: ReturnRequest,
+) -> dict[str, object]:
+    specs = _persisted_specs(db, int(ret.id))
+    if not specs:
+        raise RefundAllocationError(
+            "Refund cannot be finalized without financial allocation evidence"
+        )
+    try:
+        expected_cents = money_cents(ret.refund_amount, "refund amount")
+    except OrderMoneyAllocationError as exc:
+        raise RefundAllocationError(str(exc)) from exc
+    _validate_specs(
+        db,
+        order=order,
+        ret=ret,
+        requested_cents=expected_cents,
+        specs=specs,
+    )
+    return allocation_summary(specs, expected_cents)
+
+
 def allocation_summary(
     specs: Iterable[RefundAllocationSpec],
     requested_cents: int,
@@ -568,6 +592,25 @@ def reconcile_refund_allocations(
             codes.append("completed_refund_allocation_total_mismatch")
         if final_allocation_cents > int(policy.order_total_cents):
             codes.append("financial_allocation_exceeds_order_total")
+
+        open_return_exists = (
+            db.query(ReturnRequest.id)
+            .filter(
+                ReturnRequest.order_id == order_id,
+                ReturnRequest.status.in_(
+                    [
+                        "requested",
+                        "processing",
+                        "refund_retry_required",
+                        "refund_review_required",
+                        "refund_pending",
+                    ]
+                ),
+            )
+            .first()
+            is not None
+        )
+        pending_allocation = pending_allocation or open_return_exists
 
         physical_item, physical_case_count, open_case_exists = _physical_value_by_item(
             db,
