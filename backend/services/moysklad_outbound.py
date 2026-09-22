@@ -4,7 +4,7 @@ import base64
 import json
 import uuid
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
 import httpx
@@ -13,6 +13,11 @@ from sqlalchemy.orm import Session
 from ..config import get_settings
 from ..models import Order, OrderItem, Product, ProductVariant, ReturnRequest
 from ..provider_models import ProviderCommand
+from .order_money_allocation import (
+    OrderMoneyAllocationError,
+    allocate_net_line_totals,
+    money_cents,
+)
 from .provider_commands import enqueue_provider_command
 from .runtime_capabilities import moysklad_execution_enabled
 
@@ -58,12 +63,9 @@ class _SalesReturnSnapshot:
 
 def _money_cents(value: object, field: str) -> int:
     try:
-        amount = Decimal(str(value)).quantize(_MONEY, rounding=ROUND_HALF_UP)
-    except (InvalidOperation, TypeError, ValueError) as exc:
-        raise MoySkladReviewRequired(f"Invalid {field}") from exc
-    if not amount.is_finite() or amount < 0:
-        raise MoySkladReviewRequired(f"Invalid {field}")
-    return int((amount * 100).to_integral_value(rounding=ROUND_HALF_UP))
+        return money_cents(value, field)
+    except OrderMoneyAllocationError as exc:
+        raise MoySkladReviewRequired(str(exc)) from exc
 
 
 def _headers() -> dict[str, str]:
@@ -209,43 +211,12 @@ def _load_order_items(
 
 def _allocate_net_line_totals(
     order: Order,
-    items: list[tuple[OrderItem, ProductVariant, Product]],
+    items: list[tuple[OrderItem, ProductVariant | None, Product | None]],
 ) -> list[int]:
-    gross_lines = [
-        _money_cents(item.price, "order item price") * item.quantity
-        for item, _, _ in items
-    ]
-    gross_total = sum(gross_lines)
-    if gross_total <= 0:
-        raise MoySkladReviewRequired("Order merchandise total must be positive")
-
-    discount = _money_cents(order.discount_amount, "order discount")
-    loyalty = _money_cents(order.loyalty_discount_amount, "loyalty discount")
-    delivery = _money_cents(order.delivery_price, "delivery price")
-    order_total = _money_cents(order.total_amount, "order total")
-    merchandise_target = gross_total - discount - loyalty
-    if merchandise_target < 0 or merchandise_target + delivery != order_total:
-        raise MoySkladReviewRequired(
-            "Order monetary breakdown does not reconcile before MoySklad export"
-        )
-
-    remaining_target = merchandise_target
-    remaining_gross = gross_total
-    line_totals: list[int] = []
-    for index, gross in enumerate(gross_lines):
-        if index == len(gross_lines) - 1:
-            allocated = remaining_target
-        else:
-            allocated = (gross * remaining_target) // remaining_gross
-        if allocated < 0 or allocated > gross:
-            raise MoySkladReviewRequired("Order discount allocation is invalid")
-        line_totals.append(allocated)
-        remaining_target -= allocated
-        remaining_gross -= gross
-    if sum(line_totals) != merchandise_target:
-        raise MoySkladReviewRequired("Order discount allocation did not reconcile")
-    return line_totals
-
+    try:
+        return allocate_net_line_totals(order, [item for item, _, _ in items])
+    except OrderMoneyAllocationError as exc:
+        raise MoySkladReviewRequired(str(exc)) from exc
 
 def _require_clean_export_session(db: Session) -> None:
     if db.in_transaction():
