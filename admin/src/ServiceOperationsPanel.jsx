@@ -422,6 +422,27 @@ export default function ServiceOperationsPanel({ onUnauthorized, session }) {
                   {` · доступно ${money(item.refundable_balance, item.currency)}`}
                   {` · возвращено ${money(item.refunded_total, item.currency)}`}
                 </small>
+                <div className="service-financial-evidence">
+                  <small>
+                    {refundReconciliationLabel(item.financial_physical_reconciliation?.status)}
+                    {item.financial_physical_reconciliation?.codes?.length
+                      ? ` · ${item.financial_physical_reconciliation.codes.join(", ")}`
+                      : ""}
+                  </small>
+                  {Number(item.financial_allocation?.allocated_cents || 0) > 0 && (
+                    <small>
+                      {`Allocation: ${money(Number(item.financial_allocation.allocated_cents || 0) / 100, item.currency)}`}
+                      {` · товары ${money(Number(item.financial_allocation.item_cents || 0) / 100, item.currency)}`}
+                      {` · доставка ${money(Number(item.financial_allocation.delivery_cents || 0) / 100, item.currency)}`}
+                      {` · goodwill ${money(Number(item.financial_allocation.goodwill_cents || 0) / 100, item.currency)}`}
+                    </small>
+                  )}
+                  {(item.financial_physical_reconciliation?.lines || []).map((line) => (
+                    <small key={line.order_item_id}>
+                      {`Item #${line.order_item_id}: financial ${money(Number(line.financial_cents || 0) / 100, item.currency)} · physical ${money(Number(line.physical_cents || 0) / 100, item.currency)} · delta ${money(Number(line.delta_cents || 0) / 100, item.currency)}`}
+                    </small>
+                  ))}
+                </div>
                 {canRefundsWrite && (
                   <div className="service-controls">
                     <label>
@@ -432,14 +453,84 @@ export default function ServiceOperationsPanel({ onUnauthorized, session }) {
                         min="0.01"
                         step="0.01"
                         max={item.refundable_balance}
-                        value={refundAmounts[item.id] ?? item.refundable_balance}
+                        value={refundAmounts[item.id] ?? (
+                          Number(item.financial_allocation?.allocated_cents || 0) > 0
+                            ? item.refund_amount
+                            : item.refundable_balance
+                        )}
                         onChange={(event) => setRefundAmounts((current) => ({
                           ...current,
                           [item.id]: event.target.value,
                         }))}
-                        disabled={!canApproveReturn(item) || isBusy(`return-${item.id}`)}
+                        disabled={
+                          !canApproveReturn(item)
+                          || isBusy(`return-${item.id}`)
+                          || Number(item.financial_allocation?.allocated_cents || 0) > 0
+                        }
                       />
                     </label>
+                    {Number(item.financial_allocation?.allocated_cents || 0) === 0 && (
+                      <>
+                        {(item.financial_allocation_options?.items || []).map((line) => (
+                          <label key={line.order_item_id}>
+                            {line.title}{line.size ? ` · ${line.size}` : ""}
+                            {` · осталось ${money(Number(line.remaining_cents || 0) / 100, item.currency)}`}
+                            <input
+                              aria-label={`Allocation товара ${item.id} ${line.order_item_id}`}
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              max={Number(line.remaining_cents || 0) / 100}
+                              placeholder="0.00"
+                              value={refundAllocationDraft(item.id)[`item:${line.order_item_id}`] ?? ""}
+                              onChange={(event) => setRefundAllocationComponent(
+                                item.id,
+                                `item:${line.order_item_id}`,
+                                event.target.value,
+                              )}
+                              disabled={!canApproveReturn(item) || isBusy(`return-${item.id}`)}
+                            />
+                          </label>
+                        ))}
+                        {Number(item.financial_allocation_options?.delivery_remaining_cents || 0) > 0 && (
+                          <label>
+                            Доставка
+                            <input
+                              aria-label={`Allocation доставки ${item.id}`}
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              max={Number(item.financial_allocation_options.delivery_remaining_cents || 0) / 100}
+                              placeholder="0.00"
+                              value={refundAllocationDraft(item.id).delivery ?? ""}
+                              onChange={(event) => setRefundAllocationComponent(
+                                item.id,
+                                "delivery",
+                                event.target.value,
+                              )}
+                              disabled={!canApproveReturn(item) || isBusy(`return-${item.id}`)}
+                            />
+                          </label>
+                        )}
+                        <label>
+                          Goodwill / без физического товара
+                          <input
+                            aria-label={`Allocation goodwill ${item.id}`}
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            placeholder="0.00"
+                            value={refundAllocationDraft(item.id).goodwill ?? ""}
+                            onChange={(event) => setRefundAllocationComponent(
+                              item.id,
+                              "goodwill",
+                              event.target.value,
+                            )}
+                            disabled={!canApproveReturn(item) || isBusy(`return-${item.id}`)}
+                          />
+                        </label>
+                      </>
+                    )}
                     <button
                       className={item.status.includes("review") || item.status.includes("retry") ? "danger" : ""}
                       onClick={() => approveReturn(item)}
