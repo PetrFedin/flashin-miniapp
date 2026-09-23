@@ -7,6 +7,7 @@ import threading
 import sys
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,6 +18,7 @@ from backend.database import SessionLocal, engine
 from backend.models import Customer, InventoryMovement, Order, OrderItem, Product, ProductVariant, ReturnRequest
 from backend.provider_models import ProviderCommand
 from backend.reverse_logistics_models import ReturnLogisticsCase, ReturnLogisticsItem
+from backend.services.refund_allocation import ensure_refund_allocation
 from backend.services.refund_state import apply_provider_refund_status
 from backend.services.reverse_logistics import (
     authorize_item,
@@ -27,7 +29,14 @@ from backend.services.reverse_logistics import (
 )
 
 
-def _fixture(db, token: str, suffix: str, quantity: int = 3):
+def _fixture(
+    db,
+    token: str,
+    suffix: str,
+    quantity: int = 3,
+    *,
+    goodwill: bool = False,
+):
     customer = Customer(telegram_id=f"reverse-{token}-{suffix}", first_name="Reverse")
     product = Product(
         sku=f"REV-{token}-{suffix}",
@@ -81,6 +90,24 @@ def _fixture(db, token: str, suffix: str, quantity: int = 3):
         refund_amount=float(quantity * 100),
     )
     db.add_all([order_item, ret])
+    db.flush()
+    allocations = []
+    if goodwill:
+        allocations = [
+            SimpleNamespace(
+                component_kind="goodwill",
+                order_item_id=None,
+                quantity_evidence=None,
+                amount=float(quantity * 100),
+            )
+        ]
+    ensure_refund_allocation(
+        db,
+        order=order,
+        ret=ret,
+        requested_amount=ret.refund_amount,
+        raw_allocations=allocations,
+    )
     db.commit()
     return customer.id, order.id, order_item.id, variant.id, ret.id
 
@@ -271,7 +298,13 @@ def main() -> int:
         assert movements[0].reserved_after == movements[0].reserved_before
         assert str(movements[0].source).startswith("reverse_logistics_event:")
 
-        _, goodwill_order_id, _, goodwill_variant_id, goodwill_return_id = _fixture(db, token, "goodwill", quantity=1)
+        _, goodwill_order_id, _, goodwill_variant_id, goodwill_return_id = _fixture(
+            db,
+            token,
+            "goodwill",
+            quantity=1,
+            goodwill=True,
+        )
         goodwill_order = db.query(Order).filter(Order.id == goodwill_order_id).one()
         goodwill_ret = db.query(ReturnRequest).filter(ReturnRequest.id == goodwill_return_id).one()
         goodwill_stock = db.query(ProductVariant).filter(ProductVariant.id == goodwill_variant_id).one().stock_qty
