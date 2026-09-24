@@ -52,6 +52,7 @@ from backend.services.fulfillment_locking import lock_fulfillment_task_for_updat
 from backend.services.inventory import reserve_variant
 from backend.services.moysklad_reverse_return import enqueue_moysklad_physical_sales_return
 from backend.services.payment_settlement import settle_paid_order
+from backend.services.refund_allocation import ensure_refund_allocation
 from backend.services.refund_state import apply_provider_refund_status
 from backend.services.reverse_logistics import (
     authorize_item,
@@ -277,6 +278,14 @@ def main() -> int:
         )
         db.add(ret)
         db.flush()
+        allocation = ensure_refund_allocation(
+            db,
+            order=paid_order,
+            ret=ret,
+            requested_amount=ret.refund_amount,
+            raw_allocations=[],
+        )
+        assert allocation["allocated_cents"] == 1800000
         result = apply_provider_refund_status(db, ret, paid_order, "succeeded")
         assert result["inventory_effect"] == "none_financial_refund_is_not_physical_return"
         assert result["physical_return_required_for_stock"] is True

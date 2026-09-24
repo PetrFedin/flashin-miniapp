@@ -5,7 +5,9 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..services.payments import fetch_yookassa_refund
 from ..services.pilot_circuit_breaker import PilotCircuitBreakerError, trip_pilot_circuit_breaker
+from ..services.refund_allocation import REFUND_ALLOCATION_REVIEW_DETAIL
 from ..services.refund_locking import lock_return_request_for_provider_refund
+from ..services.refund_review import mark_refund_review_required
 from ..services.runtime_capabilities import require_payment_execution
 from ..services.refund_state import (
     apply_provider_refund_status,
@@ -96,7 +98,27 @@ async def _process_refund_webhook(payload: dict, db: Session):
         }
     except HTTPException as exc:
         order_id = locals().get("order_id") or getattr(locals().get("order"), "id", None)
+        return_id = getattr(locals().get("ret"), "id", None)
         db.rollback()
+        if (
+            order_id
+            and return_id
+            and exc.status_code == 409
+            and exc.detail == REFUND_ALLOCATION_REVIEW_DETAIL
+        ):
+            if mark_refund_review_required(
+                db,
+                return_id=int(return_id),
+                order_id=int(order_id),
+            ):
+                return {
+                    "ok": True,
+                    "refund_id": refund_id,
+                    "return_id": int(return_id),
+                    "order_id": int(order_id),
+                    "review_required": True,
+                    "review_code": "financial_allocation_evidence",
+                }
         if order_id and exc.status_code == 409 and "amount" in str(exc.detail).lower():
             _trip_after_rollback(
                 int(order_id),

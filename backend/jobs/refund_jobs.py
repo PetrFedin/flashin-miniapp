@@ -4,6 +4,8 @@ from sqlalchemy.orm import Session
 from ..models import Order, ReturnRequest
 from ..services.payments import fetch_yookassa_refund
 from ..services.runtime_capabilities import payment_execution_enabled
+from ..services.refund_locking import lock_return_request_for_known_order
+from ..services.refund_review import mark_refund_review_required
 from ..services.refund_state import (
     apply_provider_refund_status,
     provider_refund_amount,
@@ -23,28 +25,11 @@ def _mark_refund_review_required(
     return_id: int,
     order_id: int,
 ) -> bool:
-    """Persist a durable admin-visible review state for one refund anomaly."""
-    ret = (
-        db.query(ReturnRequest)
-        .filter(ReturnRequest.id == return_id)
-        .with_for_update()
-        .first()
+    return mark_refund_review_required(
+        db,
+        return_id=return_id,
+        order_id=order_id,
     )
-    order = (
-        db.query(Order)
-        .filter(Order.id == order_id)
-        .with_for_update()
-        .first()
-    )
-    if not ret or not order or ret.status in _FINAL_STATUSES:
-        db.rollback()
-        return False
-
-    ret.status = "refund_review_required"
-    order.status = "refund_requested"
-    order.payment_status = "refund_review_required"
-    db.commit()
-    return True
 
 
 async def reconcile_pending_refunds(db: Session, limit: int = 50) -> dict[str, int]:
@@ -121,13 +106,11 @@ async def reconcile_pending_refunds(db: Session, limit: int = 50) -> dict[str, i
             continue
 
         try:
-            ret = (
-                db.query(ReturnRequest)
-                .filter(ReturnRequest.id == return_id)
-                .with_for_update()
-                .first()
+            order, ret = lock_return_request_for_known_order(
+                db,
+                return_id,
+                order_id,
             )
-            order = db.query(Order).filter(Order.id == order_id).with_for_update().first()
             if not ret or not order:
                 db.rollback()
                 result["skipped"] += 1

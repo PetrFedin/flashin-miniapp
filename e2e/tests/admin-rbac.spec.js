@@ -51,6 +51,38 @@ const RETURN = {
   provider_refund_id: "",
   provider_payment_id: "pay-rbac",
   provider_payment_status: "succeeded",
+  financial_allocation: {
+    policy_version: 1,
+    allocated_cents: 0,
+    item_cents: 0,
+    delivery_cents: 0,
+    goodwill_cents: 0,
+    components: [],
+  },
+  financial_allocation_options: {
+    policy_version: 1,
+    order_total_cents: 1200000,
+    merchandise_cents: 1200000,
+    delivery_cents: 0,
+    allocated_cents: 0,
+    goodwill_allocated_cents: 0,
+    delivery_remaining_cents: 0,
+    items: [{
+      order_item_id: 1,
+      title: PRODUCT.title,
+      size: "M",
+      ordered_qty: 1,
+      net_total_cents: 1200000,
+      allocated_cents: 0,
+      remaining_cents: 1200000,
+      quantity_evidence_allocated: 0,
+    }],
+  },
+  financial_physical_reconciliation: {
+    status: "PENDING",
+    codes: [],
+    lines: [],
+  },
 };
 
 const SUPPORT = {

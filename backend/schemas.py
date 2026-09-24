@@ -232,9 +232,17 @@ class DeliveryZoneCreate(BaseModel):
     description: str = ""
 
 
+class RefundAllocationIn(BaseModel):
+    component_kind: str
+    order_item_id: int | None = Field(default=None, gt=0)
+    quantity_evidence: int | None = Field(default=None, gt=0)
+    amount: float = Field(gt=0)
+
+
 class RefundApproveIn(BaseModel):
     return_id: int
     amount: float | None = None
+    allocations: list[RefundAllocationIn] = Field(default_factory=list)
 
 
 

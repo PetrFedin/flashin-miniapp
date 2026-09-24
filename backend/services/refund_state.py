@@ -103,6 +103,24 @@ def apply_provider_refund_status(
         return _idempotent_succeeded_result(db, ret, order)
 
     if normalized_status == "succeeded":
+        from .refund_allocation import (
+            REFUND_ALLOCATION_REVIEW_DETAIL,
+            RefundAllocationError,
+            validate_persisted_return_allocation,
+        )
+
+        try:
+            allocation_evidence = validate_persisted_return_allocation(
+                db,
+                order=order,
+                ret=ret,
+            )
+        except RefundAllocationError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=REFUND_ALLOCATION_REVIEW_DETAIL,
+            ) from exc
+
         order_total = refund_money(order.total_amount, "order total")
         previous_total = completed_refund_total(
             db,
@@ -126,6 +144,7 @@ def apply_provider_refund_status(
             "remaining_refundable_amount": float(order_total - cumulative_total),
             "inventory_effect": "none_financial_refund_is_not_physical_return",
             "physical_return_required_for_stock": True,
+            "financial_allocation": allocation_evidence,
         }
 
         if full_refund:

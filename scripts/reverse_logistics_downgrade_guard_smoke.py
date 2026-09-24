@@ -16,7 +16,7 @@ if str(ROOT) not in sys.path:
 
 from backend.database import engine
 
-EXPECTED_HEAD = "0044_media_upload_commit_authority"
+EXPECTED_HEAD = "0045_refund_item_allocation"
 TARGET = "0040_delivery_authority"
 ERROR_FRAGMENT = "0041 downgrade blocked: reverse-logistics evidence exists"
 
@@ -100,13 +100,15 @@ def main() -> int:
         )
 
     # PostgreSQL transactional DDL must restore 0041 physical authority, the
-    # 0042 concurrency indexes, 0043 provider-identity uniqueness and 0044 media
-    # upload authority after 0041 rejects the downgrade chain.
+    # 0042 concurrency indexes, 0043 provider-identity uniqueness, 0044 media
+    # upload authority and 0045 refund-allocation evidence after 0041 rejects
+    # the downgrade chain.
     assert revision == EXPECTED_HEAD, revision
     assert {
         "return_logistics_cases",
         "return_logistics_items",
         "return_logistics_events",
+        "return_refund_allocations",
     } <= tables
     assert "uq_inventory_movement_core_kind" in inventory_indexes
     assert "uq_inventory_movement_reverse_event_source" in inventory_indexes
@@ -128,6 +130,7 @@ def main() -> int:
             "concurrency_indexes_preserved": True,
             "provider_identity_indexes_preserved": True,
             "media_upload_authority_preserved": True,
+            "refund_allocation_authority_preserved": True,
             "transactional_ddl_preserved": True,
         }
     )

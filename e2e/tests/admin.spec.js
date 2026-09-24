@@ -157,6 +157,43 @@ async function mockAdminApi(page) {
     provider_refund_id: "",
     provider_payment_id: "pay-9002",
     provider_payment_status: "succeeded",
+    financial_allocation: {
+      policy_version: 1,
+      allocated_cents: 0,
+      item_cents: 0,
+      delivery_cents: 0,
+      goodwill_cents: 0,
+      components: [],
+    },
+    financial_allocation_options: {
+      policy_version: 1,
+      order_total_cents: 900000,
+      merchandise_cents: 900000,
+      delivery_cents: 0,
+      allocated_cents: 0,
+      goodwill_allocated_cents: 0,
+      delivery_remaining_cents: 0,
+      items: [{
+        order_item_id: 2,
+        title: "Pilot Trousers",
+        size: "M",
+        ordered_qty: 1,
+        net_total_cents: 900000,
+        allocated_cents: 0,
+        remaining_cents: 900000,
+        quantity_evidence_allocated: 0,
+      }],
+    },
+    financial_physical_reconciliation: {
+      status: "PENDING",
+      codes: [],
+      lines: [{
+        order_item_id: 2,
+        financial_cents: 0,
+        physical_cents: 0,
+        delta_cents: 0,
+      }],
+    },
   }];
 
   await page.route("http://localhost:8000/**", async (route) => {
@@ -264,6 +301,24 @@ async function mockAdminApi(page) {
           refunded_total: body.amount,
           refundable_balance: Math.max(0, item.refundable_balance - body.amount),
           provider_refund_id: "refund-pilot-801",
+          financial_allocation: {
+            policy_version: 1,
+            allocated_cents: Math.round(body.amount * 100),
+            item_cents: Math.round(body.amount * 100),
+            delivery_cents: 0,
+            goodwill_cents: 0,
+            components: body.allocations || [],
+          },
+          financial_physical_reconciliation: {
+            status: "PENDING",
+            codes: [],
+            lines: [{
+              order_item_id: 2,
+              financial_cents: Math.round(body.amount * 100),
+              physical_cents: 0,
+              delta_cents: Math.round(body.amount * 100),
+            }],
+          },
         }
         : item);
       return json(returnRequests.find((item) => item.id === body.return_id));
@@ -422,6 +477,7 @@ test("Admin completes support, privacy and refund service operations", async ({ 
   await expect(privacyQueue.locator(".service-item-heading span")).toHaveText("Исполнен");
 
   await page.getByLabel("Сумма возврата 801").fill("4500");
+  await page.getByLabel("Allocation товара 801 2").fill("4500");
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Подтвердить refund" }).click();
   await expect(page.getByRole("status")).toContainText("Возврат #801 передан платёжному провайдеру");

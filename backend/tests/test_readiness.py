@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from backend.api import health
 
 
-CURRENT_HEAD = "0044_media_upload_commit_authority"
+CURRENT_HEAD = "0045_refund_item_allocation"
 
 
 class ScalarResult:

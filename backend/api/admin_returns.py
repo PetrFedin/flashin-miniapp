@@ -7,6 +7,11 @@ from ..models import Customer, Order, ReturnRequest
 from ..reverse_logistics_models import ReturnLogisticsCase
 from ..security import get_current_admin
 from ..services.rbac import has_permission, require_permission
+from ..services.refund_allocation import (
+    reconcile_refund_allocations,
+    refund_allocation_options,
+    return_request_allocation_summary,
+)
 from ..services.refund_state import refund_money
 
 router = APIRouter(prefix="/admin/returns", tags=["admin-returns"])
@@ -82,6 +87,7 @@ def list_admin_returns(
 
     zero = refund_money(0, "zero")
     result = []
+    reconciliation_by_order: dict[int, dict] = {}
     for return_request, order, raw_refunded_total, physical_status in rows:
         refunded_total = refund_money(raw_refunded_total, "refunded total")
         refundable_balance = max(
@@ -89,6 +95,16 @@ def list_admin_returns(
             zero,
         )
         customer = customers_by_id.get(return_request.customer_id) if can_read_customer else None
+        reconciliation = reconciliation_by_order.get(int(order.id))
+        if reconciliation is None:
+            reconciliation = reconcile_refund_allocations(db, int(order.id))
+            reconciliation_by_order[int(order.id)] = reconciliation
+        allocation = return_request_allocation_summary(db, int(return_request.id))
+        allocation_options = refund_allocation_options(
+            db,
+            order=order,
+            exclude_return_id=int(return_request.id),
+        )
         result.append(
             {
                 "id": return_request.id,
@@ -105,6 +121,9 @@ def list_admin_returns(
                 "currency": order.currency,
                 "order_status": order.status,
                 "payment_status": order.payment_status,
+                "financial_allocation": allocation,
+                "financial_allocation_options": allocation_options,
+                "financial_physical_reconciliation": reconciliation,
                 "created_at": return_request.created_at,
             }
         )

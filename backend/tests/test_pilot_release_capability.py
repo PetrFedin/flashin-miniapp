@@ -70,7 +70,7 @@ def _release(repo: Path, tmp_path: Path, release_id: str, created_at: str) -> Pa
 
 
 def test_signed_release_capability_is_bound_to_exact_release():
-    assert CAPABILITY_VERSION == 29
+    assert CAPABILITY_VERSION == 30
     secret = "s" * 48
     state = _release_state()
     state["capabilities"] = {
@@ -134,6 +134,13 @@ def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(
         ("backend/services/media_storage.py", "async def save_media(*args, **kwargs): return {}\n", "MediaStorageWriteError"),
         ("backend/tests/test_media_async_transport.py", "def test_placeholder(): pass\n", "test_slow_s3_upload_does_not_block_event_loop"),
         ("backend/services/webhook_delivery.py", "SAFE_RETRY_PRE_DISPATCH = 'broken'\n", "ambiguous_transport"),
+        ("backend/alembic/versions/0045_refund_item_allocation.py", "revision = '0045_refund_item_allocation'\n", "return_refund_allocations"),
+        ("backend/refund_allocation_models.py", "class ReturnRefundAllocation: pass\n", "accounting/client evidence only"),
+        ("backend/services/order_money_allocation.py", "def allocate_order_money(*args): return None\n", "ORDER_MONEY_POLICY_VERSION = 1"),
+        ("backend/services/refund_allocation.py", "def ensure_refund_allocation(*args, **kwargs): pass\n", "reconcile_refund_allocations"),
+        ("backend/tests/test_refund_item_allocation.py", "def test_placeholder(): pass\n", "test_quantity_backed_staged_refunds_use_exact_sequential_rounding"),
+        ("scripts/refund_item_allocation_postgres_smoke.py", "def main(): return 0\n", "over_allocation_blocked"),
+        ("docs/refunds/FINANCIAL_ITEM_ALLOCATION.md", "# Refunds\n", "financial refund does not restore sellable inventory"),
         ("backend/tests/test_webhook_outbox_ambiguity.py", "def test_placeholder(): pass\n", "test_non_2xx_http_outcomes_never_blindly_replay"),
         ("scripts/webhook_outbox_ambiguity_smoke.py", "def main(): return 0\n", "blind_replay_blocked"),
         ("docs/IDEMPOTENCY_CONTRACTS.md", "# Idempotency\n", "Receiver idempotency is not assumed"),
@@ -158,7 +165,7 @@ def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(
         ("scripts/restore_postgres.sh", "#!/usr/bin/env bash\nexit 0\n", "verify-live"),
         ("scripts/deploy_release_gate.py", "#!/usr/bin/env python3\n", "retained under deploy/release/builds"),
         ("scripts/deploy_production.sh", "#!/usr/bin/env bash\n", "deploy_release_gate.py"),
-        ("scripts/pilot_release_contract.py", "CAPABILITY_VERSION = 28\n", "CAPABILITY_VERSION = 29"),
+        ("scripts/pilot_release_contract.py", "CAPABILITY_VERSION = 29\n", "CAPABILITY_VERSION = 30"),
         (
             "backend/services/inventory_movement_contract.py",
             "def movement_transition_valid(movement): return True\n",
@@ -217,7 +224,7 @@ def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(
         (
             "scripts/reverse_logistics_downgrade_guard_smoke.py",
             "def main(): return 0\n",
-            "0044_media_upload_commit_authority",
+            "0045_refund_item_allocation",
         ),
         (
             "backend/tests/test_pilot_database_evidence.py",
