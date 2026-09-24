@@ -357,7 +357,7 @@ def _non_sellable_does_not_create_sync_guard(token: str) -> dict[str, int]:
     return {"local_before_sync": 10, "provider_stock_applied": 8}
 
 
-def _non_resalable_fails_closed_and_keeps_resalable_guard(token: str) -> str:
+def _mixed_without_provider_evidence_fails_closed_and_keeps_resalable_guard(token: str) -> str:
     with SessionLocal() as db:
         case_id = _fixture(
             db,
@@ -373,7 +373,7 @@ def _non_resalable_fails_closed_and_keeps_resalable_guard(token: str) -> str:
             reverse_moysklad._prepare_physical_return_snapshot(db, case_id)
         except MoySkladReviewRequired as exc:
             message = str(exc)
-            assert "damaged/quarantine" in message.lower(), message
+            assert "missing immutable" in message.lower(), message
 
             # Provider export is unresolved/review-required, so the verified
             # resalable unit must remain protected from a stale absolute snapshot.
@@ -397,7 +397,7 @@ def _non_resalable_fails_closed_and_keeps_resalable_guard(token: str) -> str:
                 == 1
             )
             return message
-    raise AssertionError("mixed disposition must require provider reconciliation")
+    raise AssertionError("mixed disposition without provider evidence must fail closed")
 
 
 def main() -> int:
@@ -408,7 +408,7 @@ def main() -> int:
     partial = _all_resalable_partial(token)
     stale_guard = _stale_stock_sync_guard(token)
     non_sellable_sync = _non_sellable_does_not_create_sync_guard(token)
-    review = _non_resalable_fails_closed_and_keeps_resalable_guard(token)
+    review = _mixed_without_provider_evidence_fails_closed_and_keeps_resalable_guard(token)
     print(
         {
             "status": "ok",
@@ -416,8 +416,8 @@ def main() -> int:
             "immutable_money_allocation": "provider_command_payload_v2",
             "stale_provider_stock_guard": stale_guard,
             "non_sellable_stock_sync": non_sellable_sync,
-            "damaged_quarantine_provider_outcome": "review_required_before_external_io",
-            "mixed_resalable_stock_guard": "protected_until_provider_reconciliation",
+            "damaged_quarantine_provider_outcome": "requires explicit separated provider evidence",
+            "mixed_resalable_stock_guard": "protected until separated provider reconciliation",
             "review_reason": review,
         }
     )
