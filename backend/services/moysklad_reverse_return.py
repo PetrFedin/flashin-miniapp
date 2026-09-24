@@ -442,16 +442,19 @@ def _persisted_allocation_payload(
 
 
 def _split_disposition_cents(
-    physical: ReturnLogisticsItem,
+    *,
+    resalable_qty: int,
+    damaged_qty: int,
+    quarantine_qty: int,
     allocated_cents: int,
 ) -> dict[str, int]:
-    remaining_qty = int(physical.inspected_qty)
+    remaining_qty = int(resalable_qty) + int(damaged_qty) + int(quarantine_qty)
     remaining_cents = int(allocated_cents)
     result: dict[str, int] = {}
     for disposition, quantity in (
-        ("resalable", int(physical.resalable_qty)),
-        ("damaged", int(physical.damaged_qty)),
-        ("quarantine", int(physical.quarantine_qty)),
+        ("resalable", int(resalable_qty)),
+        ("damaged", int(damaged_qty)),
+        ("quarantine", int(quarantine_qty)),
     ):
         if quantity <= 0:
             result[disposition] = 0
@@ -556,23 +559,25 @@ def _prepare_physical_return_snapshot(
                 allocated_cents = int(allocated.get("net_total_cents"))
             except (TypeError, ValueError) as exc:
                 raise MoySkladReviewRequired("Physical return monetary allocation line is invalid") from exc
-            if (
-                allocated_qty != int(physical.inspected_qty)
-                or allocated_resalable != int(physical.resalable_qty)
-                or allocated_damaged != int(physical.damaged_qty)
-                or allocated_quarantine != int(physical.quarantine_qty)
-            ):
+            if allocated_qty != int(physical.inspected_qty):
                 raise MoySkladReviewRequired("Physical return monetary allocation quantity mismatch")
+            if allocated_resalable + allocated_damaged + allocated_quarantine != allocated_qty:
+                raise MoySkladReviewRequired("Physical return disposition allocation is inconsistent")
             if allocated_cents < 0:
                 raise MoySkladReviewRequired("Physical return monetary allocation amount is invalid")
             quantity = {
-                "resalable": int(physical.resalable_qty),
-                "damaged": int(physical.damaged_qty),
-                "quarantine": int(physical.quarantine_qty),
+                "resalable": allocated_resalable,
+                "damaged": allocated_damaged,
+                "quarantine": allocated_quarantine,
             }[disposition]
             if quantity <= 0:
                 continue
-            split_cents = _split_disposition_cents(physical, allocated_cents)[disposition]
+            split_cents = _split_disposition_cents(
+                resalable_qty=allocated_resalable,
+                damaged_qty=allocated_damaged,
+                quarantine_qty=allocated_quarantine,
+                allocated_cents=allocated_cents,
+            )[disposition]
             lines.append(
                 _PhysicalReturnLine(
                     order_item_id=int(order_item.id),
