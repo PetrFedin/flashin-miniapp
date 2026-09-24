@@ -13,6 +13,20 @@ export const PHYSICAL_DISPOSITION_LABELS = Object.freeze({
   quarantine: "Карантин",
 });
 
+export const PHYSICAL_PROVIDER_STATUS_LABELS = Object.freeze({
+  not_required: "Не требуется",
+  not_queued: "Не поставлено в очередь",
+  pending: "Ожидает отправки",
+  processing: "Отправляется",
+  sent: "Подтверждено в МойСклад",
+  review_required: "Нужна сверка",
+  failed: "Ошибка — нужна сверка",
+});
+
+export function physicalProviderStatusLabel(status) {
+  return PHYSICAL_PROVIDER_STATUS_LABELS[status] || String(status || "Неизвестно");
+}
+
 const STORAGE_KEY = "flashin.physical-return.idempotency.v1";
 const MAX_ENTRIES = 50;
 
@@ -34,6 +48,7 @@ export function physicalRemaining(item, phase) {
   if (phase === "authorize") return Math.max(Number(item.ordered_qty || 0) - Number(item.authorized_qty || 0), 0);
   if (phase === "receive") return Math.max(Number(item.authorized_qty || 0) - Number(item.received_qty || 0), 0);
   if (phase === "inspect") return Math.max(Number(item.received_qty || 0) - Number(item.inspected_qty || 0), 0);
+  if (phase === "quarantine") return Math.max(Number(item.quarantine_qty || 0), 0);
   return 0;
 }
 
