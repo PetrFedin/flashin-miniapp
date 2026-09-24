@@ -173,6 +173,7 @@ AUTHORITY_REQUIRED_FILES = {
     "backend/tests/test_moysklad_stock_authority_concurrency.py",
     "backend/tests/test_pilot_database_evidence.py",
     "backend/tests/test_production_config.py",
+    "docs/providers/moysklad-disposition-authority.md",
     "scripts/moysklad_disposition_authority_smoke.py",
     "scripts/moysklad_reverse_logistics_contract_smoke.py",
     "scripts/moysklad_stock_authority_concurrency_smoke.py",
@@ -544,6 +545,15 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "/physical/quarantine/resolve",
             "МойСклад · складское распределение",
             "Автоматический повтор неоднозначной операции заблокирован",
+        ),
+    ),
+    (
+        "docs/providers/moysklad-disposition-authority.md",
+        (
+            "three distinct warehouses are mandatory",
+            "GET /report/stock/bystore",
+            "It does not blindly replay the POST",
+            "downgrade below 0046 is blocked",
         ),
     ),
     (
@@ -1198,6 +1208,8 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "name: Reverse Logistics State",
             "python scripts/reverse_logistics_state_smoke.py",
             "python scripts/moysklad_reverse_logistics_contract_smoke.py",
+            "python -m pytest -q backend/tests/test_moysklad_disposition_authority.py",
+            "python scripts/moysklad_disposition_authority_smoke.py",
             "python -m pytest -q backend/tests/test_moysklad_reverse_return_allocation.py",
             "python scripts/moysklad_stock_authority_concurrency_smoke.py",
             "python scripts/reverse_logistics_downgrade_guard_smoke.py",
