@@ -80,12 +80,19 @@ class _QuarantineMoveSnapshot:
     target_store_id: str
 
 
-def _command_key(case_id: int, disposition: str = "resalable") -> str:
-    if disposition == "resalable":
-        # Preserve the historical key so already durable fully-resalable
-        # commands retain their exact idempotency identity.
+def _command_key(
+    case_id: int,
+    disposition: str = "resalable",
+    *,
+    separated: bool = False,
+) -> str:
+    if disposition == "resalable" and not separated:
+        # Preserve the historical identity only for genuinely all-resalable
+        # cases. Mixed legacy review_required commands must never be silently
+        # reinterpreted as a partial resalable export.
         return f"physical-return:{int(case_id)}:sales_return:v1"
-    return f"physical-return:{int(case_id)}:{disposition}:sales_return:v1"
+    version = "v2" if disposition == "resalable" else "v1"
+    return f"physical-return:{int(case_id)}:{disposition}:sales_return:{version}"
 
 
 def _quarantine_move_key(event_id: int) -> str:
@@ -338,15 +345,23 @@ def _persisted_allocation_payload(
     command_type = _DISPOSITION_COMMAND_TYPES.get(disposition)
     if command_type is None:
         raise MoySkladReviewRequired("Unsupported physical return provider disposition")
+    expected = _build_physical_return_allocation(db, case_id, lock_order=False)
+    separated = disposition == "resalable" and not bool(expected.get("auto_exportable"))
+    candidate_keys = [_command_key(case_id, disposition, separated=separated)]
+    if disposition == "resalable" and separated:
+        # Inspect legacy v1 only to produce an explicit historical-review error;
+        # it is never accepted as the v2 mixed-disposition authority.
+        candidate_keys.append(_command_key(case_id, disposition, separated=False))
     command = (
         db.query(ProviderCommand)
         .filter(
             ProviderCommand.provider == "moysklad",
-            ProviderCommand.idempotency_key == _command_key(case_id, disposition),
+            ProviderCommand.idempotency_key.in_(candidate_keys),
             ProviderCommand.command_type == command_type,
             ProviderCommand.aggregate_type == "return_logistics_case",
             ProviderCommand.aggregate_id == str(int(case_id)),
         )
+        .order_by(ProviderCommand.id.desc())
         .first()
     )
     if command is None:
@@ -366,7 +381,15 @@ def _persisted_allocation_payload(
         raise MoySkladReviewRequired(
             f"Physical return monetary allocation requires review: {payload['allocation_error']}"
         )
-    expected = _build_physical_return_allocation(db, case_id, lock_order=False)
+    if (
+        disposition == "resalable"
+        and not bool(expected.get("auto_exportable"))
+        and command.idempotency_key == _command_key(case_id, "resalable", separated=False)
+    ):
+        raise MoySkladReviewRequired(
+            "Legacy mixed-disposition physical return command cannot be replayed; "
+            "record separated provider disposition evidence first"
+        )
     persisted_disposition = payload.get("provider_disposition")
     persisted_store_id = payload.get("provider_store_id")
     base_payload = {
@@ -672,7 +695,8 @@ def enqueue_moysklad_physical_sales_return(db: Session, case_id: int):
         )
         if quantity <= 0:
             continue
-        key = _command_key(case_id, disposition)
+        separated = disposition == "resalable" and not bool(base_payload.get("auto_exportable"))
+        key = _command_key(case_id, disposition, separated=separated)
         existing = (
             db.query(ProviderCommand)
             .filter(
