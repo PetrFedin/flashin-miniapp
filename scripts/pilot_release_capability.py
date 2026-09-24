@@ -146,23 +146,34 @@ REQUIRED_FILES |= PRODUCTION_CAPABILITY_REQUIRED_FILES
 # schema authority, physical evidence, signed inventory semantics, provider
 # reconciliation, durable blocked evidence and the state workflow that proves it.
 AUTHORITY_REQUIRED_FILES = {
+    ".env.production.example",
     ".github/workflows/reverse-logistics-state.yml",
+    "admin/src/PhysicalReturnPanel.jsx",
+    "admin/src/physicalReturns.js",
     "backend/alembic/versions/0041_reverse_logistics_authority.py",
     "backend/alembic/versions/0042_moysklad_stock_evidence_concurrency.py",
+    "backend/alembic/versions/0046_moysklad_return_disposition.py",
+    "backend/api/reverse_logistics.py",
+    "backend/config.py",
     "backend/database.py",
+    "backend/jobs/provider_command_jobs.py",
     "backend/models.py",
     "backend/reverse_logistics_models.py",
     "backend/services/inventory_movement_contract.py",
+    "backend/services/moysklad.py",
     "backend/services/moysklad_reverse_return.py",
     "backend/services/moysklad_stock_authority.py",
     "backend/services/pilot_inventory_evidence.py",
     "backend/services/pilot_inventory_safety.py",
     "backend/services/reverse_logistics.py",
     "backend/services/stock_reconciliation.py",
+    "backend/tests/test_moysklad_disposition_authority.py",
     "backend/tests/test_moysklad_reverse_return_allocation.py",
     "backend/tests/test_moysklad_stock_authority.py",
     "backend/tests/test_moysklad_stock_authority_concurrency.py",
     "backend/tests/test_pilot_database_evidence.py",
+    "backend/tests/test_production_config.py",
+    "scripts/moysklad_disposition_authority_smoke.py",
     "scripts/moysklad_reverse_logistics_contract_smoke.py",
     "scripts/moysklad_stock_authority_concurrency_smoke.py",
     "scripts/reverse_logistics_downgrade_guard_smoke.py",
@@ -299,7 +310,7 @@ REQUIRED_FILES |= REFUND_ITEM_ALLOCATION_REQUIRED_FILES
 # binds one packaged runtime/test surface to concrete behavior, not just presence.
 MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("backend/api/orders.py", ("acquire_pilot_checkout(", "record_pilot_order(")),
-    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 30",)),
+    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 31",)),
     (
         "scripts/pilot_release_capability.py",
         (
@@ -327,7 +338,13 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
     (
         ".env.production.example",
-        ("COMMERCIAL_CHECKOUT_ENABLED=false", "PAYMENTS_MODE=disabled", "MOYSKLAD_MODE=disabled"),
+        (
+            "COMMERCIAL_CHECKOUT_ENABLED=false",
+            "PAYMENTS_MODE=disabled",
+            "MOYSKLAD_MODE=disabled",
+            "MOYSKLAD_DAMAGED_STORE_ID=",
+            "MOYSKLAD_QUARANTINE_STORE_ID=",
+        ),
     ),
     (
         "backend/config.py",
@@ -335,6 +352,9 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "commercial_checkout_enabled: bool",
             "payments_mode: str",
             "moysklad_mode: str",
+            "moysklad_damaged_store_id: str",
+            "moysklad_quarantine_store_id: str",
+            "must be three distinct stores",
             "PAYMENTS_MODE must be disabled when production commercial checkout is disabled",
             "PILOT_RUNTIME_ENFORCED must be false when production commercial checkout is disabled",
         ),
@@ -354,7 +374,17 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("backend/api/orders.py", ("require_commercial_checkout", "require_commercial_checkout()", "acquire_pilot_checkout(")),
     ("backend/api/payments.py", ("require_payment_execution", "ProviderPaymentIntegrityError", "trip_pilot_circuit_breaker(")),
     ("backend/services/payments.py", ("require_payment_execution", "async def _request_yookassa(")),
-    ("backend/services/moysklad.py", ("require_moysklad_execution", "async def fetch_assortment(")),
+    (
+        "backend/services/moysklad.py",
+        (
+            "require_moysklad_execution",
+            "async def fetch_assortment(",
+            "async def fetch_stock_by_store(",
+            "/report/stock/bystore",
+            "def _sellable_stock_from_store_row(",
+            "async def fetch_sellable_store_stock_snapshot(",
+        ),
+    ),
     ("backend/jobs/payment_jobs.py", ("payment_execution_enabled", "reconcile_pending_payments")),
     ("backend/jobs/refund_jobs.py", ("payment_execution_enabled", "reconcile_pending_refunds")),
     ("backend/jobs/provider_command_jobs.py", ("moysklad_execution_enabled", "process_provider_commands")),
@@ -453,6 +483,7 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "provider_id_collision",
             "def _placeholder_parent_sku(",
             "sku_variant.moysklad_id = row_provider_id",
+            "fetch_sellable_store_stock_snapshot",
         ),
     ),
     (
@@ -467,6 +498,10 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             'str(variant.moysklad_id or "").strip()',
             "Physical return variant has no exact MoySklad assortment mapping",
+            "moysklad.physical_sales_return.damaged.create",
+            "moysklad.physical_sales_return.quarantine.create",
+            "moysklad.quarantine_move.create",
+            "Legacy mixed-disposition physical return command cannot be replayed",
         ),
     ),
     (
@@ -486,14 +521,57 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     (
+        "backend/alembic/versions/0046_moysklad_return_disposition.py",
+        (
+            "0046_moysklad_return_disposition",
+            "event_type IN ('authorized','received','inspected','reclassified')",
+            "_DOWNGRADE_BLOCKED",
+        ),
+    ),
+    (
+        "backend/api/reverse_logistics.py",
+        (
+            '/physical/quarantine/resolve',
+            "_require_provider_quarantine_receipt",
+            "provider_disposition",
+            "moysklad.physical_sales_return.quarantine.create",
+        ),
+    ),
+    (
+        "admin/src/PhysicalReturnPanel.jsx",
+        (
+            "resolveQuarantine",
+            "/physical/quarantine/resolve",
+            "МойСклад · складское распределение",
+            "Автоматический повтор неоднозначной операции заблокирован",
+        ),
+    ),
+    (
+        "backend/tests/test_moysklad_disposition_authority.py",
+        (
+            "test_mixed_return_creates_three_distinct_provider_outcomes",
+            "test_quarantine_resolution_is_idempotent_and_preserves_initial_inspection",
+            "test_legacy_mixed_v1_command_is_never_silently_replayed",
+        ),
+    ),
+    (
+        "scripts/moysklad_disposition_authority_smoke.py",
+        (
+            "quarantine_resolution_concurrency",
+            "stale_sellable_snapshot_blocked_before_move_confirmation",
+            "provider_catchup_after_move",
+        ),
+    ),
+    (
         "scripts/reverse_logistics_downgrade_guard_smoke.py",
         (
-            "0045_refund_item_allocation",
+            "0046_moysklad_return_disposition",
             "uq_products_moysklad_id_nonempty",
             "uq_product_variants_moysklad_id_nonempty",
             "uq_media_assets_upload_key_nonempty",
             "return_refund_allocations",
             "refund_allocation_authority_preserved",
+            "quarantine_reclassification_authority_preserved",
             "provider_identity_indexes_preserved",
         ),
     ),
