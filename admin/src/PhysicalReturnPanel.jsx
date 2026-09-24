@@ -4,6 +4,7 @@ import { AdminApiError, adminJson } from "./api.js";
 import {
   PHYSICAL_DISPOSITION_LABELS,
   PHYSICAL_RETURN_STATUS_LABELS,
+  physicalProviderStatusLabel,
   clearPhysicalIdempotencyKey,
   getPhysicalIdempotencyKey,
   normalizePhysicalQuantity,
@@ -16,7 +17,9 @@ function defaultDraft(item) {
     authorizeQty: physicalRemaining(item, "authorize") ? String(physicalRemaining(item, "authorize")) : "",
     receiveQty: physicalRemaining(item, "receive") ? String(physicalRemaining(item, "receive")) : "",
     inspectQty: physicalRemaining(item, "inspect") ? String(physicalRemaining(item, "inspect")) : "",
+    quarantineQty: physicalRemaining(item, "quarantine") ? String(physicalRemaining(item, "quarantine")) : "",
     disposition: "resalable",
+    quarantineDisposition: "resalable",
     reason: "",
   };
 }
@@ -160,6 +163,65 @@ export default function PhysicalReturnPanel({ returnItem, canWrite, onChanged, o
     await onChanged?.();
   }
 
+  async function resolveQuarantine(item) {
+    if (!canWrite) {
+      setError("Недостаточно прав: разрешение карантина требует returns.physical.write.");
+      return;
+    }
+    const draft = draftFor(item);
+    const limit = physicalRemaining(item, "quarantine");
+    const validation = normalizePhysicalQuantity(draft.quarantineQty, limit, "Количество из карантина");
+    if (validation.error) {
+      setError(validation.error);
+      return;
+    }
+    const quantity = validation.value;
+    const disposition = String(draft.quarantineDisposition || "resalable");
+    const reason = String(draft.reason || "").trim();
+    const signature = physicalMutationSignature({
+      operation: "quarantine-resolve",
+      returnId: returnItem.id,
+      orderItemId: item.order_item_id,
+      quantity,
+      disposition,
+      reason,
+    });
+    let idempotencyKey;
+    try {
+      idempotencyKey = getPhysicalIdempotencyKey(signature);
+    } catch {
+      setError("Не удалось создать устойчивый ключ разрешения карантина.");
+      return;
+    }
+
+    const result = await run(
+      "physical-quarantine-" + returnItem.id + "-" + item.order_item_id,
+      () => adminJson("/api/admin/returns/" + returnItem.id + "/physical/quarantine/resolve", {
+        method: "POST",
+        headers: { "Idempotency-Key": idempotencyKey },
+        body: JSON.stringify({
+          order_item_id: item.order_item_id,
+          quantity,
+          disposition,
+          reason,
+        }),
+      }),
+      disposition === "resalable"
+        ? "Карантин разрешён: позиция возвращена в продаваемый остаток."
+        : "Карантин разрешён: позиция переведена в повреждённые.",
+    );
+    if (!result) return;
+
+    clearPhysicalIdempotencyKey(signature);
+    setDrafts((current) => {
+      const next = { ...current };
+      delete next[item.order_item_id];
+      return next;
+    });
+    await run("physical-refresh-" + returnItem.id, loadDetail);
+    await onChanged?.();
+  }
+
   async function markTransit() {
     if (!canWrite) {
       setError("Недостаточно прав: физический возврат требует returns.physical.write.");
@@ -200,6 +262,36 @@ export default function PhysicalReturnPanel({ returnItem, canWrite, onChanged, o
           {error && <p className="error-inline" role="alert">{error}</p>}
           {notice && <p className="notice" role="status">{notice}</p>}
 
+          {detail?.provider_disposition && (
+            <div className="service-financial-evidence">
+              <b>МойСклад · складское распределение</b>
+              {["resalable", "damaged", "quarantine"].map((kind) => {
+                const evidence = detail.provider_disposition[kind] || {};
+                return (
+                  <small key={kind}>
+                    {(PHYSICAL_DISPOSITION_LABELS[kind] || kind) + ": " + Number(evidence.quantity || 0) + " шт."}
+                    {" · " + physicalProviderStatusLabel(evidence.status)}
+                    {evidence.external_id ? " · документ " + evidence.external_id : ""}
+                    {evidence.last_error ? " · " + evidence.last_error : ""}
+                  </small>
+                );
+              })}
+              {(detail.provider_disposition.quarantine_resolutions || []).map((resolution) => (
+                <small key={resolution.event_id}>
+                  {"Карантин → " + (PHYSICAL_DISPOSITION_LABELS[resolution.target_disposition] || resolution.target_disposition)
+                    + ": " + resolution.quantity + " шт. · " + physicalProviderStatusLabel(resolution.status)}
+                  {resolution.external_id ? " · перемещение " + resolution.external_id : ""}
+                  {resolution.last_error ? " · " + resolution.last_error : ""}
+                </small>
+              ))}
+              {detail.provider_disposition.reconciliation_required && (
+                <p className="event-warning">
+                  Требуется ручная сверка с МойСклад. Автоматический повтор неоднозначной операции заблокирован.
+                </p>
+              )}
+            </div>
+          )}
+
           {detail?.items?.map((item) => {
             const draft = draftFor(item);
             const authorizeRemaining = physicalRemaining(item, "authorize");
@@ -211,6 +303,8 @@ export default function PhysicalReturnPanel({ returnItem, canWrite, onChanged, o
               && authorizeRemaining > 0;
             const canReceive = canWrite && status === "in_transit" && receiveRemaining > 0;
             const canInspect = canWrite && ["received", "inspected"].includes(status) && inspectRemaining > 0;
+            const quarantineRemaining = physicalRemaining(item, "quarantine");
+            const canResolveQuarantine = canWrite && status === "inspected" && quarantineRemaining > 0;
 
             return (
               <div className="physical-return-item" key={item.order_item_id}>
@@ -335,6 +429,50 @@ export default function PhysicalReturnPanel({ returnItem, canWrite, onChanged, o
                       disabled={Boolean(busy)}
                     >
                       Зафиксировать disposition
+                    </button>
+                  </div>
+                )}
+
+                {canResolveQuarantine && (
+                  <div className="physical-action-grid">
+                    <label>
+                      Разрешить из карантина, шт.
+                      <input
+                        type="number"
+                        min="1"
+                        max={quarantineRemaining}
+                        step="1"
+                        value={draft.quarantineQty ?? ""}
+                        onChange={(event) => setDraft(item, { quarantineQty: event.target.value })}
+                        disabled={Boolean(busy)}
+                      />
+                    </label>
+                    <label>
+                      Итог карантина
+                      <select
+                        value={draft.quarantineDisposition || "resalable"}
+                        onChange={(event) => setDraft(item, { quarantineDisposition: event.target.value })}
+                        disabled={Boolean(busy)}
+                      >
+                        <option value="resalable">Вернуть в продажу</option>
+                        <option value="damaged">Повреждён</option>
+                      </select>
+                    </label>
+                    <label>
+                      Основание решения
+                      <input
+                        value={draft.reason ?? ""}
+                        maxLength={2000}
+                        onChange={(event) => setDraft(item, { reason: event.target.value })}
+                        disabled={Boolean(busy)}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => resolveQuarantine(item)}
+                      disabled={Boolean(busy)}
+                    >
+                      Разрешить карантин
                     </button>
                   </div>
                 )}
