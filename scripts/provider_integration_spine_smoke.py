@@ -88,6 +88,8 @@ def main() -> int:
         moysklad_organization_id="organization-ci",
         moysklad_agent_id="counterparty-ci",
         moysklad_store_id="store-ci",
+        moysklad_damaged_store_id="damaged-store-ci",
+        moysklad_quarantine_store_id="quarantine-store-ci",
         moysklad_delivery_service_id="delivery-service-ci",
     )
 
