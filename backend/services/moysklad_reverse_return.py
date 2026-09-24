@@ -611,7 +611,7 @@ def _prepare_physical_return_snapshot(
             order_snapshot=order_snapshot,
             demand_external_id=str(demand_command.external_id).strip(),
             disposition=disposition,
-            store_id=str(allocation.get("provider_store_id") or _disposition_store_id(disposition)).strip(),
+            store_id=str(allocation.get("provider_store_id") or "").strip(),
             lines=tuple(lines),
         )
     finally:
@@ -654,7 +654,8 @@ async def export_physical_sales_return(
     positions = await _physical_return_positions(snapshot)
     sync_id = _sync_id(f"physical-salesreturn-{snapshot.disposition}", snapshot.case_id)
     payload = _base_document(snapshot.order_snapshot, positions, sync_id)
-    payload["store"] = _entity_meta("store", snapshot.store_id)
+    provider_store_id = snapshot.store_id or _disposition_store_id(snapshot.disposition)
+    payload["store"] = _entity_meta("store", provider_store_id)
     payload["externalCode"] = (
         f"FLASHIN-PHYSICAL-RETURN-{snapshot.case_id}-{snapshot.disposition.upper()}"
     )
@@ -668,7 +669,7 @@ async def export_physical_sales_return(
     payload["description"] = (
         f"FLASHIN physical return case #{snapshot.case_id}; "
         f"return_request=#{snapshot.return_request_id}; "
-        f"verified disposition={snapshot.disposition}; store={snapshot.store_id}"
+        f"verified disposition={snapshot.disposition}; store={provider_store_id}"
     )[:4096]
     try:
         result = await _request_json("POST", "entity/salesreturn", json_body=payload)
