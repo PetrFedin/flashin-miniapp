@@ -10,7 +10,10 @@ from ..services.moysklad_outbound import (
     export_customer_order,
     export_demand,
 )
-from ..services.moysklad_reverse_return import export_physical_sales_return
+from ..services.moysklad_reverse_return import (
+    export_physical_sales_return,
+    export_quarantine_move,
+)
 from ..services.provider_command_safety import (
     enforce_terminal_provider_command_pilot_stop,
 )
@@ -43,7 +46,19 @@ async def _legacy_financial_sales_return(_db: Session, _payload: dict[str, Any])
 
 
 async def _physical_sales_return(db: Session, payload: dict[str, Any]) -> str:
-    return await export_physical_sales_return(db, int(payload["case_id"]))
+    return await export_physical_sales_return(db, int(payload["case_id"]), "resalable")
+
+
+async def _damaged_sales_return(db: Session, payload: dict[str, Any]) -> str:
+    return await export_physical_sales_return(db, int(payload["case_id"]), "damaged")
+
+
+async def _quarantine_sales_return(db: Session, payload: dict[str, Any]) -> str:
+    return await export_physical_sales_return(db, int(payload["case_id"]), "quarantine")
+
+
+async def _quarantine_move(db: Session, payload: dict[str, Any]) -> str:
+    return await export_quarantine_move(db, int(payload["event_id"]))
 
 
 _HANDLERS: dict[str, _Handler] = {
@@ -51,6 +66,9 @@ _HANDLERS: dict[str, _Handler] = {
     "moysklad.demand.create": _demand,
     "moysklad.sales_return.create": _legacy_financial_sales_return,
     "moysklad.physical_sales_return.create": _physical_sales_return,
+    "moysklad.physical_sales_return.damaged.create": _damaged_sales_return,
+    "moysklad.physical_sales_return.quarantine.create": _quarantine_sales_return,
+    "moysklad.quarantine_move.create": _quarantine_move,
 }
 
 
