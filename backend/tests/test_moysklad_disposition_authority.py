@@ -281,6 +281,11 @@ def test_ambiguous_sales_return_transport_is_terminal_review(monkeypatch):
     monkeypatch.setattr(reverse_moysklad, "_prepare_physical_return_snapshot", lambda *_args, **_kwargs: snapshot)
     monkeypatch.setattr(
         reverse_moysklad,
+        "_base_document",
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        reverse_moysklad,
         "_physical_return_positions",
         lambda _snapshot: asyncio.sleep(0, result=[{"assortment": {}, "quantity": 1, "price": 10000}]),
     )
