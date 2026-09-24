@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 
+from ..config import get_settings
 from ..database import get_db
 from ..models import Order, ReturnRequest
 from ..provider_models import ProviderCommand
@@ -15,6 +16,7 @@ from ..services.moysklad_reverse_return import (
     enqueue_moysklad_quarantine_move,
 )
 from ..services.rbac import RETURNS_PHYSICAL_WRITE_PERMISSION, require_permission
+from ..services.runtime_capabilities import moysklad_execution_enabled
 from ..services.reverse_logistics import (
     authorize_item,
     ensure_physical_case,
@@ -112,7 +114,23 @@ def _provider_disposition_summary(
     case: ReturnLogisticsCase,
     items: list[dict[str, object]],
 ) -> dict[str, object]:
-    quantities = {
+    inspection_rows = (
+        db.query(
+            ReturnLogisticsEvent.disposition,
+            ReturnLogisticsEvent.quantity,
+        )
+        .filter(
+            ReturnLogisticsEvent.case_id == case.id,
+            ReturnLogisticsEvent.event_type == "inspected",
+        )
+        .all()
+    )
+    quantities = {"resalable": 0, "damaged": 0, "quarantine": 0}
+    for disposition, quantity in inspection_rows:
+        key = str(disposition or "")
+        if key in quantities:
+            quantities[key] += int(quantity or 0)
+    terminal_quantities = {
         "resalable": sum(int(item.get("resalable_qty") or 0) for item in items),
         "damaged": sum(int(item.get("damaged_qty") or 0) for item in items),
         "quarantine": sum(int(item.get("quarantine_qty") or 0) for item in items),
@@ -177,6 +195,7 @@ def _provider_disposition_summary(
             "last_error": str(command.last_error or "")[:500] if command is not None else "",
         })
     result["quarantine_resolutions"] = resolutions
+    result["local_terminal_quantities"] = terminal_quantities
     result["reconciliation_required"] = any(
         isinstance(value, dict) and bool(value.get("requires_review"))
         for value in result.values()
@@ -290,6 +309,34 @@ def authorize_physical_return_item(
         raise
 
 
+def _require_provider_quarantine_receipt(
+    db: Session,
+    case: ReturnLogisticsCase,
+) -> None:
+    settings = get_settings()
+    if not moysklad_execution_enabled(settings) or not settings.moysklad_order_export_enabled:
+        return
+    command = (
+        db.query(ProviderCommand)
+        .filter(
+            ProviderCommand.provider == "moysklad",
+            ProviderCommand.command_type == "moysklad.physical_sales_return.quarantine.create",
+            ProviderCommand.aggregate_type == "return_logistics_case",
+            ProviderCommand.aggregate_id == str(int(case.id)),
+        )
+        .order_by(ProviderCommand.id.desc())
+        .first()
+    )
+    if command is None or command.status != "sent" or not str(command.external_id or "").strip():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Quarantine cannot be reclassified until the original quarantine "
+                "receipt is confirmed in MoySklad"
+            ),
+        )
+
+
 @router.post("/admin/returns/{return_id}/physical/quarantine/resolve")
 def resolve_physical_return_quarantine(
     return_id: int,
@@ -301,6 +348,7 @@ def resolve_physical_return_quarantine(
     try:
         ret, _order, case = _mutation_context(db, return_id, admin)
         item = _case_item_by_order_item(db, case.id, payload.order_item_id)
+        _require_provider_quarantine_receipt(db, case)
         result = resolve_quarantine_item(
             db,
             case_id=case.id,
