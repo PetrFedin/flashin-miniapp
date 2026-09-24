@@ -252,19 +252,20 @@ def test_legacy_mixed_v1_command_is_never_silently_replayed(monkeypatch):
     case, _physical, _variant = _mixed_case(db)
     monkeypatch.setattr(reverse_moysklad, "get_settings", _settings)
     payload = reverse_moysklad._build_physical_return_allocation(db, case.id)
+    case_id = int(case.id)
     enqueue_provider_command(
         db,
         provider="moysklad",
         command_type="moysklad.physical_sales_return.create",
-        idempotency_key=f"physical-return:{case.id}:sales_return:v1",
+        idempotency_key=f"physical-return:{case_id}:sales_return:v1",
         aggregate_type="return_logistics_case",
-        aggregate_id=case.id,
+        aggregate_id=case_id,
         payload=payload,
     )
     db.commit()
 
     with pytest.raises(MoySkladReviewRequired, match="Legacy mixed-disposition"):
-        reverse_moysklad._prepare_physical_return_snapshot(db, case.id, "resalable")
+        reverse_moysklad._prepare_physical_return_snapshot(db, case_id, "resalable")
 
 
 def test_ambiguous_sales_return_transport_is_terminal_review(monkeypatch):
