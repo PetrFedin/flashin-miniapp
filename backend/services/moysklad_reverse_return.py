@@ -198,6 +198,38 @@ def _case_completion_ids(db: Session, order_id: int) -> dict[int, int]:
     return completion
 
 
+def _inspection_disposition_counts(
+    db: Session,
+    physical: ReturnLogisticsItem,
+) -> dict[str, int]:
+    rows = (
+        db.query(
+            ReturnLogisticsEvent.disposition,
+            func.sum(ReturnLogisticsEvent.quantity),
+        )
+        .filter(
+            ReturnLogisticsEvent.case_id == int(physical.case_id),
+            ReturnLogisticsEvent.item_id == int(physical.id),
+            ReturnLogisticsEvent.event_type == "inspected",
+        )
+        .group_by(ReturnLogisticsEvent.disposition)
+        .all()
+    )
+    counts = {"resalable": 0, "damaged": 0, "quarantine": 0}
+    for disposition, quantity in rows:
+        key = str(disposition or "")
+        if key not in counts:
+            raise MoySkladReviewRequired(
+                "Physical return inspection contains unsupported disposition evidence"
+            )
+        counts[key] += int(quantity or 0)
+    if sum(counts.values()) != int(physical.inspected_qty):
+        raise MoySkladReviewRequired(
+            "Append-only inspection disposition evidence does not match inspected quantity"
+        )
+    return counts
+
+
 def _build_physical_return_allocation(
     db: Session,
     case_id: int,
@@ -291,13 +323,12 @@ def _build_physical_return_allocation(
     for physical in current_items:
         inspected_qty = int(physical.inspected_qty)
         authorized_qty = int(physical.authorized_qty)
-        resalable_qty = int(physical.resalable_qty)
-        damaged_qty = int(physical.damaged_qty)
-        quarantine_qty = int(physical.quarantine_qty)
+        disposition_counts = _inspection_disposition_counts(db, physical)
+        resalable_qty = int(disposition_counts["resalable"])
+        damaged_qty = int(disposition_counts["damaged"])
+        quarantine_qty = int(disposition_counts["quarantine"])
         if inspected_qty != authorized_qty:
             raise MoySkladReviewRequired("Physical return inspection is incomplete")
-        if resalable_qty + damaged_qty + quarantine_qty != inspected_qty:
-            raise MoySkladReviewRequired("Physical return disposition evidence is inconsistent")
         allocated = allocations.get((int(case.id), int(physical.id)))
         if allocated is None:
             raise MoySkladReviewRequired("Physical return monetary allocation is missing")
