@@ -46,7 +46,9 @@ async def _legacy_financial_sales_return(_db: Session, _payload: dict[str, Any])
 
 
 async def _physical_sales_return(db: Session, payload: dict[str, Any]) -> str:
-    return await export_physical_sales_return(db, int(payload["case_id"]), "resalable")
+    # Keep the historical all-resalable handler call shape stable; the exporter
+    # defaults to resalable while damaged/quarantine use explicit handlers below.
+    return await export_physical_sales_return(db, int(payload["case_id"]))
 
 
 async def _damaged_sales_return(db: Session, payload: dict[str, Any]) -> str:
