@@ -19,6 +19,7 @@ _STALE_PHYSICAL_RETURN_CONFLICT = "stale_stock_pending_physical_return"
 _BLOCKED_RECONCILIATION_ACTION = "blocked_physical_return"
 _CATCHUP_RECONCILIATION_ACTION = "physical_return_catchup"
 _PHYSICAL_RETURN_COMMAND = "moysklad.physical_sales_return.create"
+_QUARANTINE_MOVE_COMMAND = "moysklad.quarantine_move.create"
 _OPEN_EVIDENCE_CONSTRAINTS = {
     "uq_moysklad_conflict_open_stale_physical_return",
     "uq_stock_reconciliation_open_blocked_physical_return",
@@ -38,6 +39,7 @@ class MoySkladStockDecision:
 class _PendingReturnEvidence:
     event_id: int
     case_id: int
+    event_type: str
     quantity: int
     created_at: datetime
 
@@ -101,6 +103,7 @@ def _pending_resalable_evidence(
         db.query(
             ReturnLogisticsEvent.id,
             ReturnLogisticsEvent.case_id,
+            ReturnLogisticsEvent.event_type,
             ReturnLogisticsEvent.quantity,
             ReturnLogisticsEvent.created_at,
         )
@@ -111,7 +114,7 @@ def _pending_resalable_evidence(
         .filter(
             ReturnLogisticsItem.variant_id == int(variant_id),
             ReturnLogisticsItem.case_id == ReturnLogisticsEvent.case_id,
-            ReturnLogisticsEvent.event_type == "inspected",
+            ReturnLogisticsEvent.event_type.in_(("inspected", "reclassified")),
             ReturnLogisticsEvent.disposition == "resalable",
             ReturnLogisticsEvent.quantity > 0,
         )
@@ -127,10 +130,11 @@ def _pending_resalable_evidence(
         _PendingReturnEvidence(
             event_id=int(event_id),
             case_id=int(case_id),
+            event_type=str(event_type),
             quantity=int(quantity),
             created_at=created_at,
         )
-        for event_id, case_id, quantity, created_at in rows
+        for event_id, case_id, event_type, quantity, created_at in rows
     )
 
 
@@ -169,30 +173,39 @@ def _provider_returns_exported(
     db: Session,
     evidence: tuple[_PendingReturnEvidence, ...],
 ) -> bool:
-    """Require exact provider transaction evidence for every pending physical case."""
+    """Require exact provider evidence for each local sellable-stock increase."""
 
-    case_ids = {item.case_id for item in evidence}
-    if not case_ids:
+    if not evidence:
         return False
-    commands = (
-        db.query(ProviderCommand)
-        .filter(
-            ProviderCommand.provider == "moysklad",
-            ProviderCommand.command_type == _PHYSICAL_RETURN_COMMAND,
-            ProviderCommand.aggregate_type == "return_logistics_case",
-            ProviderCommand.aggregate_id.in_([str(case_id) for case_id in case_ids]),
+    for item in evidence:
+        if item.event_type == "inspected":
+            command_type = _PHYSICAL_RETURN_COMMAND
+            aggregate_type = "return_logistics_case"
+            aggregate_id = str(item.case_id)
+        elif item.event_type == "reclassified":
+            command_type = _QUARANTINE_MOVE_COMMAND
+            aggregate_type = "return_logistics_event"
+            aggregate_id = str(item.event_id)
+        else:
+            return False
+        command = (
+            db.query(ProviderCommand)
+            .filter(
+                ProviderCommand.provider == "moysklad",
+                ProviderCommand.command_type == command_type,
+                ProviderCommand.aggregate_type == aggregate_type,
+                ProviderCommand.aggregate_id == aggregate_id,
+            )
+            .order_by(ProviderCommand.id.desc())
+            .first()
         )
-        .all()
-    )
-    exported: set[int] = set()
-    for command in commands:
-        if command.status != "sent" or not str(command.external_id or "").strip():
-            continue
-        try:
-            exported.add(int(command.aggregate_id))
-        except (TypeError, ValueError):
-            continue
-    return exported == case_ids
+        if (
+            command is None
+            or command.status != "sent"
+            or not str(command.external_id or "").strip()
+        ):
+            return False
+    return True
 
 
 def _open_or_refresh_conflict(
@@ -208,7 +221,7 @@ def _open_or_refresh_conflict(
     floor_text = "invalid/missing" if catchup_floor is None else str(catchup_floor)
     message = (
         f"Provider stock {int(external_stock)} is not authoritative for local stock "
-        f"{variant.stock_qty} while resalable inspection event(s) {event_text} "
+        f"{variant.stock_qty} while resalable physical event(s) {event_text} "
         f"await provider reconciliation; provider_exported={provider_exported}; "
         f"required_catchup_stock={floor_text}; snapshot was not applied"
     )
