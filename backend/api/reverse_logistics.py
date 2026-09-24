@@ -6,7 +6,8 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import Order, ReturnRequest
-from ..reverse_logistics_models import ReturnLogisticsCase, ReturnLogisticsItem
+from ..provider_models import ProviderCommand
+from ..reverse_logistics_models import ReturnLogisticsCase, ReturnLogisticsEvent, ReturnLogisticsItem
 from ..security import get_current_admin, get_current_customer
 from ..services.audit import log_admin_action
 from ..services.moysklad_reverse_return import (
@@ -106,6 +107,83 @@ def _order_item_preview(order: Order) -> list[dict[str, object]]:
     ]
 
 
+def _provider_disposition_summary(
+    db: Session,
+    case: ReturnLogisticsCase,
+    items: list[dict[str, object]],
+) -> dict[str, object]:
+    quantities = {
+        "resalable": sum(int(item.get("resalable_qty") or 0) for item in items),
+        "damaged": sum(int(item.get("damaged_qty") or 0) for item in items),
+        "quarantine": sum(int(item.get("quarantine_qty") or 0) for item in items),
+    }
+    command_types = {
+        "resalable": "moysklad.physical_sales_return.create",
+        "damaged": "moysklad.physical_sales_return.damaged.create",
+        "quarantine": "moysklad.physical_sales_return.quarantine.create",
+    }
+    result: dict[str, object] = {}
+    for disposition, command_type in command_types.items():
+        command = (
+            db.query(ProviderCommand)
+            .filter(
+                ProviderCommand.provider == "moysklad",
+                ProviderCommand.command_type == command_type,
+                ProviderCommand.aggregate_type == "return_logistics_case",
+                ProviderCommand.aggregate_id == str(int(case.id)),
+            )
+            .order_by(ProviderCommand.id.desc())
+            .first()
+        )
+        result[disposition] = {
+            "quantity": quantities[disposition],
+            "status": command.status if command is not None else (
+                "not_required" if quantities[disposition] <= 0 else "not_queued"
+            ),
+            "external_id": str(command.external_id or "") if command is not None else "",
+            "requires_review": bool(command is not None and command.status in {"review_required", "failed"}),
+            "last_error": str(command.last_error or "")[:500] if command is not None else "",
+        }
+
+    reclassification_events = (
+        db.query(ReturnLogisticsEvent)
+        .filter(
+            ReturnLogisticsEvent.case_id == case.id,
+            ReturnLogisticsEvent.event_type == "reclassified",
+        )
+        .order_by(ReturnLogisticsEvent.id.asc())
+        .all()
+    )
+    resolutions = []
+    for event in reclassification_events:
+        command = (
+            db.query(ProviderCommand)
+            .filter(
+                ProviderCommand.provider == "moysklad",
+                ProviderCommand.command_type == "moysklad.quarantine_move.create",
+                ProviderCommand.aggregate_type == "return_logistics_event",
+                ProviderCommand.aggregate_id == str(int(event.id)),
+            )
+            .order_by(ProviderCommand.id.desc())
+            .first()
+        )
+        resolutions.append({
+            "event_id": int(event.id),
+            "quantity": int(event.quantity),
+            "target_disposition": str(event.disposition),
+            "status": command.status if command is not None else "not_queued",
+            "external_id": str(command.external_id or "") if command is not None else "",
+            "requires_review": bool(command is not None and command.status in {"review_required", "failed"}),
+            "last_error": str(command.last_error or "")[:500] if command is not None else "",
+        })
+    result["quarantine_resolutions"] = resolutions
+    result["reconciliation_required"] = any(
+        isinstance(value, dict) and bool(value.get("requires_review"))
+        for value in result.values()
+    ) or any(bool(row.get("requires_review")) for row in resolutions)
+    return result
+
+
 def _physical_payload(db: Session, ret: ReturnRequest) -> dict[str, object]:
     order = db.query(Order).filter(Order.id == ret.order_id).first()
     if order is None or int(order.customer_id) != int(ret.customer_id):
@@ -136,6 +214,7 @@ def _physical_payload(db: Session, ret: ReturnRequest) -> dict[str, object]:
         "physical_status": case.status,
         **summary,
         "items": enriched_items,
+        "provider_disposition": _provider_disposition_summary(db, case, enriched_items),
     }
 
 
