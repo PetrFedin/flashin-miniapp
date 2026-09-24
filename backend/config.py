@@ -85,6 +85,10 @@ class Settings(BaseSettings):
     moysklad_organization_id: str = ""
     moysklad_agent_id: str = ""
     moysklad_store_id: str = ""
+    # Physical reverse-logistics stock authority. These stores must be
+    # distinct from the sellable store whenever live outbound execution is enabled.
+    moysklad_damaged_store_id: str = ""
+    moysklad_quarantine_store_id: str = ""
     moysklad_delivery_service_id: str = ""
 
     cdn_public_base_url: str = "https://cdn.flashin.store"
@@ -304,10 +308,22 @@ class Settings(BaseSettings):
                     ("MOYSKLAD_ORGANIZATION_ID", self.moysklad_organization_id),
                     ("MOYSKLAD_AGENT_ID", self.moysklad_agent_id),
                     ("MOYSKLAD_STORE_ID", self.moysklad_store_id),
+                    ("MOYSKLAD_DAMAGED_STORE_ID", self.moysklad_damaged_store_id),
+                    ("MOYSKLAD_QUARANTINE_STORE_ID", self.moysklad_quarantine_store_id),
                     ("MOYSKLAD_DELIVERY_SERVICE_ID", self.moysklad_delivery_service_id),
                 ):
                     if not value.strip():
                         errors.append(f"{name} is required when MoySklad order export is enabled")
+                disposition_store_ids = {
+                    self.moysklad_store_id.strip(),
+                    self.moysklad_damaged_store_id.strip(),
+                    self.moysklad_quarantine_store_id.strip(),
+                }
+                if "" not in disposition_store_ids and len(disposition_store_ids) != 3:
+                    errors.append(
+                        "MOYSKLAD_STORE_ID, MOYSKLAD_DAMAGED_STORE_ID and "
+                        "MOYSKLAD_QUARANTINE_STORE_ID must be three distinct stores"
+                    )
 
         if errors:
             raise ValueError("Unsafe production configuration: " + "; ".join(errors))
