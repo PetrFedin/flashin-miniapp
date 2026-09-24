@@ -9,7 +9,10 @@ from ..models import Order, ReturnRequest
 from ..reverse_logistics_models import ReturnLogisticsCase, ReturnLogisticsItem
 from ..security import get_current_admin, get_current_customer
 from ..services.audit import log_admin_action
-from ..services.moysklad_reverse_return import enqueue_moysklad_physical_sales_return
+from ..services.moysklad_reverse_return import (
+    enqueue_moysklad_physical_sales_return,
+    enqueue_moysklad_quarantine_move,
+)
 from ..services.rbac import RETURNS_PHYSICAL_WRITE_PERMISSION, require_permission
 from ..services.reverse_logistics import (
     authorize_item,
@@ -18,6 +21,7 @@ from ..services.reverse_logistics import (
     mark_in_transit,
     physical_case_summary,
     receive_item,
+    resolve_quarantine_item,
 )
 
 router = APIRouter(tags=["reverse-logistics"])
@@ -30,6 +34,10 @@ class PhysicalQuantityIn(BaseModel):
 
 
 class PhysicalInspectionIn(PhysicalQuantityIn):
+    disposition: str = Field(min_length=3, max_length=32)
+
+
+class PhysicalQuarantineResolutionIn(PhysicalQuantityIn):
     disposition: str = Field(min_length=3, max_length=32)
 
 
@@ -192,6 +200,48 @@ def authorize_physical_return_item(
             "order_item_id": payload.order_item_id,
             "quantity": payload.quantity,
             "idempotent": result.idempotent,
+        })
+        db.commit()
+        return {"idempotent": result.idempotent, **physical_case_summary(db, case)}
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.post("/admin/returns/{return_id}/physical/quarantine/resolve")
+def resolve_physical_return_quarantine(
+    return_id: int,
+    payload: PhysicalQuarantineResolutionIn,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+    admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    try:
+        ret, _order, case = _mutation_context(db, return_id, admin)
+        item = _case_item_by_order_item(db, case.id, payload.order_item_id)
+        result = resolve_quarantine_item(
+            db,
+            case_id=case.id,
+            item_id=item.id,
+            quantity=payload.quantity,
+            disposition=payload.disposition,
+            idempotency_key=idempotency_key,
+            actor_admin_id=admin.id,
+            reason=payload.reason,
+        )
+        provider_command = None
+        if not result.idempotent:
+            provider_command = enqueue_moysklad_quarantine_move(db, result.event.id)
+        log_admin_action(db, admin, "return.physical.quarantine.resolve", "return_request", ret.id, {
+            "case_id": case.id,
+            "order_item_id": payload.order_item_id,
+            "quantity": payload.quantity,
+            "disposition": payload.disposition,
+            "idempotent": result.idempotent,
+            "moysklad_quarantine_move_queued": provider_command is not None,
         })
         db.commit()
         return {"idempotent": result.idempotent, **physical_case_summary(db, case)}
