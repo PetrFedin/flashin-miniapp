@@ -67,6 +67,10 @@ jobs:
         run: python scripts/reverse_logistics_rejected_evidence_smoke.py
       - name: Prove MoySklad partial-return and disposition safety
         run: python scripts/moysklad_reverse_logistics_contract_smoke.py
+      - name: Prove MoySklad terminal disposition authority
+        run: |
+          python -m pytest -q backend/tests/test_moysklad_disposition_authority.py
+          python scripts/moysklad_disposition_authority_smoke.py
       - name: Prove cumulative partial-return monetary allocation
         run: python -m pytest -q backend/tests/test_moysklad_reverse_return_allocation.py
       - name: Prove MoySklad stock authority concurrency
