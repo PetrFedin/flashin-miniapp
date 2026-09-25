@@ -79,7 +79,6 @@ class DistributedRateLimiter:
     ):
         self._client = client or Redis.from_url(
             redis_url,
-            encoding=None,
             decode_responses=False,
             socket_connect_timeout=connect_timeout_seconds,
             socket_timeout=socket_timeout_seconds,
