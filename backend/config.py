@@ -301,13 +301,17 @@ class Settings(BaseSettings):
                 errors.append(
                     "MOYSKLAD_SALE_PRICE_TYPE is required when MOYSKLAD_MODE is enabled"
                 )
+            if not self.moysklad_store_id.strip():
+                errors.append(
+                    "MOYSKLAD_STORE_ID is required when MOYSKLAD_MODE is enabled "
+                    "so inbound stock is scoped to the sellable warehouse"
+                )
             if not self.moysklad_base_url.startswith("https://"):
                 errors.append("MOYSKLAD_BASE_URL must use HTTPS when MOYSKLAD_MODE is enabled")
             if self.moysklad_order_export_enabled:
                 for name, value in (
                     ("MOYSKLAD_ORGANIZATION_ID", self.moysklad_organization_id),
                     ("MOYSKLAD_AGENT_ID", self.moysklad_agent_id),
-                    ("MOYSKLAD_STORE_ID", self.moysklad_store_id),
                     ("MOYSKLAD_DAMAGED_STORE_ID", self.moysklad_damaged_store_id),
                     ("MOYSKLAD_QUARANTINE_STORE_ID", self.moysklad_quarantine_store_id),
                     ("MOYSKLAD_DELIVERY_SERVICE_ID", self.moysklad_delivery_service_id),
