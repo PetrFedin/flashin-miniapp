@@ -307,11 +307,39 @@ REFUND_ITEM_ALLOCATION_REQUIRED_FILES = {
 }
 REQUIRED_FILES |= REFUND_ITEM_ALLOCATION_REQUIRED_FILES
 
+# Distributed rate limiting is part of the immutable production security contract.
+RATE_LIMIT_AUTHORITY_REQUIRED_FILES = {
+    ".env.production.example",
+    ".github/workflows/ci.yml",
+    ".github/workflows/distributed-rate-limit-state.yml",
+    "backend/config.py",
+    "backend/main.py",
+    "backend/middleware/metrics.py",
+    "backend/middleware/rate_limit.py",
+    "backend/requirements.txt",
+    "backend/services/distributed_rate_limit.py",
+    "backend/tests/test_pilot_launch_preflight.py",
+    "backend/tests/test_production_compose_gate.py",
+    "backend/tests/test_production_config.py",
+    "backend/tests/test_rate_limit.py",
+    "backend/tests/test_validate_env.py",
+    "deploy/monitoring/rules/flashin_pilot.yml",
+    "docker-compose.yml",
+    "docker-compose.production.yml",
+    "docs/runbooks/RATE_LIMIT_AUTHORITY.md",
+    "scripts/check_production_compose.py",
+    "scripts/pilot_launch_preflight.py",
+    "scripts/rate_limit_persistence_smoke.sh",
+    "scripts/rate_limit_redis_smoke.py",
+    "scripts/validate_env.py",
+}
+REQUIRED_FILES |= RATE_LIMIT_AUTHORITY_REQUIRED_FILES
+
 # Keep immutable capability semantics inspectable and maintainable. Every tuple
 # binds one packaged runtime/test surface to concrete behavior, not just presence.
 MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("backend/api/orders.py", ("acquire_pilot_checkout(", "record_pilot_order(")),
-    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 31",)),
+    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 32",)),
     (
         "scripts/pilot_release_capability.py",
         (
@@ -334,6 +362,8 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "REQUIRED_FILES |= WEBHOOK_AMBIGUITY_REQUIRED_FILES",
             "REFUND_ITEM_ALLOCATION_REQUIRED_FILES",
             "REQUIRED_FILES |= REFUND_ITEM_ALLOCATION_REQUIRED_FILES",
+            "RATE_LIMIT_AUTHORITY_REQUIRED_FILES",
+            "REQUIRED_FILES |= RATE_LIMIT_AUTHORITY_REQUIRED_FILES",
             "MARKER_REQUIREMENTS",
         ),
     ),
@@ -345,6 +375,10 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "MOYSKLAD_MODE=disabled",
             "MOYSKLAD_DAMAGED_STORE_ID=",
             "MOYSKLAD_QUARANTINE_STORE_ID=",
+            "RATE_LIMIT_BACKEND=redis",
+            "RATE_LIMIT_REDIS_URL=redis://redis:6379/0",
+            "RATE_LIMIT_CHECKOUT_PER_MINUTE=12",
+            "RATE_LIMIT_WEBHOOK_PER_MINUTE=180",
         ),
     ),
     (
@@ -359,6 +393,98 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "must be three distinct stores",
             "PAYMENTS_MODE must be disabled when production commercial checkout is disabled",
             "PILOT_RUNTIME_ENFORCED must be false when production commercial checkout is disabled",
+            "rate_limit_backend: str",
+            "rate_limit_redis_url: str",
+            "RATE_LIMIT_BACKEND must be redis in production",
+            "RATE_LIMIT_REDIS_URL must use redis:// or rediss:// in production",
+        ),
+    ),
+    (
+        "backend/middleware/rate_limit.py",
+        (
+            "class RateLimitMiddleware",
+            "RateLimitRule",
+            "backend_fail_closed",
+            "backend_fail_open",
+            "X-RateLimit-Degraded",
+            "_rate_limit_keys",
+        ),
+    ),
+    (
+        "backend/services/distributed_rate_limit.py",
+        (
+            "_ATOMIC_SLIDING_WINDOW",
+            "Redis.from_url",
+            "redis.call('TIME')",
+            "class RateLimitBackendUnavailable",
+            "async def hit(",
+        ),
+    ),
+    (
+        "backend/middleware/metrics.py",
+        (
+            "flashin_rate_limit_decisions_total",
+            "flashin_rate_limit_backend_available",
+            "record_rate_limit_event",
+        ),
+    ),
+    (
+        "docker-compose.yml",
+        (
+            "redis:8.10.1-alpine",
+            "--appendonly",
+            "--appendfsync",
+            "rate_limit_redis:/data",
+        ),
+    ),
+    (
+        "docker-compose.production.yml",
+        (
+            "redis:",
+            "condition: service_healthy",
+        ),
+    ),
+    (
+        "scripts/check_production_compose.py",
+        (
+            "Redis rate-limit service must use durable /data storage",
+            "Backend must wait for healthy Redis rate-limit authority",
+        ),
+    ),
+    (
+        ".github/workflows/distributed-rate-limit-state.yml",
+        (
+            "Distributed Rate Limit State",
+            "rate_limit_redis_smoke.py",
+        ),
+    ),
+    (
+        "scripts/rate_limit_redis_smoke.py",
+        (
+            "two_clients_share_budget",
+            "multi_key_rejection_is_atomic",
+        ),
+    ),
+    (
+        "scripts/rate_limit_persistence_smoke.sh",
+        (
+            "budget_survived_restart",
+            "appendfsync",
+        ),
+    ),
+    (
+        "deploy/monitoring/rules/flashin_pilot.yml",
+        (
+            "FlashinRateLimitBackendUnavailable",
+            "FlashinRateLimitFailClosed",
+            "FlashinRateLimitRejectionsHigh",
+        ),
+    ),
+    (
+        "docs/runbooks/RATE_LIMIT_AUTHORITY.md",
+        (
+            "Fail closed when the shared limiter is unavailable",
+            "do not switch production to `memory` as a workaround",
         ),
     ),
     (
