@@ -459,6 +459,13 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     (
+        ".github/workflows/ci.yml",
+        (
+            "Prove Redis rate-limit persistence across restart",
+            "scripts/rate_limit_persistence_smoke.sh",
+        ),
+    ),
+    (
         "scripts/rate_limit_redis_smoke.py",
         (
             "two_clients_share_budget",
@@ -485,6 +492,22 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             "Fail closed when the shared limiter is unavailable",
             "do not switch production to `memory` as a workaround",
+        ),
+    ),
+    (
+        "scripts/validate_env.py",
+        (
+            "RATE_LIMIT_BACKEND must be redis in production",
+            "RATE_LIMIT_REDIS_URL must use redis:// or rediss:// in production",
+            "RATE_LIMIT_WEBHOOK_PER_MINUTE",
+        ),
+    ),
+    (
+        "scripts/pilot_launch_preflight.py",
+        (
+            "RATE_LIMIT_ENABLED must be true for pilot runtime arm",
+            "RATE_LIMIT_BACKEND must be redis for pilot runtime arm",
+            "RATE_LIMIT_REDIS_URL must configure shared Redis for pilot runtime arm",
         ),
     ),
     (
