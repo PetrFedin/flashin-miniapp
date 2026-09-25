@@ -318,6 +318,7 @@ RATE_LIMIT_AUTHORITY_REQUIRED_FILES = {
     "backend/middleware/rate_limit.py",
     "backend/requirements.txt",
     "backend/services/distributed_rate_limit.py",
+    "backend/tests/test_pilot_configuration_fingerprint.py",
     "backend/tests/test_pilot_launch_preflight.py",
     "backend/tests/test_production_compose_gate.py",
     "backend/tests/test_production_config.py",
@@ -328,6 +329,7 @@ RATE_LIMIT_AUTHORITY_REQUIRED_FILES = {
     "docker-compose.production.yml",
     "docs/runbooks/RATE_LIMIT_AUTHORITY.md",
     "scripts/check_production_compose.py",
+    "scripts/pilot_evidence.py",
     "scripts/pilot_launch_preflight.py",
     "scripts/rate_limit_persistence_smoke.sh",
     "scripts/rate_limit_redis_smoke.py",
@@ -508,6 +510,24 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "RATE_LIMIT_ENABLED must be true for pilot runtime arm",
             "RATE_LIMIT_BACKEND must be redis for pilot runtime arm",
             "RATE_LIMIT_REDIS_URL must configure shared Redis for pilot runtime arm",
+        ),
+    ),
+    (
+        "scripts/pilot_evidence.py",
+        (
+            ""RATE_LIMIT_BACKEND"",
+            ""RATE_LIMIT_REDIS_URL"",
+            ""RATE_LIMIT_CHECKOUT_PER_MINUTE"",
+            ""RATE_LIMIT_WEBHOOK_PER_MINUTE"",
+        ),
+    ),
+    (
+        "backend/tests/test_pilot_configuration_fingerprint.py",
+        (
+            ""RATE_LIMIT_BACKEND"",
+            ""RATE_LIMIT_REDIS_URL"",
+            ""RATE_LIMIT_PAYMENT_PER_MINUTE"",
+            ""RATE_LIMIT_WEBHOOK_PER_MINUTE"",
         ),
     ),
     (
