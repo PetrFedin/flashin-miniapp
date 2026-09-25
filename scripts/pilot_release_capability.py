@@ -524,10 +524,10 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "backend/tests/test_pilot_configuration_fingerprint.py",
         (
-            ""RATE_LIMIT_BACKEND"",
-            ""RATE_LIMIT_REDIS_URL"",
+            '"RATE_LIMIT_BACKEND"',
+            '"RATE_LIMIT_REDIS_URL"',
             '"RATE_LIMIT_PAYMENT_PER_MINUTE"',
-            ""RATE_LIMIT_WEBHOOK_PER_MINUTE"",
+            '"RATE_LIMIT_WEBHOOK_PER_MINUTE"',
         ),
     ),
     (
