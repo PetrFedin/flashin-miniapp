@@ -147,6 +147,20 @@ if is_production:
             "MEDIA_STORAGE",
             "MEILISEARCH_ENABLED",
             "SCHEDULER_ENABLED",
+            "RATE_LIMIT_ENABLED",
+            "RATE_LIMIT_BACKEND",
+            "RATE_LIMIT_REDIS_URL",
+            "RATE_LIMIT_REDIS_CONNECT_TIMEOUT_SECONDS",
+            "RATE_LIMIT_REDIS_SOCKET_TIMEOUT_SECONDS",
+            "RATE_LIMIT_PER_MINUTE",
+            "RATE_LIMIT_AUTH_PER_MINUTE",
+            "RATE_LIMIT_ADMIN_LOGIN_PER_MINUTE",
+            "RATE_LIMIT_SEARCH_PER_MINUTE",
+            "RATE_LIMIT_CHECKOUT_PER_MINUTE",
+            "RATE_LIMIT_PAYMENT_PER_MINUTE",
+            "RATE_LIMIT_RETURN_PER_MINUTE",
+            "RATE_LIMIT_SUPPORT_PER_MINUTE",
+            "RATE_LIMIT_WEBHOOK_PER_MINUTE",
             "MOYSKLAD_MODE",
             "MOYSKLAD_SYNC_INTERVAL_MINUTES",
             "MOYSKLAD_SIZE_ATTRIBUTE_NAMES",
@@ -237,6 +251,40 @@ if is_production:
         invalid.append("POSTGRES_PASSWORD uses the development password")
     if not is_true(env.get("SCHEDULER_ENABLED")):
         invalid.append("SCHEDULER_ENABLED must be true in production")
+    if not is_true(env.get("RATE_LIMIT_ENABLED")):
+        invalid.append("RATE_LIMIT_ENABLED must be true in production")
+    rate_limit_backend = env.get("RATE_LIMIT_BACKEND", "").strip().lower()
+    if rate_limit_backend != "redis":
+        invalid.append("RATE_LIMIT_BACKEND must be redis in production")
+    rate_limit_url = urlparse(env.get("RATE_LIMIT_REDIS_URL", ""))
+    if rate_limit_url.scheme not in {"redis", "rediss"} or not rate_limit_url.hostname:
+        invalid.append("RATE_LIMIT_REDIS_URL must use redis:// or rediss:// in production")
+    validate_float(
+        env,
+        "RATE_LIMIT_REDIS_CONNECT_TIMEOUT_SECONDS",
+        0.1,
+        10,
+        invalid,
+    )
+    validate_float(
+        env,
+        "RATE_LIMIT_REDIS_SOCKET_TIMEOUT_SECONDS",
+        0.1,
+        10,
+        invalid,
+    )
+    for key in (
+        "RATE_LIMIT_PER_MINUTE",
+        "RATE_LIMIT_AUTH_PER_MINUTE",
+        "RATE_LIMIT_ADMIN_LOGIN_PER_MINUTE",
+        "RATE_LIMIT_SEARCH_PER_MINUTE",
+        "RATE_LIMIT_CHECKOUT_PER_MINUTE",
+        "RATE_LIMIT_PAYMENT_PER_MINUTE",
+        "RATE_LIMIT_RETURN_PER_MINUTE",
+        "RATE_LIMIT_SUPPORT_PER_MINUTE",
+        "RATE_LIMIT_WEBHOOK_PER_MINUTE",
+    ):
+        validate_int(env, key, 1, 100000, invalid)
     if payments_mode not in {"disabled", "sandbox", "live"}:
         invalid.append("PAYMENTS_MODE must be disabled, sandbox, or live")
     if moysklad_mode not in {"disabled", "sandbox", "live"}:
