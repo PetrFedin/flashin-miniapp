@@ -877,6 +877,11 @@ async def sync_assortment_to_catalog(
 
     try:
         sellable_store_id = str(getattr(settings, "moysklad_store_id", "") or "").strip()
+        mode = str(getattr(settings, "moysklad_mode", "disabled") or "disabled").strip().lower()
+        if mode != "disabled" and not sellable_store_id:
+            raise ValueError(
+                "MOYSKLAD_STORE_ID is required for enabled MoySklad stock synchronization"
+            )
         sellable_stock_snapshot = (
             await fetch_sellable_store_stock_snapshot(sellable_store_id)
             if sellable_store_id
