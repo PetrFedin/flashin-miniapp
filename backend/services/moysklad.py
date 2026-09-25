@@ -49,6 +49,29 @@ async def fetch_assortment(limit: int = 100, offset: int = 0) -> dict:
     return payload
 
 
+async def fetch_stock_by_store(limit: int = 1000, offset: int = 0) -> dict:
+    """Fetch the provider stock report that preserves warehouse identity."""
+    settings = require_moysklad_execution(get_settings())
+    safe_limit = max(1, min(int(limit), 1000))
+    safe_offset = max(0, int(offset))
+    url = f"{settings.moysklad_base_url}/report/stock/bystore"
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.get(
+            url,
+            headers=_headers(),
+            params={
+                "limit": safe_limit,
+                "offset": safe_offset,
+                "groupBy": "variant",
+            },
+        )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise ValueError("MoySklad stock-by-store response must be an object")
+    return payload
+
+
 def _reference_id(value: object) -> str:
     if not isinstance(value, dict):
         return ""
@@ -63,6 +86,70 @@ def _reference_id(value: object) -> str:
         return ""
     path = urlparse(href).path.rstrip("/")
     return path.rsplit("/", 1)[-1] if path else ""
+
+
+def _sellable_stock_from_store_row(row: dict, store_id: str) -> int:
+    """Return stock only from the configured sellable MoySklad store.
+
+    The by-store report includes every warehouse. Damaged and quarantine
+    inventory must never be folded back into storefront stock.
+    """
+    clean_store_id = str(store_id or "").strip()
+    if not clean_store_id:
+        raise ValueError("Sellable MoySklad store id is required")
+    entries = row.get("stockByStore")
+    if entries is None:
+        return 0
+    if not isinstance(entries, list):
+        raise ValueError("MoySklad stockByStore must be a list")
+    matched = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        if _reference_id(entry) != clean_store_id:
+            continue
+        try:
+            value = float(entry.get("stock", 0))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("MoySklad sellable-store stock is invalid") from exc
+        if not math.isfinite(value):
+            raise ValueError("MoySklad sellable-store stock is invalid")
+        matched.append(max(int(value), 0))
+    if len(matched) > 1:
+        raise ValueError("MoySklad sellable store appears more than once in one stock row")
+    return matched[0] if matched else 0
+
+
+async def fetch_sellable_store_stock_snapshot(store_id: str) -> dict[str, int]:
+    """Return one complete provider-id -> sellable-store stock snapshot."""
+    clean_store_id = str(store_id or "").strip()
+    if not clean_store_id:
+        raise ValueError("MOYSKLAD_STORE_ID is required for sellable stock authority")
+
+    snapshot: dict[str, int] = {}
+    offset = 0
+    while True:
+        payload = await fetch_stock_by_store(limit=1000, offset=offset)
+        rows = payload.get("rows", [])
+        if not isinstance(rows, list):
+            raise ValueError("MoySklad stock-by-store rows must be a list")
+        if not rows:
+            break
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            provider_id = _reference_id(row)
+            if not provider_id:
+                raise ValueError("MoySklad stock-by-store row has no assortment identity")
+            if provider_id in snapshot:
+                raise ValueError(
+                    f"MoySklad stock-by-store returned duplicate assortment id {provider_id}"
+                )
+            snapshot[provider_id] = _sellable_stock_from_store_row(row, clean_store_id)
+        offset += len(rows)
+        if len(rows) < 1000:
+            break
+    return snapshot
 
 
 def _sale_price_type_keys(sale_price: object) -> set[str]:
@@ -552,6 +639,7 @@ def _sync_assortment_row(
     settings,
     sync_type: str,
     admin_id: int | None,
+    sellable_stock_snapshot: dict[str, int] | None = None,
 ) -> tuple[int, int]:
     row_provider_id = str(row.get("id") or "").strip()
     raw_sku = row.get("article") or row.get("code")
@@ -593,7 +681,11 @@ def _sync_assortment_row(
             product_created = 0
             name = str(row.get("name") or sku).strip()[:255]
             price = _price_from_moysklad(row, settings.moysklad_sale_price_type)
-            external_stock = _stock_from_moysklad(row)
+            external_stock = (
+                int(sellable_stock_snapshot.get(row_provider_id, 0))
+                if sellable_stock_snapshot is not None
+                else _stock_from_moysklad(row)
+            )
             missing_price_message = (
                 f"Configured sale price type '{settings.moysklad_sale_price_type}' is missing or invalid"
                 if settings.moysklad_sale_price_type.strip()
@@ -784,6 +876,17 @@ async def sync_assortment_to_catalog(
     db.refresh(log)
 
     try:
+        sellable_store_id = str(getattr(settings, "moysklad_store_id", "") or "").strip()
+        mode = str(getattr(settings, "moysklad_mode", "disabled") or "disabled").strip().lower()
+        if mode != "disabled" and not sellable_store_id:
+            raise ValueError(
+                "MOYSKLAD_STORE_ID is required for enabled MoySklad stock synchronization"
+            )
+        sellable_stock_snapshot = (
+            await fetch_sellable_store_stock_snapshot(sellable_store_id)
+            if sellable_store_id
+            else None
+        )
         offset = 0
         seen = upserted_products = upserted_variants = 0
         while True:
@@ -804,6 +907,7 @@ async def sync_assortment_to_catalog(
                     settings=settings,
                     sync_type=sync_type,
                     admin_id=admin_id,
+                    sellable_stock_snapshot=sellable_stock_snapshot,
                 )
                 upserted_products += product_count
                 upserted_variants += variant_count

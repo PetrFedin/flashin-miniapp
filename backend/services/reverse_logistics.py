@@ -416,6 +416,92 @@ def inspect_item(
     return PhysicalMutationResult(case, item, event, False)
 
 
+def resolve_quarantine_item(
+    db: Session,
+    *,
+    case_id: int,
+    item_id: int,
+    quantity: int,
+    disposition: str,
+    idempotency_key: str,
+    actor_admin_id: int | None,
+    reason: str = "",
+) -> PhysicalMutationResult:
+    """Resolve inspected quarantine exactly once into sellable or damaged stock.
+
+    Quarantine is a current provider/local inventory state, not a second inspection.
+    The append-only reclassified event preserves the original inspection truth while
+    the item counters project the terminal disposition.
+    """
+    target = str(disposition or "").strip().lower()
+    if target not in {"resalable", "damaged"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Quarantine can only be resolved to resalable or damaged",
+        )
+    case, _order = _lock_case_with_order(db, case_id)
+    item = _locked_item(db, case.id, item_id)
+    if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity <= 0:
+        raise HTTPException(status_code=400, detail="Quarantine resolution quantity must be positive")
+
+    event_key = _key(idempotency_key)
+    clean_reason = _reason(reason)
+    digest = _payload_hash(item.id, "reclassified", quantity, target, clean_reason)
+    existing = _existing_event(
+        db,
+        case_id=case.id,
+        idempotency_key=event_key,
+        expected_hash=digest,
+    )
+    if existing is not None:
+        return PhysicalMutationResult(case, item, existing, True)
+
+    if case.status != "inspected":
+        raise HTTPException(
+            status_code=409,
+            detail="Quarantine can only be resolved after completed physical inspection",
+        )
+    if quantity > int(item.quarantine_qty):
+        raise HTTPException(
+            status_code=409,
+            detail="Quarantine resolution exceeds current quarantined quantity",
+        )
+
+    event, _ = _event(
+        db,
+        case=case,
+        item=item,
+        event_type="reclassified",
+        quantity=quantity,
+        disposition=target,
+        idempotency_key=event_key,
+        actor_admin_id=actor_admin_id,
+        reason=clean_reason,
+    )
+    item.quarantine_qty -= quantity
+    if target == "resalable":
+        item.resalable_qty += quantity
+        variant = _load_locked_variant(db, item.variant_id)
+        stock_before = int(variant.stock_qty)
+        reserved_before = int(variant.reserved_qty)
+        variant.stock_qty += quantity
+        _record_movement(
+            db,
+            order_id=int(case.order_id),
+            variant=variant,
+            kind="return",
+            quantity=quantity,
+            stock_before=stock_before,
+            reserved_before=reserved_before,
+            source=f"reverse_logistics_event:{event.id}",
+        )
+    else:
+        item.damaged_qty += quantity
+
+    _refresh_case_from_db(db, case)
+    return PhysicalMutationResult(case, item, event, False)
+
+
 def physical_case_summary(db: Session, case: ReturnLogisticsCase) -> dict[str, object]:
     db.flush()
     items = (

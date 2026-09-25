@@ -4,13 +4,19 @@ from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 
+from ..config import get_settings
 from ..database import get_db
 from ..models import Order, ReturnRequest
-from ..reverse_logistics_models import ReturnLogisticsCase, ReturnLogisticsItem
+from ..provider_models import ProviderCommand
+from ..reverse_logistics_models import ReturnLogisticsCase, ReturnLogisticsEvent, ReturnLogisticsItem
 from ..security import get_current_admin, get_current_customer
 from ..services.audit import log_admin_action
-from ..services.moysklad_reverse_return import enqueue_moysklad_physical_sales_return
+from ..services.moysklad_reverse_return import (
+    enqueue_moysklad_physical_sales_return,
+    enqueue_moysklad_quarantine_move,
+)
 from ..services.rbac import RETURNS_PHYSICAL_WRITE_PERMISSION, require_permission
+from ..services.runtime_capabilities import moysklad_execution_enabled
 from ..services.reverse_logistics import (
     authorize_item,
     ensure_physical_case,
@@ -18,6 +24,7 @@ from ..services.reverse_logistics import (
     mark_in_transit,
     physical_case_summary,
     receive_item,
+    resolve_quarantine_item,
 )
 
 router = APIRouter(tags=["reverse-logistics"])
@@ -30,6 +37,10 @@ class PhysicalQuantityIn(BaseModel):
 
 
 class PhysicalInspectionIn(PhysicalQuantityIn):
+    disposition: str = Field(min_length=3, max_length=32)
+
+
+class PhysicalQuarantineResolutionIn(PhysicalQuantityIn):
     disposition: str = Field(min_length=3, max_length=32)
 
 
@@ -98,6 +109,100 @@ def _order_item_preview(order: Order) -> list[dict[str, object]]:
     ]
 
 
+def _provider_disposition_summary(
+    db: Session,
+    case: ReturnLogisticsCase,
+    items: list[dict[str, object]],
+) -> dict[str, object]:
+    inspection_rows = (
+        db.query(
+            ReturnLogisticsEvent.disposition,
+            ReturnLogisticsEvent.quantity,
+        )
+        .filter(
+            ReturnLogisticsEvent.case_id == case.id,
+            ReturnLogisticsEvent.event_type == "inspected",
+        )
+        .all()
+    )
+    quantities = {"resalable": 0, "damaged": 0, "quarantine": 0}
+    for disposition, quantity in inspection_rows:
+        key = str(disposition or "")
+        if key in quantities:
+            quantities[key] += int(quantity or 0)
+    terminal_quantities = {
+        "resalable": sum(int(item.get("resalable_qty") or 0) for item in items),
+        "damaged": sum(int(item.get("damaged_qty") or 0) for item in items),
+        "quarantine": sum(int(item.get("quarantine_qty") or 0) for item in items),
+    }
+    command_types = {
+        "resalable": "moysklad.physical_sales_return.create",
+        "damaged": "moysklad.physical_sales_return.damaged.create",
+        "quarantine": "moysklad.physical_sales_return.quarantine.create",
+    }
+    result: dict[str, object] = {}
+    for disposition, command_type in command_types.items():
+        command = (
+            db.query(ProviderCommand)
+            .filter(
+                ProviderCommand.provider == "moysklad",
+                ProviderCommand.command_type == command_type,
+                ProviderCommand.aggregate_type == "return_logistics_case",
+                ProviderCommand.aggregate_id == str(int(case.id)),
+            )
+            .order_by(ProviderCommand.id.desc())
+            .first()
+        )
+        result[disposition] = {
+            "quantity": quantities[disposition],
+            "status": command.status if command is not None else (
+                "not_required" if quantities[disposition] <= 0 else "not_queued"
+            ),
+            "external_id": str(command.external_id or "") if command is not None else "",
+            "requires_review": bool(command is not None and command.status in {"review_required", "failed"}),
+            "last_error": str(command.last_error or "")[:500] if command is not None else "",
+        }
+
+    reclassification_events = (
+        db.query(ReturnLogisticsEvent)
+        .filter(
+            ReturnLogisticsEvent.case_id == case.id,
+            ReturnLogisticsEvent.event_type == "reclassified",
+        )
+        .order_by(ReturnLogisticsEvent.id.asc())
+        .all()
+    )
+    resolutions = []
+    for event in reclassification_events:
+        command = (
+            db.query(ProviderCommand)
+            .filter(
+                ProviderCommand.provider == "moysklad",
+                ProviderCommand.command_type == "moysklad.quarantine_move.create",
+                ProviderCommand.aggregate_type == "return_logistics_event",
+                ProviderCommand.aggregate_id == str(int(event.id)),
+            )
+            .order_by(ProviderCommand.id.desc())
+            .first()
+        )
+        resolutions.append({
+            "event_id": int(event.id),
+            "quantity": int(event.quantity),
+            "target_disposition": str(event.disposition),
+            "status": command.status if command is not None else "not_queued",
+            "external_id": str(command.external_id or "") if command is not None else "",
+            "requires_review": bool(command is not None and command.status in {"review_required", "failed"}),
+            "last_error": str(command.last_error or "")[:500] if command is not None else "",
+        })
+    result["quarantine_resolutions"] = resolutions
+    result["local_terminal_quantities"] = terminal_quantities
+    result["reconciliation_required"] = any(
+        isinstance(value, dict) and bool(value.get("requires_review"))
+        for value in result.values()
+    ) or any(bool(row.get("requires_review")) for row in resolutions)
+    return result
+
+
 def _physical_payload(db: Session, ret: ReturnRequest) -> dict[str, object]:
     order = db.query(Order).filter(Order.id == ret.order_id).first()
     if order is None or int(order.customer_id) != int(ret.customer_id):
@@ -128,6 +233,7 @@ def _physical_payload(db: Session, ret: ReturnRequest) -> dict[str, object]:
         "physical_status": case.status,
         **summary,
         "items": enriched_items,
+        "provider_disposition": _provider_disposition_summary(db, case, enriched_items),
     }
 
 
@@ -192,6 +298,77 @@ def authorize_physical_return_item(
             "order_item_id": payload.order_item_id,
             "quantity": payload.quantity,
             "idempotent": result.idempotent,
+        })
+        db.commit()
+        return {"idempotent": result.idempotent, **physical_case_summary(db, case)}
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _require_provider_quarantine_receipt(
+    db: Session,
+    case: ReturnLogisticsCase,
+) -> None:
+    settings = get_settings()
+    if not moysklad_execution_enabled(settings) or not settings.moysklad_order_export_enabled:
+        return
+    command = (
+        db.query(ProviderCommand)
+        .filter(
+            ProviderCommand.provider == "moysklad",
+            ProviderCommand.command_type == "moysklad.physical_sales_return.quarantine.create",
+            ProviderCommand.aggregate_type == "return_logistics_case",
+            ProviderCommand.aggregate_id == str(int(case.id)),
+        )
+        .order_by(ProviderCommand.id.desc())
+        .first()
+    )
+    if command is None or command.status != "sent" or not str(command.external_id or "").strip():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Quarantine cannot be reclassified until the original quarantine "
+                "receipt is confirmed in MoySklad"
+            ),
+        )
+
+
+@router.post("/admin/returns/{return_id}/physical/quarantine/resolve")
+def resolve_physical_return_quarantine(
+    return_id: int,
+    payload: PhysicalQuarantineResolutionIn,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+    admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    try:
+        ret, _order, case = _mutation_context(db, return_id, admin)
+        item = _case_item_by_order_item(db, case.id, payload.order_item_id)
+        _require_provider_quarantine_receipt(db, case)
+        result = resolve_quarantine_item(
+            db,
+            case_id=case.id,
+            item_id=item.id,
+            quantity=payload.quantity,
+            disposition=payload.disposition,
+            idempotency_key=idempotency_key,
+            actor_admin_id=admin.id,
+            reason=payload.reason,
+        )
+        provider_command = None
+        if not result.idempotent:
+            provider_command = enqueue_moysklad_quarantine_move(db, result.event.id)
+        log_admin_action(db, admin, "return.physical.quarantine.resolve", "return_request", ret.id, {
+            "case_id": case.id,
+            "order_item_id": payload.order_item_id,
+            "quantity": payload.quantity,
+            "disposition": payload.disposition,
+            "idempotent": result.idempotent,
+            "moysklad_quarantine_move_queued": provider_command is not None,
         })
         db.commit()
         return {"idempotent": result.idempotent, **physical_case_summary(db, case)}

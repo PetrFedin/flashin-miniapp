@@ -6,6 +6,7 @@ import {
   getPhysicalIdempotencyKey,
   normalizePhysicalQuantity,
   physicalMutationSignature,
+  physicalProviderStatusLabel,
   physicalRemaining,
 } from "./physicalReturns.js";
 
@@ -23,10 +24,23 @@ test("physical quantities are positive integers bounded by the remaining phase q
   assert.match(normalizePhysicalQuantity("1.5", 3, "Приёмка").error, /положительным целым/i);
   assert.match(normalizePhysicalQuantity("4", 3, "Приёмка").error, /превышает/i);
 
-  const item = { ordered_qty: 4, authorized_qty: 3, received_qty: 2, inspected_qty: 1 };
+  const item = {
+    ordered_qty: 4,
+    authorized_qty: 3,
+    received_qty: 2,
+    inspected_qty: 1,
+    quarantine_qty: 1,
+  };
   assert.equal(physicalRemaining(item, "authorize"), 1);
   assert.equal(physicalRemaining(item, "receive"), 1);
   assert.equal(physicalRemaining(item, "inspect"), 1);
+  assert.equal(physicalRemaining(item, "quarantine"), 1);
+});
+
+test("provider disposition statuses are operator-readable and fail visibly", () => {
+  assert.match(physicalProviderStatusLabel("sent"), /МойСклад/);
+  assert.match(physicalProviderStatusLabel("review_required"), /сверка/i);
+  assert.equal(physicalProviderStatusLabel("unexpected"), "unexpected");
 });
 
 test("one ambiguous physical mutation reuses exactly one idempotency key until success", () => {

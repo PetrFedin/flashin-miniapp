@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+
+import httpx
 from decimal import Decimal, ROUND_HALF_UP
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
-from ..models import Order, OrderItem
+from ..models import Order, OrderItem, ProductVariant
 from ..provider_models import ProviderCommand
 from ..reverse_logistics_models import (
     ReturnLogisticsCase,
@@ -20,6 +22,7 @@ from .moysklad_outbound import (
     MoySkladReviewRequired,
     _allocate_net_line_totals,
     _base_document,
+    _entity_meta,
     _load_order_items,
     _request_json,
     _require_clean_export_session,
@@ -34,6 +37,17 @@ from .runtime_capabilities import moysklad_execution_enabled
 _ALLOCATION_VERSION = 2
 _ALLOCATION_BASIS = "physical_case_completion_v1"
 _COMMAND_TYPE = "moysklad.physical_sales_return.create"
+_DISPOSITIONS = ("resalable", "damaged", "quarantine")
+_DISPOSITION_COMMAND_TYPES = {
+    "resalable": _COMMAND_TYPE,
+    "damaged": "moysklad.physical_sales_return.damaged.create",
+    "quarantine": "moysklad.physical_sales_return.quarantine.create",
+}
+_AMBIGUOUS_TRANSPORT_ERRORS = (
+    httpx.ReadTimeout,
+    httpx.WriteTimeout,
+    httpx.RemoteProtocolError,
+)
 
 
 @dataclass(frozen=True)
@@ -50,11 +64,54 @@ class _PhysicalReturnSnapshot:
     return_request_id: int
     order_snapshot: object
     demand_external_id: str
+    disposition: str
+    store_id: str
     lines: tuple[_PhysicalReturnLine, ...]
 
 
-def _command_key(case_id: int) -> str:
-    return f"physical-return:{int(case_id)}:sales_return:v1"
+@dataclass(frozen=True)
+class _QuarantineMoveSnapshot:
+    event_id: int
+    case_id: int
+    moysklad_id: str
+    quantity: int
+    target_disposition: str
+    source_store_id: str
+    target_store_id: str
+
+
+def _command_key(
+    case_id: int,
+    disposition: str = "resalable",
+    *,
+    separated: bool = False,
+) -> str:
+    if disposition == "resalable" and not separated:
+        # Preserve the historical identity only for genuinely all-resalable
+        # cases. Mixed legacy review_required commands must never be silently
+        # reinterpreted as a partial resalable export.
+        return f"physical-return:{int(case_id)}:sales_return:v1"
+    version = "v2" if disposition == "resalable" else "v1"
+    return f"physical-return:{int(case_id)}:{disposition}:sales_return:{version}"
+
+
+def _quarantine_move_key(event_id: int) -> str:
+    return f"physical-return-quarantine:{int(event_id)}:move:v1"
+
+
+def _disposition_store_id(disposition: str) -> str:
+    settings = get_settings()
+    values = {
+        "resalable": settings.moysklad_store_id,
+        "damaged": settings.moysklad_damaged_store_id,
+        "quarantine": settings.moysklad_quarantine_store_id,
+    }
+    store_id = str(values.get(disposition) or "").strip()
+    if not store_id:
+        raise MoySkladReviewRequired(
+            f"MoySklad {disposition} disposition store is not configured"
+        )
+    return store_id
 
 
 def _allocate_remaining_cents(
@@ -139,6 +196,38 @@ def _case_completion_ids(db: Session, order_id: int) -> dict[int, int]:
             + ", ".join(str(case_id) for case_id in missing)
         )
     return completion
+
+
+def _inspection_disposition_counts(
+    db: Session,
+    physical: ReturnLogisticsItem,
+) -> dict[str, int]:
+    rows = (
+        db.query(
+            ReturnLogisticsEvent.disposition,
+            func.sum(ReturnLogisticsEvent.quantity),
+        )
+        .filter(
+            ReturnLogisticsEvent.case_id == int(physical.case_id),
+            ReturnLogisticsEvent.item_id == int(physical.id),
+            ReturnLogisticsEvent.event_type == "inspected",
+        )
+        .group_by(ReturnLogisticsEvent.disposition)
+        .all()
+    )
+    counts = {"resalable": 0, "damaged": 0, "quarantine": 0}
+    for disposition, quantity in rows:
+        key = str(disposition or "")
+        if key not in counts:
+            raise MoySkladReviewRequired(
+                "Physical return inspection contains unsupported disposition evidence"
+            )
+        counts[key] += int(quantity or 0)
+    if sum(counts.values()) != int(physical.inspected_qty):
+        raise MoySkladReviewRequired(
+            "Append-only inspection disposition evidence does not match inspected quantity"
+        )
+    return counts
 
 
 def _build_physical_return_allocation(
@@ -234,13 +323,12 @@ def _build_physical_return_allocation(
     for physical in current_items:
         inspected_qty = int(physical.inspected_qty)
         authorized_qty = int(physical.authorized_qty)
-        resalable_qty = int(physical.resalable_qty)
-        damaged_qty = int(physical.damaged_qty)
-        quarantine_qty = int(physical.quarantine_qty)
+        disposition_counts = _inspection_disposition_counts(db, physical)
+        resalable_qty = int(disposition_counts["resalable"])
+        damaged_qty = int(disposition_counts["damaged"])
+        quarantine_qty = int(disposition_counts["quarantine"])
         if inspected_qty != authorized_qty:
             raise MoySkladReviewRequired("Physical return inspection is incomplete")
-        if resalable_qty + damaged_qty + quarantine_qty != inspected_qty:
-            raise MoySkladReviewRequired("Physical return disposition evidence is inconsistent")
         allocated = allocations.get((int(case.id), int(physical.id)))
         if allocated is None:
             raise MoySkladReviewRequired("Physical return monetary allocation is missing")
@@ -283,16 +371,28 @@ def _persisted_allocation_payload(
     *,
     case_id: int,
     order_id: int,
+    disposition: str = "resalable",
 ) -> dict[str, object]:
+    command_type = _DISPOSITION_COMMAND_TYPES.get(disposition)
+    if command_type is None:
+        raise MoySkladReviewRequired("Unsupported physical return provider disposition")
+    expected = _build_physical_return_allocation(db, case_id, lock_order=False)
+    separated = disposition == "resalable" and not bool(expected.get("auto_exportable"))
+    candidate_keys = [_command_key(case_id, disposition, separated=separated)]
+    if disposition == "resalable" and separated:
+        # Inspect legacy v1 only to produce an explicit historical-review error;
+        # it is never accepted as the v2 mixed-disposition authority.
+        candidate_keys.append(_command_key(case_id, disposition, separated=False))
     command = (
         db.query(ProviderCommand)
         .filter(
             ProviderCommand.provider == "moysklad",
-            ProviderCommand.idempotency_key == _command_key(case_id),
-            ProviderCommand.command_type == _COMMAND_TYPE,
+            ProviderCommand.idempotency_key.in_(candidate_keys),
+            ProviderCommand.command_type == command_type,
             ProviderCommand.aggregate_type == "return_logistics_case",
             ProviderCommand.aggregate_id == str(int(case_id)),
         )
+        .order_by(ProviderCommand.id.desc())
         .first()
     )
     if command is None:
@@ -312,15 +412,73 @@ def _persisted_allocation_payload(
         raise MoySkladReviewRequired(
             f"Physical return monetary allocation requires review: {payload['allocation_error']}"
         )
-    expected = _build_physical_return_allocation(db, case_id, lock_order=False)
-    if payload != expected:
+    if (
+        disposition == "resalable"
+        and not bool(expected.get("auto_exportable"))
+        and command.idempotency_key == _command_key(case_id, "resalable", separated=False)
+    ):
+        raise MoySkladReviewRequired(
+            "Legacy mixed-disposition physical return command cannot be replayed; "
+            "record separated provider disposition evidence first"
+        )
+    persisted_disposition = payload.get("provider_disposition")
+    persisted_store_id = payload.get("provider_store_id")
+    base_payload = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"provider_disposition", "provider_store_id"}
+    }
+    # Legacy fully-resalable v1 commands have no provider destination fields.
+    if persisted_disposition is not None or persisted_store_id is not None:
+        if persisted_disposition != disposition or not str(persisted_store_id or "").strip():
+            raise MoySkladReviewRequired(
+                "Immutable physical return provider disposition evidence is invalid"
+            )
+    if base_payload != expected:
         raise MoySkladReviewRequired(
             "Immutable physical return monetary allocation does not match physical evidence"
         )
     return payload
 
 
-def _prepare_physical_return_snapshot(db: Session, case_id: int) -> _PhysicalReturnSnapshot:
+def _split_disposition_cents(
+    *,
+    resalable_qty: int,
+    damaged_qty: int,
+    quarantine_qty: int,
+    allocated_cents: int,
+) -> dict[str, int]:
+    remaining_qty = int(resalable_qty) + int(damaged_qty) + int(quarantine_qty)
+    remaining_cents = int(allocated_cents)
+    result: dict[str, int] = {}
+    for disposition, quantity in (
+        ("resalable", int(resalable_qty)),
+        ("damaged", int(damaged_qty)),
+        ("quarantine", int(quarantine_qty)),
+    ):
+        if quantity <= 0:
+            result[disposition] = 0
+            continue
+        cents = _allocate_remaining_cents(
+            remaining_cents=remaining_cents,
+            current_qty=quantity,
+            remaining_qty=remaining_qty,
+        )
+        result[disposition] = cents
+        remaining_cents -= cents
+        remaining_qty -= quantity
+    if remaining_qty != 0 or remaining_cents != 0:
+        raise MoySkladReviewRequired(
+            "Physical return disposition monetary split did not reconcile"
+        )
+    return result
+
+
+def _prepare_physical_return_snapshot(
+    db: Session,
+    case_id: int,
+    disposition: str = "resalable",
+) -> _PhysicalReturnSnapshot:
     _require_clean_export_session(db)
     try:
         case = db.query(ReturnLogisticsCase).filter(ReturnLogisticsCase.id == case_id).first()
@@ -345,6 +503,8 @@ def _prepare_physical_return_snapshot(db: Session, case_id: int) -> _PhysicalRet
         if not physical_items:
             raise MoySkladReviewRequired("Physical return has no inspected items")
 
+        if disposition not in _DISPOSITIONS:
+            raise MoySkladReviewRequired("Unsupported physical return provider disposition")
         for physical in physical_items:
             inspected_qty = int(physical.inspected_qty)
             authorized_qty = int(physical.authorized_qty)
@@ -355,18 +515,12 @@ def _prepare_physical_return_snapshot(db: Session, case_id: int) -> _PhysicalRet
                 raise MoySkladReviewRequired("Physical return inspection is incomplete")
             if resalable_qty + damaged_qty + quarantine_qty != inspected_qty:
                 raise MoySkladReviewRequired("Physical return disposition evidence is inconsistent")
-            if damaged_qty or quarantine_qty:
-                raise MoySkladReviewRequired(
-                    "Damaged/quarantine physical return requires provider disposition reconciliation; "
-                    "automatic MoySklad SalesReturn would increase provider stock"
-                )
-            if resalable_qty != inspected_qty:
-                raise MoySkladReviewRequired("Only fully resalable physical quantities can be auto-exported")
 
         allocation = _persisted_allocation_payload(
             db,
             case_id=int(case.id),
             order_id=int(order.id),
+            disposition=disposition,
         )
         raw_lines = allocation.get("lines")
         if not isinstance(raw_lines, list):
@@ -400,23 +554,44 @@ def _prepare_physical_return_snapshot(db: Session, case_id: int) -> _PhysicalRet
             try:
                 allocated_qty = int(allocated.get("quantity") or 0)
                 allocated_resalable = int(allocated.get("resalable_qty") or 0)
+                allocated_damaged = int(allocated.get("damaged_qty") or 0)
+                allocated_quarantine = int(allocated.get("quarantine_qty") or 0)
                 allocated_cents = int(allocated.get("net_total_cents"))
             except (TypeError, ValueError) as exc:
                 raise MoySkladReviewRequired("Physical return monetary allocation line is invalid") from exc
-            if allocated_qty != int(physical.inspected_qty) or allocated_resalable != int(physical.resalable_qty):
+            if allocated_qty != int(physical.inspected_qty):
                 raise MoySkladReviewRequired("Physical return monetary allocation quantity mismatch")
+            if allocated_resalable + allocated_damaged + allocated_quarantine != allocated_qty:
+                raise MoySkladReviewRequired("Physical return disposition allocation is inconsistent")
             if allocated_cents < 0:
                 raise MoySkladReviewRequired("Physical return monetary allocation amount is invalid")
+            quantity = {
+                "resalable": allocated_resalable,
+                "damaged": allocated_damaged,
+                "quarantine": allocated_quarantine,
+            }[disposition]
+            if quantity <= 0:
+                continue
+            split_cents = _split_disposition_cents(
+                resalable_qty=allocated_resalable,
+                damaged_qty=allocated_damaged,
+                quarantine_qty=allocated_quarantine,
+                allocated_cents=allocated_cents,
+            )[disposition]
             lines.append(
                 _PhysicalReturnLine(
                     order_item_id=int(order_item.id),
                     moysklad_id=moysklad_id,
-                    quantity=int(physical.resalable_qty),
-                    net_total_cents=allocated_cents,
+                    quantity=quantity,
+                    net_total_cents=split_cents,
                 )
             )
         if set(allocation_by_item) != expected_item_ids:
             raise MoySkladReviewRequired("Physical return monetary allocation contains unexpected lines")
+        if not lines:
+            raise MoySkladReviewRequired(
+                f"Physical return has no {disposition} quantity to export"
+            )
 
         demand_command = (
             db.query(ProviderCommand)
@@ -435,6 +610,8 @@ def _prepare_physical_return_snapshot(db: Session, case_id: int) -> _PhysicalRet
             return_request_id=int(case.return_request_id),
             order_snapshot=order_snapshot,
             demand_external_id=str(demand_command.external_id).strip(),
+            disposition=disposition,
+            store_id=str(allocation.get("provider_store_id") or "").strip(),
             lines=tuple(lines),
         )
     finally:
@@ -467,13 +644,21 @@ async def _physical_return_positions(snapshot: _PhysicalReturnSnapshot) -> list[
     return positions
 
 
-async def export_physical_sales_return(db: Session, case_id: int) -> str:
+async def export_physical_sales_return(
+    db: Session,
+    case_id: int,
+    disposition: str = "resalable",
+) -> str:
     _require_export_configuration()
-    snapshot = _prepare_physical_return_snapshot(db, case_id)
+    snapshot = _prepare_physical_return_snapshot(db, case_id, disposition)
     positions = await _physical_return_positions(snapshot)
-    sync_id = _sync_id("physical-salesreturn", snapshot.case_id)
+    sync_id = _sync_id(f"physical-salesreturn-{snapshot.disposition}", snapshot.case_id)
     payload = _base_document(snapshot.order_snapshot, positions, sync_id)
-    payload["externalCode"] = f"FLASHIN-PHYSICAL-RETURN-{snapshot.case_id}"
+    provider_store_id = snapshot.store_id or _disposition_store_id(snapshot.disposition)
+    payload["store"] = _entity_meta("store", provider_store_id)
+    payload["externalCode"] = (
+        f"FLASHIN-PHYSICAL-RETURN-{snapshot.case_id}-{snapshot.disposition.upper()}"
+    )
     payload["demand"] = {
         "meta": {
             "href": f"{get_settings().moysklad_base_url.rstrip('/')}/entity/demand/{snapshot.demand_external_id}",
@@ -483,9 +668,17 @@ async def export_physical_sales_return(db: Session, case_id: int) -> str:
     }
     payload["description"] = (
         f"FLASHIN physical return case #{snapshot.case_id}; "
-        f"return_request=#{snapshot.return_request_id}; verified resalable quantities only"
+        f"return_request=#{snapshot.return_request_id}; "
+        f"verified disposition={snapshot.disposition}; store={provider_store_id}"
     )[:4096]
-    result = await _request_json("POST", "entity/salesreturn", json_body=payload)
+    try:
+        result = await _request_json("POST", "entity/salesreturn", json_body=payload)
+    except _AMBIGUOUS_TRANSPORT_ERRORS as exc:
+        # A POST may have reached MoySklad even though the response did not.
+        # Never blind-replay this non-idempotent document creation.
+        raise MoySkladReviewRequired(
+            "MoySklad physical return outcome is ambiguous; reconcile by externalCode before replay"
+        ) from exc
     external_id = str(result.get("id") or "").strip()
     if not external_id:
         raise MoySkladReviewRequired("MoySklad physical sales return returned no id")
@@ -496,20 +689,9 @@ def enqueue_moysklad_physical_sales_return(db: Session, case_id: int):
     settings = get_settings()
     if not moysklad_execution_enabled(settings) or not settings.moysklad_order_export_enabled:
         return None
-    key = _command_key(case_id)
-    existing = (
-        db.query(ProviderCommand)
-        .filter(
-            ProviderCommand.provider == "moysklad",
-            ProviderCommand.idempotency_key == key,
-        )
-        .first()
-    )
-    if existing is not None:
-        return existing
 
     try:
-        payload = _build_physical_return_allocation(db, int(case_id), lock_order=True)
+        base_payload = _build_physical_return_allocation(db, int(case_id), lock_order=True)
     except MoySkladReviewRequired as exc:
         # Physical inspection is warehouse truth and must not be rolled back by
         # provider-side mapping or monetary-data defects. Persist the command in
@@ -521,19 +703,207 @@ def enqueue_moysklad_physical_sales_return(db: Session, case_id: int):
         )
         if failed_case is None:
             raise
-        payload = {
+        base_payload = {
             "case_id": int(case_id),
             "order_id": int(failed_case.order_id),
             "allocation_version": _ALLOCATION_VERSION,
             "allocation_basis": _ALLOCATION_BASIS,
             "allocation_error": str(exc)[:1000],
         }
+        return enqueue_provider_command(
+            db,
+            provider="moysklad",
+            command_type=_COMMAND_TYPE,
+            idempotency_key=_command_key(case_id, "resalable"),
+            aggregate_type="return_logistics_case",
+            aggregate_id=case_id,
+            payload=base_payload,
+        )
+
+    commands = []
+    raw_lines = base_payload.get("lines")
+    if not isinstance(raw_lines, list):
+        raise MoySkladReviewRequired("Physical return allocation lines are invalid")
+    for disposition in _DISPOSITIONS:
+        quantity = sum(
+            int(line.get(f"{disposition}_qty") or 0)
+            for line in raw_lines
+            if isinstance(line, dict)
+        )
+        if quantity <= 0:
+            continue
+        separated = disposition == "resalable" and not bool(base_payload.get("auto_exportable"))
+        key = _command_key(case_id, disposition, separated=separated)
+        existing = (
+            db.query(ProviderCommand)
+            .filter(
+                ProviderCommand.provider == "moysklad",
+                ProviderCommand.idempotency_key == key,
+            )
+            .first()
+        )
+        if existing is not None:
+            commands.append(existing)
+            continue
+        payload = {
+            **base_payload,
+            "provider_disposition": disposition,
+            "provider_store_id": _disposition_store_id(disposition),
+        }
+        commands.append(
+            enqueue_provider_command(
+                db,
+                provider="moysklad",
+                command_type=_DISPOSITION_COMMAND_TYPES[disposition],
+                idempotency_key=key,
+                aggregate_type="return_logistics_case",
+                aggregate_id=case_id,
+                payload=payload,
+            )
+        )
+    if not commands:
+        raise MoySkladReviewRequired("Physical return has no provider disposition quantity")
+    return commands[0]
+
+
+def enqueue_moysklad_quarantine_move(db: Session, event_id: int):
+    settings = get_settings()
+    if not moysklad_execution_enabled(settings) or not settings.moysklad_order_export_enabled:
+        return None
+    event = (
+        db.query(ReturnLogisticsEvent)
+        .filter(
+            ReturnLogisticsEvent.id == int(event_id),
+            ReturnLogisticsEvent.event_type == "reclassified",
+        )
+        .first()
+    )
+    if event is None or event.disposition not in {"resalable", "damaged"}:
+        raise MoySkladReviewRequired("Quarantine resolution event is invalid")
+    item = db.query(ReturnLogisticsItem).filter(ReturnLogisticsItem.id == event.item_id).first()
+    if item is None or int(item.case_id) != int(event.case_id):
+        raise MoySkladReviewRequired("Quarantine resolution item ownership is invalid")
+    variant = db.query(ProductVariant).filter(ProductVariant.id == item.variant_id).first()
+    if variant is None or not str(variant.moysklad_id or "").strip():
+        raise MoySkladReviewRequired("Quarantine resolution has no exact MoySklad variant identity")
+
+    key = _quarantine_move_key(event.id)
+    existing = (
+        db.query(ProviderCommand)
+        .filter(
+            ProviderCommand.provider == "moysklad",
+            ProviderCommand.idempotency_key == key,
+        )
+        .first()
+    )
+    if existing is not None:
+        return existing
+    payload = {
+        "event_id": int(event.id),
+        "case_id": int(event.case_id),
+        "item_id": int(item.id),
+        "variant_id": int(item.variant_id),
+        "moysklad_id": str(variant.moysklad_id).strip(),
+        "quantity": int(event.quantity),
+        "target_disposition": str(event.disposition),
+        "source_store_id": _disposition_store_id("quarantine"),
+        "target_store_id": _disposition_store_id(str(event.disposition)),
+        "event_payload_hash": str(event.payload_hash),
+    }
     return enqueue_provider_command(
         db,
         provider="moysklad",
-        command_type=_COMMAND_TYPE,
+        command_type="moysklad.quarantine_move.create",
         idempotency_key=key,
-        aggregate_type="return_logistics_case",
-        aggregate_id=case_id,
+        aggregate_type="return_logistics_event",
+        aggregate_id=event.id,
         payload=payload,
     )
+
+
+def _prepare_quarantine_move_snapshot(db: Session, event_id: int) -> _QuarantineMoveSnapshot:
+    _require_clean_export_session(db)
+    try:
+        command = (
+            db.query(ProviderCommand)
+            .filter(
+                ProviderCommand.provider == "moysklad",
+                ProviderCommand.command_type == "moysklad.quarantine_move.create",
+                ProviderCommand.idempotency_key == _quarantine_move_key(event_id),
+                ProviderCommand.aggregate_type == "return_logistics_event",
+                ProviderCommand.aggregate_id == str(int(event_id)),
+            )
+            .first()
+        )
+        if command is None:
+            raise MoySkladReviewRequired("Quarantine move is missing immutable provider evidence")
+        payload = _decode_allocation_payload(command)
+        event = db.query(ReturnLogisticsEvent).filter(ReturnLogisticsEvent.id == int(event_id)).first()
+        if (
+            event is None
+            or event.event_type != "reclassified"
+            or event.disposition not in {"resalable", "damaged"}
+            or int(payload.get("event_id") or 0) != int(event.id)
+            or int(payload.get("case_id") or 0) != int(event.case_id)
+            or int(payload.get("quantity") or 0) != int(event.quantity)
+            or str(payload.get("target_disposition") or "") != str(event.disposition)
+            or str(payload.get("event_payload_hash") or "") != str(event.payload_hash)
+        ):
+            raise MoySkladReviewRequired("Quarantine move evidence no longer matches local authority")
+        item = db.query(ReturnLogisticsItem).filter(ReturnLogisticsItem.id == event.item_id).first()
+        if item is None or int(item.case_id) != int(event.case_id):
+            raise MoySkladReviewRequired("Quarantine move item ownership is invalid")
+        variant = db.query(ProductVariant).filter(ProductVariant.id == item.variant_id).first()
+        if (
+            variant is None
+            or str(variant.moysklad_id or "").strip() != str(payload.get("moysklad_id") or "").strip()
+        ):
+            raise MoySkladReviewRequired("Quarantine move variant identity changed")
+        source_store = str(payload.get("source_store_id") or "").strip()
+        target_store = str(payload.get("target_store_id") or "").strip()
+        if not source_store or not target_store or source_store == target_store:
+            raise MoySkladReviewRequired("Quarantine move store evidence is invalid")
+        return _QuarantineMoveSnapshot(
+            event_id=int(event.id),
+            case_id=int(event.case_id),
+            moysklad_id=str(variant.moysklad_id).strip(),
+            quantity=int(event.quantity),
+            target_disposition=str(event.disposition),
+            source_store_id=source_store,
+            target_store_id=target_store,
+        )
+    finally:
+        if db.in_transaction():
+            db.rollback()
+
+
+async def export_quarantine_move(db: Session, event_id: int) -> str:
+    _require_export_configuration()
+    snapshot = _prepare_quarantine_move_snapshot(db, event_id)
+    assortment = await _resolve_assortment_meta(snapshot.moysklad_id)
+    payload = {
+        "organization": _entity_meta("organization", get_settings().moysklad_organization_id),
+        "sourceStore": _entity_meta("store", snapshot.source_store_id),
+        "targetStore": _entity_meta("store", snapshot.target_store_id),
+        "syncId": _sync_id("physical-quarantine-move", snapshot.event_id),
+        "externalCode": f"FLASHIN-QUARANTINE-MOVE-{snapshot.event_id}",
+        "description": (
+            f"FLASHIN quarantine resolution event #{snapshot.event_id}; "
+            f"case=#{snapshot.case_id}; target={snapshot.target_disposition}"
+        )[:4096],
+        "positions": [{
+            "assortment": assortment,
+            "quantity": snapshot.quantity,
+            "price": 0,
+        }],
+    }
+    try:
+        result = await _request_json("POST", "entity/move", json_body=payload)
+    except _AMBIGUOUS_TRANSPORT_ERRORS as exc:
+        raise MoySkladReviewRequired(
+            "MoySklad quarantine move outcome is ambiguous; reconcile by externalCode before replay"
+        ) from exc
+    external_id = str(result.get("id") or "").strip()
+    if not external_id:
+        raise MoySkladReviewRequired("MoySklad quarantine move returned no id")
+    return external_id

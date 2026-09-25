@@ -37,6 +37,8 @@ def _production(**overrides):
         "moysklad_organization_id": "organization-id",
         "moysklad_agent_id": "agent-id",
         "moysklad_store_id": "store-id",
+        "moysklad_damaged_store_id": "damaged-store-id",
+        "moysklad_quarantine_store_id": "quarantine-store-id",
         "moysklad_delivery_service_id": "delivery-service-id",
     }
     values.update(overrides)
@@ -55,6 +57,8 @@ def test_production_accepts_complete_moysklad_outbound_configuration():
         "moysklad_organization_id",
         "moysklad_agent_id",
         "moysklad_store_id",
+        "moysklad_damaged_store_id",
+        "moysklad_quarantine_store_id",
         "moysklad_delivery_service_id",
     ],
 )

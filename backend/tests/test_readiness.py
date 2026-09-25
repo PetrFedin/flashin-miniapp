@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from backend.api import health
 
 
-CURRENT_HEAD = "0045_refund_item_allocation"
+CURRENT_HEAD = "0046_moysklad_return_disposition"
 
 
 class ScalarResult:

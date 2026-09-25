@@ -16,9 +16,9 @@ if str(ROOT) not in sys.path:
 
 from backend.database import engine
 
-EXPECTED_HEAD = "0045_refund_item_allocation"
+EXPECTED_HEAD = "0046_moysklad_return_disposition"
 TARGET = "0040_delivery_authority"
-ERROR_FRAGMENT = "0041 downgrade blocked: reverse-logistics evidence exists"
+ERROR_FRAGMENT = "0046 downgrade blocked: quarantine reclassification evidence exists"
 
 
 def _config() -> Config:
@@ -48,6 +48,19 @@ def main() -> int:
         raise AssertionError("downgrade guard smoke requires prior physical-return case evidence")
     if evidence_movements <= 0:
         raise AssertionError("downgrade guard smoke requires prior physical-return inventory evidence")
+    with engine.connect() as connection:
+        reclassified = int(
+            connection.execute(
+                text(
+                    "SELECT count(*) FROM return_logistics_events "
+                    "WHERE event_type = 'reclassified'"
+                )
+            ).scalar_one()
+        )
+    if reclassified <= 0:
+        raise AssertionError(
+            "downgrade guard smoke requires prior quarantine reclassification evidence"
+        )
 
     failure = ""
     try:
@@ -99,10 +112,9 @@ def main() -> int:
             ).scalar_one()
         )
 
-    # PostgreSQL transactional DDL must restore 0041 physical authority, the
-    # 0042 concurrency indexes, 0043 provider-identity uniqueness, 0044 media
-    # upload authority and 0045 refund-allocation evidence after 0041 rejects
-    # the downgrade chain.
+    # 0046 must reject before destructive downgrade starts whenever quarantine
+    # reclassification evidence exists. The complete authority stack therefore
+    # remains at the exact current head.
     assert revision == EXPECTED_HEAD, revision
     assert {
         "return_logistics_cases",
@@ -131,6 +143,7 @@ def main() -> int:
             "provider_identity_indexes_preserved": True,
             "media_upload_authority_preserved": True,
             "refund_allocation_authority_preserved": True,
+            "quarantine_reclassification_authority_preserved": True,
             "transactional_ddl_preserved": True,
         }
     )

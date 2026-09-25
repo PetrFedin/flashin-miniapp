@@ -73,7 +73,7 @@ class ReturnLogisticsEvent(Base):
         # must therefore conflict rather than create a second side effect.
         UniqueConstraint("case_id", "idempotency_key", name="uq_return_logistics_case_idempotency"),
         CheckConstraint(
-            "event_type IN ('authorized','received','inspected')",
+            "event_type IN ('authorized','received','inspected','reclassified')",
             name="ck_return_logistics_events_type",
         ),
         CheckConstraint(

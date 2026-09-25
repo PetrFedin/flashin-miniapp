@@ -157,6 +157,73 @@ def test_production_rejects_enabled_payments_when_checkout_is_disabled():
     assert "PAYMENTS_MODE must be disabled" in str(exc_info.value)
 
 
+def test_enabled_moysklad_requires_sellable_store_even_without_order_export():
+    with pytest.raises(ValidationError) as missing:
+        _safe_production_settings(
+            moysklad_mode="live",
+            moysklad_token="token",
+            moysklad_sale_price_type="RUB",
+            moysklad_order_export_enabled=False,
+            moysklad_store_id="",
+        )
+    assert "MOYSKLAD_STORE_ID is required when MOYSKLAD_MODE is enabled" in str(missing.value)
+
+    accepted = _safe_production_settings(
+        moysklad_mode="live",
+        moysklad_token="token",
+        moysklad_sale_price_type="RUB",
+        moysklad_order_export_enabled=False,
+        moysklad_store_id="sellable",
+    )
+    assert accepted.moysklad_store_id == "sellable"
+
+
+def test_live_moysklad_export_requires_distinct_disposition_stores():
+    with pytest.raises(ValidationError) as missing:
+        _safe_production_settings(
+            moysklad_mode="live",
+            moysklad_token="token",
+            moysklad_sale_price_type="RUB",
+            moysklad_order_export_enabled=True,
+            moysklad_organization_id="org",
+            moysklad_agent_id="agent",
+            moysklad_store_id="sellable",
+            moysklad_delivery_service_id="delivery",
+        )
+    assert "MOYSKLAD_DAMAGED_STORE_ID" in str(missing.value)
+    assert "MOYSKLAD_QUARANTINE_STORE_ID" in str(missing.value)
+
+    with pytest.raises(ValidationError) as duplicate:
+        _safe_production_settings(
+            moysklad_mode="live",
+            moysklad_token="token",
+            moysklad_sale_price_type="RUB",
+            moysklad_order_export_enabled=True,
+            moysklad_organization_id="org",
+            moysklad_agent_id="agent",
+            moysklad_store_id="sellable",
+            moysklad_damaged_store_id="sellable",
+            moysklad_quarantine_store_id="quarantine",
+            moysklad_delivery_service_id="delivery",
+        )
+    assert "must be three distinct stores" in str(duplicate.value)
+
+    accepted = _safe_production_settings(
+        moysklad_mode="live",
+        moysklad_token="token",
+        moysklad_sale_price_type="RUB",
+        moysklad_order_export_enabled=True,
+        moysklad_organization_id="org",
+        moysklad_agent_id="agent",
+        moysklad_store_id="sellable",
+        moysklad_damaged_store_id="damaged",
+        moysklad_quarantine_store_id="quarantine",
+        moysklad_delivery_service_id="delivery",
+    )
+    assert accepted.moysklad_damaged_store_id == "damaged"
+    assert accepted.moysklad_quarantine_store_id == "quarantine"
+
+
 def test_runtime_provider_modes_are_explicit_enums():
     with pytest.raises(ValidationError):
         _safe_production_settings(payments_mode="maybe")

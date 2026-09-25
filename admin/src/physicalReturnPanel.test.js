@@ -29,4 +29,8 @@ test("operator controls follow authorize transit receive inspect disposition seq
   assert.match(source, /mutateItem\(item, "inspect"\)/);
   assert.match(source, /PHYSICAL_DISPOSITION_LABELS/);
   assert.match(source, /returns\.physical\.write/);
+  assert.match(source, /resolveQuarantine/);
+  assert.match(source, /physical\/quarantine\/resolve/);
+  assert.match(source, /МойСклад · складское распределение/);
+  assert.match(source, /Автоматический повтор неоднозначной операции заблокирован/);
 });

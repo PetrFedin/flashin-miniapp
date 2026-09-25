@@ -35,6 +35,9 @@ export default defineConfig({
         APP_ENV: "test",
         INTEGRATED_E2E: "true",
         MOYSKLAD_ORDER_EXPORT_ENABLED: "true",
+        MOYSKLAD_STORE_ID: "e2e-sellable-store",
+        MOYSKLAD_DAMAGED_STORE_ID: "e2e-damaged-store",
+        MOYSKLAD_QUARANTINE_STORE_ID: "e2e-quarantine-store",
       },
     },
     {
