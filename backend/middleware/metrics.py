@@ -42,6 +42,8 @@ RATE_LIMIT_BACKEND_AVAILABLE = Gauge(
     "flashin_rate_limit_backend_available",
     "Whether the latest shared rate-limit backend operation succeeded",
 )
+# -1 means no shared-backend decision has been attempted in this process yet.
+RATE_LIMIT_BACKEND_AVAILABLE.set(-1)
 
 PILOT_METRICS_COLLECTION_SUCCESS = Gauge(
     "flashin_pilot_metrics_collection_success",
