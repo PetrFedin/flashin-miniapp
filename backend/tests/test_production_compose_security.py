@@ -21,6 +21,7 @@ def _safe_config():
         name: {"restart": "unless-stopped"}
         for name in {
             "db",
+            "redis",
             "backend",
             "frontend",
             "admin",
@@ -29,12 +30,37 @@ def _safe_config():
             *worker_names,
         }
     }
+    services["redis"].update(
+        {
+            "image": "redis:8.10.1-alpine",
+            "command": [
+                "redis-server",
+                "--appendonly",
+                "yes",
+                "--appendfsync",
+                "everysec",
+                "--save",
+                "",
+            ],
+            "healthcheck": {"test": ["CMD", "redis-cli", "ping"]},
+            "volumes": [
+                {
+                    "type": "volume",
+                    "source": "rate_limit_redis",
+                    "target": "/data",
+                }
+            ],
+        }
+    )
     services["backend"].update(
         {
             "healthcheck": {
                 "test": ["CMD-SHELL", "curl -fsS http://localhost:8000/ready"]
             },
-            "depends_on": {"db": {"condition": "service_healthy"}},
+            "depends_on": {
+                "db": {"condition": "service_healthy"},
+                "redis": {"condition": "service_healthy"},
+            },
             "volumes": [
                 {
                     "type": "bind",
