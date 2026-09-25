@@ -1,8 +1,12 @@
+import asyncio
 from collections import defaultdict, deque
 from types import SimpleNamespace
 
+from starlette.responses import JSONResponse
+
 from backend.middleware.rate_limit import (
     RateLimitMiddleware,
+    RateLimitBackendUnavailable,
     _client_ip,
     _rate_limit_keys,
     _route_bucket,
@@ -148,3 +152,95 @@ def test_cleanup_removes_only_buckets_outside_the_full_window():
 
     assert "expired" not in middleware.hits
     assert list(middleware.hits["active"]) == [59.5]
+
+class _UnavailableLimiter:
+    async def hit(self, _keys, _limit):
+        raise RateLimitBackendUnavailable("redis unavailable")
+
+
+def _redis_settings(**overrides):
+    values = {
+        "rate_limit_enabled": True,
+        "rate_limit_backend": "redis",
+        "rate_limit_redis_url": "redis://redis:6379/0",
+        "rate_limit_redis_connect_timeout_seconds": 1.0,
+        "rate_limit_redis_socket_timeout_seconds": 1.0,
+        "rate_limit_per_minute": 120,
+        "rate_limit_auth_per_minute": 20,
+        "rate_limit_admin_login_per_minute": 10,
+        "rate_limit_search_per_minute": 120,
+        "rate_limit_checkout_per_minute": 12,
+        "rate_limit_payment_per_minute": 12,
+        "rate_limit_return_per_minute": 12,
+        "rate_limit_support_per_minute": 30,
+        "rate_limit_webhook_per_minute": 180,
+        "app_env": "production",
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def test_sensitive_route_fails_closed_when_shared_backend_is_unavailable(monkeypatch):
+    from backend.middleware import rate_limit as module
+
+    middleware = _memory_middleware()
+    middleware._distributed = None
+    middleware._distributed_url = ""
+    monkeypatch.setattr(module, "get_settings", lambda: _redis_settings())
+    monkeypatch.setattr(
+        middleware,
+        "_distributed_limiter",
+        lambda _settings: _UnavailableLimiter(),
+    )
+    downstream_called = False
+
+    async def downstream(_request):
+        nonlocal downstream_called
+        downstream_called = True
+        return JSONResponse({"ok": True})
+
+    request = _request(
+        client_ip="203.0.113.10",
+        method="POST",
+        path="/api/orders/checkout",
+        headers={"idempotency-key": "checkout-operation-123456"},
+    )
+    response = asyncio.run(middleware.dispatch(request, downstream))
+
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "1"
+    assert response.headers["x-ratelimit-policy"] == "checkout"
+    assert downstream_called is False
+
+
+def test_availability_route_fails_open_with_explicit_degraded_header(monkeypatch):
+    from backend.middleware import rate_limit as module
+
+    middleware = _memory_middleware()
+    middleware._distributed = None
+    middleware._distributed_url = ""
+    monkeypatch.setattr(module, "get_settings", lambda: _redis_settings())
+    monkeypatch.setattr(
+        middleware,
+        "_distributed_limiter",
+        lambda _settings: _UnavailableLimiter(),
+    )
+    downstream_called = False
+
+    async def downstream(_request):
+        nonlocal downstream_called
+        downstream_called = True
+        return JSONResponse({"ok": True})
+
+    request = _request(
+        client_ip="203.0.113.10",
+        method="GET",
+        path="/api/search/products",
+    )
+    response = asyncio.run(middleware.dispatch(request, downstream))
+
+    assert response.status_code == 200
+    assert response.headers["x-ratelimit-policy"] == "search"
+    assert response.headers["x-ratelimit-degraded"] == "open"
+    assert downstream_called is True
+
