@@ -38,9 +38,6 @@ def test_production_fastapi_disables_documentation_routes():
             "ENABLE_SEED": "false",
             "USE_CREATE_ALL": "false",
             "METRICS_ENABLED": "false",
-            "RATE_LIMIT_ENABLED": "true",
-            "RATE_LIMIT_BACKEND": "redis",
-            "RATE_LIMIT_REDIS_URL": "redis://redis:6379/0",
         }
     )
     # The backend CI job intentionally carries a development ADMIN_PASSWORD.
