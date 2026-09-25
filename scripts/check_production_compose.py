@@ -27,6 +27,7 @@ WORKER_SERVICES = {
 MONITORING_SERVICES = {"alertmanager", "prometheus", "grafana"}
 REQUIRED_INTERNAL_SERVICES = {
     "db",
+    "redis",
     "backend",
     "frontend",
     "admin",
@@ -155,12 +156,30 @@ def validate_config(config: Mapping) -> list[str]:
         if name in required_services and service.get("restart") != RESTART_POLICY:
             errors.append(f"Service {name} must use restart: {RESTART_POLICY}")
 
+    redis = services.get("redis")
+    if isinstance(redis, Mapping):
+        if not _pinned_image(redis):
+            errors.append("Redis rate-limit service must use a pinned image tag")
+        if "redis-cli ping" not in _healthcheck_text(redis):
+            errors.append("Redis rate-limit service must have a redis-cli ping healthcheck")
+        command = _command_text(redis)
+        for marker in ("--appendonly yes", "--appendfsync everysec"):
+            if marker not in command:
+                errors.append(f"Redis rate-limit service is missing persistence option: {marker}")
+        storage = _mounts_by_target(redis).get("/data")
+        if not storage:
+            errors.append("Redis rate-limit service must use durable /data storage")
+        elif str(storage.get("type") or "") != "volume":
+            errors.append("Redis rate-limit /data storage must be a named volume")
+
     backend = services.get("backend")
     if isinstance(backend, Mapping):
         if "/ready" not in _healthcheck_text(backend):
             errors.append("Backend healthcheck must use /ready, not only liveness")
         if _dependency_condition(backend, "db") != "service_healthy":
             errors.append("Backend must wait for a healthy database")
+        if _dependency_condition(backend, "redis") != "service_healthy":
+            errors.append("Backend must wait for healthy Redis rate-limit authority")
         backend_mounts = _mounts_by_target(backend)
         for target in ("/app/docs", "/app/deploy/release"):
             mount = backend_mounts.get(target)
