@@ -76,6 +76,13 @@ def _runtime_configuration_errors(env: Mapping[str, str]) -> list[str]:
         errors.append("PAYMENTS_MODE must be sandbox or live for pilot runtime arm")
     if str(env.get("MOYSKLAD_MODE") or "").strip().lower() not in {"sandbox", "live"}:
         errors.append("MOYSKLAD_MODE must be sandbox or live for pilot runtime arm")
+    if not _true(env.get("RATE_LIMIT_ENABLED")):
+        errors.append("RATE_LIMIT_ENABLED must be true for pilot runtime arm")
+    if str(env.get("RATE_LIMIT_BACKEND") or "").strip().lower() != "redis":
+        errors.append("RATE_LIMIT_BACKEND must be redis for pilot runtime arm")
+    rate_limit_url = str(env.get("RATE_LIMIT_REDIS_URL") or "").strip().lower()
+    if not rate_limit_url.startswith(("redis://", "rediss://")):
+        errors.append("RATE_LIMIT_REDIS_URL must configure shared Redis for pilot runtime arm")
     if not _true(env.get("PILOT_RUNTIME_ENFORCED")):
         errors.append("PILOT_RUNTIME_ENFORCED must be true")
     try:
@@ -329,7 +336,7 @@ def run_preflight(
             next_action=(
                 ""
                 if not runtime_configuration_errors
-                else "set APP_ENV=production, COMMERCIAL_CHECKOUT_ENABLED=true, PAYMENTS_MODE=live, MOYSKLAD_MODE=live, PILOT_RUNTIME_ENFORCED=true and PILOT_RUNTIME_MAX_ORDERS=20 in the deployed .env"
+                else "set APP_ENV=production, COMMERCIAL_CHECKOUT_ENABLED=true, PAYMENTS_MODE=live, MOYSKLAD_MODE=live, RATE_LIMIT_ENABLED=true, RATE_LIMIT_BACKEND=redis, shared RATE_LIMIT_REDIS_URL, PILOT_RUNTIME_ENFORCED=true and PILOT_RUNTIME_MAX_ORDERS=20 in the deployed .env"
             ),
             details={
                 "app_env": str(env.get("APP_ENV") or "").strip(),
