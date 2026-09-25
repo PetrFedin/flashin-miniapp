@@ -12,10 +12,17 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    restart: unless-stopped
+    ports: !reset []
+
   backend:
     restart: unless-stopped
     ports: !reset []
     stop_grace_period: 30s
+    depends_on:
+      redis:
+        condition: service_healthy
     volumes:
       - ./docs:/app/docs:ro
       - ./deploy/release:/app/deploy/release:ro
