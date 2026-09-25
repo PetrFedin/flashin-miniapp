@@ -5,9 +5,15 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 import uuid
+from pathlib import Path
 
 from redis.asyncio import Redis
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from backend.services.distributed_rate_limit import DistributedRateLimiter
 
