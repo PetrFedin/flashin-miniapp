@@ -299,3 +299,35 @@ def test_ambiguous_sales_return_transport_is_terminal_review(monkeypatch):
     monkeypatch.setattr(reverse_moysklad, "_request_json", ambiguous)
     with pytest.raises(MoySkladReviewRequired, match="ambiguous"):
         asyncio.run(reverse_moysklad.export_physical_sales_return(object(), 9, "damaged"))
+
+def test_ambiguous_quarantine_move_transport_is_terminal_review(monkeypatch):
+    snapshot = reverse_moysklad._QuarantineMoveSnapshot(
+        event_id=12,
+        case_id=9,
+        moysklad_id="variant",
+        quantity=1,
+        target_disposition="resalable",
+        source_store_id="store-quarantine",
+        target_store_id="store-sellable",
+    )
+    monkeypatch.setattr(reverse_moysklad, "_require_export_configuration", lambda: None)
+    monkeypatch.setattr(
+        reverse_moysklad,
+        "_prepare_quarantine_move_snapshot",
+        lambda *_args, **_kwargs: snapshot,
+    )
+
+    async def fake_assortment(_moysklad_id):
+        return {"href": "https://example.invalid/entity/variant/variant"}
+
+    async def ambiguous(*_args, **_kwargs):
+        raise httpx.ReadTimeout("provider response lost")
+
+    monkeypatch.setattr(reverse_moysklad, "_resolve_assortment_meta", fake_assortment)
+    monkeypatch.setattr(reverse_moysklad, "_entity_meta", lambda kind, value: {"kind": kind, "id": value})
+    monkeypatch.setattr(reverse_moysklad, "get_settings", _settings)
+    monkeypatch.setattr(reverse_moysklad, "_request_json", ambiguous)
+
+    with pytest.raises(MoySkladReviewRequired, match="quarantine move outcome is ambiguous"):
+        asyncio.run(reverse_moysklad.export_quarantine_move(object(), 12))
+
