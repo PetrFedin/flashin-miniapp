@@ -515,10 +515,10 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "scripts/pilot_evidence.py",
         (
-            ""RATE_LIMIT_BACKEND"",
-            ""RATE_LIMIT_REDIS_URL"",
-            ""RATE_LIMIT_CHECKOUT_PER_MINUTE"",
-            ""RATE_LIMIT_WEBHOOK_PER_MINUTE"",
+            '"RATE_LIMIT_BACKEND"',
+            '"RATE_LIMIT_REDIS_URL"',
+            '"RATE_LIMIT_CHECKOUT_PER_MINUTE"',
+            '"RATE_LIMIT_WEBHOOK_PER_MINUTE"',
         ),
     ),
     (
@@ -526,7 +526,7 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             ""RATE_LIMIT_BACKEND"",
             ""RATE_LIMIT_REDIS_URL"",
-            ""RATE_LIMIT_PAYMENT_PER_MINUTE"",
+            '"RATE_LIMIT_PAYMENT_PER_MINUTE"',
             ""RATE_LIMIT_WEBHOOK_PER_MINUTE"",
         ),
     ),
