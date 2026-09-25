@@ -157,6 +157,27 @@ def test_production_rejects_enabled_payments_when_checkout_is_disabled():
     assert "PAYMENTS_MODE must be disabled" in str(exc_info.value)
 
 
+def test_enabled_moysklad_requires_sellable_store_even_without_order_export():
+    with pytest.raises(ValidationError) as missing:
+        _safe_production_settings(
+            moysklad_mode="live",
+            moysklad_token="token",
+            moysklad_sale_price_type="RUB",
+            moysklad_order_export_enabled=False,
+            moysklad_store_id="",
+        )
+    assert "MOYSKLAD_STORE_ID is required when MOYSKLAD_MODE is enabled" in str(missing.value)
+
+    accepted = _safe_production_settings(
+        moysklad_mode="live",
+        moysklad_token="token",
+        moysklad_sale_price_type="RUB",
+        moysklad_order_export_enabled=False,
+        moysklad_store_id="sellable",
+    )
+    assert accepted.moysklad_store_id == "sellable"
+
+
 def test_live_moysklad_export_requires_distinct_disposition_stores():
     with pytest.raises(ValidationError) as missing:
         _safe_production_settings(
