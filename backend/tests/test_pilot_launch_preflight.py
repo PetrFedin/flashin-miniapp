@@ -13,6 +13,9 @@ RUNTIME_ENV = {
     "COMMERCIAL_CHECKOUT_ENABLED": "true",
     "PAYMENTS_MODE": "live",
     "MOYSKLAD_MODE": "live",
+    "RATE_LIMIT_ENABLED": "true",
+    "RATE_LIMIT_BACKEND": "redis",
+    "RATE_LIMIT_REDIS_URL": "redis://redis:6379/0",
     "PILOT_RUNTIME_ENFORCED": "true",
     "PILOT_RUNTIME_MAX_ORDERS": "20",
 }
@@ -112,6 +115,9 @@ def test_runtime_configuration_is_fail_closed(monkeypatch, tmp_path):
             "COMMERCIAL_CHECKOUT_ENABLED": "false",
             "PAYMENTS_MODE": "disabled",
             "MOYSKLAD_MODE": "disabled",
+            "RATE_LIMIT_ENABLED": "false",
+            "RATE_LIMIT_BACKEND": "memory",
+            "RATE_LIMIT_REDIS_URL": "",
             "PILOT_RUNTIME_ENFORCED": "false",
             "PILOT_RUNTIME_MAX_ORDERS": "21",
         },
@@ -127,6 +133,9 @@ def test_runtime_configuration_is_fail_closed(monkeypatch, tmp_path):
     assert any("COMMERCIAL_CHECKOUT_ENABLED must be true" in item for item in stage["errors"])
     assert any("PAYMENTS_MODE must be sandbox or live" in item for item in stage["errors"])
     assert any("MOYSKLAD_MODE must be sandbox or live" in item for item in stage["errors"])
+    assert any("RATE_LIMIT_ENABLED must be true" in item for item in stage["errors"])
+    assert any("RATE_LIMIT_BACKEND must be redis" in item for item in stage["errors"])
+    assert any("RATE_LIMIT_REDIS_URL" in item for item in stage["errors"])
     assert any("PILOT_RUNTIME_ENFORCED must be true" in item for item in stage["errors"])
     assert any("exactly 20" in item for item in stage["errors"])
 
