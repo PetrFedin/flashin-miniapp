@@ -24,6 +24,7 @@
 
 ## Operations
 
+- `docs/runbooks/RATE_LIMIT_AUTHORITY.md`
 - `docs/v37_worker_schedule.md`
 - `docs/v38_fulfillment_runbook.md`
 - `docs/disaster_recovery.md`
