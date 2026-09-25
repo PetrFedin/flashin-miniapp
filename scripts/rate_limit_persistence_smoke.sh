@@ -18,7 +18,9 @@ test "$appendonly" = "yes"
 test "$appendfsync" = "everysec"
 
 docker compose exec -T redis redis-cli DEL "$key" >/dev/null
-docker compose exec -T redis redis-cli ZADD "$key" 1 persisted-member >/dev/null
+docker compose exec -T redis redis-cli --raw EVAL \
+  "local t=redis.call('TIME'); local ms=(tonumber(t[1])*1000)+math.floor(tonumber(t[2])/1000); redis.call('ZADD',KEYS[1],ms,'persisted-member'); redis.call('PEXPIRE',KEYS[1],61000); return ms" \
+  1 "$key" >/dev/null
 sleep 2
 
 docker compose restart redis >/dev/null
