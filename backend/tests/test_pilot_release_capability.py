@@ -167,6 +167,41 @@ def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(
         ("scripts/deploy_production.sh", "#!/usr/bin/env bash\n", "deploy_release_gate.py"),
         ("scripts/pilot_release_contract.py", "CAPABILITY_VERSION = 31\n", "CAPABILITY_VERSION = 32"),
         (
+            "backend/middleware/rate_limit.py",
+            "class RateLimitMiddleware: pass\n",
+            "backend_fail_closed",
+        ),
+        (
+            "backend/services/distributed_rate_limit.py",
+            "class DistributedRateLimiter: pass\n",
+            "_ATOMIC_SLIDING_WINDOW",
+        ),
+        (
+            ".github/workflows/distributed-rate-limit-state.yml",
+            "name: Distributed Rate Limit State\njobs: {}\n",
+            "rate_limit_redis_smoke.py",
+        ),
+        (
+            "docker-compose.yml",
+            "services:\n  backend: {}\n",
+            "redis:8.10.1-alpine",
+        ),
+        (
+            "scripts/rate_limit_redis_smoke.py",
+            "def main(): return 0\n",
+            "two_clients_share_budget",
+        ),
+        (
+            "scripts/rate_limit_persistence_smoke.sh",
+            "#!/usr/bin/env bash\nexit 0\n",
+            "budget_survived_restart",
+        ),
+        (
+            "docs/runbooks/RATE_LIMIT_AUTHORITY.md",
+            "# Rate limiting\n",
+            "Fail closed when the shared limiter is unavailable",
+        ),
+        (
             "backend/services/inventory_movement_contract.py",
             "def movement_transition_valid(movement): return True\n",
             "expected_inventory_delta",
