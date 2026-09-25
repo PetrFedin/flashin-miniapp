@@ -202,6 +202,16 @@ def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(
             "Fail closed when the shared limiter is unavailable",
         ),
         (
+            "scripts/pilot_evidence.py",
+            "CONFIG_FINGERPRINT_KEYS = (\"APP_ENV\",)\n",
+            "\"RATE_LIMIT_BACKEND\"",
+        ),
+        (
+            "backend/tests/test_pilot_configuration_fingerprint.py",
+            "CRITICAL_WIRING_KEYS = (\"RATE_LIMIT_ENABLED\",)\n",
+            "\"RATE_LIMIT_REDIS_URL\"",
+        ),
+        (
             "backend/services/inventory_movement_contract.py",
             "def movement_transition_valid(movement): return True\n",
             "expected_inventory_delta",
