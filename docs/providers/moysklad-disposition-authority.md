@@ -4,13 +4,15 @@
 
 FLASHIN treats financial refund settlement and physical inventory as separate authorities. A payment refund never restores sellable stock. Sellable inventory can increase only from verified physical reverse-logistics evidence.
 
-For live MoySklad reverse logistics, three distinct warehouses are mandatory:
+For any enabled MoySklad mode, `MOYSKLAD_STORE_ID` is mandatory and is the only warehouse allowed to drive storefront sellable stock.
+
+When live MoySklad order/reverse-logistics export is enabled, three distinct warehouses are mandatory:
 
 - `MOYSKLAD_STORE_ID` — sellable stock used by the storefront.
 - `MOYSKLAD_DAMAGED_STORE_ID` — terminal non-sellable damaged stock.
 - `MOYSKLAD_QUARANTINE_STORE_ID` — temporary non-sellable quarantine stock.
 
-The three IDs must be different. Production configuration fails closed if live MoySklad order export is enabled without all three.
+The three IDs must be different. Production configuration fails closed if enabled MoySklad has no sellable store, and fails closed on live outbound execution unless all three disposition stores are configured.
 
 ## Initial physical return
 
@@ -28,7 +30,7 @@ Historical mixed-return v1 commands are never silently reinterpreted. Mixed resa
 
 ## Sellable inbound stock authority
 
-The storefront does not import aggregate MoySklad `effectiveStock` when a sellable store is configured.
+The storefront never imports aggregate MoySklad `effectiveStock` for an enabled production MoySklad integration.
 
 FLASHIN requests `GET /report/stock/bystore` with `groupBy=variant`, resolves each assortment provider ID, and applies only the `stock` belonging to `MOYSKLAD_STORE_ID`.
 
