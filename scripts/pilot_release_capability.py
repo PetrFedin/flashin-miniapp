@@ -337,11 +337,26 @@ RATE_LIMIT_AUTHORITY_REQUIRED_FILES = {
 }
 REQUIRED_FILES |= RATE_LIMIT_AUTHORITY_REQUIRED_FILES
 
+# Python application container least privilege is part of the immutable production
+# runtime and rollback contract.
+CONTAINER_LEAST_PRIVILEGE_REQUIRED_FILES = {
+    ".github/workflows/ci.yml",
+    "Dockerfile.backend",
+    "Dockerfile.bot",
+    "backend/tests/test_production_compose_gate.py",
+    "backend/tests/test_production_compose_security.py",
+    "docker-compose.production.yml",
+    "docs/runbooks/CONTAINER_LEAST_PRIVILEGE.md",
+    "scripts/check_production_compose.py",
+    "scripts/container_least_privilege_smoke.sh",
+}
+REQUIRED_FILES |= CONTAINER_LEAST_PRIVILEGE_REQUIRED_FILES
+
 # Keep immutable capability semantics inspectable and maintainable. Every tuple
 # binds one packaged runtime/test surface to concrete behavior, not just presence.
 MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("backend/api/orders.py", ("acquire_pilot_checkout(", "record_pilot_order(")),
-    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 32",)),
+    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 33",))
     (
         "scripts/pilot_release_capability.py",
         (
@@ -366,6 +381,8 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "REQUIRED_FILES |= REFUND_ITEM_ALLOCATION_REQUIRED_FILES",
             "RATE_LIMIT_AUTHORITY_REQUIRED_FILES",
             "REQUIRED_FILES |= RATE_LIMIT_AUTHORITY_REQUIRED_FILES",
+            "CONTAINER_LEAST_PRIVILEGE_REQUIRED_FILES",
+            "REQUIRED_FILES |= CONTAINER_LEAST_PRIVILEGE_REQUIRED_FILES",
             "MARKER_REQUIREMENTS",
         ),
     ),
@@ -444,6 +461,13 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             "redis:",
             "condition: service_healthy",
+            "x-app-security: &app-security",
+            'user: "10001:10001"',
+            "read_only: true",
+            "cap_drop:",
+            "no-new-privileges:true",
+            "exports_data:/app/exports",
+            "media:/app/media",
         ),
     ),
     (
@@ -451,6 +475,27 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             "Redis rate-limit service must use durable /data storage",
             "Backend must wait for healthy Redis rate-limit authority",
+            "APP_RUNTIME_USER = \"10001:10001\"",
+            "must use a read-only root filesystem",
+            "must drop all Linux capabilities",
+            "must enforce no-new-privileges",
+            "unexpected writable application mount",
+        ),
+    ),
+    (
+        "Dockerfile.backend",
+        (
+            "useradd --uid 10001 --gid 10001",
+            "PYTHONDONTWRITEBYTECODE=1",
+            "USER 10001:10001",
+        ),
+    ),
+    (
+        "Dockerfile.bot",
+        (
+            "useradd --uid 10001 --gid 10001",
+            "PYTHONDONTWRITEBYTECODE=1",
+            "USER 10001:10001",
         ),
     ),
     (
@@ -465,6 +510,27 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             "Prove Redis rate-limit persistence across restart",
             "scripts/rate_limit_persistence_smoke.sh",
+            "Prove least-privilege application runtimes",
+            "scripts/container_least_privilege_smoke.sh",
+        ),
+    ),
+    (
+        "scripts/container_least_privilege_smoke.sh",
+        (
+            'test "$(id -u)" = "10001"',
+            "NoNewPrivs:",
+            "CapEff:",
+            "CapBnd:",
+            "root filesystem is not read-only",
+            "/app/exports/.flashin-export-write-probe",
+        ),
+    ),
+    (
+        "docs/runbooks/CONTAINER_LEAST_PRIVILEGE.md",
+        (
+            "root filesystem: read-only",
+            "effective and bounding capability sets are zero",
+            "do not make the root filesystem writable as a workaround",
         ),
     ),
     (
