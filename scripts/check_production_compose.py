@@ -22,6 +22,13 @@ WORKER_SERVICES = {
     "media_jobs",
     "scheduler",
 }
+APP_RUNTIME_SERVICES = {"backend", "bot"} | WORKER_SERVICES
+APP_RUNTIME_USER = "10001:10001"
+APP_RUNTIME_TMPFS_TARGET = "/tmp"
+APP_WRITABLE_TARGETS = {
+    "backend": {"/app/media", "/app/exports"},
+    "media_jobs": {"/app/media"},
+}
 # Immutable capability-v17 compatibility marker. The active monitoring set below is stricter:
 # MONITORING_SERVICES = {"prometheus", "grafana"}
 MONITORING_SERVICES = {"alertmanager", "prometheus", "grafana"}
@@ -99,6 +106,67 @@ def _mounts_by_target(service: Mapping) -> dict[str, Mapping]:
     return result
 
 
+def _tmpfs_targets(service: Mapping) -> set[str]:
+    targets: set[str] = set()
+    for entry in service.get("tmpfs") or []:
+        if isinstance(entry, str):
+            target = entry.split(":", 1)[0].strip()
+        elif isinstance(entry, Mapping):
+            target = str(entry.get("target") or "").strip()
+        else:
+            target = ""
+        if target:
+            targets.add(target)
+    return targets
+
+
+def _security_options(service: Mapping) -> set[str]:
+    raw = service.get("security_opt") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    return {str(value).strip().lower() for value in raw if str(value).strip()}
+
+
+def _capability_drops(service: Mapping) -> set[str]:
+    raw = service.get("cap_drop") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    return {str(value).strip().upper() for value in raw if str(value).strip()}
+
+
+def _validate_app_runtime(name: str, service: Mapping) -> list[str]:
+    errors: list[str] = []
+    if str(service.get("user") or "").strip() != APP_RUNTIME_USER:
+        errors.append(f"{name} must run as {APP_RUNTIME_USER}")
+    if service.get("read_only") is not True:
+        errors.append(f"{name} must use a read-only root filesystem")
+    if "ALL" not in _capability_drops(service):
+        errors.append(f"{name} must drop all Linux capabilities")
+    if "no-new-privileges:true" not in _security_options(service):
+        errors.append(f"{name} must enforce no-new-privileges")
+    if APP_RUNTIME_TMPFS_TARGET not in _tmpfs_targets(service):
+        errors.append(f"{name} must mount writable {APP_RUNTIME_TMPFS_TARGET} tmpfs")
+
+    allowed_writable = APP_WRITABLE_TARGETS.get(name, set())
+    mounts = _mounts_by_target(service)
+    for target, mount in mounts.items():
+        if not target.startswith("/app/"):
+            continue
+        writable = not bool(mount.get("read_only"))
+        if writable and target not in allowed_writable:
+            errors.append(f"{name} has unexpected writable application mount: {target}")
+
+    for target in sorted(allowed_writable):
+        mount = mounts.get(target)
+        if not mount:
+            errors.append(f"{name} must mount writable {target}")
+        elif mount.get("read_only"):
+            errors.append(f"{name} mount {target} must be writable")
+        elif str(mount.get("type") or "") != "volume":
+            errors.append(f"{name} writable mount {target} must be a named volume")
+    return errors
+
+
 def _secret_sources(service: Mapping) -> set[str]:
     result: set[str] = set()
     for secret in service.get("secrets") or []:
@@ -155,6 +223,11 @@ def validate_config(config: Mapping) -> list[str]:
 
         if name in required_services and service.get("restart") != RESTART_POLICY:
             errors.append(f"Service {name} must use restart: {RESTART_POLICY}")
+
+    for name in sorted(APP_RUNTIME_SERVICES):
+        service = services.get(name)
+        if isinstance(service, Mapping):
+            errors.extend(_validate_app_runtime(name, service))
 
     redis = services.get("redis")
     if isinstance(redis, Mapping):
@@ -326,6 +399,9 @@ def main() -> int:
             "backend_healthcheck": "/ready",
             "monitoring": sorted(MONITORING_SERVICES),
             "workers": sorted(WORKER_SERVICES),
+            "app_runtime_services": sorted(APP_RUNTIME_SERVICES),
+            "app_runtime_user": APP_RUNTIME_USER,
+            "read_only_rootfs": True,
             "restart_policy": RESTART_POLICY,
         }
     )
