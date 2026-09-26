@@ -356,7 +356,7 @@ REQUIRED_FILES |= CONTAINER_LEAST_PRIVILEGE_REQUIRED_FILES
 # binds one packaged runtime/test surface to concrete behavior, not just presence.
 MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("backend/api/orders.py", ("acquire_pilot_checkout(", "record_pilot_order(")),
-    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 33",))
+    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 33",)),
     (
         "scripts/pilot_release_capability.py",
         (
