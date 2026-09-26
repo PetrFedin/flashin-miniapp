@@ -212,6 +212,36 @@ def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(
             "\"RATE_LIMIT_REDIS_URL\"",
         ),
         (
+            "Dockerfile.backend",
+            "FROM python:3.12-slim\nCMD [\"python\"]\n",
+            "USER 10001:10001",
+        ),
+        (
+            "Dockerfile.bot",
+            "FROM python:3.12-slim\nCMD [\"python\"]\n",
+            "USER 10001:10001",
+        ),
+        (
+            "docker-compose.production.yml",
+            "services:\n  backend:\n    restart: unless-stopped\n",
+            "x-app-security: &app-security",
+        ),
+        (
+            "scripts/check_production_compose.py",
+            "def validate_config(config): return []\n",
+            "APP_RUNTIME_USER = \"10001:10001\"",
+        ),
+        (
+            "scripts/container_least_privilege_smoke.sh",
+            "#!/usr/bin/env bash\nexit 0\n",
+            "NoNewPrivs:",
+        ),
+        (
+            "docs/runbooks/CONTAINER_LEAST_PRIVILEGE.md",
+            "# Containers\n",
+            "root filesystem: read-only",
+        ),
+        (
             "backend/services/inventory_movement_contract.py",
             "def movement_transition_valid(movement): return True\n",
             "expected_inventory_delta",
