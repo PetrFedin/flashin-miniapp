@@ -15,6 +15,24 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:8.10.1-alpine
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --save
+      - ""
+    volumes:
+      - rate_limit_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
   backend:
     build:
       context: .
@@ -309,6 +327,7 @@ secrets:
 
 volumes:
   pgdata:
+  rate_limit_redis:
   media:
   meili_data:
   caddydata:

@@ -33,6 +33,18 @@ REQUEST_LATENCY = Histogram(
     ["method", "path"],
 )
 
+RATE_LIMIT_DECISIONS = Counter(
+    "flashin_rate_limit_decisions_total",
+    "Rate-limit decisions by bounded route category and outcome",
+    ["category", "outcome"],
+)
+RATE_LIMIT_BACKEND_AVAILABLE = Gauge(
+    "flashin_rate_limit_backend_available",
+    "Whether the latest shared rate-limit backend operation succeeded",
+)
+# -1 means no shared-backend decision has been attempted in this process yet.
+RATE_LIMIT_BACKEND_AVAILABLE.set(-1)
+
 PILOT_METRICS_COLLECTION_SUCCESS = Gauge(
     "flashin_pilot_metrics_collection_success",
     "Whether the latest pilot metric collection completed successfully",
@@ -283,6 +295,14 @@ def collect_pilot_metrics(db: "Session", settings: "Settings") -> bool:
         return True
     except (KeyError, TypeError, ValueError, RuntimeError):
         return False
+
+
+def record_rate_limit_event(category: str, outcome: str) -> None:
+    RATE_LIMIT_DECISIONS.labels(category=category, outcome=outcome).inc()
+
+
+def set_rate_limit_backend_available(available: bool) -> None:
+    RATE_LIMIT_BACKEND_AVAILABLE.set(1 if available else 0)
 
 
 class MetricsMiddleware(BaseHTTPMiddleware):

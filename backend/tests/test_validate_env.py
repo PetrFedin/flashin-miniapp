@@ -49,6 +49,20 @@ def _valid_production_env() -> dict[str, str]:
         "MOYSKLAD_COLOR_ATTRIBUTE_NAMES": "Цвет,Color",
         "MOYSKLAD_SYNC_INTERVAL_MINUTES": "30",
         "SCHEDULER_ENABLED": "true",
+        "RATE_LIMIT_ENABLED": "true",
+        "RATE_LIMIT_BACKEND": "redis",
+        "RATE_LIMIT_REDIS_URL": "redis://redis:6379/0",
+        "RATE_LIMIT_REDIS_CONNECT_TIMEOUT_SECONDS": "1",
+        "RATE_LIMIT_REDIS_SOCKET_TIMEOUT_SECONDS": "1",
+        "RATE_LIMIT_PER_MINUTE": "120",
+        "RATE_LIMIT_AUTH_PER_MINUTE": "20",
+        "RATE_LIMIT_ADMIN_LOGIN_PER_MINUTE": "10",
+        "RATE_LIMIT_SEARCH_PER_MINUTE": "120",
+        "RATE_LIMIT_CHECKOUT_PER_MINUTE": "12",
+        "RATE_LIMIT_PAYMENT_PER_MINUTE": "12",
+        "RATE_LIMIT_RETURN_PER_MINUTE": "12",
+        "RATE_LIMIT_SUPPORT_PER_MINUTE": "30",
+        "RATE_LIMIT_WEBHOOK_PER_MINUTE": "180",
         "NOTIFICATION_BATCH_SIZE": "50",
         "NOTIFICATION_POLL_SECONDS": "10",
         "NOTIFICATION_MAX_ATTEMPTS": "5",
@@ -133,6 +147,36 @@ def test_backoff_order_is_rejected(tmp_path):
 
     assert result.returncode == 1
     assert "NOTIFICATION_MAX_BACKOFF_SECONDS must be >=" in result.stdout
+
+
+def test_non_distributed_production_rate_limiter_is_rejected(tmp_path):
+    values = _valid_production_env()
+    values["RATE_LIMIT_BACKEND"] = "memory"
+
+    result = _run_validator(tmp_path, values)
+
+    assert result.returncode == 1
+    assert "RATE_LIMIT_BACKEND must be redis in production" in result.stdout
+
+
+def test_invalid_production_rate_limit_redis_url_is_rejected(tmp_path):
+    values = _valid_production_env()
+    values["RATE_LIMIT_REDIS_URL"] = "http://redis:6379/0"
+
+    result = _run_validator(tmp_path, values)
+
+    assert result.returncode == 1
+    assert "RATE_LIMIT_REDIS_URL must use redis:// or rediss://" in result.stdout
+
+
+def test_disabled_production_rate_limiter_is_rejected(tmp_path):
+    values = _valid_production_env()
+    values["RATE_LIMIT_ENABLED"] = "false"
+
+    result = _run_validator(tmp_path, values)
+
+    assert result.returncode == 1
+    assert "RATE_LIMIT_ENABLED must be true in production" in result.stdout
 
 
 def test_disabled_production_scheduler_is_rejected(tmp_path):

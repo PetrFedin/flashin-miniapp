@@ -79,6 +79,39 @@ groups:
           summary: Controlled pilot is close to the 20-order limit
           description: Three or fewer controlled checkout slots remain. Prepare final reconciliation and closure.
 
+      - alert: FlashinRateLimitBackendUnavailable
+        expr: flashin_rate_limit_backend_available == 0
+        for: 30s
+        labels:
+          severity: critical
+          service: flashin-backend
+          component: rate-limit
+        annotations:
+          summary: Shared Redis rate-limit authority is unavailable
+          description: Sensitive authentication, checkout, payment, return and webhook routes fail closed while the distributed limiter is unavailable.
+
+      - alert: FlashinRateLimitFailClosed
+        expr: sum(increase(flashin_rate_limit_decisions_total{outcome="backend_fail_closed"}[5m])) > 0
+        for: 0m
+        labels:
+          severity: critical
+          service: flashin-backend
+          component: rate-limit
+        annotations:
+          summary: A sensitive request was blocked because the shared limiter failed
+          description: Investigate Redis availability before reopening sensitive request paths.
+
+      - alert: FlashinRateLimitRejectionsHigh
+        expr: sum(increase(flashin_rate_limit_decisions_total{outcome="rejected"}[5m])) >= 5
+        for: 0m
+        labels:
+          severity: warning
+          service: flashin-backend
+          component: rate-limit
+        annotations:
+          summary: FLASHIN is actively rate limiting repeated requests
+          description: At least five requests were rejected in five minutes. Review route category, source traffic and abuse patterns.
+
       - alert: FlashinWebhookOutboxMetricsUnavailable
         expr: absent(flashin_webhook_outbox_metrics_collection_success) or flashin_webhook_outbox_metrics_collection_success == 0
         for: 1m

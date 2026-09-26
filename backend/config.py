@@ -98,9 +98,19 @@ class Settings(BaseSettings):
     inventory_low_stock_threshold: int = 2
     audit_log_enabled: bool = True
     rate_limit_enabled: bool = True
+    rate_limit_backend: str = "memory"  # memory | redis
+    rate_limit_redis_url: str = "redis://redis:6379/0"
+    rate_limit_redis_connect_timeout_seconds: float = 1.0
+    rate_limit_redis_socket_timeout_seconds: float = 1.0
     rate_limit_per_minute: int = 120
     rate_limit_auth_per_minute: int = 20
     rate_limit_admin_login_per_minute: int = 10
+    rate_limit_search_per_minute: int = 120
+    rate_limit_checkout_per_minute: int = 12
+    rate_limit_payment_per_minute: int = 12
+    rate_limit_return_per_minute: int = 12
+    rate_limit_support_per_minute: int = 30
+    rate_limit_webhook_per_minute: int = 180
 
     default_delivery_price: float = 0
     courier_delivery_price: float = 500
@@ -150,10 +160,24 @@ class Settings(BaseSettings):
             self.rate_limit_per_minute,
             self.rate_limit_auth_per_minute,
             self.rate_limit_admin_login_per_minute,
+            self.rate_limit_search_per_minute,
+            self.rate_limit_checkout_per_minute,
+            self.rate_limit_payment_per_minute,
+            self.rate_limit_return_per_minute,
+            self.rate_limit_support_per_minute,
+            self.rate_limit_webhook_per_minute,
             self.moysklad_sync_limit,
             self.moysklad_sync_interval_minutes,
         ) <= 0:
             raise ValueError("Rate limits and sync limits must be positive")
+        if not 0.1 <= self.rate_limit_redis_connect_timeout_seconds <= 10:
+            raise ValueError("RATE_LIMIT_REDIS_CONNECT_TIMEOUT_SECONDS must be between 0.1 and 10")
+        if not 0.1 <= self.rate_limit_redis_socket_timeout_seconds <= 10:
+            raise ValueError("RATE_LIMIT_REDIS_SOCKET_TIMEOUT_SECONDS must be between 0.1 and 10")
+        rate_limit_backend = self.rate_limit_backend.strip().lower()
+        if rate_limit_backend not in {"memory", "redis"}:
+            raise ValueError("RATE_LIMIT_BACKEND must be memory or redis")
+        self.rate_limit_backend = rate_limit_backend
         if min(
             self.default_delivery_price,
             self.courier_delivery_price,
@@ -215,6 +239,12 @@ class Settings(BaseSettings):
             errors.append("TELEGRAM_BOT_TOKEN is missing or unsafe")
         if len(self.outbox_signing_secret) < 32 or self.outbox_signing_secret.strip().lower() in weak_values:
             errors.append("OUTBOX_SIGNING_SECRET must be at least 32 characters")
+        if not self.rate_limit_enabled:
+            errors.append("RATE_LIMIT_ENABLED must be true in production")
+        elif self.rate_limit_backend != "redis":
+            errors.append("RATE_LIMIT_BACKEND must be redis in production")
+        elif not self.rate_limit_redis_url.strip().lower().startswith(("redis://", "rediss://")):
+            errors.append("RATE_LIMIT_REDIS_URL must use redis:// or rediss:// in production")
         if self.commercial_checkout_enabled:
             if self.payments_mode == "disabled":
                 errors.append("PAYMENTS_MODE must not be disabled when commercial checkout is enabled")

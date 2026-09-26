@@ -30,6 +30,9 @@ def _safe_production_settings(**overrides):
         "yookassa_return_url": "https://mini.flashin.store/payment-result",
         "media_storage": "local",
         "meilisearch_enabled": False,
+        "rate_limit_enabled": True,
+        "rate_limit_backend": "redis",
+        "rate_limit_redis_url": "redis://redis:6379/0",
         "moysklad_mode": "disabled",
         "moysklad_order_export_enabled": False,
         "enable_seed": False,
@@ -155,6 +158,38 @@ def test_production_rejects_enabled_payments_when_checkout_is_disabled():
         )
 
     assert "PAYMENTS_MODE must be disabled" in str(exc_info.value)
+
+
+def test_production_requires_shared_rate_limit_backend():
+    with pytest.raises(ValidationError) as disabled:
+        _safe_production_settings(rate_limit_enabled=False)
+    assert "RATE_LIMIT_ENABLED must be true in production" in str(disabled.value)
+
+    with pytest.raises(ValidationError) as local:
+        _safe_production_settings(rate_limit_backend="memory")
+    assert "RATE_LIMIT_BACKEND must be redis in production" in str(local.value)
+
+    with pytest.raises(ValidationError) as invalid_url:
+        _safe_production_settings(rate_limit_redis_url="http://redis:6379/0")
+    assert "RATE_LIMIT_REDIS_URL" in str(invalid_url.value)
+
+
+def test_rate_limit_backend_and_budgets_are_validated_in_every_environment():
+    with pytest.raises(ValidationError):
+        Settings(
+            _env_file=None,
+            telegram_bot_token="test-token",
+            jwt_secret="test-secret",
+            rate_limit_backend="unknown",
+        )
+
+    with pytest.raises(ValidationError):
+        Settings(
+            _env_file=None,
+            telegram_bot_token="test-token",
+            jwt_secret="test-secret",
+            rate_limit_checkout_per_minute=0,
+        )
 
 
 def test_enabled_moysklad_requires_sellable_store_even_without_order_export():

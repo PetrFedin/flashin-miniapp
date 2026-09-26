@@ -70,7 +70,7 @@ def _release(repo: Path, tmp_path: Path, release_id: str, created_at: str) -> Pa
 
 
 def test_signed_release_capability_is_bound_to_exact_release():
-    assert CAPABILITY_VERSION == 31
+    assert CAPABILITY_VERSION == 32
     secret = "s" * 48
     state = _release_state()
     state["capabilities"] = {
@@ -165,7 +165,52 @@ def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(
         ("scripts/restore_postgres.sh", "#!/usr/bin/env bash\nexit 0\n", "verify-live"),
         ("scripts/deploy_release_gate.py", "#!/usr/bin/env python3\n", "retained under deploy/release/builds"),
         ("scripts/deploy_production.sh", "#!/usr/bin/env bash\n", "deploy_release_gate.py"),
-        ("scripts/pilot_release_contract.py", "CAPABILITY_VERSION = 30\n", "CAPABILITY_VERSION = 31"),
+        ("scripts/pilot_release_contract.py", "CAPABILITY_VERSION = 31\n", "CAPABILITY_VERSION = 32"),
+        (
+            "backend/middleware/rate_limit.py",
+            "class RateLimitMiddleware: pass\n",
+            "backend_fail_closed",
+        ),
+        (
+            "backend/services/distributed_rate_limit.py",
+            "class DistributedRateLimiter: pass\n",
+            "_ATOMIC_SLIDING_WINDOW",
+        ),
+        (
+            ".github/workflows/distributed-rate-limit-state.yml",
+            "name: Distributed Rate Limit State\njobs: {}\n",
+            "rate_limit_redis_smoke.py",
+        ),
+        (
+            "docker-compose.yml",
+            "services:\n  backend: {}\n",
+            "redis:8.10.1-alpine",
+        ),
+        (
+            "scripts/rate_limit_redis_smoke.py",
+            "def main(): return 0\n",
+            "two_clients_share_budget",
+        ),
+        (
+            "scripts/rate_limit_persistence_smoke.sh",
+            "#!/usr/bin/env bash\nexit 0\n",
+            "budget_survived_restart",
+        ),
+        (
+            "docs/runbooks/RATE_LIMIT_AUTHORITY.md",
+            "# Rate limiting\n",
+            "Fail closed when the shared limiter is unavailable",
+        ),
+        (
+            "scripts/pilot_evidence.py",
+            "CONFIG_FINGERPRINT_KEYS = (\"APP_ENV\",)\n",
+            "\"RATE_LIMIT_BACKEND\"",
+        ),
+        (
+            "backend/tests/test_pilot_configuration_fingerprint.py",
+            "CRITICAL_WIRING_KEYS = (\"RATE_LIMIT_ENABLED\",)\n",
+            "\"RATE_LIMIT_REDIS_URL\"",
+        ),
         (
             "backend/services/inventory_movement_contract.py",
             "def movement_transition_valid(movement): return True\n",

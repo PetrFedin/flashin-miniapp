@@ -78,7 +78,7 @@ from .middleware.metrics import (
     collect_webhook_outbox_metrics,
     metrics_response,
 )
-from .middleware.rate_limit import InMemoryRateLimitMiddleware
+from .middleware.rate_limit import RateLimitMiddleware
 from .middleware.request_id import RequestIdMiddleware
 from .middleware.security_headers import SecurityHeadersMiddleware
 from .seed import bootstrap_admin, seed_products
@@ -124,7 +124,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.add_middleware(SecurityHeadersMiddleware)
-app.add_middleware(InMemoryRateLimitMiddleware)
+app.add_middleware(RateLimitMiddleware)
 app.add_middleware(AdminOrderStateGuardMiddleware)
 if settings.metrics_enabled:
     app.add_middleware(MetricsMiddleware)

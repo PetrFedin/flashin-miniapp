@@ -30,6 +30,7 @@ def _safe_config() -> dict:
         name: {"restart": "unless-stopped"}
         for name in {
             "db",
+            "redis",
             "backend",
             "frontend",
             "admin",
@@ -38,10 +39,35 @@ def _safe_config() -> dict:
             *worker_names,
         }
     }
+    services["redis"].update(
+        {
+            "image": "redis:8.10.1-alpine",
+            "command": [
+                "redis-server",
+                "--appendonly",
+                "yes",
+                "--appendfsync",
+                "everysec",
+                "--save",
+                "",
+            ],
+            "healthcheck": {"test": ["CMD", "redis-cli", "ping"]},
+            "volumes": [
+                {
+                    "type": "volume",
+                    "source": "rate_limit_redis",
+                    "target": "/data",
+                }
+            ],
+        }
+    )
     services["backend"].update(
         {
             "healthcheck": {"test": ["CMD-SHELL", "curl -fsS http://localhost:8000/ready"]},
-            "depends_on": {"db": {"condition": "service_healthy"}},
+            "depends_on": {
+                "db": {"condition": "service_healthy"},
+                "redis": {"condition": "service_healthy"},
+            },
             "volumes": [
                 {"type": "bind", "source": "./docs", "target": "/app/docs", "read_only": True},
                 {
@@ -170,6 +196,32 @@ def test_caddy_must_publish_exact_public_ports():
     errors = module.validate_config(config)
 
     assert any("Caddy must publish only" in error for error in errors)
+
+
+def test_redis_rate_limit_authority_requires_persistence_and_backend_dependency():
+    module = _load_module()
+    config = _safe_config()
+    config["services"]["redis"]["command"] = ["redis-server"]
+    config["services"]["redis"]["volumes"] = []
+    config["services"]["backend"]["depends_on"].pop("redis")
+
+    errors = module.validate_config(config)
+
+    assert any("Redis rate-limit service is missing persistence option" in error for error in errors)
+    assert "Redis rate-limit service must use durable /data storage" in errors
+    assert "Backend must wait for healthy Redis rate-limit authority" in errors
+
+
+def test_redis_rate_limit_authority_must_not_publish_host_port():
+    module = _load_module()
+    config = _safe_config()
+    config["services"]["redis"]["ports"] = [
+        {"target": 6379, "published": "6379", "protocol": "tcp"}
+    ]
+
+    errors = module.validate_config(config)
+
+    assert any("Internal service redis publishes host ports" in error for error in errors)
 
 
 def test_backend_healthcheck_must_use_readiness_endpoint():
