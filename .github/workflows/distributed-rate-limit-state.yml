@@ -39,7 +39,7 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements.txt
       - name: Install backend dependencies
-        run: pip install -r backend/requirements.txt
+        run: python -m pip install --disable-pip-version-check --timeout 60 --retries 8 -r backend/requirements.txt
       - name: Prove route policy and production configuration
         run: >-
           python -m pytest -q

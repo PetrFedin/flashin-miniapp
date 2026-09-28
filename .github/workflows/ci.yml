@@ -52,7 +52,7 @@ jobs:
             backend/requirements.txt
             bot/requirements.txt
       - name: Install backend dependencies
-        run: pip install -r backend/requirements.txt -r bot/requirements.txt
+        run: python -m pip install --disable-pip-version-check --timeout 60 --retries 8 -r backend/requirements.txt -r bot/requirements.txt
       - name: Compile Python sources
         run: python -m compileall -q backend bot scripts
       - name: Audit critical integration links
@@ -301,7 +301,7 @@ jobs:
             frontend/package.json
             admin/package.json
       - name: Install backend dependencies
-        run: pip install -r backend/requirements.txt
+        run: python -m pip install --disable-pip-version-check --timeout 60 --retries 8 -r backend/requirements.txt
       - name: Install integrated browser dependencies
         run: |
           npm install --no-audit --no-fund --prefix e2e
