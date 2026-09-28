@@ -3,6 +3,7 @@ from pydantic import ValidationError
 
 
 def _base_env(monkeypatch):
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
     values = {
         "APP_ENV": "production",
         "PRODUCTION_ADMISSION_MODE": "true",
