@@ -39,6 +39,17 @@ def _safe_config() -> dict:
             *worker_names,
         }
     }
+    app_runtime_names = {"backend", "bot", *worker_names}
+    for name in app_runtime_names:
+        services[name].update(
+            {
+                "user": "10001:10001",
+                "read_only": True,
+                "cap_drop": ["ALL"],
+                "security_opt": ["no-new-privileges:true"],
+                "tmpfs": ["/tmp:rw,nosuid,nodev,size=64m"],
+            }
+        )
     services["redis"].update(
         {
             "image": "redis:8.10.1-alpine",
@@ -69,6 +80,8 @@ def _safe_config() -> dict:
                 "redis": {"condition": "service_healthy"},
             },
             "volumes": [
+                {"type": "volume", "source": "media", "target": "/app/media"},
+                {"type": "volume", "source": "exports_data", "target": "/app/exports"},
                 {"type": "bind", "source": "./docs", "target": "/app/docs", "read_only": True},
                 {
                     "type": "bind",
@@ -81,6 +94,9 @@ def _safe_config() -> dict:
     )
     for worker_name in worker_names:
         services[worker_name]["depends_on"] = {"db": {"condition": "service_healthy"}}
+    services["media_jobs"]["volumes"] = [
+        {"type": "volume", "source": "media", "target": "/app/media"}
+    ]
 
     services["alertmanager"] = {
         "restart": "unless-stopped",
@@ -246,6 +262,46 @@ def test_required_service_restart_policy_is_enforced():
 
     assert "Service scheduler must use restart: unless-stopped" in errors
 
+
+
+def test_application_runtimes_require_least_privilege_contract():
+    module = _load_module()
+    config = _safe_config()
+    config["services"]["backend"].update({"user": "0:0", "read_only": False, "cap_drop": [], "security_opt": [], "tmpfs": []})
+
+    errors = module.validate_config(config)
+
+    assert "backend must run as 10001:10001" in errors
+    assert "backend must use a read-only root filesystem" in errors
+    assert "backend must drop all Linux capabilities" in errors
+    assert "backend must enforce no-new-privileges" in errors
+    assert "backend must mount writable /tmp tmpfs" in errors
+
+
+def test_application_runtime_rejects_unexpected_writable_app_mount():
+    module = _load_module()
+    config = _safe_config()
+    config["services"]["ops_jobs"]["volumes"] = [
+        {"type": "volume", "source": "unexpected_cache", "target": "/app/cache"}
+    ]
+
+    errors = module.validate_config(config)
+
+    assert "ops_jobs has unexpected writable application mount: /app/cache" in errors
+
+
+def test_required_writable_application_volume_cannot_disappear():
+    module = _load_module()
+    config = _safe_config()
+    config["services"]["backend"]["volumes"] = [
+        mount
+        for mount in config["services"]["backend"]["volumes"]
+        if mount.get("target") != "/app/exports"
+    ]
+
+    errors = module.validate_config(config)
+
+    assert "backend must mount writable /app/exports" in errors
 
 def test_alertmanager_must_use_runtime_secret_and_non_public_storage():
     module = _load_module()

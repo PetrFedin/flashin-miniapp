@@ -346,6 +346,11 @@ jobs:
           caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
       - name: Docker build
         run: docker compose build
+      - name: Prove least-privilege application runtimes
+        run: |
+          cp .env.production.example .env
+          bash scripts/container_least_privilege_smoke.sh
+          cp .env.local.example .env
       - name: Prove Redis rate-limit persistence across restart
         run: bash scripts/rate_limit_persistence_smoke.sh
       - name: Run signed backup and restore drill

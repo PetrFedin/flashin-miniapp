@@ -4,6 +4,8 @@ WORKDIR /app
 
 RUN apt-get update \
     && apt-get upgrade -y \
+    && groupadd --gid 10001 flashin \
+    && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin flashin \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt /app/backend/requirements.txt
@@ -14,6 +16,12 @@ RUN pip install --no-cache-dir -r /app/backend/requirements.txt \
 COPY backend /app/backend
 COPY bot /app/bot
 
-ENV PYTHONPATH=/app
+ENV PYTHONPATH=/app \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    TMPDIR=/tmp \
+    HOME=/tmp
+
+USER 10001:10001
 
 CMD ["python", "-m", "bot.main"]

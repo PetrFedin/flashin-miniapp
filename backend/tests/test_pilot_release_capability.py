@@ -70,7 +70,7 @@ def _release(repo: Path, tmp_path: Path, release_id: str, created_at: str) -> Pa
 
 
 def test_signed_release_capability_is_bound_to_exact_release():
-    assert CAPABILITY_VERSION == 32
+    assert CAPABILITY_VERSION == 33
     secret = "s" * 48
     state = _release_state()
     state["capabilities"] = {
@@ -165,7 +165,7 @@ def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(
         ("scripts/restore_postgres.sh", "#!/usr/bin/env bash\nexit 0\n", "verify-live"),
         ("scripts/deploy_release_gate.py", "#!/usr/bin/env python3\n", "retained under deploy/release/builds"),
         ("scripts/deploy_production.sh", "#!/usr/bin/env bash\n", "deploy_release_gate.py"),
-        ("scripts/pilot_release_contract.py", "CAPABILITY_VERSION = 31\n", "CAPABILITY_VERSION = 32"),
+        ("scripts/pilot_release_contract.py", "CAPABILITY_VERSION = 32\n", "CAPABILITY_VERSION = 33"),
         (
             "backend/middleware/rate_limit.py",
             "class RateLimitMiddleware: pass\n",
@@ -210,6 +210,36 @@ def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(
             "backend/tests/test_pilot_configuration_fingerprint.py",
             "CRITICAL_WIRING_KEYS = (\"RATE_LIMIT_ENABLED\",)\n",
             "\"RATE_LIMIT_REDIS_URL\"",
+        ),
+        (
+            "Dockerfile.backend",
+            "FROM python:3.12-slim\nCMD [\"python\"]\n",
+            "USER 10001:10001",
+        ),
+        (
+            "Dockerfile.bot",
+            "FROM python:3.12-slim\nCMD [\"python\"]\n",
+            "USER 10001:10001",
+        ),
+        (
+            "docker-compose.production.yml",
+            "services:\n  backend:\n    restart: unless-stopped\n",
+            "x-app-security: &app-security",
+        ),
+        (
+            "scripts/check_production_compose.py",
+            "def validate_config(config): return []\n",
+            "APP_RUNTIME_USER = \"10001:10001\"",
+        ),
+        (
+            "scripts/container_least_privilege_smoke.sh",
+            "#!/usr/bin/env bash\nexit 0\n",
+            "NoNewPrivs:",
+        ),
+        (
+            "docs/runbooks/CONTAINER_LEAST_PRIVILEGE.md",
+            "# Containers\n",
+            "root filesystem: read-only",
         ),
         (
             "backend/services/inventory_movement_contract.py",
