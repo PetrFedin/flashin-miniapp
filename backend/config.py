@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     app_env: str = "development"
+    production_admission_mode: bool = False
     database_url: str = "postgresql+psycopg2://flashin:flashin@db:5432/flashin"
     cors_origins: str = "http://localhost:5173,http://localhost:5174,https://mini.flashin.store,https://admin.flashin.store"
     telegram_bot_token: str
@@ -235,7 +236,18 @@ class Settings(BaseSettings):
             errors.append("ADMIN_TOTP_ENCRYPTION_KEY must be a unique secret of at least 32 characters")
         elif hmac_compare_secret(self.admin_totp_encryption_key, self.jwt_secret):
             errors.append("ADMIN_TOTP_ENCRYPTION_KEY must differ from JWT_SECRET")
-        if len(self.telegram_bot_token) < 20 or self.telegram_bot_token.strip().lower() in weak_values:
+        if self.production_admission_mode:
+            if self.commercial_checkout_enabled:
+                errors.append("COMMERCIAL_CHECKOUT_ENABLED must be false in production admission mode")
+            if self.payments_mode != "disabled":
+                errors.append("PAYMENTS_MODE must be disabled in production admission mode")
+            if self.moysklad_mode != "disabled":
+                errors.append("MOYSKLAD_MODE must be disabled in production admission mode")
+            if self.moysklad_order_export_enabled:
+                errors.append("MOYSKLAD_ORDER_EXPORT_ENABLED must be false in production admission mode")
+            if self.pilot_runtime_enforced:
+                errors.append("PILOT_RUNTIME_ENFORCED must be false in production admission mode")
+        elif len(self.telegram_bot_token) < 20 or self.telegram_bot_token.strip().lower() in weak_values:
             errors.append("TELEGRAM_BOT_TOKEN is missing or unsafe")
         if len(self.outbox_signing_secret) < 32 or self.outbox_signing_secret.strip().lower() in weak_values:
             errors.append("OUTBOX_SIGNING_SECRET must be at least 32 characters")
