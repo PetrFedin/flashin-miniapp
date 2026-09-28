@@ -1,0 +1,202 @@
+name: Security
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - pilot/e2e-hardening-20260808
+  schedule:
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependency-review:
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    needs: dependency-vulnerability-scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # releases/v4, 2026-07-16
+      - name: Detect GitHub dependency graph support
+        id: dependency-graph
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          response_file="$(mktemp)"
+          status="$(
+            curl --silent --show-error \
+              --output "$response_file" \
+              --write-out '%{http_code}' \
+              --header 'Accept: application/vnd.github+json' \
+              --header "Authorization: Bearer ${GH_TOKEN}" \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/dependency-graph/sbom"
+          )"
+          case "$status" in
+            200)
+              echo 'available=true' >> "$GITHUB_OUTPUT"
+              ;;
+            403|404)
+              echo 'available=false' >> "$GITHUB_OUTPUT"
+              echo '::warning title=Dependency graph unavailable::GitHub differential dependency review is unavailable for this repository. HIGH/CRITICAL dependency enforcement remains mandatory through dependency-vulnerability-scan; enable Dependency graph in repository security settings to restore differential review.'
+              ;;
+            *)
+              cat "$response_file" >&2
+              echo "::error title=Dependency graph preflight failed::Unexpected GitHub API status ${status}."
+              exit 1
+              ;;
+          esac
+      - name: Review pull request dependency changes
+        if: github.event_name == 'pull_request' && steps.dependency-graph.outputs.available == 'true'
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
+        with:
+          fail-on-severity: high
+      - name: Require a previous release commit for push review
+        if: github.event_name == 'push' && steps.dependency-graph.outputs.available == 'true'
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          test -n "$BEFORE_SHA"
+          test "$BEFORE_SHA" != "0000000000000000000000000000000000000000"
+      - name: Review release dependency changes
+        if: github.event_name == 'push' && steps.dependency-graph.outputs.available == 'true'
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
+        with:
+          base-ref: ${{ github.event.before }}
+          head-ref: ${{ github.sha }}
+          fail-on-severity: high
+      - name: Record dependency-review fallback
+        if: steps.dependency-graph.outputs.available != 'true'
+        run: |
+          set -euo pipefail
+          echo 'GitHub Dependency Graph is unavailable; mandatory Trivy HIGH/CRITICAL dependency scan passed before this job via needs.'
+
+  codeql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language:
+          - python
+          - javascript-typescript
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # releases/v4, 2026-07-16
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@f3712979fa5f215279b101dd0a2e3bdfb4353324 # v3.37.7
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+      - name: Analyze
+        uses: github/codeql-action/analyze@f3712979fa5f215279b101dd0a2e3bdfb4353324 # v3.37.7
+        with:
+          category: /language:${{ matrix.language }}
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # releases/v4, 2026-07-16
+        with:
+          fetch-depth: 0
+      - name: Scan repository for secrets
+        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # trivy-action master pinned; Trivy v0.74.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: secret
+          format: table
+          exit-code: "1"
+          version: v0.74.0
+
+  dependency-vulnerability-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # releases/v4, 2026-07-16
+      - name: Scan dependency manifests and filesystem packages
+        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # trivy-action master pinned; Trivy v0.74.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          version: v0.74.0
+
+  image-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: backend
+            dockerfile: Dockerfile.backend
+          - name: bot
+            dockerfile: Dockerfile.bot
+          - name: frontend
+            dockerfile: Dockerfile.frontend
+          - name: admin
+            dockerfile: Dockerfile.admin
+          - name: ingress
+            dockerfile: Dockerfile.ingress
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # releases/v4, 2026-07-16
+      - name: Build runtime image
+        run: >-
+          docker build
+          --file "${{ matrix.dockerfile }}"
+          --tag "flashin-${{ matrix.name }}:${GITHUB_SHA}"
+          .
+      - name: Generate CycloneDX SBOM
+        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # trivy-action master pinned; Trivy v0.74.0
+        with:
+          scan-type: image
+          image-ref: flashin-${{ matrix.name }}:${{ github.sha }}
+          format: cyclonedx
+          output: sbom-${{ matrix.name }}.cdx.json
+          exit-code: "0"
+          version: v0.74.0
+      - name: Upload image SBOM
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # releases/v4
+        with:
+          name: sbom-${{ matrix.name }}-${{ github.sha }}
+          path: sbom-${{ matrix.name }}.cdx.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Scan runtime image for high and critical vulnerabilities
+        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # trivy-action master pinned; Trivy v0.74.0
+        with:
+          scan-type: image
+          image-ref: flashin-${{ matrix.name }}:${{ github.sha }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          version: v0.74.0

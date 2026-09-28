@@ -3,9 +3,9 @@
 
 All local application state uses real routes and transactional persistence. Only
 YooKassa HTTP calls are replaced with deterministic fakes. The smoke proves
-partial-refund money/loyalty invariants and replay safety, rejects over-refunds,
-and proves a full cumulative refund restores sold inventory exactly once while
-queueing customer notifications idempotently.
+partial/full refund money and loyalty invariants, replay safety and over-refund
+protection, while proving financial refund completion alone does not restore
+sold inventory before physical warehouse evidence.
 """
 
 from __future__ import annotations
@@ -39,6 +39,7 @@ from backend.models import (
     LoyaltyTransaction,
     Notification,
     Order,
+    OrderItem,
     Payment,
     Product,
     ProductVariant,
@@ -100,7 +101,7 @@ def main() -> int:
         admin = AdminUser(
             email=f"refund-{token}@test.local",
             password_hash="not-used-by-dependency-override",
-            role="manager",
+            role="owner",
             active=True,
         )
         product = Product(
@@ -278,6 +279,11 @@ def main() -> int:
         )
         order_id = int(order["id"])
         assert _money(order["total_amount"]) == Decimal("1700.00")
+        order_item = (
+            db.query(OrderItem)
+            .filter(OrderItem.order_id == order_id)
+            .one()
+        )
 
         payment = _expect(
             client.post("/api/payments", json={"order_id": order_id}),
@@ -303,7 +309,17 @@ def main() -> int:
         first_refund = _expect(
             client.post(
                 "/api/returns/admin/approve",
-                json={"return_id": first_return_id, "amount": 700},
+                json={
+                    "return_id": first_return_id,
+                    "amount": 700,
+                    "allocations": [
+                        {
+                            "component_kind": "item",
+                            "order_item_id": order_item.id,
+                            "amount": 700,
+                        }
+                    ],
+                },
             ),
             200,
             "approve partial refund",
@@ -316,7 +332,11 @@ def main() -> int:
         first_refund_replay = _expect(
             client.post(
                 "/api/returns/admin/approve",
-                json={"return_id": first_return_id, "amount": 700},
+                json={
+                    "return_id": first_return_id,
+                    "amount": 700,
+                    "allocations": [],
+                },
             ),
             200,
             "replay partial refund approval",
@@ -384,7 +404,17 @@ def main() -> int:
         second_refund = _expect(
             client.post(
                 "/api/returns/admin/approve",
-                json={"return_id": second_return_id, "amount": 1000},
+                json={
+                    "return_id": second_return_id,
+                    "amount": 1000,
+                    "allocations": [
+                        {
+                            "component_kind": "item",
+                            "order_item_id": order_item.id,
+                            "amount": 1000,
+                        }
+                    ],
+                },
             ),
             200,
             "approve remaining refund",
@@ -397,7 +427,11 @@ def main() -> int:
         second_refund_replay = _expect(
             client.post(
                 "/api/returns/admin/approve",
-                json={"return_id": second_return_id, "amount": 1000},
+                json={
+                    "return_id": second_return_id,
+                    "amount": 1000,
+                    "allocations": [],
+                },
             ),
             200,
             "replay full cumulative refund approval",
@@ -471,7 +505,7 @@ def main() -> int:
         assert persisted_order.status == "refunded"
         assert persisted_order.payment_status == "refunded"
         assert persisted_payment.status == "succeeded"
-        assert persisted_variant.stock_qty == 5
+        assert persisted_variant.stock_qty == 3
         assert persisted_variant.reserved_qty == 0
         assert persisted_promo.used_count == 1
         assert persisted_cart.status == "converted"
@@ -497,10 +531,7 @@ def main() -> int:
             ("order_refund_reversal", Decimal("-17.00")),
             ("loyalty_refund", Decimal("100.00")),
         ]
-        assert len(return_movements) == 1
-        assert return_movements[0].quantity == 2
-        assert return_movements[0].stock_before == 3
-        assert return_movements[0].stock_after == 5
+        assert len(return_movements) == 0
         assert len(notifications) == 3
         assert len(paid_keys) == 1
         assert len(event_keys) == 3
@@ -535,10 +566,11 @@ def main() -> int:
                     "refunds": ["700.00", "1000.00"],
                     "remaining": "0.00",
                     "loyalty_after_full_refund": f"{_money(persisted_profile.loyalty_points):.2f}",
-                    "stock_after_full_refund": persisted_variant.stock_qty,
-                    "return_movements": len(return_movements),
+                    "stock_after_financial_refund": persisted_variant.stock_qty,
+                    "return_movements_without_physical_evidence": len(return_movements),
                     "notifications": len(notifications),
                     "provider_refund_calls": len(refund_create_calls),
+                    "financial_item_allocation_evidence": True,
                 },
                 ensure_ascii=False,
                 indent=2,

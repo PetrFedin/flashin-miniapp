@@ -75,9 +75,16 @@ BASE_CHECKS: Mapping[str, str] = {
             GROUP BY provider, provider_payment_id, event_type HAVING count(*) > 1
         ) conflicts
     """,
-    "duplicate_order_returns": """
+    "duplicate_open_order_returns": """
         SELECT count(*) FROM (
             SELECT order_id FROM return_requests
+            WHERE status IN (
+                'requested',
+                'processing',
+                'refund_retry_required',
+                'refund_review_required',
+                'refund_pending'
+            )
             GROUP BY order_id HAVING count(*) > 1
         ) conflicts
     """,

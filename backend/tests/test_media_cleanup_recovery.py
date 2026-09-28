@@ -1,0 +1,275 @@
+from types import SimpleNamespace
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from backend.api import media as media_api
+from backend.database import Base
+from backend.jobs import media_cleanup_jobs
+from backend.services.media_cleanup import (
+    MEDIA_CLEANUP_AGGREGATE,
+    MEDIA_CLEANUP_COMMAND,
+    MEDIA_CLEANUP_PROVIDER,
+    MediaCleanupReviewRequired,
+    enqueue_media_cleanup,
+    media_cleanup_digest,
+    media_cleanup_idempotency_key,
+    parse_media_cleanup_command,
+    validate_generated_media_storage_key,
+)
+
+
+def _command(storage_key: str) -> dict:
+    digest = media_cleanup_digest(storage_key)
+    return {
+        "id": 41,
+        "provider": MEDIA_CLEANUP_PROVIDER,
+        "command_type": MEDIA_CLEANUP_COMMAND,
+        "idempotency_key": media_cleanup_idempotency_key(storage_key),
+        "aggregate_type": MEDIA_CLEANUP_AGGREGATE,
+        "aggregate_id": digest,
+        "payload_json": (
+            '{"reason":"upload_finalize_failed","storage_key":"'
+            + storage_key
+            + '"}'
+        ),
+        "lease_token": "lease-41",
+    }
+
+
+class _Db:
+    def __init__(self):
+        self.active = False
+
+    def in_transaction(self):
+        return self.active
+
+    def rollback(self):
+        self.active = False
+
+
+def test_generated_media_key_allowlist_rejects_arbitrary_paths():
+    assert validate_generated_media_storage_key("a" * 32 + ".png").endswith(".png")
+    for value in ("", "object.png", "../object.png", "a" * 32 + ".svg"):
+        try:
+            validate_generated_media_storage_key(value)
+        except MediaCleanupReviewRequired:
+            pass
+        else:
+            raise AssertionError(f"unexpected cleanup key accepted: {value}")
+
+
+def test_payload_binding_rejects_changed_aggregate():
+    command = _command("b" * 32 + ".webp")
+    command["aggregate_id"] = "0" * 64
+    try:
+        parse_media_cleanup_command(command)
+    except MediaCleanupReviewRequired as exc:
+        assert "binding" in str(exc)
+    else:
+        raise AssertionError("changed aggregate binding must fail closed")
+
+
+def test_worker_deletes_only_after_claim_commit_and_reference_check(monkeypatch):
+    key = "c" * 32 + ".jpg"
+    command = _command(key)
+    db = _Db()
+    deleted = []
+    finished = []
+
+    monkeypatch.setattr(
+        media_cleanup_jobs,
+        "claim_provider_commands",
+        lambda _db, *, provider, limit: [command],
+    )
+    monkeypatch.setattr(
+        media_cleanup_jobs,
+        "_authoritative_media_asset_id",
+        lambda _db, _key: None,
+    )
+    monkeypatch.setattr(
+        media_cleanup_jobs,
+        "delete_media",
+        lambda storage_key: (
+            (_ for _ in ()).throw(AssertionError("delete ran in DB transaction"))
+            if db.in_transaction()
+            else deleted.append(storage_key)
+        ),
+    )
+    monkeypatch.setattr(
+        media_cleanup_jobs,
+        "finish_provider_command",
+        lambda _db, command_id, lease_token, *, external_id: finished.append(
+            (command_id, lease_token, external_id)
+        ) or True,
+    )
+
+    result = media_cleanup_jobs.process_media_cleanup_commands(db)
+
+    assert deleted == [key]
+    assert result["deleted"] == 1
+    assert finished[0][0:2] == (41, "lease-41")
+    assert key not in finished[0][2]
+
+
+def test_malformed_command_enters_review_before_delete(monkeypatch):
+    command = _command("d" * 32 + ".png")
+    command["command_type"] = "object_storage.media.put"
+    db = _Db()
+    failures = []
+
+    monkeypatch.setattr(
+        media_cleanup_jobs,
+        "claim_provider_commands",
+        lambda _db, *, provider, limit: [command],
+    )
+    monkeypatch.setattr(
+        media_cleanup_jobs,
+        "delete_media",
+        lambda _storage_key: (_ for _ in ()).throw(
+            AssertionError("malformed command must not delete")
+        ),
+    )
+    monkeypatch.setattr(
+        media_cleanup_jobs,
+        "fail_provider_command",
+        lambda _db, command_id, lease_token, exc, review_required=False: failures.append(
+            (command_id, review_required, str(exc))
+        ) or "review_required",
+    )
+
+    result = media_cleanup_jobs.process_media_cleanup_commands(db)
+
+    assert result["review_required"] == 1
+    assert failures[0][0:2] == (41, True)
+
+
+def test_provider_delete_failure_uses_bounded_retry_state(monkeypatch):
+    command = _command("e" * 32 + ".png")
+    db = _Db()
+
+    monkeypatch.setattr(
+        media_cleanup_jobs,
+        "claim_provider_commands",
+        lambda _db, *, provider, limit: [command],
+    )
+    monkeypatch.setattr(
+        media_cleanup_jobs,
+        "_authoritative_media_asset_id",
+        lambda _db, _key: None,
+    )
+    monkeypatch.setattr(
+        media_cleanup_jobs,
+        "delete_media",
+        lambda _storage_key: (_ for _ in ()).throw(
+            TimeoutError("storage timeout")
+        ),
+    )
+    monkeypatch.setattr(
+        media_cleanup_jobs,
+        "fail_provider_command",
+        lambda _db, command_id, lease_token, exc, review_required=False: "retry_scheduled",
+    )
+
+    result = media_cleanup_jobs.process_media_cleanup_commands(db)
+
+    assert result["retry_scheduled"] == 1
+    assert result["deleted"] == 0
+
+
+def test_authoritative_media_reference_blocks_provider_delete(monkeypatch):
+    key = "f" * 32 + ".webp"
+    command = _command(key)
+    db = _Db()
+    failures = []
+
+    monkeypatch.setattr(
+        media_cleanup_jobs,
+        "claim_provider_commands",
+        lambda _db, *, provider, limit: [command],
+    )
+    monkeypatch.setattr(
+        media_cleanup_jobs,
+        "_authoritative_media_asset_id",
+        lambda _db, _key: 778,
+    )
+    monkeypatch.setattr(
+        media_cleanup_jobs,
+        "delete_media",
+        lambda _storage_key: (_ for _ in ()).throw(
+            AssertionError("referenced media must never be deleted")
+        ),
+    )
+    monkeypatch.setattr(
+        media_cleanup_jobs,
+        "fail_provider_command",
+        lambda _db, command_id, lease_token, exc, review_required=False: failures.append(
+            (command_id, review_required, str(exc))
+        ) or "review_required",
+    )
+
+    result = media_cleanup_jobs.process_media_cleanup_commands(db)
+
+    assert result["review_required"] == 1
+    assert failures[0][0:2] == (41, True)
+    assert "MediaAsset 778" in failures[0][2]
+
+
+def test_operator_queue_hides_raw_key_and_replay_preserves_binding(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+    key = "1" * 32 + ".png"
+    command = enqueue_media_cleanup(db, key)
+    command.status = "failed"
+    command.next_attempt_at = None
+    db.commit()
+    command_id = int(command.id)
+    original_payload = str(command.payload_json)
+    original_fingerprint = str(command.aggregate_id)
+
+    permission_calls = []
+    audit_calls = []
+    admin = SimpleNamespace(id=91)
+    monkeypatch.setattr(
+        media_api,
+        "require_permission",
+        lambda _db, _admin, permission: permission_calls.append(permission),
+    )
+    monkeypatch.setattr(
+        media_api,
+        "log_admin_action",
+        lambda _db, _admin, action, entity_type, entity_id, payload: audit_calls.append(
+            (action, entity_type, entity_id, payload)
+        ),
+    )
+
+    queue = media_api.media_cleanup_queue(limit=100, admin=admin, db=db)
+    assert len(queue["items"]) == 1
+    item = queue["items"][0]
+    assert item["id"] == command_id
+    assert item["object_fingerprint"] == original_fingerprint
+    assert "storage_key" not in item
+    assert "payload_json" not in item
+    assert key not in str(item)
+
+    result = media_api.retry_media_cleanup(command_id, admin=admin, db=db)
+    db.expire_all()
+    persisted = db.query(type(command)).filter(type(command).id == command_id).one()
+    assert result == {
+        "id": command_id,
+        "status": "pending",
+        "object_fingerprint": original_fingerprint,
+    }
+    assert persisted.payload_json == original_payload
+    assert persisted.aggregate_id == original_fingerprint
+    assert persisted.status == "pending"
+    assert permission_calls == ["media.write", "media.write"]
+    assert audit_calls[0][0:3] == (
+        "media.cleanup.retry",
+        "provider_command",
+        command_id,
+    )
+    assert audit_calls[0][3]["object_fingerprint"] == original_fingerprint
+    assert key not in str(audit_calls[0][3])
+    db.close()

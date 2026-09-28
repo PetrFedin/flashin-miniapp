@@ -8,12 +8,18 @@ function failureMessage(label, result) {
   return `${label}: ${detail}`;
 }
 
+const SAFE_CAPABILITY_FALLBACK = {
+  commercial_checkout: { enabled: false },
+  payments: { enabled: false, mode: "disabled", provider: null },
+};
+
 export async function loadStorefrontBootstrap(api) {
   const [products, cart] = await Promise.all([
     api.listProducts(),
     api.getCart(),
   ]);
-  const [looksResult, wishlistResult] = await Promise.allSettled([
+  const [capabilitiesResult, looksResult, wishlistResult] = await Promise.allSettled([
+    api.getPlatformCapabilities(),
     api.listLooks(),
     api.listWishlist(),
   ]);
@@ -21,9 +27,11 @@ export async function loadStorefrontBootstrap(api) {
   return {
     products,
     cart,
+    capabilities: resultValue(capabilitiesResult, SAFE_CAPABILITY_FALLBACK),
     looks: resultValue(looksResult, []),
     wishlist: resultValue(wishlistResult, []),
     warnings: [
+      failureMessage("Режим покупок", capabilitiesResult),
       failureMessage("Образы", looksResult),
       failureMessage("Избранное", wishlistResult),
     ].filter(Boolean),

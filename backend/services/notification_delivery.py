@@ -7,11 +7,12 @@ from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from ..database import utcnow_naive
-from ..models import Notification
-from ..notification_models import NotificationDeliveryState
+from ..models import ConsentRecord, Notification
+from ..notification_models import NotificationDeliveryState, NotificationPolicyContext
+from .notifications import NOTIFICATION_PURPOSE_MARKETING
 
 
-RETRYABLE_NOTIFICATION_STATUSES = {"pending", "failed"}
+MANUALLY_REQUEUEABLE_NOTIFICATION_STATUSES = {"pending", "failed", "review_required"}
 BATCH_SIZE = max(1, min(int(os.getenv("NOTIFICATION_BATCH_SIZE", "50")), 200))
 MAX_ATTEMPTS = max(1, min(int(os.getenv("NOTIFICATION_MAX_ATTEMPTS", "5")), 20))
 INITIAL_BACKOFF_SECONDS = max(
@@ -24,6 +25,21 @@ MAX_BACKOFF_SECONDS = max(
 )
 LEASE_SECONDS = max(30, int(os.getenv("NOTIFICATION_LEASE_SECONDS", "180")))
 
+DELIVERY_ALLOWED = "allowed"
+DELIVERY_SUPPRESSED = "suppressed"
+DELIVERY_IGNORED = "ignored"
+DELIVERY_OUTCOME_SENT = "sent"
+DELIVERY_OUTCOME_RETRYABLE_FAILURE = "retryable_failure"
+DELIVERY_OUTCOME_PERMANENT_FAILURE = "permanent_failure"
+DELIVERY_OUTCOME_REVIEW_REQUIRED = "review_required"
+DELIVERY_OUTCOMES = {
+    DELIVERY_OUTCOME_SENT,
+    DELIVERY_OUTCOME_RETRYABLE_FAILURE,
+    DELIVERY_OUTCOME_PERMANENT_FAILURE,
+    DELIVERY_OUTCOME_REVIEW_REQUIRED,
+}
+_SUPPRESSED_ERROR = "Suppressed by marketing consent policy"
+
 
 def reset_notification_delivery(
     notification: Notification,
@@ -31,15 +47,16 @@ def reset_notification_delivery(
     *,
     now: datetime | None = None,
 ) -> NotificationDeliveryState:
-    """Reset a failed/pending notification for an immediate, audited retry.
+    """Reset a manually-requeueable notification for an immediate, audited retry.
 
-    Sent notifications are deliberately not retryable because Telegram does not
-    provide an idempotency key for sendMessage and replaying them could create a
-    duplicate customer message.
+    Sent or policy-suppressed notifications are deliberately not retryable.
+    Telegram does not provide an idempotency key for sendMessage, so an
+    ambiguous delivery is parked in review_required and may only be retried by
+    an explicit operator action after checking the customer-facing outcome.
     """
     if notification.status == "sent":
         raise HTTPException(status_code=409, detail="Sent notification cannot be retried")
-    if notification.status not in RETRYABLE_NOTIFICATION_STATUSES:
+    if notification.status not in MANUALLY_REQUEUEABLE_NOTIFICATION_STATUSES:
         raise HTTPException(
             status_code=409,
             detail=f"Notification in status {notification.status} cannot be retried",
@@ -197,15 +214,108 @@ def renew_delivery_lease(
     return True
 
 
+def preflight_notification_delivery(
+    db: Session,
+    notification_id: int,
+    lease_token: str,
+) -> str:
+    """Apply purpose-specific policy immediately before the transport call.
+
+    Marketing consent is append-only, so the latest record by created_at/id is
+    authoritative. Missing policy context remains allowed for legacy rows;
+    malformed marketing context fails closed. A suppressed row is terminal and
+    its lease state is deleted so neither automatic nor manual retry can revive
+    it without creating a new notification under a new consent decision.
+    """
+    normalized_token = str(lease_token or "").strip()
+    if not normalized_token:
+        return DELIVERY_IGNORED
+
+    row = (
+        db.query(Notification)
+        .filter(
+            Notification.id == notification_id,
+            Notification.status == "processing",
+        )
+        .with_for_update()
+        .first()
+    )
+    if not row or row.status != "processing":
+        db.rollback()
+        return DELIVERY_IGNORED
+
+    state = (
+        db.query(NotificationDeliveryState)
+        .filter(
+            NotificationDeliveryState.notification_id == row.id,
+            NotificationDeliveryState.lease_token == normalized_token,
+        )
+        .with_for_update()
+        .first()
+    )
+    if not state or state.lease_token != normalized_token:
+        db.rollback()
+        return DELIVERY_IGNORED
+
+    context = (
+        db.query(NotificationPolicyContext)
+        .filter(NotificationPolicyContext.notification_id == row.id)
+        .first()
+    )
+    if context is None or context.purpose != NOTIFICATION_PURPOSE_MARKETING:
+        db.rollback()
+        return DELIVERY_ALLOWED
+
+    latest_consent = None
+    if context.customer_id is not None:
+        latest_consent = (
+            db.query(ConsentRecord)
+            .filter(
+                ConsentRecord.customer_id == context.customer_id,
+                ConsentRecord.consent_type == "marketing",
+            )
+            .order_by(ConsentRecord.created_at.desc(), ConsentRecord.id.desc())
+            .first()
+        )
+
+    if latest_consent is not None and bool(latest_consent.granted):
+        db.rollback()
+        return DELIVERY_ALLOWED
+
+    row.status = DELIVERY_SUPPRESSED
+    row.error = _SUPPRESSED_ERROR
+    row.sent_at = None
+    db.delete(state)
+    db.commit()
+    return DELIVERY_SUPPRESSED
+
+
 def finish_delivery(
     db: Session,
     notification_id: int,
     lease_token: str,
     error: Exception | None = None,
+    *,
+    delivery_outcome: str | None = None,
 ) -> str:
+    """Finalize a leased notification using an explicit side-effect outcome.
+
+    Unknown failures default to review_required rather than automatic retry.
+    This is intentionally fail-closed because Telegram sendMessage has no
+    caller-provided idempotency key and a lost response can hide a successful
+    provider-side send.
+    """
     normalized_token = str(lease_token or "").strip()
     if not normalized_token:
         return "ignored"
+
+    resolved_outcome = delivery_outcome
+    if resolved_outcome is None:
+        resolved_outcome = (
+            DELIVERY_OUTCOME_SENT if error is None else DELIVERY_OUTCOME_REVIEW_REQUIRED
+        )
+    if resolved_outcome not in DELIVERY_OUTCOMES:
+        raise ValueError(f"Unknown notification delivery outcome: {resolved_outcome}")
 
     row = (
         db.query(Notification)
@@ -234,7 +344,9 @@ def finish_delivery(
         return "ignored"
 
     now = utcnow_naive()
-    if error is None:
+    if resolved_outcome == DELIVERY_OUTCOME_SENT:
+        if error is not None:
+            raise ValueError("Successful notification outcome cannot include an error")
         row.status = "sent"
         row.sent_at = now
         row.error = ""
@@ -244,9 +356,29 @@ def finish_delivery(
 
     state.attempts = max(int(state.attempts or 0), 0) + 1
     state.updated_at = now
-    state.last_error = f"{error.__class__.__name__}: {error}"[:2000]
+    if error is None:
+        state.last_error = f"Delivery outcome: {resolved_outcome}"
+    else:
+        state.last_error = f"{error.__class__.__name__}: {error}"[:2000]
     state.lease_token = None
+    row.sent_at = None
     row.error = state.last_error
+
+    if resolved_outcome == DELIVERY_OUTCOME_REVIEW_REQUIRED:
+        row.status = "review_required"
+        state.next_attempt_at = None
+        db.commit()
+        return "review_required"
+
+    if resolved_outcome == DELIVERY_OUTCOME_PERMANENT_FAILURE:
+        row.status = "failed"
+        state.next_attempt_at = None
+        db.commit()
+        return "failed"
+
+    if resolved_outcome != DELIVERY_OUTCOME_RETRYABLE_FAILURE:
+        raise ValueError(f"Unhandled notification delivery outcome: {resolved_outcome}")
+
     if state.attempts >= MAX_ATTEMPTS:
         row.status = "failed"
         state.next_attempt_at = None

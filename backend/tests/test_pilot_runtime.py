@@ -1,4 +1,5 @@
 import json
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -7,11 +8,14 @@ from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from backend.database import Base
-from backend.models import Customer, Order
+from backend.database import Base, utcnow_naive
+from backend.models import Customer, Order, OrderItem, Product, ProductVariant
 from backend.pilot_models import PilotOrderSlot, PilotRuntimeState
+from backend.provider_models import ProviderCommand
+from backend.services.inventory import reserve_variant
 from backend.services.pilot_runtime import (
     acquire_pilot_checkout,
+    assert_pilot_new_payment_attempt_allowed,
     record_pilot_order,
     sha256_file,
 )
@@ -19,6 +23,7 @@ from scripts.pilot_evidence import configuration_fingerprint, sign_payload
 from scripts.pilot_control_audit import build_audit_entry, normalize_mutation
 from scripts.pilot_control_binding import build_admission_binding
 from scripts.pilot_control_chain import state_anchor
+from scripts.pilot_release_contract import CAPABILITY_VERSION
 
 
 def _capability(state: dict, secret: str) -> dict:
@@ -27,12 +32,52 @@ def _capability(state: dict, secret: str) -> dict:
             "schema_version": 1,
             "kind": "release_capability",
             "name": "pilot_runtime_guard",
-            "version": 17,
+            "version": CAPABILITY_VERSION,
             "archive_sha256": state["sha256"],
             "git_commit": state["git_commit"],
             "release_id": state["release_id"],
         },
         secret,
+    )
+
+
+def _attach_pending_inventory(db, order: Order) -> None:
+    suffix = str(order.id)
+    product = Product(
+        sku=f"pilot-{suffix}",
+        title=f"Pilot Product {suffix}",
+        slug=f"pilot-{suffix}",
+        price=100,
+    )
+    db.add(product)
+    db.flush()
+    variant = ProductVariant(
+        product_id=product.id,
+        size="M",
+        sku=f"pilot-{suffix}-M",
+        stock_qty=10,
+        reserved_qty=0,
+    )
+    db.add(variant)
+    db.flush()
+    db.add(
+        OrderItem(
+            order_id=order.id,
+            product_id=product.id,
+            variant_id=variant.id,
+            title=product.title,
+            size=variant.size,
+            quantity=1,
+            price=100,
+        )
+    )
+    db.flush()
+    reserve_variant(
+        db,
+        variant.id,
+        1,
+        order_id=order.id,
+        source="pilot-runtime-test",
     )
 
 
@@ -86,7 +131,10 @@ def _runtime(tmp_path: Path, *, accepted_orders: int = 0):
         "state_history_sha256": [],
         "created_at": pilot_created_at,
         "decision": "NO-GO",
-        "scenarios": [{} for _ in range(20)],
+        "scenarios": [
+            {"number": number, "result": "todo"}
+            for number in range(1, 21)
+        ],
     }
 
     manifest_path = pilot_docs / "pilot_admission_manifest.json"
@@ -162,12 +210,16 @@ def _runtime(tmp_path: Path, *, accepted_orders: int = 0):
         max_orders=20,
         accepted_orders=accepted_orders,
         allowed_telegram_ids='["123456"]',
+        opened_at=utcnow_naive(),
     )
     session.add(state)
+    pilot_orders: list[Order] = []
     for sequence in range(1, accepted_orders + 1):
         order = Order(customer_id=customer.id, total_amount=100, currency="RUB")
         session.add(order)
         session.flush()
+        _attach_pending_inventory(session, order)
+        pilot_orders.append(order)
         session.add(
             PilotOrderSlot(
                 run_id=state.run_id,
@@ -178,6 +230,22 @@ def _runtime(tmp_path: Path, *, accepted_orders: int = 0):
             )
         )
     session.commit()
+
+    if pilot_orders:
+        current_pilot = json.loads(pilot_path.read_text(encoding="utf-8"))
+        for sequence, order in enumerate(pilot_orders, start=1):
+            current_pilot = _next_signed_state(
+                current_pilot,
+                secret,
+                scenario_number=sequence,
+                result="pass",
+                scenario_changes={
+                    "order_id": str(order.id),
+                    "order_status": str(order.status),
+                },
+            )
+        pilot_path.write_text(json.dumps(current_pilot), encoding="utf-8")
+
     return session, customer, settings, env, pilot_path, manifest_path, previous_path
 
 
@@ -190,6 +258,7 @@ def _next_signed_state(
     decision: str | None = None,
     admission_sha256: str | None = None,
     parent_sha256: str | None = None,
+    scenario_changes: dict | None = None,
 ) -> dict:
     parent = state_anchor(payload)
     child = json.loads(json.dumps(payload))
@@ -197,7 +266,10 @@ def _next_signed_state(
     effective_parent = parent_sha256 or parent["sha256"]
     child["revision"] = parent["revision"] + 1
     child["state_history_sha256"] = [*parent["history"], effective_parent]
-    child["scenarios"][scenario_number - 1]["result"] = result
+    record = child["scenarios"][scenario_number - 1]
+    record["result"] = result
+    for key, value in (scenario_changes or {}).items():
+        record[key] = value
     if decision is not None:
         child["decision"] = decision
     if admission_sha256 is not None:
@@ -236,6 +308,7 @@ def test_allowlisted_checkout_consumes_one_atomic_slot(tmp_path):
     order = Order(customer_id=customer.id, total_amount=100, currency="RUB")
     db.add(order)
     db.flush()
+    _attach_pending_inventory(db, order)
     record_pilot_order(db, context=context, order=order, customer=customer)
     db.commit()
 
@@ -243,6 +316,69 @@ def test_allowlisted_checkout_consumes_one_atomic_slot(tmp_path):
     assert state.accepted_orders == 1
     assert state.status == "active"
     assert db.query(PilotOrderSlot).count() == 1
+
+
+def test_next_checkout_waits_for_signed_previous_scenario_without_stopping_runtime(tmp_path):
+    db, customer, settings, env, pilot_path, *_ = _runtime(tmp_path)
+
+    first = acquire_pilot_checkout(db, customer=customer, settings=settings, env=env)
+    order = Order(customer_id=customer.id, total_amount=100, currency="RUB")
+    db.add(order)
+    db.flush()
+    _attach_pending_inventory(db, order)
+    record_pilot_order(db, context=first, order=order, customer=customer)
+    db.commit()
+
+    with pytest.raises(HTTPException) as waiting:
+        acquire_pilot_checkout(db, customer=customer, settings=settings, env=env)
+    assert waiting.value.status_code == 423
+    assert waiting.value.detail == {
+        "code": "pilot_checkout_unavailable",
+        "message": "Checkout is temporarily unavailable during the controlled pilot.",
+    }
+
+    runtime = db.get(PilotRuntimeState, 1)
+    assert runtime.status == "active"
+    assert not runtime.stop_reason
+    assert runtime.accepted_orders == 1
+
+    payload = json.loads(pilot_path.read_text(encoding="utf-8"))
+    passed = _next_signed_state(
+        payload,
+        env["PILOT_EVIDENCE_SIGNING_SECRET"],
+        scenario_number=1,
+        result="pass",
+        scenario_changes={
+            "order_id": str(order.id),
+            "order_status": str(order.status),
+        },
+    )
+    pilot_path.write_text(json.dumps(passed), encoding="utf-8")
+
+    second = acquire_pilot_checkout(db, customer=customer, settings=settings, env=env)
+    assert second.sequence == 2
+
+
+def test_current_slot_payment_guard_does_not_wait_for_scenario_pass(tmp_path):
+    db, customer, settings, env, *_ = _runtime(tmp_path)
+
+    context = acquire_pilot_checkout(db, customer=customer, settings=settings, env=env)
+    order = Order(customer_id=customer.id, total_amount=100, currency="RUB")
+    db.add(order)
+    db.flush()
+    _attach_pending_inventory(db, order)
+    record_pilot_order(db, context=context, order=order, customer=customer)
+    db.commit()
+
+    assert_pilot_new_payment_attempt_allowed(
+        db,
+        order_id=order.id,
+        settings=settings,
+        env=env,
+    )
+    runtime = db.get(PilotRuntimeState, 1)
+    assert runtime.status == "active"
+    assert not runtime.stop_reason
 
 
 def test_non_allowlisted_customer_and_stop_decision_are_blocked(tmp_path):
@@ -305,6 +441,7 @@ def test_twentieth_order_closes_runtime_without_exceeding_limit(tmp_path):
     order = Order(customer_id=customer.id, total_amount=100, currency="RUB")
     db.add(order)
     db.flush()
+    _attach_pending_inventory(db, order)
     record_pilot_order(db, context=context, order=order, customer=customer)
     db.commit()
 
@@ -341,7 +478,6 @@ def test_pilot_state_bound_to_other_admission_fails_closed(tmp_path):
     assert mismatch.value.status_code == 503
 
 
-
 def test_tampered_pilot_control_state_fails_closed_on_checkout(tmp_path):
     db, customer, settings, env, pilot_path, *_ = _runtime(tmp_path)
     payload = json.loads(pilot_path.read_text(encoding="utf-8"))
@@ -351,7 +487,6 @@ def test_tampered_pilot_control_state_fails_closed_on_checkout(tmp_path):
     with pytest.raises(HTTPException) as tampered:
         acquire_pilot_checkout(db, customer=customer, settings=settings, env=env)
     assert tampered.value.status_code == 503
-
 
 
 def test_runtime_anchor_advances_to_descendant_and_rejects_replay(tmp_path):
@@ -389,3 +524,66 @@ def test_unrelated_valid_signed_state_branch_fails_closed(tmp_path):
     with pytest.raises(HTTPException) as unrelated:
         acquire_pilot_checkout(db, customer=customer, settings=settings, env=env)
     assert unrelated.value.status_code == 503
+
+
+def test_current_run_provider_failure_blocks_new_checkout_without_leaking_details(tmp_path):
+    db, customer, settings, env, *_ = _runtime(tmp_path)
+    state = db.get(PilotRuntimeState, 1)
+    db.add(
+        ProviderCommand(
+            provider="moysklad",
+            command_type="customer_order.create",
+            idempotency_key="private-pilot-command-key",
+            aggregate_type="order",
+            aggregate_id="private-order-id",
+            payload_json='{"secret":"must-not-leak"}',
+            status="failed",
+            last_error="private provider failure detail",
+            created_at=state.opened_at,
+        )
+    )
+    db.commit()
+
+    with pytest.raises(HTTPException) as blocked:
+        acquire_pilot_checkout(db, customer=customer, settings=settings, env=env)
+
+    assert blocked.value.status_code == 423
+    assert blocked.value.detail == {
+        "code": "pilot_checkout_unavailable",
+        "message": "Checkout is temporarily unavailable during the controlled pilot.",
+    }
+    serialized = json.dumps(blocked.value.detail)
+    assert "private-pilot-command-key" not in serialized
+    assert "must-not-leak" not in serialized
+    assert "provider failure" not in serialized
+
+
+def test_historical_provider_failure_before_runtime_window_does_not_block_checkout(tmp_path):
+    db, customer, settings, env, *_ = _runtime(tmp_path)
+    state = db.get(PilotRuntimeState, 1)
+    db.add(
+        ProviderCommand(
+            provider="moysklad",
+            command_type="customer_order.create",
+            idempotency_key="historical-command",
+            status="failed",
+            created_at=state.opened_at - timedelta(seconds=1),
+        )
+    )
+    db.commit()
+
+    context = acquire_pilot_checkout(db, customer=customer, settings=settings, env=env)
+    assert context is not None
+    assert context.sequence == 1
+
+
+def test_active_runtime_without_opened_at_fails_integrity_check(tmp_path):
+    db, customer, settings, env, *_ = _runtime(tmp_path)
+    state = db.get(PilotRuntimeState, 1)
+    state.opened_at = None
+    db.commit()
+
+    with pytest.raises(HTTPException) as invalid:
+        acquire_pilot_checkout(db, customer=customer, settings=settings, env=env)
+    assert invalid.value.status_code == 503
+    assert invalid.value.detail["code"] == "pilot_runtime_integrity_failure"

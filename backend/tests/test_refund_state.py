@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from backend.services import refund_state
+from backend.services import refund_allocation, refund_state
 
 
 def _order(total=1000.0):
@@ -47,9 +47,13 @@ def test_provider_refund_amount_validates_currency():
     assert exc.value.status_code == 409
 
 
-def test_full_refund_applies_loyalty_and_inventory_reversal(monkeypatch):
+def test_financial_refund_module_has_no_sellable_inventory_authority():
+    assert not hasattr(refund_state, "restore_sold_variants")
+    assert not hasattr(refund_state, "enqueue_moysklad_sales_return")
+
+
+def test_full_refund_applies_loyalty_without_inventory_reversal(monkeypatch):
     called = {}
-    restored = []
     notifications = []
 
     def fake_apply(db, *, customer_id, order_id, redeemed_points):
@@ -60,19 +64,18 @@ def test_full_refund_applies_loyalty_and_inventory_reversal(monkeypatch):
         )
         return {"ok": True}
 
-    def fake_restore(db, quantities, *, order_id, source):
-        restored.append((dict(quantities), order_id, source))
-        return True
-
     def fake_notification(db, order, *, return_id, amount, full_refund):
         notifications.append((order.id, return_id, amount, full_refund))
         return True
 
     monkeypatch.setattr(refund_state, "completed_refund_total", lambda *args, **kwargs: Decimal("0.00"))
     monkeypatch.setattr(refund_state, "apply_full_refund_loyalty", fake_apply)
-    monkeypatch.setattr(refund_state, "_order_item_quantities", lambda _order: {77: 2})
-    monkeypatch.setattr(refund_state, "restore_sold_variants", fake_restore)
     monkeypatch.setattr(refund_state, "queue_order_refund", fake_notification)
+    monkeypatch.setattr(
+        refund_allocation,
+        "validate_persisted_return_allocation",
+        lambda *args, **kwargs: {"allocated_cents": 100000},
+    )
     order = _order()
     ret = _return()
 
@@ -82,17 +85,17 @@ def test_full_refund_applies_loyalty_and_inventory_reversal(monkeypatch):
     assert order.status == "refunded"
     assert order.payment_status == "refunded"
     assert called == {"customer_id": 7, "order_id": 42, "redeemed_points": 100.0}
-    assert restored == [({77: 2}, 42, "full_refund")]
     assert notifications == [(42, 100, 1000.0, True)]
     assert result["ok"] is True
-    assert result["inventory_restored"] is True
+    assert result["inventory_effect"] == "none_financial_refund_is_not_physical_return"
+    assert result["physical_return_required_for_stock"] is True
     assert result["cumulative_refund_amount"] == 1000.0
     assert result["remaining_refundable_amount"] == 0.0
 
 
 def test_partial_refund_does_not_silently_recalculate_loyalty_or_inventory(monkeypatch):
     def fail_if_called(*args, **kwargs):
-        raise AssertionError("full-refund loyalty/inventory handler must not run")
+        raise AssertionError("full-refund loyalty handler must not run")
 
     notifications = []
 
@@ -102,8 +105,12 @@ def test_partial_refund_does_not_silently_recalculate_loyalty_or_inventory(monke
 
     monkeypatch.setattr(refund_state, "completed_refund_total", lambda *args, **kwargs: Decimal("0.00"))
     monkeypatch.setattr(refund_state, "apply_full_refund_loyalty", fail_if_called)
-    monkeypatch.setattr(refund_state, "restore_sold_variants", fail_if_called)
     monkeypatch.setattr(refund_state, "queue_order_refund", fake_notification)
+    monkeypatch.setattr(
+        refund_allocation,
+        "validate_persisted_return_allocation",
+        lambda *args, **kwargs: {"allocated_cents": 25000},
+    )
     order = _order()
     ret = _return(250.0)
 
@@ -112,7 +119,12 @@ def test_partial_refund_does_not_silently_recalculate_loyalty_or_inventory(monke
     assert ret.status == "approved_partial"
     assert order.status == "partially_refunded"
     assert order.payment_status == "partially_refunded"
-    assert result["policy"] == "loyalty_and_inventory_adjusted_only_after_full_cumulative_refund"
+    assert result["policy"] == (
+        "financial_refund_never_changes_sellable_inventory; "
+        "received_inspected_resalable_physical_disposition_is_required"
+    )
+    assert result["inventory_effect"] == "none_financial_refund_is_not_physical_return"
+    assert result["physical_return_required_for_stock"] is True
     assert result["cumulative_refund_amount"] == 250.0
     assert result["remaining_refundable_amount"] == 750.0
     assert notifications == [(42, 100, 250.0, False)]
@@ -136,3 +148,79 @@ def test_canceled_and_pending_refunds_preserve_reconcilable_states(monkeypatch):
     assert pending_return.status == "refund_pending"
     assert pending_order.status == "refund_requested"
     assert pending_order.payment_status == "refund_pending"
+
+
+@pytest.mark.parametrize(
+    (
+        "return_status",
+        "order_status",
+        "payment_status",
+        "provider_status",
+        "completed_total",
+        "remaining_total",
+    ),
+    [
+        ("approved", "refunded", "refunded", "pending", "1000.00", 0.0),
+        ("approved", "refunded", "refunded", "canceled", "1000.00", 0.0),
+        ("approved", "refunded", "refunded", "succeeded", "1000.00", 0.0),
+        (
+            "approved_partial",
+            "partially_refunded",
+            "partially_refunded",
+            "pending",
+            "250.00",
+            750.0,
+        ),
+        (
+            "approved_partial",
+            "partially_refunded",
+            "partially_refunded",
+            "canceled",
+            "250.00",
+            750.0,
+        ),
+    ],
+)
+def test_final_refund_state_ignores_stale_provider_observations(
+    monkeypatch,
+    return_status,
+    order_status,
+    payment_status,
+    provider_status,
+    completed_total,
+    remaining_total,
+):
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("terminal refund must not replay side effects")
+
+    monkeypatch.setattr(
+        refund_state,
+        "completed_refund_total",
+        lambda *args, **kwargs: Decimal(completed_total),
+    )
+    monkeypatch.setattr(refund_state, "apply_full_refund_loyalty", fail_if_called)
+    monkeypatch.setattr(refund_state, "queue_order_refund", fail_if_called)
+
+    order = _order()
+    order.status = order_status
+    order.payment_status = payment_status
+    ret = _return(1000.0 if return_status == "approved" else 250.0)
+    ret.status = return_status
+
+    result = refund_state.apply_provider_refund_status(
+        object(),
+        ret,
+        order,
+        provider_status,
+    )
+
+    assert ret.status == return_status
+    assert order.status == order_status
+    assert order.payment_status == payment_status
+    assert result == {
+        "cumulative_refund_amount": float(Decimal(completed_total)),
+        "remaining_refundable_amount": remaining_total,
+        "idempotent": True,
+        "return_status": return_status,
+        "inventory_effect": "none_financial_refund_is_not_physical_return",
+    }

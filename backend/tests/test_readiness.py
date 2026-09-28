@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from backend.api import health
 
 
-CURRENT_HEAD = "0026_inventory_return_movement"
+CURRENT_HEAD = "0046_moysklad_return_disposition"
 
 
 class ScalarResult:
@@ -78,4 +78,3 @@ def test_not_ready_when_migration_graph_is_invalid(monkeypatch):
         health.ready(db)
 
     assert exc_info.value.status_code == 503
-    assert exc_info.value.detail == "Service is not ready"

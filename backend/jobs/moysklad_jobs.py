@@ -7,6 +7,7 @@ from backend.jobs.scheduler_lock import run_locked_async_db_job
 from backend.services.crm import recompute_all_profiles
 from backend.services.moysklad import sync_assortment_to_catalog
 from backend.services.recommendations import rebuild_basic_recommendations
+from backend.services.runtime_capabilities import moysklad_execution_enabled
 
 
 async def run_moysklad_pipeline(
@@ -16,6 +17,16 @@ async def run_moysklad_pipeline(
     crm_callback: Callable[[Session], int],
     recommendations_callback: Callable[[Session], int],
 ) -> dict[str, Any]:
+    if not moysklad_execution_enabled():
+        return {
+            "status": "disabled",
+            "products_seen": 0,
+            "products_upserted": 0,
+            "variants_upserted": 0,
+            "crm_profiles": 0,
+            "recommendations": 0,
+        }
+
     log = await sync_callback(db, sync_type="scheduled")
     if log.status != "success":
         raise RuntimeError(log.error or "MoySklad synchronization failed")

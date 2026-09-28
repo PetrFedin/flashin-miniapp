@@ -76,7 +76,6 @@ Pilot procedure and stop criteria: `docs/pilot/pilot_launch_runbook.md`.
 TELEGRAM_BOT_TOKEN=
 JWT_SECRET=
 ADMIN_EMAIL=
-ADMIN_PASSWORD=
 ADMIN_TOTP_ENCRYPTION_KEY=
 YOOKASSA_SHOP_ID=
 YOOKASSA_SECRET_KEY=
@@ -84,6 +83,8 @@ MOYSKLAD_TOKEN=
 MEILISEARCH_MASTER_KEY=
 OUTBOX_SIGNING_SECRET=
 ```
+
+`ADMIN_PASSWORD` is deliberately **not** a production environment value. On a fresh production database, the first owner password is entered twice through the hidden interactive `scripts/seed_admin.py` prompt, then TOTP is enrolled through the offline first-admin MFA bootstrap. See `docs/runbooks/admin_mfa_bootstrap.md`.
 
 ## Database
 

@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
+import PhysicalReturnPanel from "./PhysicalReturnPanel.jsx";
+import { hasAdminPermission } from "./adminPermissions.js";
 import { AdminApiError, adminJson } from "./api.js";
 import {
   PRIVACY_STATUS_LABELS,
@@ -7,15 +9,17 @@ import {
   RETURN_STATUS_LABELS,
   SUPPORT_PRIORITY_LABELS,
   SUPPORT_STATUS_LABELS,
+  buildRefundAllocationPayload,
   canApproveReturn,
   canProcessPrivacy,
   normalizeAdminAssignment,
   normalizeRefundAmount,
+  refundReconciliationLabel,
   serviceAttentionCount,
   supportTransitions,
 } from "./serviceOperations.js";
 
-const SECTION_PATHS = Object.freeze({
+const SERVICE_ENDPOINTS = Object.freeze({
   support: "/api/support/admin/tickets",
   privacy: "/api/privacy/admin/requests",
   returns: "/api/admin/returns",
@@ -36,23 +40,32 @@ function operationError(error) {
   return error?.message || "Операция не выполнена.";
 }
 
-export default function ServiceOperationsPanel({ onUnauthorized }) {
+export default function ServiceOperationsPanel({ onUnauthorized, session }) {
+  const canSupport = hasAdminPermission(session, "support.write");
+  const canPrivacyRead = hasAdminPermission(session, "privacy.read");
+  const canPrivacyWrite = hasAdminPermission(session, "privacy.write");
+  const canReturnsRead = hasAdminPermission(session, "orders.read");
+  const canCustomersRead = hasAdminPermission(session, "customers.read");
+  const canRefundsWrite = hasAdminPermission(session, "refunds.write");
+  const canPhysicalReturnsWrite = hasAdminPermission(session, "returns.physical.write");
+
   const [tickets, setTickets] = useState([]);
   const [privacyRequests, setPrivacyRequests] = useState([]);
   const [returns, setReturns] = useState([]);
   const [sectionErrors, setSectionErrors] = useState({});
   const [supportDrafts, setSupportDrafts] = useState({});
   const [refundAmounts, setRefundAmounts] = useState({});
+  const [refundAllocationDrafts, setRefundAllocationDrafts] = useState({});
   const [busyKeys, setBusyKeys] = useState(() => new Set());
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const locks = useRef(new Set());
 
   const attentionCount = useMemo(() => serviceAttentionCount({
-    tickets,
-    privacy: privacyRequests,
-    returns,
-  }), [tickets, privacyRequests, returns]);
+    tickets: canSupport ? tickets : [],
+    privacy: canPrivacyRead ? privacyRequests : [],
+    returns: canReturnsRead ? returns : [],
+  }), [tickets, privacyRequests, returns, canSupport, canPrivacyRead, canReturnsRead]);
 
   function isBusy(key) {
     return busyKeys.has(key);
@@ -91,7 +104,19 @@ export default function ServiceOperationsPanel({ onUnauthorized }) {
   }
 
   async function load() {
-    const entries = Object.entries(SECTION_PATHS);
+    const entries = [];
+    if (canSupport) entries.push(["support", SERVICE_ENDPOINTS.support]);
+    if (canPrivacyRead) entries.push(["privacy", SERVICE_ENDPOINTS.privacy]);
+    if (canReturnsRead) entries.push(["returns", SERVICE_ENDPOINTS.returns]);
+
+    if (!canSupport) setTickets([]);
+    if (!canPrivacyRead) setPrivacyRequests([]);
+    if (!canReturnsRead) setReturns([]);
+    if (!entries.length) {
+      setSectionErrors({});
+      return;
+    }
+
     const results = await Promise.allSettled(entries.map(([, path]) => adminJson(path)));
     const nextErrors = {};
     let unauthorized = false;
@@ -115,7 +140,21 @@ export default function ServiceOperationsPanel({ onUnauthorized }) {
 
   useEffect(() => {
     run("initial-service-load", load);
-  }, []);
+  }, [canSupport, canPrivacyRead, canReturnsRead]);
+
+  function refundAllocationDraft(returnId) {
+    return refundAllocationDrafts[returnId] || {};
+  }
+
+  function setRefundAllocationComponent(returnId, key, value) {
+    setRefundAllocationDrafts((current) => ({
+      ...current,
+      [returnId]: {
+        ...(current[returnId] || {}),
+        [key]: value,
+      },
+    }));
+  }
 
   function supportDraft(ticket) {
     return supportDrafts[ticket.id] || {
@@ -133,6 +172,10 @@ export default function ServiceOperationsPanel({ onUnauthorized }) {
   }
 
   async function updateTicket(ticket) {
+    if (!canSupport) {
+      setError("Недостаточно прав: управление обращениями требует support.write.");
+      return;
+    }
     const draft = supportDraft(ticket);
     const assignment = normalizeAdminAssignment(draft.assigned_admin_id);
     if (assignment.error) {
@@ -173,6 +216,10 @@ export default function ServiceOperationsPanel({ onUnauthorized }) {
   }
 
   async function processPrivacy(request) {
+    if (!canPrivacyWrite) {
+      setError("Недостаточно прав: исполнение privacy-запроса требует privacy.write.");
+      return;
+    }
     const typeLabel = PRIVACY_TYPE_LABELS[request.request_type] || request.request_type;
     const warning = request.request_type === "delete"
       ? `Исполнить запрос #${request.id} «${typeLabel}»? Данные клиента будут необратимо обезличены.`
@@ -189,22 +236,46 @@ export default function ServiceOperationsPanel({ onUnauthorized }) {
   }
 
   async function approveReturn(item) {
-    const rawAmount = refundAmounts[item.id] ?? item.refundable_balance;
+    if (!canRefundsWrite) {
+      setError("Недостаточно прав: подтверждение refund требует refunds.write.");
+      return;
+    }
+    const fixedAllocation = Number(item.financial_allocation?.allocated_cents || 0) > 0;
+    const rawAmount = refundAmounts[item.id]
+      ?? (fixedAllocation && Number(item.refund_amount) > 0
+        ? item.refund_amount
+        : item.refundable_balance);
     const validation = normalizeRefundAmount(rawAmount, item.refundable_balance);
     if (validation.error) {
       setError(validation.error);
       return;
     }
     const amount = validation.value;
+    const allocation = buildRefundAllocationPayload(
+      item,
+      refundAllocationDraft(item.id),
+      amount,
+    );
+    if (allocation.error) {
+      setError(allocation.error);
+      return;
+    }
+    const componentNote = allocation.allocations.length
+      ? ` Финансовых компонентов: ${allocation.allocations.length}.`
+      : " Полный остаток будет распределён по authoritative order-money policy.";
     if (!window.confirm(
-      `Подтвердить возврат #${item.id} по заказу #${item.order_id} на ${money(amount, item.currency)}?`,
+      `Подтвердить возврат #${item.id} по заказу #${item.order_id} на ${money(amount, item.currency)}?${componentNote}`,
     )) return;
 
     const result = await run(
       `return-${item.id}`,
       () => adminJson("/api/returns/admin/approve", {
         method: "POST",
-        body: JSON.stringify({ return_id: item.id, amount }),
+        body: JSON.stringify({
+          return_id: item.id,
+          amount,
+          allocations: allocation.allocations,
+        }),
       }),
       `Возврат #${item.id} передан платёжному провайдеру.`,
     );
@@ -234,139 +305,252 @@ export default function ServiceOperationsPanel({ onUnauthorized }) {
       {notice && <div className="notice" role="status">{notice}<button onClick={() => setNotice("")}>×</button></div>}
 
       <div className="service-grid">
-        <article className="service-card" aria-labelledby="support-queue-title">
-          <h3 id="support-queue-title">Обращения клиентов</h3>
-          {sectionErrors.support && <p className="error-inline">{sectionErrors.support}</p>}
-          {!sectionErrors.support && !tickets.length && <p>Открытых обращений нет.</p>}
-          {tickets.map((ticket) => {
-            const draft = supportDraft(ticket);
-            const statuses = [ticket.status, ...supportTransitions(ticket.status)];
-            return (
-              <div className="service-item" key={ticket.id}>
+        {canSupport && (
+          <article className="service-card" aria-labelledby="support-queue-title">
+            <h3 id="support-queue-title">Обращения клиентов</h3>
+            {sectionErrors.support && <p className="error-inline">{sectionErrors.support}</p>}
+            {!sectionErrors.support && !tickets.length && <p>Открытых обращений нет.</p>}
+            {tickets.map((ticket) => {
+              const draft = supportDraft(ticket);
+              const statuses = [ticket.status, ...supportTransitions(ticket.status)];
+              return (
+                <div className="service-item" key={ticket.id}>
+                  <div className="service-item-heading">
+                    <b>#{ticket.id} · {ticket.subject}</b>
+                    <span>{SUPPORT_STATUS_LABELS[ticket.status] || ticket.status}</span>
+                  </div>
+                  <p>{ticket.message}</p>
+                  <small>{ticket.order_id ? `Заказ #${ticket.order_id}` : "Без привязки к заказу"}</small>
+                  <div className="service-controls">
+                    <label>
+                      Статус
+                      <select
+                        aria-label={`Статус обращения ${ticket.id}`}
+                        value={draft.status || ticket.status}
+                        onChange={(event) => setSupportDraft(ticket.id, { status: event.target.value })}
+                        disabled={isBusy(`support-${ticket.id}`)}
+                      >
+                        {statuses.map((status) => (
+                          <option value={status} key={status}>{SUPPORT_STATUS_LABELS[status] || status}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Приоритет
+                      <select
+                        aria-label={`Приоритет обращения ${ticket.id}`}
+                        value={draft.priority || ticket.priority}
+                        onChange={(event) => setSupportDraft(ticket.id, { priority: event.target.value })}
+                        disabled={isBusy(`support-${ticket.id}`)}
+                      >
+                        {Object.entries(SUPPORT_PRIORITY_LABELS).map(([value, label]) => (
+                          <option value={value} key={value}>{label}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Ответственный Admin ID
+                      <input
+                        aria-label={`Ответственный обращения ${ticket.id}`}
+                        type="number"
+                        min="1"
+                        step="1"
+                        placeholder="ID активного администратора"
+                        value={draft.assigned_admin_id ?? ""}
+                        onChange={(event) => setSupportDraft(ticket.id, { assigned_admin_id: event.target.value })}
+                        disabled={isBusy(`support-${ticket.id}`)}
+                      />
+                    </label>
+                    <button
+                      onClick={() => updateTicket(ticket)}
+                      disabled={isBusy(`support-${ticket.id}`)}
+                    >
+                      Сохранить обращение
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </article>
+        )}
+
+        {canPrivacyRead && (
+          <article className="service-card" aria-labelledby="privacy-queue-title">
+            <h3 id="privacy-queue-title">Privacy-запросы</h3>
+            {!canPrivacyWrite && <p className="event-warning">Просмотр без исполнения: нет privacy.write.</p>}
+            {sectionErrors.privacy && <p className="error-inline">{sectionErrors.privacy}</p>}
+            {!sectionErrors.privacy && !privacyRequests.length && <p>Необработанных запросов нет.</p>}
+            {privacyRequests.map((request) => (
+              <div className="service-item" key={request.id}>
                 <div className="service-item-heading">
-                  <b>#{ticket.id} · {ticket.subject}</b>
-                  <span>{SUPPORT_STATUS_LABELS[ticket.status] || ticket.status}</span>
+                  <b>#{request.id} · {PRIVACY_TYPE_LABELS[request.request_type] || request.request_type}</b>
+                  <span>{PRIVACY_STATUS_LABELS[request.status] || request.status}</span>
                 </div>
-                <p>{ticket.message}</p>
-                <small>{ticket.order_id ? `Заказ #${ticket.order_id}` : "Без привязки к заказу"}</small>
-                <div className="service-controls">
-                  <label>
-                    Статус
-                    <select
-                      aria-label={`Статус обращения ${ticket.id}`}
-                      value={draft.status || ticket.status}
-                      onChange={(event) => setSupportDraft(ticket.id, { status: event.target.value })}
-                      disabled={isBusy(`support-${ticket.id}`)}
-                    >
-                      {statuses.map((status) => (
-                        <option value={status} key={status}>{SUPPORT_STATUS_LABELS[status] || status}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    Приоритет
-                    <select
-                      aria-label={`Приоритет обращения ${ticket.id}`}
-                      value={draft.priority || ticket.priority}
-                      onChange={(event) => setSupportDraft(ticket.id, { priority: event.target.value })}
-                      disabled={isBusy(`support-${ticket.id}`)}
-                    >
-                      {Object.entries(SUPPORT_PRIORITY_LABELS).map(([value, label]) => (
-                        <option value={value} key={value}>{label}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    Ответственный Admin ID
-                    <input
-                      aria-label={`Ответственный обращения ${ticket.id}`}
-                      type="number"
-                      min="1"
-                      step="1"
-                      placeholder="ID активного администратора"
-                      value={draft.assigned_admin_id ?? ""}
-                      onChange={(event) => setSupportDraft(ticket.id, { assigned_admin_id: event.target.value })}
-                      disabled={isBusy(`support-${ticket.id}`)}
-                    />
-                  </label>
+                {request.result_url && <small>Результат: {request.result_url}</small>}
+                {canPrivacyWrite && (
                   <button
-                    onClick={() => updateTicket(ticket)}
-                    disabled={isBusy(`support-${ticket.id}`)}
+                    onClick={() => processPrivacy(request)}
+                    disabled={!canProcessPrivacy(request.status) || isBusy(`privacy-${request.id}`)}
                   >
-                    Сохранить обращение
+                    Исполнить privacy-запрос
                   </button>
+                )}
+              </div>
+            ))}
+          </article>
+        )}
+
+        {canReturnsRead && (
+          <article className="service-card" aria-labelledby="returns-queue-title">
+            <h3 id="returns-queue-title">Возвраты и refunds</h3>
+            {!canRefundsWrite && !canPhysicalReturnsWrite && (
+              <p className="event-warning">Возвраты доступны только для чтения: нет refunds.write и returns.physical.write.</p>
+            )}
+            {sectionErrors.returns && <p className="error-inline">{sectionErrors.returns}</p>}
+            {!sectionErrors.returns && !returns.length && <p>Возвратов на обработку нет.</p>}
+            {returns.map((item) => (
+              <div className="service-item" key={item.id}>
+                <div className="service-item-heading">
+                  <b>#{item.id} · Заказ #{item.order_id}</b>
+                  <span>Финансы: {RETURN_STATUS_LABELS[item.status] || item.status}</span>
                 </div>
+                <p>{item.reason}</p>
+                <small>
+                  {canCustomersRead && item.customer_pii_visible
+                    ? (item.customer_name || item.customer_username || `Клиент #${item.customer_id}`)
+                    : "Данные клиента скрыты"}
+                  {` · доступно ${money(item.refundable_balance, item.currency)}`}
+                  {` · возвращено ${money(item.refunded_total, item.currency)}`}
+                </small>
+                <div className="service-financial-evidence">
+                  <small>
+                    {refundReconciliationLabel(item.financial_physical_reconciliation?.status)}
+                    {item.financial_physical_reconciliation?.codes?.length
+                      ? ` · ${item.financial_physical_reconciliation.codes.join(", ")}`
+                      : ""}
+                  </small>
+                  {Number(item.financial_allocation?.allocated_cents || 0) > 0 && (
+                    <small>
+                      {`Allocation: ${money(Number(item.financial_allocation.allocated_cents || 0) / 100, item.currency)}`}
+                      {` · товары ${money(Number(item.financial_allocation.item_cents || 0) / 100, item.currency)}`}
+                      {` · доставка ${money(Number(item.financial_allocation.delivery_cents || 0) / 100, item.currency)}`}
+                      {` · goodwill ${money(Number(item.financial_allocation.goodwill_cents || 0) / 100, item.currency)}`}
+                    </small>
+                  )}
+                  {(item.financial_physical_reconciliation?.lines || []).map((line) => (
+                    <small key={line.order_item_id}>
+                      {`Item #${line.order_item_id}: financial ${money(Number(line.financial_cents || 0) / 100, item.currency)} · physical ${money(Number(line.physical_cents || 0) / 100, item.currency)} · delta ${money(Number(line.delta_cents || 0) / 100, item.currency)}`}
+                    </small>
+                  ))}
+                </div>
+                {canRefundsWrite && (
+                  <div className="service-controls">
+                    <label>
+                      Сумма возврата
+                      <input
+                        aria-label={`Сумма возврата ${item.id}`}
+                        type="number"
+                        min="0.01"
+                        step="0.01"
+                        max={item.refundable_balance}
+                        value={refundAmounts[item.id] ?? (
+                          Number(item.financial_allocation?.allocated_cents || 0) > 0
+                            ? item.refund_amount
+                            : item.refundable_balance
+                        )}
+                        onChange={(event) => setRefundAmounts((current) => ({
+                          ...current,
+                          [item.id]: event.target.value,
+                        }))}
+                        disabled={
+                          !canApproveReturn(item)
+                          || isBusy(`return-${item.id}`)
+                          || Number(item.financial_allocation?.allocated_cents || 0) > 0
+                        }
+                      />
+                    </label>
+                    {Number(item.financial_allocation?.allocated_cents || 0) === 0 && (
+                      <>
+                        {(item.financial_allocation_options?.items || []).map((line) => (
+                          <label key={line.order_item_id}>
+                            {line.title}{line.size ? ` · ${line.size}` : ""}
+                            {` · осталось ${money(Number(line.remaining_cents || 0) / 100, item.currency)}`}
+                            <input
+                              aria-label={`Allocation товара ${item.id} ${line.order_item_id}`}
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              max={Number(line.remaining_cents || 0) / 100}
+                              placeholder="0.00"
+                              value={refundAllocationDraft(item.id)[`item:${line.order_item_id}`] ?? ""}
+                              onChange={(event) => setRefundAllocationComponent(
+                                item.id,
+                                `item:${line.order_item_id}`,
+                                event.target.value,
+                              )}
+                              disabled={!canApproveReturn(item) || isBusy(`return-${item.id}`)}
+                            />
+                          </label>
+                        ))}
+                        {Number(item.financial_allocation_options?.delivery_remaining_cents || 0) > 0 && (
+                          <label>
+                            Доставка
+                            <input
+                              aria-label={`Allocation доставки ${item.id}`}
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              max={Number(item.financial_allocation_options.delivery_remaining_cents || 0) / 100}
+                              placeholder="0.00"
+                              value={refundAllocationDraft(item.id).delivery ?? ""}
+                              onChange={(event) => setRefundAllocationComponent(
+                                item.id,
+                                "delivery",
+                                event.target.value,
+                              )}
+                              disabled={!canApproveReturn(item) || isBusy(`return-${item.id}`)}
+                            />
+                          </label>
+                        )}
+                        <label>
+                          Goodwill / без физического товара
+                          <input
+                            aria-label={`Allocation goodwill ${item.id}`}
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            placeholder="0.00"
+                            value={refundAllocationDraft(item.id).goodwill ?? ""}
+                            onChange={(event) => setRefundAllocationComponent(
+                              item.id,
+                              "goodwill",
+                              event.target.value,
+                            )}
+                            disabled={!canApproveReturn(item) || isBusy(`return-${item.id}`)}
+                          />
+                        </label>
+                      </>
+                    )}
+                    <button
+                      className={item.status.includes("review") || item.status.includes("retry") ? "danger" : ""}
+                      onClick={() => approveReturn(item)}
+                      disabled={!canApproveReturn(item) || isBusy(`return-${item.id}`)}
+                    >
+                      Подтвердить refund
+                    </button>
+                  </div>
+                )}
+                {item.provider_refund_id && <small>Provider refund: {item.provider_refund_id}</small>}
+                <PhysicalReturnPanel
+                  returnItem={item}
+                  canWrite={canPhysicalReturnsWrite}
+                  onChanged={load}
+                  onUnauthorized={onUnauthorized}
+                />
               </div>
-            );
-          })}
-        </article>
-
-        <article className="service-card" aria-labelledby="privacy-queue-title">
-          <h3 id="privacy-queue-title">Privacy-запросы</h3>
-          {sectionErrors.privacy && <p className="error-inline">{sectionErrors.privacy}</p>}
-          {!sectionErrors.privacy && !privacyRequests.length && <p>Необработанных запросов нет.</p>}
-          {privacyRequests.map((request) => (
-            <div className="service-item" key={request.id}>
-              <div className="service-item-heading">
-                <b>#{request.id} · {PRIVACY_TYPE_LABELS[request.request_type] || request.request_type}</b>
-                <span>{PRIVACY_STATUS_LABELS[request.status] || request.status}</span>
-              </div>
-              {request.result_url && <small>Результат: {request.result_url}</small>}
-              <button
-                onClick={() => processPrivacy(request)}
-                disabled={!canProcessPrivacy(request.status) || isBusy(`privacy-${request.id}`)}
-              >
-                Исполнить privacy-запрос
-              </button>
-            </div>
-          ))}
-        </article>
-
-        <article className="service-card" aria-labelledby="returns-queue-title">
-          <h3 id="returns-queue-title">Возвраты и refunds</h3>
-          {sectionErrors.returns && <p className="error-inline">{sectionErrors.returns}</p>}
-          {!sectionErrors.returns && !returns.length && <p>Возвратов на обработку нет.</p>}
-          {returns.map((item) => (
-            <div className="service-item" key={item.id}>
-              <div className="service-item-heading">
-                <b>#{item.id} · Заказ #{item.order_id}</b>
-                <span>{RETURN_STATUS_LABELS[item.status] || item.status}</span>
-              </div>
-              <p>{item.reason}</p>
-              <small>
-                {item.customer_name || item.customer_username || `Клиент #${item.customer_id}`}
-                {` · доступно ${money(item.refundable_balance, item.currency)}`}
-                {` · возвращено ${money(item.refunded_total, item.currency)}`}
-              </small>
-              <div className="service-controls">
-                <label>
-                  Сумма возврата
-                  <input
-                    aria-label={`Сумма возврата ${item.id}`}
-                    type="number"
-                    min="0.01"
-                    step="0.01"
-                    max={item.refundable_balance}
-                    value={refundAmounts[item.id] ?? item.refundable_balance}
-                    onChange={(event) => setRefundAmounts((current) => ({
-                      ...current,
-                      [item.id]: event.target.value,
-                    }))}
-                    disabled={!canApproveReturn(item) || isBusy(`return-${item.id}`)}
-                  />
-                </label>
-                <button
-                  className={item.status.includes("review") || item.status.includes("retry") ? "danger" : ""}
-                  onClick={() => approveReturn(item)}
-                  disabled={!canApproveReturn(item) || isBusy(`return-${item.id}`)}
-                >
-                  Подтвердить refund
-                </button>
-              </div>
-              {item.provider_refund_id && <small>Provider refund: {item.provider_refund_id}</small>}
-            </div>
-          ))}
-        </article>
+            ))}
+          </article>
+        )}
       </div>
     </section>
   );

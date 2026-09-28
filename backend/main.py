@@ -7,10 +7,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
+from . import catalog_intent_models as _catalog_intent_models  # noqa: F401
+from . import catalog_models as _catalog_models  # noqa: F401
 from . import checkout_models as _checkout_models  # noqa: F401
 from . import model_constraints as _model_constraints  # noqa: F401
 from . import notification_models as _notification_models  # noqa: F401
 from . import provider_models as _provider_models  # noqa: F401
+from . import refund_allocation_models as _refund_allocation_models  # noqa: F401
 from .api.admin import router as admin_router
 from .api.admin_auth import router as admin_auth_router
 from .api.admin_notifications import router as admin_notifications_router
@@ -23,6 +26,12 @@ from .api.business_analytics import router as business_analytics_router
 from .api.campaigns import router as campaigns_router
 from .api.cart import router as cart_router
 from .api.cart_items import router as cart_items_router
+from .api.catalog_admin_operations import router as catalog_admin_operations_router
+from .api.catalog_intents import router as catalog_intents_router
+from .api.catalog_merchandising import router as catalog_merchandising_router
+from .api.catalog_pricing import router as catalog_pricing_router
+from .api.catalog_sharing import router as catalog_sharing_router
+from .api.catalog_showroom import router as catalog_showroom_router
 from .api.crm import router as crm_router
 from .api.currency import router as currency_router
 from .api.delivery import router as delivery_router
@@ -52,6 +61,7 @@ from .api.reconciliation import router as reconciliation_router
 from .api.refund_webhooks import router as refund_webhooks_router
 from .api.restock import router as restock_router
 from .api.returns import router as returns_router
+from .api.reverse_logistics import router as reverse_logistics_router
 from .api.search import router as search_router
 from .api.support import router as support_router
 from .api.timeline import router as timeline_router
@@ -65,28 +75,17 @@ from .middleware.metrics import (
     MetricsMiddleware,
     collect_pilot_metrics,
     collect_provider_command_metrics,
+    collect_webhook_outbox_metrics,
     metrics_response,
 )
-from .middleware.rate_limit import InMemoryRateLimitMiddleware
+from .middleware.rate_limit import RateLimitMiddleware
+from .middleware.request_id import RequestIdMiddleware
 from .middleware.security_headers import SecurityHeadersMiddleware
 from .seed import bootstrap_admin, seed_products
+from .services.telegram_product_links import telegram_bot_username
 
 settings = get_settings()
 is_production = settings.app_env.strip().lower() == "production"
-
-_REMOVED_MONOLITH_ADMIN_ROUTES = {
-    ("/admin/login", "POST"),
-    ("/admin/promocodes", "POST"),
-}
-admin_router.routes[:] = [
-    route
-    for route in admin_router.routes
-    if not any(
-        getattr(route, "path", "") == path
-        and method in getattr(route, "methods", set())
-        for path, method in _REMOVED_MONOLITH_ADMIN_ROUTES
-    )
-]
 
 if settings.sentry_dsn:
     sentry_sdk.init(
@@ -98,6 +97,8 @@ if settings.sentry_dsn:
 
 
 def initialize_application() -> None:
+    if is_production and not telegram_bot_username():
+        raise RuntimeError("TELEGRAM_BOT_USERNAME must be configured in production")
     if settings.use_create_all:
         Base.metadata.create_all(bind=engine)
     db = SessionLocal()
@@ -116,14 +117,14 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(
-    title="FLASHIN Mini App Backend v53",
+    title="FLASHIN Mini App Backend v54",
     docs_url=None if is_production else "/docs",
     redoc_url=None if is_production else "/redoc",
     openapi_url=None if is_production else "/openapi.json",
     lifespan=lifespan,
 )
 app.add_middleware(SecurityHeadersMiddleware)
-app.add_middleware(InMemoryRateLimitMiddleware)
+app.add_middleware(RateLimitMiddleware)
 app.add_middleware(AdminOrderStateGuardMiddleware)
 if settings.metrics_enabled:
     app.add_middleware(MetricsMiddleware)
@@ -134,7 +135,9 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Request-ID", "Content-Disposition"],
 )
+app.add_middleware(RequestIdMiddleware)
 
 Path(settings.media_local_dir).mkdir(parents=True, exist_ok=True)
 app.mount("/media", StaticFiles(directory=settings.media_local_dir), name="media")
@@ -143,6 +146,12 @@ app.include_router(health_router)
 app.include_router(currency_router, prefix="/currency")
 app.include_router(auth_router, prefix="/api")
 app.include_router(products_router, prefix="/api")
+app.include_router(catalog_merchandising_router, prefix="/api")
+app.include_router(catalog_pricing_router, prefix="/api")
+app.include_router(catalog_showroom_router, prefix="/api")
+app.include_router(catalog_sharing_router, prefix="/api")
+app.include_router(catalog_admin_operations_router, prefix="/api")
+app.include_router(catalog_intents_router, prefix="/api")
 app.include_router(cart_router, prefix="/api")
 app.include_router(cart_items_router, prefix="/api")
 app.include_router(order_cancellation_router, prefix="/api")
@@ -157,6 +166,7 @@ app.include_router(admin_notifications_router, prefix="/api")
 app.include_router(admin_returns_router, prefix="/api")
 app.include_router(media_router, prefix="/api")
 app.include_router(returns_router, prefix="/api")
+app.include_router(reverse_logistics_router, prefix="/api")
 app.include_router(wishlist_router, prefix="/api")
 app.include_router(restock_router, prefix="/api")
 app.include_router(delivery_router, prefix="/api")
@@ -194,9 +204,10 @@ if settings.metrics_enabled:
     def metrics(db: Session = Depends(get_db)):
         collect_pilot_metrics(db, settings)
         collect_provider_command_metrics(db)
+        collect_webhook_outbox_metrics(db)
         return metrics_response()
 
 
 @app.get("/", include_in_schema=not is_production)
 def root():
-    return {"message": "FLASHIN Mini App API v53", "env": settings.app_env}
+    return {"message": "FLASHIN Mini App API v54", "env": settings.app_env}

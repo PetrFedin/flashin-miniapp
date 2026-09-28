@@ -4,7 +4,7 @@ from sqlalchemy.orm import sessionmaker
 from backend import model_constraints  # noqa: F401
 from backend.database import Base
 from backend.models import Customer, Order, ReturnRequest
-from backend.services import refund_state
+from backend.services import refund_allocation, refund_state
 from backend.services.payments import _refund_idempotence_key
 
 
@@ -64,7 +64,7 @@ def test_remaining_refundable_amount_uses_completed_partial_refunds():
     )
 
 
-def test_second_refund_completes_order_cumulatively(monkeypatch):
+def test_second_refund_completes_order_cumulatively_without_inventory_side_effect(monkeypatch):
     db = _session()
     order = _order(db)
     db.add(
@@ -92,14 +92,11 @@ def test_second_refund_completes_order_cumulatively(monkeypatch):
         "apply_full_refund_loyalty",
         lambda *args, **kwargs: {"loyalty_reversed": True},
     )
-    monkeypatch.setattr(refund_state, "_order_item_quantities", lambda _order: {77: 2})
-    restored = []
-
-    def fake_restore_sold_variants(_db, quantities, *, order_id, source):
-        restored.append((dict(quantities), order_id, source))
-        return True
-
-    monkeypatch.setattr(refund_state, "restore_sold_variants", fake_restore_sold_variants)
+    monkeypatch.setattr(
+        refund_allocation,
+        "validate_persisted_return_allocation",
+        lambda *args, **kwargs: {"allocated_cents": 7000},
+    )
 
     result = refund_state.apply_provider_refund_status(db, second, order, "succeeded")
 
@@ -108,8 +105,10 @@ def test_second_refund_completes_order_cumulatively(monkeypatch):
     assert order.payment_status == "refunded"
     assert result["cumulative_refund_amount"] == 100.0
     assert result["remaining_refundable_amount"] == 0.0
-    assert result["inventory_restored"] is True
-    assert restored == [({77: 2}, order.id, "full_refund")]
+    assert result["inventory_effect"] == "none_financial_refund_is_not_physical_return"
+    assert result["physical_return_required_for_stock"] is True
+    assert result["loyalty_reversed"] is True
+    assert "inventory_restored" not in result
 
 
 def test_equal_refund_amounts_have_distinct_provider_idempotency_keys():

@@ -1,6 +1,7 @@
-import json
+from tempfile import SpooledTemporaryFile
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -8,13 +9,18 @@ from ..models import ConsentRecord, Customer, PrivacyRequest
 from ..schemas import ConsentIn, PrivacyRequestCreate, PrivacyRequestOut
 from ..security import get_current_admin, get_current_customer
 from ..services.audit import log_admin_action
+from ..services.customer_auth import revoke_customer_sessions
 from ..services.privacy import (
     ALLOWED_CONSENT_TYPES,
     OPEN_PRIVACY_REQUEST_STATUSES,
     anonymize_customer,
-    build_customer_export,
     mark_privacy_processed,
     withdraw_optional_consents,
+)
+from ..services.privacy_export import (
+    PRIVACY_EXPORT_FILENAME,
+    PrivacyExportUnavailable,
+    write_customer_export,
 )
 from ..services.rbac import require_permission
 
@@ -117,19 +123,43 @@ def my_privacy_requests(
     )
 
 
+def _stream_spooled_export(file_obj, chunk_size: int = 64 * 1024):
+    try:
+        while True:
+            chunk = file_obj.read(chunk_size)
+            if not chunk:
+                break
+            yield chunk
+    finally:
+        file_obj.close()
+
+
 @router.get("/export")
 def export_my_data(
     customer: Customer = Depends(get_current_customer),
     db: Session = Depends(get_db),
 ):
-    data = build_customer_export(db, customer)
-    return Response(
-        content=json.dumps(data, ensure_ascii=False, indent=2),
-        media_type="application/json",
+    export_file = SpooledTemporaryFile(max_size=1024 * 1024, mode="w+b")
+    try:
+        write_customer_export(db, customer, export_file)
+    except PrivacyExportUnavailable as exc:
+        export_file.close()
+        raise HTTPException(status_code=410, detail=str(exc)) from exc
+    except Exception:
+        export_file.close()
+        raise
+
+    content_length = export_file.tell()
+    export_file.seek(0)
+    return StreamingResponse(
+        _stream_spooled_export(export_file),
+        media_type="application/json; charset=utf-8",
         headers={
             "Content-Disposition": (
-                f'attachment; filename="flashin_customer_{customer.id}_export.json"'
+                f'attachment; filename="{PRIVACY_EXPORT_FILENAME}"; '
+                f"filename*=UTF-8''{PRIVACY_EXPORT_FILENAME}"
             ),
+            "Content-Length": str(content_length),
             "Cache-Control": "no-store, max-age=0",
             "Pragma": "no-cache",
             "X-Content-Type-Options": "nosniff",
@@ -191,7 +221,13 @@ def admin_process_privacy_request(
                 )
             }
         elif request.request_type == "delete":
+            sessions_revoked = revoke_customer_sessions(
+                db,
+                customer_id=customer.id,
+                reason="privacy_deletion",
+            )
             result = anonymize_customer(db, customer)
+            result["sessions_revoked"] = sessions_revoked
         else:
             raise HTTPException(status_code=400, detail="Unsupported privacy request type")
 

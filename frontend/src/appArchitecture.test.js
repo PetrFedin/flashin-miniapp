@@ -23,6 +23,15 @@ test("storefront uses resilient bootstrap and profile loaders", () => {
   assert.doesNotMatch(source, /const \[nextProfile, loyalty, nextReferral/);
 });
 
+test("storefront commerce controls are derived from authoritative runtime capabilities", () => {
+  assert.match(source, /getPlatformCapabilities/);
+  assert.match(source, /commercialCheckoutEnabled/);
+  assert.match(source, /paymentsEnabled/);
+  assert.match(source, /commerceEnabled/);
+  assert.match(source, /paymentsEnabled && canPayOrder/);
+  assert.doesNotMatch(source, /COMMERCIAL_CHECKOUT_ENABLED/);
+});
+
 test("successful business mutations are not masked by refresh failures", () => {
   assert.match(source, /Cancellation succeeded; a cart refresh failure must not report it as failed/);
   assert.match(source, /setOrders\(\(current\) => current\.some/);

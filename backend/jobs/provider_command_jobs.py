@@ -5,16 +5,19 @@ from typing import Any, Awaitable, Callable
 
 from sqlalchemy.orm import Session
 
-from ..provider_models import ProviderCommand
 from ..services.moysklad_outbound import (
     MoySkladReviewRequired,
     export_customer_order,
     export_demand,
-    export_sales_return,
+)
+from ..services.moysklad_reverse_return import (
+    export_physical_sales_return,
+    export_quarantine_move,
 )
 from ..services.provider_command_safety import (
     enforce_terminal_provider_command_pilot_stop,
 )
+from ..services.runtime_capabilities import moysklad_execution_enabled
 from ..services.provider_commands import (
     claim_provider_commands,
     fail_provider_command,
@@ -33,40 +36,55 @@ async def _demand(db: Session, payload: dict[str, Any]) -> str:
     return await export_demand(db, int(payload["order_id"]))
 
 
-async def _sales_return(db: Session, payload: dict[str, Any]) -> str:
-    order_id = int(payload["order_id"])
-    demand = (
-        db.query(ProviderCommand)
-        .filter(
-            ProviderCommand.provider == "moysklad",
-            ProviderCommand.idempotency_key == f"order:{order_id}:demand:v1",
-            ProviderCommand.status == "sent",
-            ProviderCommand.external_id != "",
-        )
-        .first()
+async def _legacy_financial_sales_return(_db: Session, _payload: dict[str, Any]) -> str:
+    # Commands created by the retired financial-refund path are intentionally
+    # not replayed. An operator must establish physical-return truth instead of
+    # letting a money event manufacture a stock-return document.
+    raise MoySkladReviewRequired(
+        "Legacy financial-refund sales return requires physical return reconciliation"
     )
-    if not demand:
-        # Dependency lag is retryable. Do not strand a valid return in manual
-        # review just because the preceding demand is still being retried.
-        raise RuntimeError("MoySklad demand dependency is not completed yet")
-    return await export_sales_return(
-        db,
-        order_id,
-        int(payload["return_id"]),
-    )
+
+
+async def _physical_sales_return(db: Session, payload: dict[str, Any]) -> str:
+    # Keep the historical all-resalable handler call shape stable; the exporter
+    # defaults to resalable while damaged/quarantine use explicit handlers below.
+    return await export_physical_sales_return(db, int(payload["case_id"]))
+
+
+async def _damaged_sales_return(db: Session, payload: dict[str, Any]) -> str:
+    return await export_physical_sales_return(db, int(payload["case_id"]), "damaged")
+
+
+async def _quarantine_sales_return(db: Session, payload: dict[str, Any]) -> str:
+    return await export_physical_sales_return(db, int(payload["case_id"]), "quarantine")
+
+
+async def _quarantine_move(db: Session, payload: dict[str, Any]) -> str:
+    return await export_quarantine_move(db, int(payload["event_id"]))
 
 
 _HANDLERS: dict[str, _Handler] = {
     "moysklad.customer_order.create": _customer_order,
     "moysklad.demand.create": _demand,
-    "moysklad.sales_return.create": _sales_return,
+    "moysklad.sales_return.create": _legacy_financial_sales_return,
+    "moysklad.physical_sales_return.create": _physical_sales_return,
+    "moysklad.physical_sales_return.damaged.create": _damaged_sales_return,
+    "moysklad.physical_sales_return.quarantine.create": _quarantine_sales_return,
+    "moysklad.quarantine_move.create": _quarantine_move,
 }
 
 
 async def process_provider_commands(db: Session, limit: int = 50) -> dict[str, int]:
-    # Recover a missed pilot stop before taking more work. This also covers the
-    # case where a prior worker process persisted a terminal command and died
-    # before it could persist the circuit-breaker transition.
+    if not moysklad_execution_enabled():
+        return {
+            "claimed": 0,
+            "sent": 0,
+            "retry_scheduled": 0,
+            "failed": 0,
+            "review_required": 0,
+            "ignored": 0,
+        }
+
     enforce_terminal_provider_command_pilot_stop(db)
 
     claimed = claim_provider_commands(db, provider="moysklad", limit=limit)

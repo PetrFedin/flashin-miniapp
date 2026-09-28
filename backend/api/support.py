@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..database import get_db, utcnow_naive
-from ..models import AdminUser, Customer, SupportTicket
+from ..models import AdminUser, Customer, Order, SupportTicket
 from ..schemas import SupportTicketCreate, SupportTicketOut, SupportTicketUpdate
 from ..security import get_current_admin, get_current_customer
 from ..services.rbac import require_permission
@@ -41,6 +41,19 @@ def create_ticket(
     priority = (payload.priority or "normal").strip().lower()
     if priority not in _PRIORITIES:
         raise HTTPException(status_code=400, detail="Unsupported ticket priority")
+
+    if payload.order_id is not None:
+        order = (
+            db.query(Order)
+            .filter(
+                Order.id == payload.order_id,
+                Order.customer_id == customer.id,
+            )
+            .first()
+        )
+        if order is None:
+            raise HTTPException(status_code=404, detail="Order not found")
+
     ticket = SupportTicket(
         customer_id=customer.id,
         order_id=payload.order_id,

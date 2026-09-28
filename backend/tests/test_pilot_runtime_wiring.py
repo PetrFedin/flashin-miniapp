@@ -83,13 +83,19 @@ def test_release_capability_requires_runtime_checkout_and_safe_operations():
         assert marker in source
 
 
-def test_production_environment_requires_exact_twenty_order_guard():
+def test_production_environment_separates_disabled_profile_from_controlled_commerce():
     example = read(".env.production.example")
     validator = read("scripts/validate_env.py")
-    assert "PILOT_RUNTIME_ENFORCED=true" in example
+
+    assert "COMMERCIAL_CHECKOUT_ENABLED=false" in example
+    assert "PAYMENTS_MODE=disabled" in example
+    assert "MOYSKLAD_MODE=disabled" in example
+    assert "PILOT_RUNTIME_ENFORCED=false" in example
     assert "PILOT_RUNTIME_MAX_ORDERS=20" in example
-    assert "PILOT_RUNTIME_ENFORCED must be true in production" in validator
-    assert "PILOT_RUNTIME_MAX_ORDERS must equal 20 in production" in validator
+
+    assert "PILOT_RUNTIME_ENFORCED must be true for production commercial checkout" in validator
+    assert "PILOT_RUNTIME_ENFORCED must be false when production commercial checkout is disabled" in validator
+    assert "PILOT_RUNTIME_MAX_ORDERS must equal 20 for production commercial checkout" in validator
 
 
 def test_runtime_make_targets_are_unique():

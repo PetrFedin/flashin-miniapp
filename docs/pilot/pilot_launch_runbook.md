@@ -5,7 +5,9 @@
 Первый реальный заказ разрешён только для **точного immutable release**, который одновременно:
 
 - прошёл полный CI (`backend`, `frontend`, `admin`, `browser-e2e`, `integrated-e2e`, `docker`) от официального GitHub Actions App;
-- развёрнут на production-подобном pilot host;
+- выпущен guarded GitHub `Release` workflow как retained ZIP + `.sha256` для exact protected-main commit;
+- развёрнут на production-подобном pilot host из этого exact retained artifact, а не из произвольного host checkout;
+- имеет signed `pilot_runtime_guard` capability v18;
 - имеет подписанные provider, live readiness, rollback, lifecycle и repository-governance evidence;
 - имеет действующий подписанный admission с пятью именованными владельцами;
 - связан с отдельным pilot runtime state;
@@ -14,7 +16,9 @@
 
 Любое изменение release, production configuration, evidence-файла, admission manifest или GitHub `main` требует остановки runtime и нового полного допуска.
 
-`integrated-e2e` — обязательный internal-stack gate: он проводит подписанный тестовый Telegram WebApp payload через реальный Mini App -> FastAPI -> PostgreSQL -> payment domain -> Admin fulfillment/delivery -> Mini App refresh. В нём заменена только внешняя HTTP-граница YooKassa. Этот PASS не заменяет реальные Telegram/YooKassa/MoySklad/CDN evidence.
+`integrated-e2e` — обязательный internal-stack gate: он проводит подписанный тестовый Telegram WebApp payload через реальный Mini App -> FastAPI -> PostgreSQL -> payment -> canonical YooKassa callback -> stock -> Admin fulfillment/delivery -> return/refund callback -> stock restoration -> notification -> terminal Mini App/Admin state. В нём заменена внешняя HTTP-граница YooKassa. Этот PASS не заменяет реальные Telegram/YooKassa/MoySklad/CDN evidence.
+
+Отдельный обязательный backend provider-spine smoke проводит `customerorder -> demand -> salesreturn` через реальный PostgreSQL provider-command lifecycle и worker, заменяя только удалённую HTTP-границу MoySklad. Он доказывает внутренний outbound mapping/dispatch, но не существование документов в живом аккаунте MoySklad.
 
 ## Обязательные внешние входы
 
@@ -22,7 +26,8 @@
 
 - production/sandbox credentials Telegram, YooKassa, MoySklad, Meilisearch и R2/S3, если функции включены;
 - отдельный случайный `PILOT_EVIDENCE_SIGNING_SECRET`;
-- отдельный краткоживущий operator-only `PILOT_GITHUB_TOKEN` с минимально достаточными `Actions: read` и `Administration: read`, включая доступ к полным ruleset bypass data;
+- отдельный краткоживущий operator-only GitHub token с `Administration: write` **только на время применения branch protection**;
+- отдельный краткоживущий operator-only GitHub token с минимально достаточными `Actions: read` и `Administration: read` для чтения protection/ruleset и выпуска repository-governance evidence;
 - `PILOT_GITHUB_ACTIONS_APP_ID=15368` для привязки required checks к официальному GitHub Actions App;
 - DNS и валидный HTTPS для Mini App, API, Admin и CDN;
 - публичные оферта, privacy, consent, returns/refunds и реквизиты продавца;
@@ -32,7 +37,7 @@
 - два разных проверяемых immutable release: `current` и `previous`;
 - проверенный backup и подписанный production-like rollback drill.
 
-GitHub governance token запрещено хранить в root `.env`: Compose передаёт этот файл application containers. Секреты, raw Telegram `initData`, cookies и authorization headers запрещено сохранять в evidence.
+GitHub operator tokens запрещено хранить в root `.env`: Compose передаёт этот файл application containers. Секреты, raw Telegram `initData`, cookies и authorization headers запрещено сохранять в evidence.
 
 ## 1. Защитить исходный код
 
@@ -47,34 +52,72 @@ GitHub governance token запрещено хранить в root `.env`: Compos
 7. classic `enforce_admins=true` или ruleset без bypass actors;
 8. `main` остаётся default branch.
 
-После изменения governance не вносите новые коммиты в `main`, пока не будет создан новый release и заново пройдена вся цепочка. На момент подготовки v20 API GitHub показывал `main` как unprotected, поэтому этот шаг нельзя считать выполненным по одному только зелёному CI.
+Сначала проверьте exact policy локальным dry-run без токена:
+
+```bash
+python3 scripts/configure_main_protection.py
+```
+
+Для применения classic branch protection передайте `Administration: write` token **только в процесс этой команды**:
+
+```bash
+PILOT_GITHUB_TOKEN="$TOKEN_FROM_OPERATOR_SECRET_MANAGER" \
+  python3 scripts/configure_main_protection.py --apply
+unset PILOT_GITHUB_TOKEN
+```
+
+Команда fail-closed требует ровно шесть checks и GitHub Actions App ID `15368`, включает strict checks, PR-only, `enforce_admins`, conversation resolution и запрещает force-push/deletion. Если используется organization ruleset вместо classic protection, настройте эквивалентную политику и затем докажите её governance collector-ом.
+
+После изменения governance не вносите новые коммиты в `main`, пока не будет создан новый release и заново пройдена вся цепочка. Если API GitHub показывает `main` как unprotected, этот шаг нельзя считать выполненным по одному только зелёному CI.
 
 ## 2. Проверить production configuration
 
 ```bash
 make validate-env
+python3 scripts/provider_wiring_preflight.py --env .env
 make readiness-gate
 ```
 
-`readiness-gate` должен завершиться GO до deploy. Никакие значения из `.env.production.example` не являются реальными секретами. В production `.env` должны находиться только не-секретные GitHub governance settings; строка `PILOT_GITHUB_TOKEN` там запрещена.
+Все три шага должны завершиться GO до deploy. Provider preflight fail-closed проверяет production HTTPS URLs, точный YooKassa callback `${API_PUBLIC_URL}/api/webhooks/yookassa`, точный return URL `${MINI_APP_URL}/payment-result`, Telegram token wiring, YooKassa credentials, MoySklad credentials/organization/agent/store IDs, outbound enablement, scheduler и pilot runtime guard. Никакие значения из `.env.production.example` не являются реальными секретами. В production `.env` должны находиться только не-секретные GitHub governance settings; строка `PILOT_GITHUB_TOKEN` там запрещена.
 
-## 3. Создать и развернуть два immutable release
+## 3. Получить exact immutable release и доказуемый rollback slot
 
-Нужны различающиеся `current` и `previous`, чтобы rollback был доказуемым.
+Нужны различающиеся `current` и `previous`, чтобы rollback был доказуемым. Production pilot release **не создаётся на host через `make release-create`**. Он должен быть получен из guarded GitHub `Release` workflow после protected-main push CI.
 
-```bash
-make release-create
-make release-verify FILE=deploy/release/builds/flashin_<release>.zip
-make deploy-prod
+Для release скачайте без изменения байтов ZIP и соседний checksum в retained directory:
 
-# После следующего проверенного release/deploy должен появиться previous.
-make release-create
-make release-verify FILE=deploy/release/builds/flashin_<next-release>.zip
-make deploy-prod
-make release-status
+```text
+deploy/release/builds/flashin_<release>.zip
+deploy/release/builds/flashin_<release>.zip.sha256
 ```
 
-Не допускается использовать архив, созданный из другого commit, или вручную менять release pointer.
+Normal production deploy намеренно принимает только архив, чей commit **прямо сейчас** является current protected GitHub `main` head и имеет успешный exact-SHA `push` CI со всеми шестью required jobs. Поэтому старый rollback release нельзя задеплоить через normal `make deploy-prod` уже после того, как `main` ушёл вперёд, просто ради создания `previous` pointer.
+
+`previous` должен быть сформирован одним из безопасных способов:
+
+- он уже остался от предыдущего успешного artifact-bound production deployment, выполненного в тот момент, когда его commit был current protected exact-green `main`; или
+- он был подготовлен в утверждённой release/rollback последовательности **до** финального продвижения нового pilot release.
+
+Если перед финальным pilot deploy нет отдельного проверенного `previous`, это NO-GO. Не обходите gate ручным редактированием pointers.
+
+Проверка и deploy exact pilot release:
+
+```bash
+make release-verify FILE=deploy/release/builds/flashin_<pilot>.zip
+python3 scripts/deploy_release_gate.py \
+  --archive deploy/release/builds/flashin_<pilot>.zip
+python3 scripts/pilot_release_capability.py inspect \
+  --archive deploy/release/builds/flashin_<pilot>.zip
+make deploy-prod RELEASE=deploy/release/builds/flashin_<pilot>.zip
+make release-status
+python3 scripts/pilot_release_capability.py verify --slot both --env .env
+```
+
+`deploy_release_gate.py` fail-closed требует: artifact под `deploy/release/builds/`, соседний `.sha256`, manifest commit = checkout `HEAD`, полностью чистый tracked/non-ignored-untracked checkout, exact tracked file-set, совпадающие SHA-256 и Git-semantic executable bits. Дополнительно он сам обращается к жёстко закреплённому trust anchor `PetrFedin/flashin-miniapp` через `https://api.github.com`, требует `main protected=true`, archive commit = current `main` head, успешный exact-SHA **push** CI и success всех шести required jobs. Repository/API endpoint нельзя перенаправить env-переменной. Для аутентификации/rate limit допустим только process-injected `FLASHIN_GITHUB_TOKEN`/`GITHUB_TOKEN`; токен не меняет trust anchor.
+
+Production images собираются из временной распаковки verified ZIP, а не из host source tree. Полный gate повторяется после image build и до migrations/runtime operations. Bare `make deploy-prod` намеренно запрещён.
+
+Не допускается использовать архив от другого commit, вручную менять release pointer или считать локально перепакованный checkout эквивалентом GitHub Release artifact.
 
 ## 4. Backup и production-like rollback drill
 
@@ -97,7 +140,7 @@ make provider-probes
 make check-integrations
 ```
 
-Отчёт должен быть strict, свежим, подписанным и привязанным к точному release/configuration.
+Отчёт должен быть strict, свежим, подписанным и привязанным к точному release/configuration. Для Telegram/YooKassa/MoySklad PASS должен отражать реальный ответ внешнего provider, а не CI fake/stub.
 
 ## 6. Публичный live readiness gate
 
@@ -130,13 +173,32 @@ make pilot-admit ARGS='\
 Выполните все обязательные сценарии из `docs/pilot/live_lifecycle_evidence.md` и все P01-P20 шаги `docs/pilot/live_pilot_runner.json`:
 
 - real Telegram signed authentication;
-- YooKassa redirect и return;
-- duplicate webhook idempotency;
-- sandbox refund/reconciliation;
-- live MoySklad sync;
+- YooKassa redirect, canonical `/api/webhooks/yookassa` callback и return;
+- duplicate payment/refund webhook idempotency;
+- sandbox/live refund и authoritative reconciliation;
+- live MoySklad sync и outbound `customerorder`/`demand`/`salesreturn`;
 - Telegram notification delivery;
 - Meilisearch indexing, если включён;
 - R2/S3/CDN delivery, если включён.
+
+Сначала запускается только side-effectful controlled order/payment stage:
+
+```bash
+make real-order-e2e
+make real-order-e2e-status
+```
+
+`real-order-e2e` требует явный `E2E_VARIANT_ID`, чистую pilot cart, нулевую исходную reservation и один controlled SKU. После всех read-only preconditions runner **атомарно** создаёт `docs/pilot/evidence/real_order_e2e_context.json` через exclusive `O_EXCL` до первой cart mutation. Только процесс, выигравший этот claim, может перейти к side effects; второй параллельный запуск завершается fail-closed. Marker хранится с mode `0600` и продвигается по фазам `preflight_intent -> checkout_intent -> order_created -> payment_created`. Каждый переход записывается атомарно с `fsync` файла и каталога. Любой существующий marker блокирует новый real-order run.
+
+`make real-order-e2e-status` возвращает success только для структурно корректного `payment_created`. Если runner оборвался на `preflight_intent`, `checkout_intent` или `order_created`, **не удаляйте marker и не запускайте runner повторно**. Используйте `docs/pilot/real_provider_e2e_recovery.md`: сначала определите, успела ли предыдущая попытка изменить cart, принять checkout или создать provider payment, и продолжайте reconciliation для уже существующего состояния.
+
+После `payment_created` завершите реальный provider/operator lifecycle **того же** `order:<id>`: YooKassa confirmation/callback, fulfillment/delivery, return/refund, MoySklad outbound processing и Telegram delivery. Только затем запускайте read-only terminal verifier:
+
+```bash
+make real-lifecycle-e2e
+```
+
+Terminal verifier и admission оба требуют exact `payment_created` context, тот же order/SKU, полный provider-backed refund, восстановленный baseline stock, `customerorder`/`demand`/`salesreturn` external IDs и ровно одно отправленное refund notification. Они не принимают provisional context.
 
 Сохраните только sanitized evidence под `docs/pilot/evidence`, затем:
 
@@ -146,16 +208,17 @@ make pilot-lifecycle-attach
 make pilot-lifecycle-status
 ```
 
+Для каждого из восьми order-linked scenarios shared context обязателен ровно один раз **и не может быть единственным доказательством**: дополнительно требуется scenario-specific evidence artifact. Все восемь сценариев должны иметь один `order:<id>`, один context SHA и production `api_base == API_PUBLIC_URL`.
+
 Каждый scenario owner должен дословно совпадать с одним из владельцев signed admission. Ни один обязательный P01-P20 шаг не может оставаться `todo` или `failed` к моменту финального допуска.
 
 ## 9. Signed repository-governance evidence
 
 Убедитесь, что защищённый `main` указывает на тот же commit, что `current_release.json`, полный **push CI** этого commit завершён success, а все шесть required checks (`backend`, `frontend`, `admin`, `browser-e2e`, `integrated-e2e`, `docker`) имеют `app_id`/`integration_id=15368`.
 
-Токен подаётся только в процесс создания отчёта. Не записывайте его в `.env`, Compose secret или контейнер:
+Для evidence используйте read-capable governance token; write-права после применения protection здесь не нужны. Токен подаётся только в процесс создания отчёта. Не записывайте его в `.env`, Compose secret или контейнер:
 
 ```bash
-# Предпочтительно: secret-manager запускает одну команду с ephemeral env.
 PILOT_GITHUB_TOKEN="$TOKEN_FROM_OPERATOR_SECRET_MANAGER" \
   make pilot-governance-create ARGS='--owner "Exact Technical Owner"'
 unset PILOT_GITHUB_TOKEN
@@ -165,15 +228,22 @@ make pilot-governance-attach
 
 Не вставляйте raw token в интерактивную shell history; используйте process injection секрет-менеджера или краткоживущий GitHub App installation token.
 
-Collector обязан видеть полное поле `bypass_actors`. Скрытое поле, отсутствующий token, неполные checks, недоверенный source, другой head SHA, PR-only run вместо успешного `push` run или иной workflow дают NO-GO. Проверка уже подписанного отчёта токен не требует. Admission v20 дополнительно fail-closed требует наличие всех шести checks даже при устаревшей env-конфигурации.
+Collector обязан видеть полное поле `bypass_actors`. Скрытое поле, отсутствующий token, неполные checks, недоверенный source, другой head SHA, PR-only run вместо успешного `push` run или иной workflow дают NO-GO. Проверка уже подписанного отчёта токен не требует. Governance tooling fail-closed требует наличие всех шести checks даже при отсутствии `PILOT_GITHUB_REQUIRED_CHECKS` в env.
 
-## 10. Финальная проверка допуска
+## 10. Финальный P01-P20 checklist и admission
+
+Сначала создайте и подпишите exact P01-P20 checklist evidence, затем прикрепите его к финальному launch manifest:
 
 ```bash
+make pilot-checklist-create
+make pilot-checklist-status
+make pilot-checklist-attach
 make pilot-admission-status
 ```
 
-Только `go: true` разрешает инициализацию runtime. Эта команда проверяет baseline evidence, lifecycle, governance, release capability, signatures, checksums, freshness и owner identity.
+`pilot-governance-status` — только промежуточная проверка. **Только `make pilot-admission-status` является финальным GO/NO-GO**, потому что он требует baseline admission, live lifecycle, repository governance и подписанный P01-P20 checklist в одной exact release/configuration lineage.
+
+Только `go: true` разрешает инициализацию/arm runtime.
 
 ## 11. Инициализировать и открыть runtime только allowlist
 
@@ -191,7 +261,7 @@ make pilot-runtime-arm ARGS='\
 make pilot-runtime-status
 ```
 
-Запрещено открывать runtime без явного allowlist, использовать массовый список или повышать лимит выше 20.
+`pilot-runtime-arm` перед мутацией **повторно** запускает final admission verifier. Telegram IDs не передаются в admission verifier. Запрещено открывать runtime без явного allowlist, использовать массовый список или повышать лимит выше 20.
 
 ## 12. Волны первых 20 заказов
 
@@ -220,6 +290,7 @@ STOP обязателен при любом из условий:
 
 - критический сценарий `fail`;
 - duplicate order/payment/refund ID;
+- unresolved `preflight_intent`/`checkout_intent`/`order_created` real-E2E context или попытка запустить новый real-order E2E поверх существующего marker;
 - money delta более 0,01 или неверная валюта;
 - отрицательный остаток или неверный inventory delta;
 - duplicate webhook/callback создал повторный финансовый/доменный эффект;

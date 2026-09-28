@@ -14,22 +14,32 @@ export function mutationRequestKey(path, options = {}) {
 }
 
 export function createRequestCoordinator() {
-  const inFlight = new Map();
+  const scopes = new Map();
 
   return {
-    run(key, operation) {
+    run(key, operation, scope = "default") {
       if (!key) return Promise.resolve().then(operation);
+      let inFlight = scopes.get(scope);
+      if (!inFlight) {
+        inFlight = new Map();
+        scopes.set(scope, inFlight);
+      }
       const current = inFlight.get(key);
       if (current) return current;
       const shared = Promise.resolve()
         .then(operation)
         .finally(() => {
           if (inFlight.get(key) === shared) inFlight.delete(key);
+          if (inFlight.size === 0 && scopes.get(scope) === inFlight) scopes.delete(scope);
         });
       inFlight.set(key, shared);
       return shared;
     },
-    size: () => inFlight.size,
+    size() {
+      let total = 0;
+      for (const inFlight of scopes.values()) total += inFlight.size;
+      return total;
+    },
   };
 }
 

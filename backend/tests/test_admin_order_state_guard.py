@@ -49,22 +49,32 @@ def _run(path: str, payload: dict, method: str = "PATCH") -> tuple[list[dict], b
     return sent, bytes(received_by_app)
 
 
-def test_blocks_paid_status_on_generic_admin_order_patch():
-    sent, forwarded = _run("/api/admin/orders/42", {"status": "paid"})
-
-    assert sent[0]["status"] == 409
-    assert forwarded == b""
-
-
-def test_blocks_refund_workflow_statuses():
-    for status in ("payment_created", "refund_requested", "refunded"):
+def test_blocks_provider_owned_status_on_generic_admin_order_patch():
+    for status in ("paid", "payment_created", "refund_requested", "refunded", "cancelled"):
         sent, forwarded = _run("/api/admin/orders/42", {"status": status})
         assert sent[0]["status"] == 409
         assert forwarded == b""
 
 
-def test_allows_operational_status_and_replays_body():
-    payload = {"status": "assembling", "tracking_number": "TRACK-1"}
+def test_blocks_later_fulfillment_and_shipment_statuses():
+    for status in ("ready", "shipped", "completed"):
+        sent, forwarded = _run("/api/admin/orders/42", {"status": status})
+        assert sent[0]["status"] == 409
+        assert forwarded == b""
+
+
+def test_blocks_delivery_and_tracking_fields_even_when_starting_fulfillment():
+    for payload in (
+        {"status": "assembling", "delivery_status": "assembling"},
+        {"status": "assembling", "tracking_number": "TRACK-1"},
+    ):
+        sent, forwarded = _run("/api/admin/orders/42", payload)
+        assert sent[0]["status"] == 409
+        assert forwarded == b""
+
+
+def test_allows_only_assembling_compatibility_gateway_and_replays_body():
+    payload = {"status": "assembling"}
     sent, forwarded = _run("/api/admin/orders/42", payload)
 
     assert sent[0]["status"] == 204

@@ -12,6 +12,17 @@ from sqlalchemy.orm import Session
 from ..config import get_settings
 from ..database import utcnow_naive
 from ..models import WebhookDestination
+from ..services.audit import log_admin_action
+from ..services.webhook_delivery import (
+    AMBIGUOUS_CANCELLED,
+    SAFE_RETRY_PRE_DISPATCH,
+    classify_http_status,
+    classify_pre_dispatch_exception,
+    classify_transport_exception,
+    encode_delivery_error,
+    review_required_for,
+    validate_delivery_classification,
+)
 from ..services.webhook_security import (
     is_internal_destination,
     resolve_public_webhook_addresses,
@@ -207,6 +218,93 @@ def _finish_outbox(
     return updated is not None
 
 
+def _review_outbox(
+    db: Session,
+    row_id: int,
+    lease_token: str,
+    *,
+    classification: str,
+    error_type: str,
+    destination: str = "",
+) -> bool:
+    """Lease-fenced terminal quarantine for potentially delivered webhooks."""
+
+    normalized_token = str(lease_token or "").strip()
+    if not normalized_token:
+        return False
+    normalized_classification = validate_delivery_classification(classification)
+    if not review_required_for(normalized_classification):
+        raise ValueError("Only review-required webhook outcomes may be quarantined")
+
+    current = db.execute(
+        text(
+            """
+            SELECT attempts
+            FROM webhook_outbox
+            WHERE
+                id = :row_id
+                AND status = 'processing'
+                AND lease_token = :lease_token
+            FOR UPDATE
+            """
+        ),
+        {"row_id": row_id, "lease_token": normalized_token},
+    ).first()
+    if current is None:
+        db.rollback()
+        return False
+
+    attempts = max(int(current.attempts or 0), 0) + 1
+    encoded_error = encode_delivery_error(normalized_classification, error_type)
+    updated = db.execute(
+        text(
+            """
+            UPDATE webhook_outbox
+            SET
+                destination = CASE
+                    WHEN :destination = '' THEN destination
+                    ELSE :destination
+                END,
+                attempts = :attempts,
+                last_error = :error,
+                status = 'review_required',
+                next_attempt_at = NULL,
+                lease_token = NULL
+            WHERE
+                id = :row_id
+                AND status = 'processing'
+                AND lease_token = :lease_token
+            RETURNING id
+            """
+        ),
+        {
+            "row_id": row_id,
+            "lease_token": normalized_token,
+            "attempts": attempts,
+            "error": encoded_error,
+            "destination": destination,
+        },
+    ).first()
+    if updated is None:
+        db.rollback()
+        return False
+
+    log_admin_action(
+        db,
+        None,
+        "webhook_outbox.review_required",
+        "webhook_outbox",
+        row_id,
+        {
+            "event_id": row_id,
+            "classification": normalized_classification,
+            "attempts": attempts,
+        },
+    )
+    db.commit()
+    return True
+
+
 async def process_outbox(db: Session) -> int:
     claimed = _claim_outbox(db)
     if not claimed:
@@ -291,9 +389,6 @@ async def process_outbox(db: Session) -> int:
                     body,
                     hashlib.sha256,
                 ).hexdigest()
-
-                if not _renew_outbox_lease(db, row_id, lease_token):
-                    continue
                 request = client.build_request(
                     "POST",
                     normalized_destination,
@@ -306,28 +401,101 @@ async def process_outbox(db: Session) -> int:
                         "X-Flashin-Event-Type": item["event_type"],
                     },
                 )
-                response = await client.send(request, stream=True)
-                try:
-                    if response.status_code < 200 or response.status_code >= 300:
-                        raise RuntimeError(f"Webhook returned HTTP {response.status_code}")
-                finally:
-                    await response.aclose()
+            except Exception as exc:
+                classification = classify_pre_dispatch_exception(exc)
+                encoded_error = encode_delivery_error(
+                    classification,
+                    exc.__class__.__name__,
+                )
+                if review_required_for(classification):
+                    _review_outbox(
+                        db,
+                        row_id,
+                        lease_token,
+                        classification=classification,
+                        error_type=exc.__class__.__name__,
+                        destination=normalized_destination,
+                    )
+                else:
+                    _finish_outbox(
+                        db,
+                        row_id,
+                        lease_token,
+                        success=False,
+                        error=encoded_error,
+                    )
+                continue
 
-                if _finish_outbox(
+            if not _renew_outbox_lease(db, row_id, lease_token):
+                continue
+
+            try:
+                response = await client.send(request, stream=True)
+            except asyncio.CancelledError:
+                _review_outbox(
+                    db,
+                    row_id,
+                    lease_token,
+                    classification=AMBIGUOUS_CANCELLED,
+                    error_type="CancelledError",
+                    destination=normalized_destination,
+                )
+                raise
+            except Exception as exc:
+                classification = classify_transport_exception(exc)
+                if classification == SAFE_RETRY_PRE_DISPATCH:
+                    _finish_outbox(
+                        db,
+                        row_id,
+                        lease_token,
+                        success=False,
+                        error=encode_delivery_error(
+                            classification,
+                            exc.__class__.__name__,
+                        ),
+                    )
+                else:
+                    _review_outbox(
+                        db,
+                        row_id,
+                        lease_token,
+                        classification=classification,
+                        error_type=exc.__class__.__name__,
+                        destination=normalized_destination,
+                    )
+                continue
+
+            status_code = int(response.status_code)
+            if 200 <= status_code < 300:
+                finalized = _finish_outbox(
                     db,
                     row_id,
                     lease_token,
                     success=True,
                     destination=normalized_destination,
-                ):
+                )
+                if finalized:
                     sent += 1
-            except Exception as exc:
-                _finish_outbox(
+            else:
+                classification = classify_http_status(status_code)
+                _review_outbox(
                     db,
                     row_id,
                     lease_token,
-                    success=False,
-                    error=f"{exc.__class__.__name__}: {exc}"[:2000],
+                    classification=classification,
+                    error_type=f"HTTP{status_code}",
+                    destination=normalized_destination,
                 )
 
+            try:
+                await response.aclose()
+            except asyncio.CancelledError:
+                # Durable outcome is already recorded from the received HTTP status.
+                raise
+            except Exception:
+                # Closing a streamed response cannot retroactively change the
+                # already durable receiver outcome.
+                pass
+
     return sent
+

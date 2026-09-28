@@ -1,6 +1,7 @@
 import json
 import re
 from datetime import timedelta
+from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
@@ -13,6 +14,15 @@ _MAX_WEBHOOK_BODY_BYTES = 256 * 1024
 _EVENT_TYPE_RE = re.compile(r"^[A-Za-z0-9_.:-]+$")
 
 
+def _json_default(value):
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise TypeError("Decimal payload values must be finite")
+        # Preserve the existing JSON-number contract at the webhook boundary.
+        return float(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
 def _serialize_payload(payload: dict | list) -> str:
     if not isinstance(payload, (dict, list)):
         raise ValueError("Webhook payload must be a JSON object or array")
@@ -22,6 +32,7 @@ def _serialize_payload(payload: dict | list) -> str:
             ensure_ascii=False,
             separators=(",", ":"),
             allow_nan=False,
+            default=_json_default,
         )
     except (TypeError, ValueError) as exc:
         raise ValueError("Webhook payload is not valid JSON") from exc

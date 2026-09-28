@@ -1,38 +1,36 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..database import get_db, utcnow_naive
 from ..middleware.rate_limit import _client_ip
-from ..models import AdminPasswordReset, AdminTotpSecret, AdminUser
+from ..models import AdminPasswordReset, AdminSession, AdminTotpSecret, AdminUser
 from ..schemas import TokenOut
 from ..security import (
+    bearer,
     create_admin_token,
+    get_current_admin,
     hash_password,
     password_needs_rehash,
     verify_password,
 )
+from ..services.admin_password_policy import validate_admin_password
 from ..services.admin_security import (
+    consume_totp_counter,
     create_admin_session,
     is_admin_ip_allowed,
     log_admin_login,
+    match_stored_totp_counter,
     revoke_admin_sessions,
     sha256,
     upgrade_totp_secret_encryption,
-    verify_stored_totp,
 )
+from ..services.rbac import effective_permissions
 
 router = APIRouter(prefix="/admin", tags=["admin-auth"])
 _DUMMY_PASSWORD_HASH = hash_password("not-a-real-admin-password")
-_COMMON_PASSWORDS = {
-    "password",
-    "password123",
-    "admin",
-    "admin123",
-    "qwerty123",
-    "change-me-now",
-}
 
 
 class AdminSessionLoginIn(BaseModel):
@@ -55,26 +53,8 @@ def _request_identity(request: Request) -> tuple[str, str]:
     )
 
 
-def _validate_new_admin_password(password: str, email: str = "") -> None:
-    lowered = password.lower()
-    if lowered in _COMMON_PASSWORDS:
-        raise HTTPException(status_code=400, detail="New password is too weak")
-    classes = sum(
-        (
-            any(character.islower() for character in password),
-            any(character.isupper() for character in password),
-            any(character.isdigit() for character in password),
-            any(not character.isalnum() for character in password),
-        )
-    )
-    if classes < 3:
-        raise HTTPException(
-            status_code=400,
-            detail="New password must use at least three character classes",
-        )
-    email_local = (email or "").split("@", 1)[0].strip().lower()
-    if len(email_local) >= 4 and email_local in lowered:
-        raise HTTPException(status_code=400, detail="New password must not contain the email name")
+def _production_admin_mfa_required() -> bool:
+    return get_settings().app_env.strip().lower() == "production"
 
 
 @router.post("/login", response_model=TokenOut)
@@ -100,6 +80,9 @@ def admin_session_login(
         raise HTTPException(status_code=403, detail="Admin access is not allowed")
 
     try:
+        # This row lock is the serialization anchor for password + MFA state.
+        # Two concurrent login attempts for the same administrator cannot both
+        # consume the same TOTP counter before commit.
         admin = (
             db.query(AdminUser)
             .filter(AdminUser.email == email, AdminUser.active.is_(True))
@@ -127,22 +110,50 @@ def admin_session_login(
             .with_for_update()
             .first()
         )
+        if _production_admin_mfa_required() and (totp is None or not totp.enabled):
+            log_admin_login(
+                db,
+                email,
+                admin.id,
+                False,
+                "mfa_not_enrolled",
+                ip_address,
+                user_agent,
+            )
+            db.commit()
+            raise HTTPException(
+                status_code=403,
+                detail="Admin MFA enrollment is required",
+            )
+
         if totp and totp.enabled:
             try:
-                totp_valid = verify_stored_totp(
+                totp_counter = match_stored_totp_counter(
                     admin.id,
                     totp.secret,
                     payload.totp_code or "",
                 )
             except ValueError:
-                totp_valid = False
-            if not totp_valid:
+                totp_counter = None
+            if totp_counter is None:
                 log_admin_login(
                     db,
                     email,
                     admin.id,
                     False,
                     "invalid_totp",
+                    ip_address,
+                    user_agent,
+                )
+                db.commit()
+                raise HTTPException(status_code=401, detail="Invalid admin credentials")
+            if not consume_totp_counter(db, admin.id, totp_counter):
+                log_admin_login(
+                    db,
+                    email,
+                    admin.id,
+                    False,
+                    "totp_replay",
                     ip_address,
                     user_agent,
                 )
@@ -157,7 +168,7 @@ def admin_session_login(
         create_admin_session(db, admin.id, token, ip_address, user_agent)
         log_admin_login(
             db,
-            email,
+            admin.email,
             admin.id,
             True,
             "success",
@@ -167,6 +178,82 @@ def admin_session_login(
         db.commit()
         return TokenOut(access_token=token)
     except HTTPException:
+        raise
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.get("/session")
+def current_admin_session(
+    response: Response,
+    admin: AdminUser = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """Return only identity and the effective permissions used by RBAC.
+
+    This is deliberately a no-store projection: it contains no token, session
+    hash, TOTP state, IP data or role-configuration internals.
+    """
+
+    permissions = effective_permissions(db, admin)
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return {
+        "id": int(admin.id),
+        "email": str(admin.email),
+        "role": str(admin.role),
+        "all_access": "*" in permissions,
+        "permissions": sorted(permission for permission in permissions if permission != "*"),
+    }
+
+
+@router.post("/logout", status_code=204)
+def admin_session_logout(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    admin: AdminUser = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """Revoke exactly the bearer-backed administrator session being logged out."""
+
+    if not credentials or credentials.scheme.lower() != "bearer":
+        raise HTTPException(status_code=401, detail="Admin authentication required")
+
+    try:
+        session = (
+            db.query(AdminSession)
+            .filter(
+                AdminSession.admin_id == admin.id,
+                AdminSession.session_token_hash == sha256(credentials.credentials),
+                AdminSession.revoked.is_(False),
+            )
+            .with_for_update()
+            .first()
+        )
+        if session is None:
+            raise HTTPException(status_code=401, detail="Admin session is not active")
+
+        session.revoked = True
+        session.revoked_at = utcnow_naive()
+        log_admin_login(
+            db,
+            admin.email,
+            admin.id,
+            True,
+            "logout",
+            session.ip_address,
+            session.user_agent,
+        )
+        db.commit()
+        return Response(
+            status_code=204,
+            headers={
+                "Cache-Control": "no-store, max-age=0",
+                "Pragma": "no-cache",
+            },
+        )
+    except HTTPException:
+        db.rollback()
         raise
     except Exception:
         db.rollback()
@@ -229,7 +316,10 @@ def confirm_admin_password_reset(
             db.commit()
             raise HTTPException(status_code=400, detail="Reset token is invalid or expired")
 
-        _validate_new_admin_password(payload.new_password, admin.email)
+        try:
+            validate_admin_password(payload.new_password, admin.email)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         if verify_password(payload.new_password, admin.password_hash):
             raise HTTPException(status_code=400, detail="New password must be different")
 

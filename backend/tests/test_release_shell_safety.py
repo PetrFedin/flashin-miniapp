@@ -45,13 +45,21 @@ def test_restore_is_destructive_only_after_validation_and_recreates_database():
     assert "--yes" in script
 
 
-def test_deploy_creates_inspects_and_promotes_verified_release_and_backup():
+def test_deploy_requires_retained_artifact_before_runtime_mutation_and_promotes_after_smoke():
     script = read("scripts/deploy_production.sh")
-    create_pos = script.index("release_control.py create")
+    gate_pos = script.index("deploy_release_gate.py --archive")
     inspect_pos = script.index("pilot_release_capability.py inspect --archive")
+    extract_pos = script.index("release_control.py extract")
+    stop_pos = script.index("pilot_runtime.py _stop")
+    build_pos = script.index("Building images from verified immutable Release artifact")
     migrate_pos = script.index("alembic.ini upgrade head")
+    smoke_pos = script.index("container_smoke.py")
     promote_pos = script.index("release_control.py promote")
-    assert create_pos < inspect_pos < migrate_pos < promote_pos
+
+    assert gate_pos < inspect_pos < extract_pos < stop_pos < build_pos < migrate_pos < smoke_pos < promote_pos
+    assert "release_control.py create" not in script
+    assert "RELEASE=deploy/release/builds/flashin_<release>.zip make deploy-prod" in script
+    assert 'cd "$release_source_dir"' in script
     assert "backup_postgres.sh --print-path" in script
     assert 'verify_backup.sh "$backup_file"' in script
     assert "scripts/rollback.sh previous" in script

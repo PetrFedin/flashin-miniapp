@@ -1,8 +1,5 @@
 export const NEXT_FULFILLMENT_STATUS = Object.freeze({
   paid: "assembling",
-  assembling: "ready",
-  ready: "shipped",
-  shipped: "completed",
 });
 
 export const ORDER_STATUS_LABELS = Object.freeze({

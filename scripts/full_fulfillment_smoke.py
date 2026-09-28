@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import sys
 import uuid
+from decimal import Decimal
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,12 +23,15 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, joinedload
 
 from backend.database import engine, get_db
+from backend.delivery_models import DeliveryZoneRule
 from backend.main import app
 from backend.models import (
     AdminUser,
     AuditLog,
     Customer,
+    DeliveryProvider,
     DeliveryShipment,
+    DeliveryZone,
     FulfillmentTask,
     FulfillmentTaskItem,
     Notification,
@@ -39,6 +43,7 @@ from backend.models import (
 )
 from backend.notification_models import NotificationEventKey
 from backend.security import get_current_admin
+from backend.services.delivery_authority import accept_quote_for_order, create_delivery_quote
 from backend.services.fulfillment import ensure_fulfillment_task
 
 
@@ -96,22 +101,65 @@ def main() -> int:
             stock_qty=5,
             reserved_qty=0,
         )
-        db.add_all([admin, customer, product, variant])
+        provider_code = f"courier-{token}"
+        provider = DeliveryProvider(
+            code=provider_code,
+            name=f"Fulfillment courier {token}",
+            active=True,
+            config_json=json.dumps({"mode": "manual"}, sort_keys=True),
+        )
+        db.add_all([admin, customer, product, variant, provider])
         db.flush()
+
+        zone = DeliveryZone(
+            name=f"Fulfillment Moscow {token}",
+            delivery_type="courier",
+            price=Decimal("500.00"),
+            active=True,
+            description="Full fulfillment authoritative courier fixture",
+        )
+        db.add(zone)
+        db.flush()
+        db.add(
+            DeliveryZoneRule(
+                zone_id=zone.id,
+                delivery_type="courier",
+                priority=500000 + (int(token[:6], 16) % 400000),
+                country_code="RU",
+                region="",
+                city="Москва",
+                postal_prefix="",
+                provider_code=provider_code,
+                service_code="manual-courier",
+                currency="RUB",
+                version=1,
+            )
+        )
+        db.flush()
+        quote = create_delivery_quote(
+            db,
+            customer_id=customer.id,
+            delivery_type="courier",
+            city="Москва",
+            address_line="Тверская улица, 1",
+        )
+
         order = Order(
             customer_id=customer.id,
             status="paid",
             payment_status="paid",
             delivery_status="not_started",
-            total_amount=18000,
+            total_amount=18500,
+            delivery_price=quote.price,
             discount_amount=0,
             currency="RUB",
             delivery_type="courier",
-            address="Pilot address",
+            address=quote.address_snapshot,
             comment="Full fulfillment transactional smoke",
         )
         db.add(order)
         db.flush()
+        accept_quote_for_order(quote, order)
         order_item = OrderItem(
             order_id=order.id,
             product_id=product.id,
@@ -203,6 +251,16 @@ def main() -> int:
         )
         assert packed["status"] == "packed"
 
+        rejected_packed_edit = client.patch(
+            f"/api/fulfillment/task-items/{task_item['task_item_id']}"
+            "?picked_qty=0&status=to_pick"
+        )
+        assert rejected_packed_edit.status_code == 409
+        assert (
+            rejected_packed_edit.json()["detail"]
+            == "Picklist cannot be edited while fulfillment task is packed"
+        )
+
         ready = _expect(
             client.patch(
                 f"/api/fulfillment/tasks/{task_id}",
@@ -213,21 +271,32 @@ def main() -> int:
         )
         assert ready["status"] == "ready"
 
+        rejected_ready_edit = client.patch(
+            f"/api/fulfillment/task-items/{task_item['task_item_id']}"
+            "?picked_qty=0&status=to_pick"
+        )
+        assert rejected_ready_edit.status_code == 409
+        assert (
+            rejected_ready_edit.json()["detail"]
+            == "Picklist cannot be edited while fulfillment task is ready"
+        )
+
         shipment = _expect(
             client.post(
                 f"/api/delivery-providers/orders/{order_id}/shipment"
-                "?provider_code=courier"
+                f"?provider_code={provider_code}"
             ),
             200,
             "create shipment",
         )
         shipment_id = shipment["id"]
         assert shipment["status"] == "created"
+        assert Decimal(str(shipment["price"])).quantize(Decimal("0.01")) == Decimal("500.00")
 
         repeated_shipment = _expect(
             client.post(
                 f"/api/delivery-providers/orders/{order_id}/shipment"
-                "?provider_code=courier"
+                f"?provider_code={provider_code}"
             ),
             200,
             "idempotent shipment create",
@@ -289,6 +358,7 @@ def main() -> int:
         assert persisted_order.payment_status == "paid"
         assert persisted_order.delivery_status == "delivered"
         assert persisted_order.tracking_number == tracking_number
+        assert Decimal(str(persisted_order.delivery_price)).quantize(Decimal("0.01")) == Decimal("500.00")
         assert persisted_task.status == "ready"
         assert persisted_task.assigned_admin_id == admin.id
         assert persisted_task.pick_started_at is not None
@@ -299,6 +369,7 @@ def main() -> int:
         assert len(persisted_shipments) == 1
         assert persisted_shipments[0].status == "delivered"
         assert persisted_shipments[0].tracking_number == tracking_number
+        assert Decimal(str(persisted_shipments[0].price)).quantize(Decimal("0.01")) == Decimal("500.00")
         assert "fulfillment.task.update" in audit_actions
         assert "fulfillment.task_item.update" in audit_actions
         assert "delivery.shipment.create" in audit_actions
@@ -316,6 +387,7 @@ def main() -> int:
                     "shipment_id": shipment_id,
                     "order_status": persisted_order.status,
                     "delivery_status": persisted_order.delivery_status,
+                    "delivery_price": str(persisted_order.delivery_price),
                     "tracking_number": persisted_order.tracking_number,
                     "notifications": len(notifications),
                     "audit_actions": sorted(audit_actions),

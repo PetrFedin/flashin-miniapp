@@ -5,16 +5,30 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db, utcnow_naive
 from ..models import WebhookOutbox
-from ..schemas import WebhookOutboxOut
+from ..schemas import WebhookOutboxOut, WebhookReviewActionIn
 from ..security import get_current_admin
 from ..services.audit import log_admin_action
 from ..services.rbac import require_permission
-from ..services.webhook_security import is_internal_destination, normalize_webhook_url
+from ..services.webhook_delivery import (
+    delivery_classification_from_error,
+    public_delivery_error,
+)
+from ..services.webhook_security import (
+    is_internal_destination,
+    normalize_webhook_url,
+    redact_webhook_destination,
+)
 
 router = APIRouter(prefix="/outbox", tags=["outbox"])
 
 _RETRYABLE_STATUSES = {"pending", "failed"}
-_LISTABLE_STATUSES = _RETRYABLE_STATUSES | {"sent", "discarded"}
+_LISTABLE_STATUSES = _RETRYABLE_STATUSES | {"sent", "discarded", "review_required"}
+_REVIEW_REASON_CODES = {
+    "receiver_confirmed_not_processed",
+    "receiver_confirmed_processed",
+    "receiver_support_authorized_replay",
+    "configuration_corrected",
+}
 
 
 def _reset_for_retry(row: WebhookOutbox, now: datetime) -> None:
@@ -40,6 +54,20 @@ def _reset_for_retry(row: WebhookOutbox, now: datetime) -> None:
     row.next_attempt_at = now
 
 
+def _public_outbox(row: WebhookOutbox) -> dict:
+    """Serialize operational outbox state without destination credentials or raw errors."""
+
+    return {
+        "id": row.id,
+        "destination": redact_webhook_destination(row.destination),
+        "event_type": row.event_type,
+        "status": row.status,
+        "attempts": row.attempts,
+        "classification": delivery_classification_from_error(row.last_error),
+        "last_error": public_delivery_error(row.status, row.last_error),
+    }
+
+
 @router.get("", response_model=list[WebhookOutboxOut])
 def list_outbox(
     status: str | None = Query(default=None),
@@ -54,7 +82,12 @@ def list_outbox(
         if normalized_status not in _LISTABLE_STATUSES:
             raise HTTPException(status_code=400, detail="Invalid outbox status")
         query = query.filter(WebhookOutbox.status == normalized_status)
-    return query.order_by(WebhookOutbox.created_at.desc(), WebhookOutbox.id.desc()).limit(limit).all()
+    rows = (
+        query.order_by(WebhookOutbox.created_at.desc(), WebhookOutbox.id.desc())
+        .limit(limit)
+        .all()
+    )
+    return [_public_outbox(row) for row in rows]
 
 
 @router.post("/failed/requeue")
@@ -130,7 +163,7 @@ def retry_outbox(
         previous = {
             "status": row.status,
             "attempts": row.attempts,
-            "last_error": row.last_error[:500],
+            "had_error": bool(row.last_error),
         }
         _reset_for_retry(row, utcnow_naive())
         log_admin_action(
@@ -143,6 +176,134 @@ def retry_outbox(
         )
         db.commit()
         return {"ok": True, "id": row.id, "status": row.status, "attempts": row.attempts}
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _validate_review_action(row_id: int, payload: WebhookReviewActionIn) -> str:
+    if payload.event_id != row_id:
+        raise HTTPException(status_code=400, detail="Webhook event confirmation does not match row id")
+    reason_code = payload.reason_code.strip().lower()
+    if reason_code not in _REVIEW_REASON_CODES:
+        raise HTTPException(status_code=400, detail="Invalid webhook review reason code")
+    return reason_code
+
+
+def _review_row_or_409(db: Session, row_id: int) -> WebhookOutbox:
+    row = (
+        db.query(WebhookOutbox)
+        .filter(WebhookOutbox.id == row_id)
+        .populate_existing()
+        .with_for_update()
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Webhook outbox row not found")
+    if row.status != "review_required":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Webhook in status {row.status} is not awaiting review",
+        )
+    classification = delivery_classification_from_error(row.last_error)
+    if not classification:
+        raise HTTPException(status_code=409, detail="Webhook review evidence is malformed")
+    return row
+
+
+@router.post("/{row_id}/review/retry")
+def retry_review_outbox(
+    row_id: int,
+    payload: WebhookReviewActionIn,
+    admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    require_permission(db, admin, "webhooks.write")
+    try:
+        reason_code = _validate_review_action(row_id, payload)
+        row = _review_row_or_409(db, row_id)
+        classification = delivery_classification_from_error(row.last_error)
+
+        if not is_internal_destination(row.destination):
+            try:
+                row.destination = normalize_webhook_url(row.destination)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Webhook destination is invalid and cannot be replayed",
+                ) from exc
+
+        row.status = "pending"
+        row.next_attempt_at = utcnow_naive()
+        row.last_error = ""
+        log_admin_action(
+            db,
+            admin,
+            "webhook_outbox.review_replay",
+            "webhook_outbox",
+            row.id,
+            {
+                "event_id": row.id,
+                "classification": classification,
+                "reason_code": reason_code,
+                "attempts": row.attempts,
+            },
+        )
+        db.commit()
+        return {
+            "ok": True,
+            "id": row.id,
+            "event_id": row.id,
+            "status": row.status,
+            "attempts": row.attempts,
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.post("/{row_id}/review/mark-sent")
+def mark_review_outbox_sent(
+    row_id: int,
+    payload: WebhookReviewActionIn,
+    admin=Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    require_permission(db, admin, "webhooks.write")
+    try:
+        reason_code = _validate_review_action(row_id, payload)
+        row = _review_row_or_409(db, row_id)
+        classification = delivery_classification_from_error(row.last_error)
+        row.status = "sent"
+        row.next_attempt_at = None
+        row.last_error = ""
+        log_admin_action(
+            db,
+            admin,
+            "webhook_outbox.review_mark_sent",
+            "webhook_outbox",
+            row.id,
+            {
+                "event_id": row.id,
+                "classification": classification,
+                "reason_code": reason_code,
+                "attempts": row.attempts,
+            },
+        )
+        db.commit()
+        return {
+            "ok": True,
+            "id": row.id,
+            "event_id": row.id,
+            "status": row.status,
+            "attempts": row.attempts,
+        }
     except HTTPException:
         db.rollback()
         raise
@@ -169,6 +330,8 @@ def discard_outbox(
             raise HTTPException(status_code=404, detail="Webhook outbox row not found")
         if row.status == "sent":
             raise HTTPException(status_code=409, detail="Sent webhook cannot be discarded")
+        if row.status == "processing":
+            raise HTTPException(status_code=409, detail="Processing webhook cannot be discarded")
         if row.status == "discarded":
             return {"ok": True, "id": row.id, "status": row.status, "idempotent": True}
 

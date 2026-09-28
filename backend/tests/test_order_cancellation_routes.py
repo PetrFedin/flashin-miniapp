@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from fastapi.routing import iter_route_contexts
+
 from backend import main
 
 
@@ -9,9 +11,8 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 def _post_routes(path: str):
     return [
         route
-        for route in main.app.routes
-        if getattr(route, "path", "") == path
-        and "POST" in getattr(route, "methods", set())
+        for route in iter_route_contexts(main.app.routes)
+        if route.path == path and "POST" in (route.methods or set())
     ]
 
 

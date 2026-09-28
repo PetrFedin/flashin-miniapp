@@ -11,6 +11,46 @@ const REQUEST_TIMEOUT_MS = Number.isFinite(configuredTimeout) && configuredTimeo
   ? Math.min(Math.max(configuredTimeout, 3_000), 120_000)
   : DEFAULT_REQUEST_TIMEOUT_MS;
 const requestCoordinator = createRequestCoordinator();
+const PUBLIC_REQUEST_SCOPE = Symbol("public-admin-request-scope");
+const MEDIA_UPLOAD_KEY_PREFIX = "flashin_media_upload_key:";
+const uploadKeyFallback = new Map();
+
+function createUploadKey() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `media-${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function uploadKeyStorageName(path, field, fileIdentity) {
+  return `${MEDIA_UPLOAD_KEY_PREFIX}${path}:${field}:${fileIdentity}`;
+}
+
+function getStoredUploadKey(storageName) {
+  try {
+    const stored = globalThis.sessionStorage?.getItem(storageName);
+    if (stored) return stored;
+  } catch {
+    // Fall back to in-memory state when browser storage is unavailable.
+  }
+  return uploadKeyFallback.get(storageName) || "";
+}
+
+function setStoredUploadKey(storageName, value) {
+  uploadKeyFallback.set(storageName, value);
+  try {
+    globalThis.sessionStorage?.setItem(storageName, value);
+  } catch {
+    // In-memory retry identity still protects this page session.
+  }
+}
+
+function clearStoredUploadKey(storageName) {
+  uploadKeyFallback.delete(storageName);
+  try {
+    globalThis.sessionStorage?.removeItem(storageName);
+  } catch {
+    // Nothing else to do.
+  }
+}
 
 export class AdminApiError extends Error {
   constructor(message, status = 0, options = {}) {
@@ -24,9 +64,47 @@ export function getAdminToken() {
   return localStorage.getItem("admin_token") || "";
 }
 
+function clearAdminTokenLocal() {
+  localStorage.removeItem("admin_token");
+}
+
+function revokeAdminSessionBestEffort(token) {
+  if (!token) return;
+  void fetch(`${API_BASE}/api/admin/logout`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
+    keepalive: true,
+  }).catch(() => {
+    // Local logout remains authoritative for this browser even when the
+    // network is unavailable. The server-side session will still expire by
+    // its normal JWT/session lifetime and cannot affect a replacement token.
+  });
+}
+
 export function setAdminToken(token) {
-  if (token) localStorage.setItem("admin_token", token);
-  else localStorage.removeItem("admin_token");
+  if (token) {
+    localStorage.setItem("admin_token", token);
+    return;
+  }
+
+  const tokenAtLogout = getAdminToken();
+  clearAdminTokenLocal();
+  revokeAdminSessionBestEffort(tokenAtLogout);
+}
+
+function staleAdminSessionError() {
+  return new AdminApiError("Административная сессия изменилась. Повторите операцию.");
+}
+
+function assertAdminSessionUnchanged(auth, tokenAtStart) {
+  if (!auth) return;
+  if (getAdminToken() !== tokenAtStart) throw staleAdminSessionError();
+}
+
+function clearAdminTokenIfCurrent(tokenAtStart) {
+  if (getAdminToken() !== tokenAtStart) throw staleAdminSessionError();
+  clearAdminTokenLocal();
 }
 
 async function errorDetail(response) {
@@ -64,9 +142,8 @@ async function fetchWithTimeout(url, options = {}) {
   }
 }
 
-function authHeaders(auth, customHeaders = {}) {
+function authHeaders(auth, customHeaders = {}, token = getAdminToken()) {
   const result = { ...customHeaders };
-  const token = getAdminToken();
   if (auth && token) result.Authorization = `Bearer ${token}`;
   return result;
 }
@@ -78,24 +155,31 @@ export async function adminRequest(path, options = {}) {
     headers = {},
     ...requestOptions
   } = options;
+  const tokenAtStart = auth ? getAdminToken() : "";
   const coordinationKey = dedupeKey ?? mutationRequestKey(path, requestOptions);
+  const coordinationScope = auth ? tokenAtStart : PUBLIC_REQUEST_SCOPE;
 
   return requestCoordinator.run(coordinationKey, async () => {
     const response = await fetchWithTimeout(`${API_BASE}${path}`, {
       ...requestOptions,
-      headers: authHeaders(auth, headers),
+      headers: authHeaders(auth, headers, tokenAtStart),
     });
     if (!response.ok) {
-      if (response.status === 401 && auth) setAdminToken("");
-      throw new AdminApiError(
-        (await errorDetail(response)) || `HTTP ${response.status}`,
-        response.status,
-      );
+      const detail = await errorDetail(response);
+      if (response.status === 401 && auth) clearAdminTokenIfCurrent(tokenAtStart);
+      else assertAdminSessionUnchanged(auth, tokenAtStart);
+      throw new AdminApiError(detail || `HTTP ${response.status}`, response.status);
     }
+
+    assertAdminSessionUnchanged(auth, tokenAtStart);
     if (response.status === 204) return null;
     const contentType = response.headers.get("content-type") || "";
-    return contentType.includes("application/json") ? response.json() : response.text();
-  });
+    const payload = contentType.includes("application/json")
+      ? await response.json()
+      : await response.text();
+    assertAdminSessionUnchanged(auth, tokenAtStart);
+    return payload;
+  }, coordinationScope);
 }
 
 export function adminJson(path, options = {}) {
@@ -105,11 +189,15 @@ export function adminJson(path, options = {}) {
   });
 }
 
-export async function loginAdmin(email, password) {
+export async function loginAdmin(email, password, totpCode = "") {
+  const payload = { email, password };
+  const normalizedTotp = String(totpCode || "").trim();
+  if (normalizedTotp) payload.totp_code = normalizedTotp;
+
   const data = await adminJson("/api/admin/login", {
     method: "POST",
     auth: false,
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify(payload),
   });
   setAdminToken(data.access_token);
   return data;
@@ -119,28 +207,53 @@ export async function uploadAdminFile(path, file, field = "file") {
   const form = new FormData();
   form.append(field, file);
   const fileIdentity = [file.name, file.size, file.lastModified, file.type].join(":");
-  return adminRequest(path, {
-    method: "POST",
-    body: form,
-    dedupeKey: `UPLOAD:${path}:${field}:${fileIdentity}`,
-  });
+  const dedupeKey = `UPLOAD:${path}:${field}:${fileIdentity}`;
+
+  if (path !== "/api/media/upload") {
+    return adminRequest(path, {
+      method: "POST",
+      body: form,
+      dedupeKey,
+    });
+  }
+
+  const storageName = uploadKeyStorageName(path, field, fileIdentity);
+  const uploadKey = getStoredUploadKey(storageName) || createUploadKey();
+  setStoredUploadKey(storageName, uploadKey);
+  try {
+    const result = await adminRequest(path, {
+      method: "POST",
+      body: form,
+      headers: { "Idempotency-Key": uploadKey },
+      dedupeKey,
+    });
+    clearStoredUploadKey(storageName);
+    return result;
+  } catch (error) {
+    // Preserve the key after timeout/network/5xx ambiguity so a retry resolves
+    // the already-committed MediaAsset instead of creating a second object.
+    throw error;
+  }
 }
 
 export async function downloadAdminFile(path, fallbackFilename) {
+  const tokenAtStart = getAdminToken();
   const response = await fetchWithTimeout(`${API_BASE}${path}`, {
-    headers: authHeaders(true),
+    headers: authHeaders(true, {}, tokenAtStart),
   });
   if (!response.ok) {
-    if (response.status === 401) setAdminToken("");
-    throw new AdminApiError(
-      (await errorDetail(response)) || "Не удалось скачать файл",
-      response.status,
-    );
+    const detail = await errorDetail(response);
+    if (response.status === 401) clearAdminTokenIfCurrent(tokenAtStart);
+    else assertAdminSessionUnchanged(true, tokenAtStart);
+    throw new AdminApiError(detail || "Не удалось скачать файл", response.status);
   }
+  assertAdminSessionUnchanged(true, tokenAtStart);
   const disposition = response.headers.get("content-disposition") || "";
   const match = disposition.match(/filename="?([^";]+)"?/i);
+  const blob = await response.blob();
+  assertAdminSessionUnchanged(true, tokenAtStart);
   return {
-    blob: await response.blob(),
+    blob,
     filename: match?.[1] || fallbackFilename,
   };
 }

@@ -6,19 +6,23 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Mapping, TYPE_CHECKING
 
-from sqlalchemy import func, or_
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from ..models import Order, PaymentReconciliation, ReturnRequest
 from ..pilot_models import PilotOrderSlot, PilotRuntimeState
+from .pilot_database_evidence import validate_pilot_database_evidence
+from .pilot_money_safety import build_pilot_money_safety
+from .pilot_operational_safety import (
+    DEFAULT_OPERATIONAL_QUEUE_GRACE_MINUTES,
+    build_pilot_operational_safety,
+)
 from .pilot_runtime import validate_runtime_files
+from .pilot_sequence_safety import is_pilot_sequence_continuation_ready
 
 if TYPE_CHECKING:
     from ..config import Settings
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
-_PAYMENT_REVIEW_STATUSES = {"paid_review_required", "payment_review_required"}
-_REFUND_ATTENTION_STATUSES = {"refund_retry_required", "refund_review_required"}
 _SAFE_AUTO_STOP_REASONS = (
     "provider_payment_amount_invalid",
     "provider_payment_amount_or_currency_mismatch",
@@ -31,11 +35,18 @@ _SAFE_AUTO_STOP_REASONS = (
     "payment_review:paid_after_cancel",
     "payment_review:canceled_after_settlement",
     "payment_review:provider_cancel_conflict",
+    "payment_review_required",
     "payment_reconciliation_mismatch",
     "refund_retry_required",
     "refund_review_required",
     "refund_finalization_integrity_failure",
     "refund_finalization_integrity_conflict",
+    "runtime_artifact_integrity_failure",
+    "pilot_control_decision_stop",
+    "pilot_database_integrity_failure",
+    "operational_safety_failure",
+    "pilot_money_safety_evaluation_failure",
+    "pilot_runtime_configuration_mismatch",
     "pilot_slot_runtime_mismatch",
 )
 
@@ -119,53 +130,32 @@ def _artifact_error_codes(errors: list[str]) -> list[str]:
     return codes
 
 
-def _money_attention(db: Session, order_ids: list[int]) -> dict[str, int | bool]:
-    if not order_ids:
-        return {
-            "payment_review_orders": 0,
-            "refund_attention_orders": 0,
-            "reconciliation_mismatches": 0,
-            "attention_required": False,
-        }
-
-    payment_review_orders = (
-        db.query(func.count(func.distinct(Order.id)))
-        .filter(
-            Order.id.in_(order_ids),
-            or_(
-                Order.status == "payment_review_required",
-                Order.payment_status.in_(_PAYMENT_REVIEW_STATUSES),
-            ),
-        )
-        .scalar()
-        or 0
-    )
-    refund_attention_orders = (
-        db.query(func.count(func.distinct(ReturnRequest.order_id)))
-        .filter(
-            ReturnRequest.order_id.in_(order_ids),
-            ReturnRequest.status.in_(_REFUND_ATTENTION_STATUSES),
-        )
-        .scalar()
-        or 0
-    )
-    reconciliation_mismatches = (
-        db.query(func.count(PaymentReconciliation.id))
-        .filter(
-            PaymentReconciliation.order_id.in_(order_ids),
-            PaymentReconciliation.status == "mismatch",
-            PaymentReconciliation.resolved_at.is_(None),
-        )
-        .scalar()
-        or 0
-    )
+def _money_attention(db: Session, order_ids: list[int]) -> dict[str, Any]:
+    verdict = build_pilot_money_safety(db, order_ids)
     return {
-        "payment_review_orders": int(payment_review_orders),
-        "refund_attention_orders": int(refund_attention_orders),
-        "reconciliation_mismatches": int(reconciliation_mismatches),
-        "attention_required": bool(
-            payment_review_orders or refund_attention_orders or reconciliation_mismatches
-        ),
+        "payment_review_orders": int(verdict["payment_review_orders"]),
+        "refund_attention_orders": int(verdict["refund_attention_orders"]),
+        "reconciliation_mismatches": int(verdict["reconciliation_mismatches"]),
+        "attention_required": bool(verdict["attention_required"]),
+    }
+
+
+def _not_applicable_operational_safety(*, healthy: bool | None = None) -> dict[str, Any]:
+    return {
+        "applicable": False,
+        "healthy": healthy,
+        "blocking_codes": [],
+        "grace_minutes": DEFAULT_OPERATIONAL_QUEUE_GRACE_MINUTES,
+        "scope_started_at": None,
+        "queues": {},
+    }
+
+
+def _not_applicable_continuation() -> dict[str, Any]:
+    return {
+        "applicable": False,
+        "ready": None,
+        "next_sequence": None,
     }
 
 
@@ -221,7 +211,9 @@ def build_pilot_operations_status(
                 "healthy": None,
                 "codes": [],
             },
+            "continuation": _not_applicable_continuation(),
             "money_attention": _money_attention(db, []),
+            "operational_safety": _not_applicable_operational_safety(),
         }
 
     slots = (
@@ -270,6 +262,8 @@ def build_pilot_operations_status(
         database_codes.append("release_binding_invalid")
     if state.status in {"active", "stopped", "completed"} and not state.pilot_state_created_at:
         database_codes.append("pilot_state_binding_missing")
+    if state.status == "active" and state.opened_at is None:
+        database_codes.append("active_runtime_opened_at_missing")
     if state.status == "active" and allowlist_count == 0:
         database_codes.append("active_allowlist_empty")
     if state.status == "active" and state.accepted_orders >= state.max_orders:
@@ -278,29 +272,86 @@ def build_pilot_operations_status(
         database_codes.append("completed_before_limit")
     if state.status == "stopped" and not str(state.stop_reason or "").strip():
         database_codes.append("stopped_without_reason")
-    database_codes = list(dict.fromkeys(database_codes))
 
     artifact_applicable = bool(state.admission_sha256 and state.release_sha256)
     artifact_codes: list[str] = []
     artifact_healthy: bool | None = None
+    validated_pilot_state: dict[str, Any] = {}
     if artifact_applicable:
         try:
-            artifact_errors = validate_runtime_files(state, settings, env=env)
+            artifact_errors = validate_runtime_files(
+                state,
+                settings,
+                env=env,
+                validated_pilot_state=validated_pilot_state,
+            )
         except Exception:
             artifact_errors = ["runtime validator failed"]
         artifact_codes = _artifact_error_codes(artifact_errors)
         artifact_healthy = not artifact_codes
 
+    if artifact_healthy is True:
+        try:
+            database_evidence_errors = validate_pilot_database_evidence(
+                db,
+                validated_pilot_state,
+                state,
+                final=False,
+            )
+        except Exception:
+            database_evidence_errors = ["pilot database evidence evaluation failed"]
+        if database_evidence_errors:
+            database_codes.append("pilot_database_evidence_invalid")
+
+    database_codes = list(dict.fromkeys(database_codes))
     money_attention = _money_attention(db, order_ids)
+    if state.opened_at is None:
+        operational_safety = _not_applicable_operational_safety(
+            healthy=False if state.status == "active" else None
+        )
+    else:
+        try:
+            operational_safety = {
+                "applicable": True,
+                **build_pilot_operational_safety(
+                    db,
+                    created_since=state.opened_at,
+                ),
+            }
+        except Exception:
+            operational_safety = {
+                "applicable": True,
+                "healthy": False,
+                "blocking_codes": ["operational_safety_evaluation_failed"],
+                "grace_minutes": DEFAULT_OPERATIONAL_QUEUE_GRACE_MINUTES,
+                "scope_started_at": _timestamp(state.opened_at),
+                "queues": {},
+            }
+
     remaining_orders = max(int(state.max_orders) - int(state.accepted_orders), 0)
     database_healthy = not database_codes
+    continuation_applicable = state.status == "active" and remaining_orders > 0
+    continuation_ready: bool | None = None
+    if continuation_applicable and artifact_healthy is True and database_healthy:
+        continuation_ready = is_pilot_sequence_continuation_ready(
+            validated_pilot_state,
+            accepted_orders=int(state.accepted_orders),
+        )
+    continuation = {
+        "applicable": continuation_applicable,
+        "ready": continuation_ready,
+        "next_sequence": int(state.accepted_orders) + 1 if continuation_applicable else None,
+    }
+
     integrity_healthy = database_healthy and artifact_healthy is True
     checkout_ready = bool(
         enforced
         and state.status == "active"
         and remaining_orders > 0
         and integrity_healthy
+        and continuation_ready is True
         and not money_attention["attention_required"]
+        and operational_safety["healthy"] is True
     )
 
     return {
@@ -333,5 +384,7 @@ def build_pilot_operations_status(
             "healthy": artifact_healthy,
             "codes": artifact_codes,
         },
+        "continuation": continuation,
         "money_attention": money_attention,
+        "operational_safety": operational_safety,
     }

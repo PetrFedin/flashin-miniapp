@@ -1,6 +1,13 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import (
+    CheckConstraint,
+    Index,
+    UniqueConstraint,
+    create_engine,
+    event,
+    text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapper, sessionmaker
 
 from .config import get_settings
@@ -19,6 +26,137 @@ def utcnow_naive(_context=None) -> datetime:
     unsafe in-place type migration of every timestamp column.
     """
     return datetime.now(UTC).replace(tzinfo=None)
+
+
+def _append_partial_unique_index(
+    table,
+    *,
+    name: str,
+    columns: tuple[str, ...],
+    predicate: str,
+) -> None:
+    """Mirror a production partial unique index in create_all test metadata."""
+
+    if name in {index.name for index in table.indexes}:
+        return
+    where = text(predicate)
+    Index(
+        name,
+        *(table.c[column] for column in columns),
+        unique=True,
+        postgresql_where=where,
+        sqlite_where=where,
+    )
+
+
+@event.listens_for(Mapper, "after_mapper_constructed")
+def _upgrade_legacy_authority_schema(mapper: Mapper, _class) -> None:
+    """Keep legacy ORM metadata aligned with Alembic authority revisions.
+
+    Production is migrated by Alembic, while deterministic unit tests often use
+    ``Base.metadata.create_all`` against SQLite. The metadata adapter therefore
+    mirrors the 0041 inventory-movement contract, the 0042 single-open
+    MoySklad evidence invariants, the 0043 provider-identity uniqueness and
+    the 0044 media upload idempotency authority so tests never run against a
+    weaker schema.
+    """
+
+    table = mapper.local_table
+    table_name = getattr(table, "name", "")
+
+    if table_name == "media_assets":
+        _append_partial_unique_index(
+            table,
+            name="uq_media_assets_upload_key_nonempty",
+            columns=("upload_key",),
+            predicate="upload_key <> ''",
+        )
+        return
+
+    if table_name == "products":
+        _append_partial_unique_index(
+            table,
+            name="uq_products_moysklad_id_nonempty",
+            columns=("moysklad_id",),
+            predicate="moysklad_id <> ''",
+        )
+        return
+
+    if table_name == "product_variants":
+        _append_partial_unique_index(
+            table,
+            name="uq_product_variants_moysklad_id_nonempty",
+            columns=("moysklad_id",),
+            predicate="moysklad_id <> ''",
+        )
+        return
+
+    if table_name == "moysklad_conflicts":
+        _append_partial_unique_index(
+            table,
+            name="uq_moysklad_conflict_open_stale_physical_return",
+            columns=("moysklad_id", "conflict_type"),
+            predicate=(
+                "status = 'open' AND "
+                "conflict_type = 'stale_stock_pending_physical_return'"
+            ),
+        )
+        return
+
+    if table_name == "stock_reconciliation_logs":
+        _append_partial_unique_index(
+            table,
+            name="uq_stock_reconciliation_open_blocked_physical_return",
+            columns=("variant_id",),
+            predicate="status = 'open' AND action = 'blocked_physical_return'",
+        )
+        return
+
+    if table_name != "inventory_movements":
+        return
+
+    kind_constraint = next(
+        (
+            item
+            for item in list(table.constraints)
+            if isinstance(item, CheckConstraint)
+            and item.name == "ck_inventory_movements_kind"
+        ),
+        None,
+    )
+    if kind_constraint is not None and "'return'" not in str(kind_constraint.sqltext):
+        table.constraints.remove(kind_constraint)
+        table.append_constraint(
+            CheckConstraint(
+                "kind IN ('reserve', 'release', 'commit', 'return')",
+                name="ck_inventory_movements_kind",
+            )
+        )
+
+    legacy_unique = next(
+        (
+            item
+            for item in list(table.constraints)
+            if isinstance(item, UniqueConstraint)
+            and item.name == "uq_inventory_movement_order_variant_kind"
+        ),
+        None,
+    )
+    if legacy_unique is not None:
+        table.constraints.remove(legacy_unique)
+
+    _append_partial_unique_index(
+        table,
+        name="uq_inventory_movement_core_kind",
+        columns=("order_id", "variant_id", "kind"),
+        predicate="kind IN ('reserve','release','commit')",
+    )
+    _append_partial_unique_index(
+        table,
+        name="uq_inventory_movement_reverse_event_source",
+        columns=("source",),
+        predicate="kind = 'return' AND source LIKE 'reverse_logistics_event:%'",
+    )
 
 
 @event.listens_for(Mapper, "mapper_configured")

@@ -101,13 +101,20 @@ def test_checkout_fingerprint_is_stable_and_sensitive_to_payload():
         "delivery_type": "courier",
         "address": "Moscow center",
         "comment": "Call first",
+        "delivery_quote_id": "dq_authoritative_quote_001",
     }
     first = _checkout_request_fingerprint(**base)
     second = _checkout_request_fingerprint(**dict(reversed(list(base.items()))))
-    changed = _checkout_request_fingerprint(**{**base, "address": "Saint Petersburg"})
+    changed_address = _checkout_request_fingerprint(
+        **{**base, "address": "Saint Petersburg"}
+    )
+    changed_quote = _checkout_request_fingerprint(
+        **{**base, "delivery_quote_id": "dq_authoritative_quote_002"}
+    )
 
     assert first == second
-    assert first != changed
+    assert first != changed_address
+    assert first != changed_quote
     assert len(first) == 64
 
 

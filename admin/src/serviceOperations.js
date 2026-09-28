@@ -97,3 +97,92 @@ export function serviceAttentionCount({ tickets = [], privacy = [], returns = []
   const returnAttention = returns.filter((item) => canApproveReturn(item)).length;
   return ticketAttention + privacyAttention + returnAttention;
 }
+
+
+function refundComponentAmount(rawValue, label) {
+  const normalized = String(rawValue ?? "").trim();
+  if (!normalized) return { value: 0 };
+  const amount = Number(normalized);
+  if (!Number.isFinite(amount) || amount < 0) {
+    return { error: `${label}: сумма должна быть неотрицательным числом.` };
+  }
+  return { value: Math.round(amount * 100) / 100 };
+}
+
+export function buildRefundAllocationPayload(item, draft = {}, refundAmount) {
+  const target = Math.round(Number(refundAmount) * 100);
+  if (!Number.isInteger(target) || target <= 0) {
+    return { error: "Сумма refund allocation должна быть больше нуля." };
+  }
+
+  const options = item?.financial_allocation_options || {};
+  const fixed = Number(item?.financial_allocation?.allocated_cents || 0) > 0;
+  if (fixed) return { allocations: [] };
+
+  const allocations = [];
+  let totalCents = 0;
+
+  for (const line of Array.isArray(options.items) ? options.items : []) {
+    const key = `item:${line.order_item_id}`;
+    const parsed = refundComponentAmount(draft[key], `Товар #${line.order_item_id}`);
+    if (parsed.error) return parsed;
+    const cents = Math.round(parsed.value * 100);
+    if (!cents) continue;
+    if (cents > Number(line.remaining_cents || 0)) {
+      return { error: `Allocation по товару #${line.order_item_id} превышает оставшуюся стоимость.` };
+    }
+    allocations.push({
+      component_kind: "item",
+      order_item_id: Number(line.order_item_id),
+      amount: cents / 100,
+    });
+    totalCents += cents;
+  }
+
+  const delivery = refundComponentAmount(draft.delivery, "Доставка");
+  if (delivery.error) return delivery;
+  const deliveryCents = Math.round(delivery.value * 100);
+  if (deliveryCents > Number(options.delivery_remaining_cents || 0)) {
+    return { error: "Allocation по доставке превышает оставшуюся стоимость доставки." };
+  }
+  if (deliveryCents) {
+    allocations.push({ component_kind: "delivery", amount: deliveryCents / 100 });
+    totalCents += deliveryCents;
+  }
+
+  const goodwill = refundComponentAmount(draft.goodwill, "Goodwill");
+  if (goodwill.error) return goodwill;
+  const goodwillCents = Math.round(goodwill.value * 100);
+  if (goodwillCents) {
+    allocations.push({ component_kind: "goodwill", amount: goodwillCents / 100 });
+    totalCents += goodwillCents;
+  }
+
+  if (!allocations.length) {
+    const autoCents = (
+      (Array.isArray(options.items) ? options.items : [])
+        .reduce((sum, line) => sum + Number(line.remaining_cents || 0), 0)
+      + Number(options.delivery_remaining_cents || 0)
+    );
+    if (autoCents === target) return { allocations: [] };
+    return {
+      error: "Для частичного или goodwill refund укажите финансовое распределение по товарам, доставке или goodwill.",
+    };
+  }
+
+  if (totalCents !== target) {
+    return {
+      error: `Сумма allocation ${(totalCents / 100).toFixed(2)} не совпадает с refund ${(target / 100).toFixed(2)}.`,
+    };
+  }
+  return { allocations };
+}
+
+export function refundReconciliationLabel(status) {
+  return ({
+    PASS: "PASS · деньги и физический возврат согласованы",
+    PENDING: "PENDING · ожидается финансовая/физическая стадия",
+    REVIEW: "REVIEW · требуется сверка оператора",
+    BLOCKED: "BLOCKED · нарушен финансовый инвариант",
+  })[status] || "Нет reconciliation evidence";
+}

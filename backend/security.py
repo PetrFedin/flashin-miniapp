@@ -2,22 +2,29 @@ import hashlib
 import hmac
 import secrets
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qsl
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
+from .auth_models import CustomerSession
 from .config import get_settings
-from .database import get_db
+from .database import get_db, utcnow_naive
+from .middleware.rate_limit import _client_ip
 from .models import AdminUser, Customer
-from .services.admin_security import is_admin_session_active
+from .services.admin_security import is_admin_ip_allowed, is_admin_session_active
+from .services.customer_auth import find_customer_session, register_customer_session
 
 bearer = HTTPBearer(auto_error=False)
 
-_TELEGRAM_MAX_AGE_SECONDS = 60 * 60 * 24
+# Telegram initData is a bootstrap assertion, not a reusable login credential.
+# Fifteen minutes is intentionally far below the previous 24-hour window; a
+# durable one-time claim below prevents replay even inside this short window.
+_TELEGRAM_MAX_AGE_SECONDS = 15 * 60
 _TELEGRAM_CLOCK_SKEW_SECONDS = 5 * 60
 _PASSWORD_SCHEME = "pbkdf2_sha256"
 _PASSWORD_ITERATIONS = 310_000
@@ -25,6 +32,13 @@ _JWT_ISSUER = "flashin-miniapp"
 _JWT_CUSTOMER_AUDIENCE = "flashin-customer"
 _JWT_ADMIN_AUDIENCE = "flashin-admin"
 _JWT_CLOCK_SKEW_SECONDS = 30
+
+
+@dataclass(frozen=True)
+class CustomerAuthContext:
+    customer: Customer
+    session: CustomerSession
+    payload: dict
 
 
 def verify_telegram_init_data(init_data: str) -> dict:
@@ -79,16 +93,26 @@ def verify_telegram_init_data(init_data: str) -> dict:
     return parsed
 
 
-def _jwt_payload(subject: str, token_type: str, audience: str, expires_minutes: int) -> dict:
+def _jwt_payload(
+    subject: str,
+    token_type: str,
+    audience: str,
+    expires_minutes: int,
+    *,
+    jti: str | None = None,
+    issued_at: datetime | None = None,
+) -> dict:
     if expires_minutes <= 0:
         raise ValueError("JWT expiration must be positive")
-    now = datetime.now(timezone.utc)
+    now = issued_at or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
     return {
         "sub": subject,
         "type": token_type,
         "iss": _JWT_ISSUER,
         "aud": audience,
-        "jti": secrets.token_urlsafe(24),
+        "jti": jti or secrets.token_urlsafe(24),
         "iat": now,
         "nbf": now,
         "exp": now + timedelta(minutes=expires_minutes),
@@ -124,7 +148,18 @@ def _decode_token(token: str, expected_type: str, audience: str) -> dict:
     return payload
 
 
-def create_access_token(customer_id: int) -> str:
+def create_access_token(
+    customer_id: int,
+    *,
+    session_identifier: str | None = None,
+    jti: str | None = None,
+    issued_at: datetime | None = None,
+) -> str:
+    """Encode a customer JWT.
+
+    Production customer access requires the corresponding persisted session.
+    Call `issue_customer_session_token` for an authenticatable token.
+    """
     if customer_id <= 0:
         raise ValueError("Customer id must be positive")
     settings = get_settings()
@@ -133,19 +168,51 @@ def create_access_token(customer_id: int) -> str:
         "customer",
         _JWT_CUSTOMER_AUDIENCE,
         settings.jwt_expire_minutes,
+        jti=jti,
+        issued_at=issued_at,
     )
+    if session_identifier:
+        payload["sid"] = session_identifier
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
-def get_current_customer(
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
-    db: Session = Depends(get_db),
-) -> Customer:
-    if not credentials or credentials.scheme.lower() != "bearer":
-        raise HTTPException(status_code=401, detail="Bearer token required")
+def issue_customer_session_token(
+    db: Session,
+    customer_id: int,
+) -> tuple[str, CustomerSession]:
+    if customer_id <= 0:
+        raise ValueError("Customer id must be positive")
+    settings = get_settings()
+    issued_at = datetime.now(timezone.utc)
+    session_identifier = secrets.token_urlsafe(24)
+    jti = secrets.token_urlsafe(24)
+    token = create_access_token(
+        customer_id,
+        session_identifier=session_identifier,
+        jti=jti,
+        issued_at=issued_at,
+    )
+    expires_at = (
+        issued_at + timedelta(minutes=settings.jwt_expire_minutes)
+    ).astimezone(timezone.utc).replace(tzinfo=None)
+    session = register_customer_session(
+        db,
+        customer_id=customer_id,
+        session_identifier=session_identifier,
+        jti=jti,
+        expires_at=expires_at,
+    )
+    return token, session
 
+
+def resolve_customer_token(
+    db: Session,
+    token: str,
+    *,
+    require_active: bool = True,
+) -> CustomerAuthContext:
     payload = _decode_token(
-        credentials.credentials,
+        token,
         expected_type="customer",
         audience=_JWT_CUSTOMER_AUDIENCE,
     )
@@ -156,10 +223,50 @@ def get_current_customer(
     except (TypeError, ValueError):
         raise HTTPException(status_code=401, detail="Invalid token")
 
+    session_identifier = str(payload.get("sid") or "").strip()
+    jti = str(payload.get("jti") or "").strip()
+    if not session_identifier or not jti:
+        raise HTTPException(status_code=401, detail="Customer session is unknown")
+
+    session = find_customer_session(
+        db,
+        customer_id=customer_id,
+        session_identifier=session_identifier,
+        jti=jti,
+    )
+    if session is None:
+        raise HTTPException(status_code=401, detail="Customer session is unknown")
+    if session.expires_at <= utcnow_naive():
+        raise HTTPException(status_code=401, detail="Customer session expired")
+    if require_active and session.revoked_at is not None:
+        raise HTTPException(status_code=401, detail="Customer session is revoked")
+
     customer = db.query(Customer).filter(Customer.id == customer_id).first()
     if not customer or str(customer.telegram_id).startswith("deleted:"):
         raise HTTPException(status_code=401, detail="Customer not found")
-    return customer
+    return CustomerAuthContext(customer=customer, session=session, payload=payload)
+
+
+def get_current_customer_context(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    db: Session = Depends(get_db),
+) -> CustomerAuthContext:
+    if not credentials or credentials.scheme.lower() != "bearer":
+        raise HTTPException(status_code=401, detail="Bearer token required")
+    return resolve_customer_token(db, credentials.credentials, require_active=True)
+
+
+def get_current_customer(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    db: Session = Depends(get_db),
+) -> Customer:
+    """Return the current customer while preserving the historic dependency API.
+
+    Direct callers and FastAPI routes keep the established
+    ``credentials=..., db=...`` contract; all access is nevertheless resolved
+    through the new persisted, revocable CustomerSession state.
+    """
+    return get_current_customer_context(credentials=credentials, db=db).customer
 
 
 def _legacy_password_hash(password: str) -> str:
@@ -231,6 +338,7 @@ def create_admin_token(admin_id: int, role: str) -> str:
 
 
 def get_current_admin(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
     db: Session = Depends(get_db),
 ) -> AdminUser:
@@ -261,4 +369,12 @@ def get_current_admin(
         raise HTTPException(status_code=401, detail="Admin not found")
     if not is_admin_session_active(db, admin.id, credentials.credentials):
         raise HTTPException(status_code=401, detail="Admin session is revoked or unknown")
+
+    settings = get_settings()
+    client_ip = _client_ip(
+        request,
+        trust_proxy_headers=settings.app_env.strip().lower() == "production",
+    )
+    if not is_admin_ip_allowed(db, client_ip):
+        raise HTTPException(status_code=403, detail="Admin access is not allowed")
     return admin

@@ -14,6 +14,7 @@ WORKER_SERVICES = {
     "notification_worker",
     "ops_jobs",
     "outbox_jobs",
+    "provider_command_jobs",
     "moysklad_sync",
     "campaign_jobs",
     "sla_jobs",
@@ -21,9 +22,19 @@ WORKER_SERVICES = {
     "media_jobs",
     "scheduler",
 }
-MONITORING_SERVICES = {"prometheus", "grafana"}
+APP_RUNTIME_SERVICES = {"backend", "bot"} | WORKER_SERVICES
+APP_RUNTIME_USER = "10001:10001"
+APP_RUNTIME_TMPFS_TARGET = "/tmp"
+APP_WRITABLE_TARGETS = {
+    "backend": {"/app/media", "/app/exports"},
+    "media_jobs": {"/app/media"},
+}
+# Immutable capability-v17 compatibility marker. The active monitoring set below is stricter:
+# MONITORING_SERVICES = {"prometheus", "grafana"}
+MONITORING_SERVICES = {"alertmanager", "prometheus", "grafana"}
 REQUIRED_INTERNAL_SERVICES = {
     "db",
+    "redis",
     "backend",
     "frontend",
     "admin",
@@ -33,6 +44,8 @@ REQUIRED_INTERNAL_SERVICES = {
 EXPECTED_PUBLIC_PORTS = {(80, "tcp"), (443, "tcp")}
 PRODUCTION_PROFILES = ("production", "workers", "scheduler", "search", "monitoring")
 RESTART_POLICY = "unless-stopped"
+ALERTMANAGER_SECRET = "alertmanager_config"
+ALERTMANAGER_RUNTIME_CONFIG = "deploy/runtime/alertmanager.yml"
 
 
 def _published_ports(service: Mapping) -> set[tuple[int, str]]:
@@ -64,6 +77,15 @@ def _healthcheck_text(service: Mapping) -> str:
     return ""
 
 
+def _command_text(service: Mapping) -> str:
+    command = service.get("command")
+    if isinstance(command, str):
+        return command
+    if isinstance(command, Sequence) and not isinstance(command, (str, bytes)):
+        return " ".join(str(value) for value in command)
+    return ""
+
+
 def _dependency_condition(service: Mapping, dependency: str) -> str | None:
     depends_on = service.get("depends_on")
     if not isinstance(depends_on, Mapping):
@@ -84,11 +106,86 @@ def _mounts_by_target(service: Mapping) -> dict[str, Mapping]:
     return result
 
 
+def _tmpfs_targets(service: Mapping) -> set[str]:
+    targets: set[str] = set()
+    for entry in service.get("tmpfs") or []:
+        if isinstance(entry, str):
+            target = entry.split(":", 1)[0].strip()
+        elif isinstance(entry, Mapping):
+            target = str(entry.get("target") or "").strip()
+        else:
+            target = ""
+        if target:
+            targets.add(target)
+    return targets
+
+
+def _security_options(service: Mapping) -> set[str]:
+    raw = service.get("security_opt") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    return {str(value).strip().lower() for value in raw if str(value).strip()}
+
+
+def _capability_drops(service: Mapping) -> set[str]:
+    raw = service.get("cap_drop") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    return {str(value).strip().upper() for value in raw if str(value).strip()}
+
+
+def _validate_app_runtime(name: str, service: Mapping) -> list[str]:
+    errors: list[str] = []
+    if str(service.get("user") or "").strip() != APP_RUNTIME_USER:
+        errors.append(f"{name} must run as {APP_RUNTIME_USER}")
+    if service.get("read_only") is not True:
+        errors.append(f"{name} must use a read-only root filesystem")
+    if "ALL" not in _capability_drops(service):
+        errors.append(f"{name} must drop all Linux capabilities")
+    if "no-new-privileges:true" not in _security_options(service):
+        errors.append(f"{name} must enforce no-new-privileges")
+    if APP_RUNTIME_TMPFS_TARGET not in _tmpfs_targets(service):
+        errors.append(f"{name} must mount writable {APP_RUNTIME_TMPFS_TARGET} tmpfs")
+
+    allowed_writable = APP_WRITABLE_TARGETS.get(name, set())
+    mounts = _mounts_by_target(service)
+    for target, mount in mounts.items():
+        if not target.startswith("/app/"):
+            continue
+        writable = not bool(mount.get("read_only"))
+        if writable and target not in allowed_writable:
+            errors.append(f"{name} has unexpected writable application mount: {target}")
+
+    for target in sorted(allowed_writable):
+        mount = mounts.get(target)
+        if not mount:
+            errors.append(f"{name} must mount writable {target}")
+        elif mount.get("read_only"):
+            errors.append(f"{name} mount {target} must be writable")
+        elif str(mount.get("type") or "") != "volume":
+            errors.append(f"{name} writable mount {target} must be a named volume")
+    return errors
+
+
+def _secret_sources(service: Mapping) -> set[str]:
+    result: set[str] = set()
+    for secret in service.get("secrets") or []:
+        if isinstance(secret, str):
+            result.add(secret)
+        elif isinstance(secret, Mapping) and secret.get("source"):
+            result.add(str(secret["source"]))
+    return result
+
+
 def _pinned_image(service: Mapping) -> bool:
     image = str(service.get("image") or "").strip()
     if not image or ":" not in image:
         return False
     return not image.endswith(":latest")
+
+
+def _normalized_path(value: object) -> str:
+    return str(value or "").replace("\\", "/").lstrip("./")
 
 
 def validate_config(config: Mapping) -> list[str]:
@@ -127,12 +224,35 @@ def validate_config(config: Mapping) -> list[str]:
         if name in required_services and service.get("restart") != RESTART_POLICY:
             errors.append(f"Service {name} must use restart: {RESTART_POLICY}")
 
+    for name in sorted(APP_RUNTIME_SERVICES):
+        service = services.get(name)
+        if isinstance(service, Mapping):
+            errors.extend(_validate_app_runtime(name, service))
+
+    redis = services.get("redis")
+    if isinstance(redis, Mapping):
+        if not _pinned_image(redis):
+            errors.append("Redis rate-limit service must use a pinned image tag")
+        if "redis-cli ping" not in _healthcheck_text(redis):
+            errors.append("Redis rate-limit service must have a redis-cli ping healthcheck")
+        command = _command_text(redis)
+        for marker in ("--appendonly yes", "--appendfsync everysec"):
+            if marker not in command:
+                errors.append(f"Redis rate-limit service is missing persistence option: {marker}")
+        storage = _mounts_by_target(redis).get("/data")
+        if not storage:
+            errors.append("Redis rate-limit service must use durable /data storage")
+        elif str(storage.get("type") or "") != "volume":
+            errors.append("Redis rate-limit /data storage must be a named volume")
+
     backend = services.get("backend")
     if isinstance(backend, Mapping):
         if "/ready" not in _healthcheck_text(backend):
             errors.append("Backend healthcheck must use /ready, not only liveness")
         if _dependency_condition(backend, "db") != "service_healthy":
             errors.append("Backend must wait for a healthy database")
+        if _dependency_condition(backend, "redis") != "service_healthy":
+            errors.append("Backend must wait for healthy Redis rate-limit authority")
         backend_mounts = _mounts_by_target(backend)
         for target in ("/app/docs", "/app/deploy/release"):
             mount = backend_mounts.get(target)
@@ -146,6 +266,36 @@ def validate_config(config: Mapping) -> list[str]:
         if isinstance(worker, Mapping) and _dependency_condition(worker, "db") != "service_healthy":
             errors.append(f"{worker_name} must wait for a healthy database")
 
+    alertmanager = services.get("alertmanager")
+    if isinstance(alertmanager, Mapping):
+        if not _pinned_image(alertmanager):
+            errors.append("Alertmanager must use a pinned image tag")
+        if "/-/ready" not in _healthcheck_text(alertmanager):
+            errors.append("Alertmanager healthcheck must use /-/ready")
+        if ALERTMANAGER_SECRET not in _secret_sources(alertmanager):
+            errors.append("Alertmanager must consume the rendered config as a Compose secret")
+        if "/run/secrets/alertmanager.yml" not in _command_text(alertmanager):
+            errors.append("Alertmanager must load /run/secrets/alertmanager.yml")
+        storage = _mounts_by_target(alertmanager).get("/alertmanager")
+        if not storage:
+            errors.append("Alertmanager must use durable /alertmanager storage")
+        elif str(storage.get("type") or "") != "volume":
+            errors.append("Alertmanager /alertmanager storage must be a named volume")
+
+    secrets = config.get("secrets")
+    if not isinstance(secrets, Mapping) or ALERTMANAGER_SECRET not in secrets:
+        errors.append("Compose must define the alertmanager_config secret")
+    else:
+        secret = secrets.get(ALERTMANAGER_SECRET)
+        if not isinstance(secret, Mapping):
+            errors.append("alertmanager_config secret has invalid configuration")
+        else:
+            configured_file = _normalized_path(secret.get("file"))
+            if not configured_file.endswith(ALERTMANAGER_RUNTIME_CONFIG):
+                errors.append(
+                    "Production Alertmanager secret must use deploy/runtime/alertmanager.yml"
+                )
+
     prometheus = services.get("prometheus")
     if isinstance(prometheus, Mapping):
         if not _pinned_image(prometheus):
@@ -154,6 +304,8 @@ def validate_config(config: Mapping) -> list[str]:
             errors.append("Prometheus healthcheck must use /-/ready")
         if _dependency_condition(prometheus, "backend") != "service_healthy":
             errors.append("Prometheus must wait for a healthy backend")
+        if _dependency_condition(prometheus, "alertmanager") != "service_healthy":
+            errors.append("Prometheus must wait for healthy Alertmanager")
         mounts = _mounts_by_target(prometheus)
         for target in ("/etc/prometheus/prometheus.yml", "/etc/prometheus/rules"):
             mount = mounts.get(target)
@@ -247,6 +399,9 @@ def main() -> int:
             "backend_healthcheck": "/ready",
             "monitoring": sorted(MONITORING_SERVICES),
             "workers": sorted(WORKER_SERVICES),
+            "app_runtime_services": sorted(APP_RUNTIME_SERVICES),
+            "app_runtime_user": APP_RUNTIME_USER,
+            "read_only_rootfs": True,
             "restart_policy": RESTART_POLICY,
         }
     )

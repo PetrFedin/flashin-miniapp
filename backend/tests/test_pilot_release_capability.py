@@ -1,3 +1,4 @@
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -34,431 +35,25 @@ def _git(repo: Path, *args: str) -> None:
     )
 
 
-FILE_CONTENT = {
-    "backend/api/orders.py": "acquire_pilot_checkout()\nrecord_pilot_order()\n",
-    "scripts/pilot_release_capability.py": "from pilot_release_contract import CAPABILITY_VERSION\n",
-    "scripts/pilot_release_contract.py": "CAPABILITY_VERSION = 17\n",
-    "scripts/readiness_gate.py": (
-        'def build_signed_live_report():\n    pass\n"kind": "pilot_live_gate"\n'
-        'configuration_fingerprint(env, secret)\nrelease_binding(current_release)\n'
-        'return sign_payload(payload, secret)\n'
-    ),
-    "scripts/pilot_admission.py": (
-        'live gate evidence signature is invalid\n'
-        'live gate configuration fingerprint does not match\n'
-        'live gate release binding is missing\n'
-        'validate_release_binding(release, current_release)\n'
-        'def validate_admission_evidence_inputs(): pass\n'
-        'current_release=current_release\n'
-    ),
-    "backend/tests/test_pilot_admission.py": (
-        'test_live_gate_rejects_tampering_configuration_and_other_release\n'
-        'test_admission_create_preflight_binds_live_gate_to_current_release\n'
-        'configuration fingerprint\nlive gate release\n'
-    ),
-    "backend/services/pilot_runtime.py": (
-        "from scripts.pilot_release_contract import CAPABILITY_VERSION\n"
-        "validate_pilot_database_evidence(\n"
-        '"version": CAPABILITY_VERSION\n'
-        "build_admission_binding(manifest_path, manifest)\n"
-        "validate_state_descendant(\n"
-        "validate_audit_log(\napproved_operators(manifest)\n"
-        "state.pilot_state_revision\nstate.pilot_state_sha256\n"
-        "armed runtime pilot state replay anchor is missing\n"
-    ),
-    "backend/services/pilot_database_evidence.py": (
-        "def validate_pilot_database_evidence(): pass\n"
-        "pilot slot order_id\nPostgreSQL payment\nPostgreSQL refund\n"
-        "final GO scenario order IDs\n"
-    ),
-    "backend/tests/test_pilot_database_evidence.py": (
-        "test_exact_completed_twenty_order_database_evidence_is_accepted\n"
-        "test_missing_or_wrong_slot_order_fails_closed\n"
-        "test_payment_refund_status_and_amount_are_read_from_postgresql\n"
-        "test_final_go_rejects_active_or_incomplete_runtime\n"
-    ),
-    "backend/services/pilot_inventory_evidence.py": (
-        "def validate_order_inventory_evidence(): pass\n"
-        "reserve/release\nreserve/commit\nsigned stock_before\n"
-        "signed expected_stock_delta\n"
-    ),
-    "backend/services/inventory.py": (
-        "InventoryMovement(\nkind=\"reserve\"\nkind=\"release\"\n"
-        "kind=\"commit\"\norder_id=order_id\n"
-    ),
-    "backend/alembic/versions/0024_inventory_movement_ledger.py": (
-        "0024_inventory_movement_ledger\n0023_pilot_state_replay_anchor\n"
-        "inventory_movements\nuq_inventory_movement_order_variant_kind\n"
-    ),
-    "backend/tests/test_inventory_movement_ledger.py": (
-        "test_reserve_and_release_are_one_durable_order_linked_chain\n"
-        "test_reserve_and_commit_capture_stock_and_reserved_snapshots\n"
-        "test_production_inventory_callsites_are_order_attributed\n"
-    ),
-    "scripts/pilot_control_binding.py": (
-        "def build_admission_binding(): pass\nmanifest_sha256\n"
-        "def validate_admission_binding(): pass\n"
-        "def require_admission_binding(): pass\n"
-    ),
-    "scripts/pilot_control.py": (
-        "SCHEMA_VERSION = 7\ndatabase_evidence_contract\n"
-        "inventory_evidence_contract\nverified_admission_context(\n"
-        "approved_operator_names=args.approved_operators\n"
-        "mutation=_mutation_from_args(\n"
-        "Unattributed pilot state schema 4 cannot be reused\n"
-        "Last accountable mutation\n"
-    ),
-    "scripts/pilot_control_audit.py": (
-        "APPROVAL_ROLES\ndef approved_operators(): pass\n"
-        "def normalize_mutation(): pass\ndef validate_audit_log(): pass\n"
-        "def validate_record_mutation(): pass\n"
-        "does not match signed admission owner\n"
-    ),
-    "scripts/pilot_control_chain.py": (
-        "def signed_state_sha256(): pass\n"
-        "def validate_anchor_transition(): pass\n"
-        "pilot control state revision rollback detected\n"
-        "pilot control state ancestry does not match the armed runtime\n"
-    ),
-    "scripts/pilot_control_lock.py": (
-        "def exclusive_state_lock(): pass\n"
-        "fcntl.LOCK_EX | fcntl.LOCK_NB\n"
-        "Pilot control state lock acquisition timed out\n"
-        "os.fchmod(handle.fileno(), 0o600)\n"
-    ),
-    "scripts/pilot_control_io.py": (
-        "def durable_atomic_write_text(): pass\n"
-        "os.fsync(handle.fileno())\n"
-        "os.replace(temporary_path, path)\n"
-        "_fsync_directory(path.parent)\n"
-        "os.fchmod(handle.fileno(), 0o600)\n"
-    ),
-    "backend/pilot_models.py": (
-        "pilot_state_revision\npilot_state_sha256\nck_pilot_runtime_state_anchor\n"
-    ),
-    "backend/alembic/versions/0023_pilot_state_replay_anchor.py": (
-        "0023_pilot_state_replay_anchor\n0022_pilot_runtime_guard\n"
-        "pilot_state_revision\npilot_state_sha256\n"
-    ),
-    "scripts/pilot_runner.py": (
-        "errors = verify_default_admission(ROOT)\nreturn pilot_control_main(args)\n"
-    ),
-    "scripts/pilot_runtime.py": (
-        "build_admission_binding(DEFAULT_MANIFEST, manifest)\n"
-        "validate_pilot_database_evidence(\n"
-        "validate_audit_log(\napproved_operators(manifest)\n"
-        "pilot_state_revision\npilot_state_sha256\npilot_state_history\n"
-        "validate_anchor_transition(\n"
-        "Stopped pilot runtime cannot change admission or release lineage\n"
-    ),
-    "Makefile": (
-        "python3 scripts/pilot_runner.py init $(ARGS)\n"
-        "--operator-role operations_owner\n"
-        "python3 scripts/pilot_runner.py record $(ARGS)\n"
-        "python3 scripts/pilot_runner.py status\n"
-        "python3 scripts/pilot_runner.py validate --final\n"
-    ),
-    "backend/tests/test_pilot_control_binding.py": (
-        "test_state_is_bound_to_one_exact_signed_admission_file\n"
-        "test_legacy_state_is_rejected_without_silent_migration\n"
-        "test_makefile_routes_pilot_control_through_admission_runner\n"
-    ),
-    "backend/tests/test_pilot_control_audit.py": (
-        "test_init_and_record_are_bound_to_admission_owners_and_lineage\n"
-        "test_unapproved_name_or_role_is_rejected\n"
-        "test_misleading_scenario_audit_is_rejected\n"
-        "test_tampered_or_unapproved_audit_fails_state_load\n"
-        "test_init_and_record_parser_require_accountable_identity\n"
-    ),
-    "backend/tests/test_pilot_control_signature.py": (
-        "test_cross_process_writers_serialize_and_reject_stale_parent\n"
-        "test_cross_process_lock_timeout_fails_closed\n"
-        'multiprocessing.get_context("fork")\n'
-    ),
-    "backend/tests/test_pilot_control_durability.py": (
-        "test_durable_atomic_write_fsyncs_file_and_parent_directory\n"
-        "test_summary_refresh_repairs_stale_file_without_advancing_state\n"
-        "test_summary_write_failure_leaves_valid_committed_state_and_is_repairable\n"
-        "test_status_summary_refresh_does_not_change_signed_json_bytes\n"
-    ),
-    "backend/tests/test_pilot_runtime.py": (
-        "test_tampered_pilot_control_state_fails_closed_on_checkout\n"
-        "test_runtime_anchor_advances_to_descendant_and_rejects_replay\n"
-        "test_unrelated_valid_signed_state_branch_fails_closed\n"
-    ),
-    "backend/tests/test_pilot_state_replay_migration.py": (
-        "test_replay_anchor_migration_extends_current_pilot_runtime_head\n"
-    ),
-    "backend/services/pilot_circuit_breaker.py": (
-        "def stop_pilot_for_order():\n    pass\n"
-        "def trip_pilot_circuit_breaker():\n    pass\n"
-    ),
-    "backend/api/payments.py": (
-        "class ProviderPaymentIntegrityError: pass\n"
-        "trip_pilot_circuit_breaker()\nstop_pilot_for_order()\n"
-    ),
-    "backend/api/returns.py": "trip_pilot_circuit_breaker()\nstop_pilot_for_order()\n",
-    "backend/services/payment_reconciliation.py": (
-        "payment_reconciliation_mismatch\nstop_pilot_for_order()\n"
-    ),
-    "backend/order_statuses.py": (
-        "SETTLED_ORDER_PAYMENT_STATUSES = frozenset({\n"
-        '    "paid", "paid_review_required", "refund_review_required"\n'
-        "})\n"
-    ),
-    "backend/services/payment_settlement.py": (
-        "from ..order_statuses import SETTLED_ORDER_PAYMENT_STATUSES\n"
-        "if order.payment_status in SETTLED_ORDER_PAYMENT_STATUSES:\n    return False\n"
-        "reward_referral_after_first_paid_order(db, order.customer_id, order.id)\n"
-    ),
-    "backend/services/loyalty.py": (
-        "def _lock_referral_customer():\n    pass\n"
-        "def _has_prior_settled_order():\n    pass\n"
-        "Referral code must be applied before the first paid order\n"
-        "return attach_referral_to_customer(db, code, new_customer_id)\n"
-        'attribution.status = "ineligible"\n'
-        "def reward_referral_after_first_paid_order():\n    pass\n"
-    ),
-    "backend/tests/test_referral_attribution.py": (
-        "test_legacy_apply_referral_only_attaches_pending_attribution\n"
-        "test_referral_after_settled_order_is_rejected_even_for_same_code\n"
-        "test_missing_customer_is_not_silently_eligible\n"
-    ),
-    "backend/services/fulfillment.py": (
-        "def _picklist_is_complete():\n    pass\n"
-        "Every picklist item must be fully picked before packing\n"
-        'order.delivery_status = "ready"\n'
-    ),
-    "backend/api/fulfillment.py": (
-        "fulfillment.task.update\nfulfillment.task_item.update\nassigned_admin_id\n"
-    ),
-    "backend/services/delivery_providers.py": (
-        "_SHIPMENT_TRANSITIONS = {}\n"
-        "Only a ready order can be transferred to delivery\n"
-        'order.status = "shipped"\norder.status = "completed"\n'
-    ),
-    "backend/api/delivery_providers.py": (
-        "delivery.shipment.create\ndelivery.shipment.update\nwith_for_update()\n"
-    ),
-    "backend/main.py": (
-        "collect_pilot_metrics\n"
-        '@app.get("/metrics"\n'
-        "return metrics_response()\n"
-    ),
-    "backend/middleware/metrics.py": (
-        "flashin_pilot_metrics_collection_success\n"
-        "def collect_pilot_metrics():\n    pass\n"
-        'return "__unmatched__"\n'
-    ),
-    "deploy/monitoring/rules/flashin_pilot.yml": (
-        "FlashinPilotMetricsUnavailable\n"
-        "FlashinPilotArtifactIntegrityFailed\n"
-        "FlashinPilotMoneyAttentionRequired\n"
-        "FlashinPilotCapacityLow\n"
-    ),
-    "deploy/grafana/dashboards/flashin_operations.json": (
-        "FLASHIN Operations\nflashin_pilot_checkout_ready\nflashin_pilot_money_attention\n"
-    ),
-    "deploy/grafana/provisioning/datasources/prometheus.yml": (
-        "prometheus\nhttp://prometheus:9090\n"
-    ),
-    "deploy/monitoring/prometheus.yml": (
-        "rule_files\n/etc/prometheus/rules/*.yml\nbackend:8000\n"
-    ),
-    "scripts/check_production_compose.py": (
-        'MONITORING_SERVICES = {"prometheus", "grafana"}\n'
-        'PRODUCTION_PROFILES = ("production", "workers", "scheduler", "search", "monitoring")\n'
-        "Grafana anonymous access must be disabled\n"
-    ),
-    ".env.production.example": (
-        "METRICS_ENABLED=true\nGRAFANA_ADMIN_USER=pilot\nGRAFANA_ADMIN_PASSWORD=secret\n"
-    ),
-    "docker-compose.yml": (
-        "prometheus:\ngrafana:\nprometheus_data\ngrafana_data\n"
-    ),
-    ".github/workflows/ci.yml": (
-        "browser-e2e:\nInstall Chromium\nRun Mini App and Admin browser journeys\n"
-        "Run transactional referral attribution smoke\n"
-        "Run transactional full fulfillment smoke\n"
-        "Run signed backup and restore drill\n"
-        "bash scripts/backup_restore_smoke.sh\n"
-        "Run signed full release rollback drill\n"
-        "bash scripts/release_rollback_smoke.sh\n"
-        "needs: [backend, frontend, admin, browser-e2e]\n"
-    ),
-    "e2e/package.json": (
-        "{\n"
-        '  "scripts": {"test": "playwright test"},\n'
-        '  "devDependencies": {"@playwright/test": "1.54.2"}\n'
-        "}\n"
-    ),
-    "e2e/playwright.config.js": (
-        'name: "storefront-mobile"\nname: "admin-desktop"\n'
-        'trace: "retain-on-failure"\nscreenshot: "only-on-failure"\n'
-        'video: "retain-on-failure"\n'
-    ),
-    "e2e/tests/storefront.spec.js": (
-        "Mini App critical pilot journey\n"
-        "Mini App cart quantity and removal controls\n"
-        "Mini App profile, support, privacy and return journey\n"
-        "Mini App payment return route refreshes paid order\n"
-    ),
-    "e2e/tests/admin.spec.js": (
-        "Admin critical pilot operator journey\n"
-        "Admin operations, fulfillment and BusinessEvent recovery journey\n"
-        "Admin completes support, privacy and refund service operations\n"
-    ),
-    "e2e/tests/owner-admin.spec.js": (
-        "Admin assigns an accountable owner to a support ticket\n"
-        "assigned_admin_id: 42\nОтветственный обращения 901\n"
-    ),
-    "e2e/tests/fulfillment-admin.spec.js": (
-        "Admin completes picklist, shipment and delivery lifecycle\n"
-        "Собрать все позиции и упаковать\nPILOT-TRACK-9100\n"
-        'status: "completed"\n'
-    ),
-    "backend/api/support.py": (
-        "class AdminSupportTicketOut:\n    assigned_admin_id: int | None = None\n"
-        "response_model=list[AdminSupportTicketOut]\n"
-        "response_model=AdminSupportTicketOut\n"
-    ),
-    "backend/tests/test_support_admin_schema.py": (
-        "test_admin_support_ticket_schema_exposes_accountable_owner\nassigned_admin_id\n"
-    ),
-    "admin/src/FulfillmentOperationsPanel.jsx": (
-        '"/api/fulfillment/tasks"\n"/api/delivery-providers/shipments"\n'
-        "async function pickAndPack() {}\nasync function ship() {}\n"
-        "async function deliver() {}\n"
-    ),
-    "admin/src/fulfillmentOperations.js": (
-        "export function isPicklistComplete() {}\n"
-        "export function fulfillmentAction() {}\n"
-        "export function normalizeTracking() {}\n"
-        "export function fulfillmentAttentionCount() {}\n"
-        "Собрать все позиции и упаковать\nПередать в доставку\nПодтвердить доставку\n"
-    ),
-    "admin/src/fulfillmentOperations.test.js": (
-        "fulfillment actions expose only the next safe workflow step\n"
-        "picklist completeness requires every ordered unit\n"
-        "tracking is bounded and meaningful\n"
-        "attention remains until shipment is delivered\n"
-    ),
-    "admin/src/ServiceOperationsPanel.jsx": (
-        'support: "/api/support/admin/tickets"\n'
-        'privacy: "/api/privacy/admin/requests"\n'
-        'returns: "/api/admin/returns"\n'
-        'adminJson("/api/returns/admin/approve"\n'
-        "Подтвердить refund\nОтветственный обращения\n"
-    ),
-    "admin/src/serviceOperations.js": (
-        "export function supportTransitions() {}\n"
-        "export function canProcessPrivacy() {}\n"
-        "export function canApproveReturn() {}\n"
-        "export function normalizeAdminAssignment() {}\n"
-        "export function normalizeRefundAmount() {}\n"
-        "export function serviceAttentionCount() {}\n"
-    ),
-    "admin/src/serviceOperations.test.js": (
-        "support transitions follow the backend state machine\n"
-        "support owner assignment accepts only positive integer Admin IDs\n"
-        "refund amount is positive, bounded and rounded\n"
-        "aggregate attention are fail-closed\n"
-    ),
-    "admin/src/BusinessEventsPanel.jsx": (
-        'import FulfillmentOperationsPanel from "./FulfillmentOperationsPanel.jsx"\n'
-        "<FulfillmentOperationsPanel onUnauthorized={onUnauthorized} />\n"
-        'import ServiceOperationsPanel from "./ServiceOperationsPanel.jsx"\n'
-        "<ServiceOperationsPanel onUnauthorized={onUnauthorized} />\n"
-    ),
-    "admin/index.html": (
-        'href="/src/serviceOperations.css"\nFLASHIN Admin\n'
-    ),
-    "admin/src/serviceOperations.css": (
-        ".service-operations {}\n.service-grid {}\n.attention-badge {}\n"
-    ),
-    "scripts/full_fulfillment_smoke.py": (
-        "Every picklist item must be fully picked before packing\n"
-        "idempotent shipment create\n"
-        'persisted_order.status == "completed"\n'
-        'persisted_order.delivery_status == "delivered"\n'
-    ),
-    "scripts/referral_attribution_smoke.py": (
-        "duplicate referral payment webhook\nlate_referral.status_code == 409\n"
-        "persisted_referral.used_count == 1\nlen(reward_rows) == 1\n"
-        "second_persisted_order.referral_code is None\n"
-    ),
-    "scripts/backup_integrity.py": (
-        'KIND = "postgres_backup_manifest"\nCRITICAL_TABLES = (\n'
-        "def snapshot_database():\n    pass\n"
-        "def verify_restorable():\n    pass\n"
-        "def verify_live_database():\n    pass\n"
-        "backup SHA-256 does not match signed manifest\n"
-        "restored critical table\n"
-    ),
-    "scripts/backup_postgres.sh": (
-        'MANIFEST_FILE=x\npython3 "$INTEGRITY_SCRIPT" create\n'
-        "Backup created, restored in isolation and signed\n"
-    ),
-    "scripts/verify_backup.sh": (
-        'Signed backup manifest not found\npython3 "$INTEGRITY_SCRIPT" verify\n'
-        "Backup signature, archive, schema and critical data verification OK\n"
-    ),
-    "scripts/restore_postgres.sh": (
-        'Signed backup manifest not found\npython3 "$INTEGRITY_SCRIPT" verify\n'
-        'python3 "$INTEGRITY_SCRIPT" verify-live\nsigned snapshot verified\n'
-    ),
-    "scripts/backup_restore_smoke.sh": (
-        "tampered_archive_rejected\nmutated_database_rejected\n"
-        "restored_value_verified\nverify-live\nrestore_postgres.sh --yes\n"
-    ),
-    "scripts/release_rollback_smoke.sh": (
-        "ROLLBACK_DRILL=1\nPREVIOUS_MARKER=previous\nCURRENT_MARKER=current\n"
-        "container_marker=previous\nrestored_name=sentinel\nverify-live\n"
-        "verify --slot both\nverify-rollback\nruntime_image_rebuilt\n"
-        "release_pointer_promoted\nsigned_evidence_verified\n"
-    ),
-    "backend/tests/test_backup_integrity.py": (
-        "test_signed_manifest_binds_exact_archive_and_snapshot\n"
-        "test_archive_byte_or_size_change_is_rejected\n"
-        "test_snapshot_comparison_detects_schema_revision_and_ledger_changes\n"
-        "test_database_identifiers_fail_closed\n"
-    ),
-    "docs/pilot/end_to_end_coverage_matrix.md": (
-        "## Browser journeys\nNine stateful Playwright journeys\n"
-        "accountable active Admin ID\nAdmin service operations\nfull picklist\n"
-        "## Transactional referral evidence\nfirst paid order -> one inviter reward\n"
-        "## Signed backup and restore evidence\nBackup/restore integrity\n"
-        "Release rollback\n## Evidence boundary\n"
-    ),
-    "docker-compose.production.yml": (
-        "./docs:/app/docs:ro\n./deploy/release:/app/deploy/release:ro\n"
-    ),
-    "scripts/deploy_production.sh": (
-        "pilot_runtime.py _stop\ncheck_pilot_runtime_integrity.py\n"
-    ),
-    "scripts/rollback.sh": (
-        'CAPABILITY_SCRIPT="scripts/pilot_release_capability.py"\n'
-        '"$CAPABILITY_SCRIPT" inspect --archive\n'
-        "scripts/verify_backup.sh\nrestore_postgres.sh\n"
-        "docker compose build backend frontend admin bot notification_worker scheduler\n"
-        "RELEASE_STATE_DIR=\n--state-dir \"$RELEASE_STATE_DIR\"\n"
-        "PROMOTED_RELEASE=\nRollback release pointer promotion mismatch\n"
-        "verify --slot both\nrecord-rollback\n"
-        "pilot_runtime.py _stop\ncheck_pilot_runtime_integrity.py\n"
-    ),
-}
-
-
 def _guarded_repo(tmp_path: Path) -> Path:
+    """Build the synthetic release from the real current capability surface.
+
+    This intentionally avoids a hand-maintained copy of every marker. A new
+    release capability must be proven by the exact files that production will
+    package; marker-removal tests below mutate one copied file at a time.
+    """
+
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q")
     _git(repo, "config", "user.email", "pilot@example.com")
     _git(repo, "config", "user.name", "Pilot Test")
-    for relative in REQUIRED_FILES:
-        path = repo / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(FILE_CONTENT.get(relative, "guarded\n"), encoding="utf-8")
+    for relative in sorted(REQUIRED_FILES):
+        source = ROOT / relative
+        assert source.is_file(), f"Required release capability source is missing: {relative}"
+        target = repo / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
     _git(repo, "add", ".")
     _git(repo, "commit", "-qm", "guarded release")
     return repo
@@ -475,7 +70,7 @@ def _release(repo: Path, tmp_path: Path, release_id: str, created_at: str) -> Pa
 
 
 def test_signed_release_capability_is_bound_to_exact_release():
-    assert CAPABILITY_VERSION == 17
+    assert CAPABILITY_VERSION == 33
     secret = "s" * 48
     state = _release_state()
     state["capabilities"] = {
@@ -504,22 +99,62 @@ def test_unsigned_or_tampered_release_capability_is_rejected():
 
 def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(tmp_path):
     repo = _guarded_repo(tmp_path)
-    guarded = _release(repo, tmp_path, "guarded", "2026-08-05T00:00:00Z")
+    guarded = _release(repo, tmp_path, "guarded", "2026-08-10T00:00:00Z")
     assert inspect_runtime_guard(guarded) == []
 
-    missing_path = repo / "scripts/backup_integrity.py"
+    missing_path = repo / "scripts/moysklad_stock_authority_concurrency_smoke.py"
     missing_path.unlink()
     _git(repo, "add", "-u")
-    _git(repo, "commit", "-qm", "remove backup integrity")
-    unguarded = _release(repo, tmp_path, "unguarded", "2026-08-05T00:01:00Z")
+    _git(repo, "commit", "-qm", "remove authority concurrency proof")
+    unguarded = _release(repo, tmp_path, "unguarded", "2026-08-10T00:01:00Z")
     errors = inspect_runtime_guard(unguarded)
-    assert any("scripts/backup_integrity.py" in error for error in errors)
+    assert any("scripts/moysklad_stock_authority_concurrency_smoke.py" in error for error in errors)
 
 
 @pytest.mark.parametrize(
     ("path", "replacement", "expected_marker"),
     [
         ("backend/api/payments.py", "class ProviderPaymentIntegrityError: pass\n", "trip_pilot_circuit_breaker"),
+        ("backend/config.py", "class Settings: pass\n", "commercial_checkout_enabled: bool"),
+        ("scripts/preflight.py", "print('Preflight OK')\n", "validate_admin_password_contract"),
+        ("backend/tests/test_preflight_admin_password_contract.py", "def test_placeholder(): pass\n", "test_production_preflight_rejects_persisted_admin_password"),
+        ("backend/services/runtime_capabilities.py", "def public_runtime_capabilities(): return {}\n", "require_payment_execution"),
+        ("backend/services/privacy_export.py", "def write_customer_export(*args, **kwargs): pass\n", "decimal-string-2dp"),
+        ("backend/api/privacy.py", "router = object()\n", "SpooledTemporaryFile"),
+        ("scripts/privacy_export_postgres_smoke.py", "def main(): return 0\n", "privacy export smoke requires PostgreSQL"),
+        ("backend/tests/test_privacy_export_contract.py", "def test_placeholder(): pass\n", "test_privacy_export_contract_is_exact_unicode_safe_and_customer_scoped"),
+        ("backend/alembic/versions/0044_media_upload_commit_authority.py", "revision = '0044_media_upload_commit_authority'\n", "uq_media_assets_upload_key_nonempty"),
+        ("backend/api/media.py", "router = object()\n", "authoritative_commit_reached"),
+        ("admin/src/api.js", "export async function uploadAdminFile() {}\n", "Idempotency-Key"),
+        ("backend/tests/test_media_storage_transaction_boundary.py", "def test_placeholder(): pass\n", "test_postcommit_response_failure_never_deletes_or_requeues_committed_object"),
+        ("backend/tests/test_media_upload_commit_authority.py", "def test_placeholder(): pass\n", "test_create_all_mirrors_media_upload_key_partial_uniqueness"),
+        ("scripts/media_storage_transaction_boundary_smoke.py", "def main(): return 0\n", "postcommit_asset_recovered"),
+        ("backend/services/media_cleanup.py", "def enqueue_media_cleanup(*args, **kwargs): pass\n", "MEDIA_CLEANUP_PROVIDER"),
+        ("backend/jobs/media_cleanup_jobs.py", "def process_media_cleanup_commands(*args, **kwargs): return {}\n", "authoritative_media_asset_id"),
+        ("backend/services/media_storage.py", "async def save_media(*args, **kwargs): return {}\n", "MediaStorageWriteError"),
+        ("backend/tests/test_media_async_transport.py", "def test_placeholder(): pass\n", "test_slow_s3_upload_does_not_block_event_loop"),
+        ("backend/services/webhook_delivery.py", "SAFE_RETRY_PRE_DISPATCH = 'broken'\n", "ambiguous_transport"),
+        ("backend/alembic/versions/0045_refund_item_allocation.py", "revision = '0045_refund_item_allocation'\n", "return_refund_allocations"),
+        ("backend/refund_allocation_models.py", "class ReturnRefundAllocation: pass\n", "accounting/client evidence only"),
+        ("backend/services/order_money_allocation.py", "def allocate_order_money(*args): return None\n", "ORDER_MONEY_POLICY_VERSION = 1"),
+        ("backend/services/refund_allocation.py", "def ensure_refund_allocation(*args, **kwargs): pass\n", "reconcile_refund_allocations"),
+        ("backend/tests/test_refund_item_allocation.py", "def test_placeholder(): pass\n", "test_quantity_backed_staged_refunds_use_exact_sequential_rounding"),
+        ("scripts/refund_item_allocation_postgres_smoke.py", "def main(): return 0\n", "over_allocation_blocked"),
+        ("docs/refunds/FINANCIAL_ITEM_ALLOCATION.md", "# Refunds\n", "financial refund does not restore sellable inventory"),
+        ("backend/tests/test_webhook_outbox_ambiguity.py", "def test_placeholder(): pass\n", "test_non_2xx_http_outcomes_never_blindly_replay"),
+        ("scripts/webhook_outbox_ambiguity_smoke.py", "def main(): return 0\n", "blind_replay_blocked"),
+        ("docs/IDEMPOTENCY_CONTRACTS.md", "# Idempotency\n", "Receiver idempotency is not assumed"),
+        ("scripts/media_cleanup_recovery_smoke.py", "def main(): return 0\n", "authoritative_media_reference_blocks_delete"),
+        ("scripts/run_media_cleanup_jobs.py", "def main(): return 0\n", "media-cleanup"),
+        ("docs/providers/object-storage.md", "# Object storage\n", "Durable cleanup command"),
+        ("docs/runbooks/MEDIA_STORAGE_FAILURE.md", "# Runbook\n", "PostgreSQL outage / disaster recovery"),
+        ("backend/alembic/versions/0043_moysklad_variant_identity_authority.py", "revision = '0043_moysklad_variant_identity_authority'\n", "uq_products_moysklad_id_nonempty"),
+        ("backend/services/moysklad.py", "async def fetch_assortment(): pass\n", "MoySkladIdentityConflict"),
+        ("backend/services/moysklad_outbound.py", "class MoySkladReviewRequired: pass\n", "exact MoySklad assortment id"),
+        ("backend/tests/test_moysklad_variant_identity_authority.py", "def test_placeholder(): pass\n", "test_two_provider_variants_share_one_authoritative_parent_product"),
+        ("backend/api/platform.py", "router = object()\n", '@router.get("/capabilities")'),
+        ("frontend/src/App.jsx", "export default function App() {}\n", "SAFE_RUNTIME_CAPABILITIES"),
+        ("e2e/tests/storefront.spec.js", "test(\"placeholder\", async () => {})\n", "provider-disabled production keeps non-money customer surfaces usable"),
         (".github/workflows/ci.yml", "jobs:\n  docker:\n    needs: [backend]\n", "browser-e2e"),
         ("backend/middleware/metrics.py", "def metrics_response(): pass\n", "flashin_pilot_metrics_collection_success"),
         ("admin/src/BusinessEventsPanel.jsx", "export default function Panel() {}\n", "ServiceOperationsPanel"),
@@ -528,6 +163,169 @@ def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(
         ("backend/services/loyalty.py", "def reward_referral_after_first_paid_order(): pass\n", "_lock_referral_customer"),
         ("scripts/backup_integrity.py", "KIND = 'broken'\n", "postgres_backup_manifest"),
         ("scripts/restore_postgres.sh", "#!/usr/bin/env bash\nexit 0\n", "verify-live"),
+        ("scripts/deploy_release_gate.py", "#!/usr/bin/env python3\n", "retained under deploy/release/builds"),
+        ("scripts/deploy_production.sh", "#!/usr/bin/env bash\n", "deploy_release_gate.py"),
+        ("scripts/pilot_release_contract.py", "CAPABILITY_VERSION = 32\n", "CAPABILITY_VERSION = 33"),
+        (
+            "backend/middleware/rate_limit.py",
+            "class RateLimitMiddleware: pass\n",
+            "backend_fail_closed",
+        ),
+        (
+            "backend/services/distributed_rate_limit.py",
+            "class DistributedRateLimiter: pass\n",
+            "_ATOMIC_SLIDING_WINDOW",
+        ),
+        (
+            ".github/workflows/distributed-rate-limit-state.yml",
+            "name: Distributed Rate Limit State\njobs: {}\n",
+            "rate_limit_redis_smoke.py",
+        ),
+        (
+            "docker-compose.yml",
+            "services:\n  backend: {}\n",
+            "redis:8.10.1-alpine",
+        ),
+        (
+            "scripts/rate_limit_redis_smoke.py",
+            "def main(): return 0\n",
+            "two_clients_share_budget",
+        ),
+        (
+            "scripts/rate_limit_persistence_smoke.sh",
+            "#!/usr/bin/env bash\nexit 0\n",
+            "budget_survived_restart",
+        ),
+        (
+            "docs/runbooks/RATE_LIMIT_AUTHORITY.md",
+            "# Rate limiting\n",
+            "Fail closed when the shared limiter is unavailable",
+        ),
+        (
+            "scripts/pilot_evidence.py",
+            "CONFIG_FINGERPRINT_KEYS = (\"APP_ENV\",)\n",
+            "\"RATE_LIMIT_BACKEND\"",
+        ),
+        (
+            "backend/tests/test_pilot_configuration_fingerprint.py",
+            "CRITICAL_WIRING_KEYS = (\"RATE_LIMIT_ENABLED\",)\n",
+            "\"RATE_LIMIT_REDIS_URL\"",
+        ),
+        (
+            "Dockerfile.backend",
+            "FROM python:3.12-slim\nCMD [\"python\"]\n",
+            "USER 10001:10001",
+        ),
+        (
+            "Dockerfile.bot",
+            "FROM python:3.12-slim\nCMD [\"python\"]\n",
+            "USER 10001:10001",
+        ),
+        (
+            "docker-compose.production.yml",
+            "services:\n  backend:\n    restart: unless-stopped\n",
+            "x-app-security: &app-security",
+        ),
+        (
+            "scripts/check_production_compose.py",
+            "def validate_config(config): return []\n",
+            "APP_RUNTIME_USER = \"10001:10001\"",
+        ),
+        (
+            "scripts/container_least_privilege_smoke.sh",
+            "#!/usr/bin/env bash\nexit 0\n",
+            "NoNewPrivs:",
+        ),
+        (
+            "docs/runbooks/CONTAINER_LEAST_PRIVILEGE.md",
+            "# Containers\n",
+            "root filesystem: read-only",
+        ),
+        (
+            "backend/services/inventory_movement_contract.py",
+            "def movement_transition_valid(movement): return True\n",
+            "expected_inventory_delta",
+        ),
+        (
+            "backend/services/moysklad_reverse_return.py",
+            "def enqueue_moysklad_physical_sales_return(*args, **kwargs): pass\n",
+            "_ALLOCATION_VERSION = 2",
+        ),
+        (
+            "backend/services/moysklad_stock_authority.py",
+            "def evaluate_moysklad_stock_snapshot(*args, **kwargs): pass\n",
+            "_is_open_evidence_unique_race",
+        ),
+        (
+            "backend/alembic/versions/0041_reverse_logistics_authority.py",
+            "revision = '0041_reverse_logistics_authority'\n",
+            "_DOWNGRADE_BLOCKED",
+        ),
+        (
+            "backend/alembic/versions/0042_moysklad_stock_evidence_concurrency.py",
+            "revision = '0042_moysklad_stock_evidence_concurrency'\n",
+            "uq_moysklad_conflict_open_stale_physical_return",
+        ),
+        (
+            "backend/database.py",
+            "class Base: pass\n",
+            "_append_partial_unique_index",
+        ),
+        (
+            ".github/workflows/reverse-logistics-state.yml",
+            "name: Reverse Logistics State\njobs: {}\n",
+            "moysklad_disposition_authority_smoke.py",
+        ),
+        (
+            "backend/alembic/versions/0046_moysklad_return_disposition.py",
+            "revision = '0046_moysklad_return_disposition'\n",
+            "_DOWNGRADE_BLOCKED",
+        ),
+        (
+            "backend/tests/test_moysklad_disposition_authority.py",
+            "def test_placeholder(): pass\n",
+            "test_mixed_return_creates_three_distinct_provider_outcomes",
+        ),
+        (
+            "scripts/moysklad_disposition_authority_smoke.py",
+            "def main(): return 0\n",
+            "quarantine_resolution_concurrency",
+        ),
+        (
+            "admin/src/PhysicalReturnPanel.jsx",
+            "export default function Panel() {}\n",
+            "/physical/quarantine/resolve",
+        ),
+        (
+            "backend/tests/test_moysklad_reverse_return_allocation.py",
+            "def test_placeholder(): pass\n",
+            "test_sibling_partial_returns_allocate_exact_original_line_cents_without_rounding_drift",
+        ),
+        (
+            "backend/tests/test_moysklad_stock_authority.py",
+            "def test_placeholder(): pass\n",
+            "test_blocked_operational_evidence_survives_business_transaction_rollback",
+        ),
+        (
+            "backend/tests/test_moysklad_stock_authority_concurrency.py",
+            "def test_placeholder(): pass\n",
+            "test_only_owned_open_evidence_unique_races_are_retryable",
+        ),
+        (
+            "scripts/moysklad_stock_authority_concurrency_smoke.py",
+            "def main(): return 0\n",
+            "WORKERS = 12",
+        ),
+        (
+            "scripts/reverse_logistics_downgrade_guard_smoke.py",
+            "def main(): return 0\n",
+            "0046_moysklad_return_disposition",
+        ),
+        (
+            "backend/tests/test_pilot_database_evidence.py",
+            "def test_placeholder(): pass\n",
+            "test_interleaved_same_sku_order_cannot_sign_other_orders_commit",
+        ),
     ],
 )
 def test_immutable_archive_rejects_removed_guard_marker(
@@ -542,7 +340,7 @@ def test_immutable_archive_rejects_removed_guard_marker(
     _git(repo, "add", path)
     _git(repo, "commit", "-qm", f"remove guard from {path}")
 
-    release = _release(repo, tmp_path, "unwired", "2026-08-05T00:02:00Z")
+    release = _release(repo, tmp_path, "unwired", "2026-08-10T00:02:00Z")
     errors = inspect_runtime_guard(release)
     assert any(path in error for error in errors)
     assert any(expected_marker in error for error in errors)
@@ -554,8 +352,9 @@ def test_immutable_archive_rejects_missing_full_release_rollback_proof(tmp_path)
     smoke.write_text("ROLLBACK_DRILL=1\n", encoding="utf-8")
     _git(repo, "add", str(smoke.relative_to(repo)))
     _git(repo, "commit", "-qm", "remove full rollback proof")
-    archive = _release(repo, tmp_path, "missing-full-rollback", "2026-08-05T00:00:00Z")
+    archive = _release(repo, tmp_path, "missing-full-rollback", "2026-08-10T00:03:00Z")
 
     errors = inspect_runtime_guard(archive)
 
     assert any("runtime_image_rebuilt" in error for error in errors)
+    assert any("signed_evidence_verified" in error for error in errors)

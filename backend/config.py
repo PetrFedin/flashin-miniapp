@@ -17,10 +17,14 @@ class Settings(BaseSettings):
     admin_jwt_expire_minutes: int = 8 * 60
 
     admin_email: str = "admin@flashin.store"
-    admin_password: str = "change-me-now"
+    # Local-development compatibility only. Production bootstrap reads a
+    # one-time password from a hidden interactive prompt and forbids this env.
+    admin_password: str = ""
     admin_totp_encryption_key: str = ""
 
     payment_provider: str = "yookassa"
+    commercial_checkout_enabled: bool = True
+    payments_mode: str = "live"  # disabled | sandbox | live
     yookassa_shop_id: str = ""
     yookassa_secret_key: str = ""
     yookassa_return_url: str = "https://mini.flashin.store/payment-result"
@@ -36,6 +40,10 @@ class Settings(BaseSettings):
     s3_region: str = "auto"
     s3_access_key_id: str = ""
     s3_secret_access_key: str = ""
+    s3_connect_timeout_seconds: int = 5
+    s3_read_timeout_seconds: int = 20
+    s3_max_attempts: int = 3
+    media_io_max_concurrency: int = 4
 
     feature_flags_enabled: bool = True
     scheduler_enabled: bool = False
@@ -54,6 +62,7 @@ class Settings(BaseSettings):
     meilisearch_url: str = "http://meilisearch:7700"
     meilisearch_master_key: str = "change-me"
     meilisearch_products_index: str = "products"
+    meilisearch_timeout_seconds: int = 5
 
     referral_cookie_days: int = 30
     loyalty_max_redeem_percent: float = 30
@@ -62,6 +71,7 @@ class Settings(BaseSettings):
     metrics_enabled: bool = True
 
     moysklad_base_url: str = "https://api.moysklad.ru/api/remap/1.2"
+    moysklad_mode: str = "live"  # disabled | sandbox | live
     moysklad_token: str = ""
     moysklad_login: str = ""
     moysklad_password: str = ""
@@ -75,6 +85,10 @@ class Settings(BaseSettings):
     moysklad_organization_id: str = ""
     moysklad_agent_id: str = ""
     moysklad_store_id: str = ""
+    # Physical reverse-logistics stock authority. These stores must be
+    # distinct from the sellable store whenever live outbound execution is enabled.
+    moysklad_damaged_store_id: str = ""
+    moysklad_quarantine_store_id: str = ""
     moysklad_delivery_service_id: str = ""
 
     cdn_public_base_url: str = "https://cdn.flashin.store"
@@ -84,9 +98,19 @@ class Settings(BaseSettings):
     inventory_low_stock_threshold: int = 2
     audit_log_enabled: bool = True
     rate_limit_enabled: bool = True
+    rate_limit_backend: str = "memory"  # memory | redis
+    rate_limit_redis_url: str = "redis://redis:6379/0"
+    rate_limit_redis_connect_timeout_seconds: float = 1.0
+    rate_limit_redis_socket_timeout_seconds: float = 1.0
     rate_limit_per_minute: int = 120
     rate_limit_auth_per_minute: int = 20
     rate_limit_admin_login_per_minute: int = 10
+    rate_limit_search_per_minute: int = 120
+    rate_limit_checkout_per_minute: int = 12
+    rate_limit_payment_per_minute: int = 12
+    rate_limit_return_per_minute: int = 12
+    rate_limit_support_per_minute: int = 30
+    rate_limit_webhook_per_minute: int = 180
 
     default_delivery_price: float = 0
     courier_delivery_price: float = 500
@@ -118,6 +142,16 @@ class Settings(BaseSettings):
             raise ValueError("JWT_EXPIRE_MINUTES must be between 1 and 43200")
         if not 1 <= self.admin_jwt_expire_minutes <= 60 * 24:
             raise ValueError("ADMIN_JWT_EXPIRE_MINUTES must be between 1 and 1440")
+        if not 1 <= self.meilisearch_timeout_seconds <= 60:
+            raise ValueError("MEILISEARCH_TIMEOUT_SECONDS must be between 1 and 60")
+        if not 1 <= self.s3_connect_timeout_seconds <= 60:
+            raise ValueError("S3_CONNECT_TIMEOUT_SECONDS must be between 1 and 60")
+        if not 1 <= self.s3_read_timeout_seconds <= 120:
+            raise ValueError("S3_READ_TIMEOUT_SECONDS must be between 1 and 120")
+        if not 1 <= self.s3_max_attempts <= 10:
+            raise ValueError("S3_MAX_ATTEMPTS must be between 1 and 10")
+        if not 1 <= self.media_io_max_concurrency <= 8:
+            raise ValueError("MEDIA_IO_MAX_CONCURRENCY must be between 1 and 8")
         if not 0 <= self.loyalty_max_redeem_percent <= 100:
             raise ValueError("LOYALTY_MAX_REDEEM_PERCENT must be between 0 and 100")
         if self.loyalty_point_value_rub <= 0 or self.loyalty_points_per_ruble < 0:
@@ -126,10 +160,24 @@ class Settings(BaseSettings):
             self.rate_limit_per_minute,
             self.rate_limit_auth_per_minute,
             self.rate_limit_admin_login_per_minute,
+            self.rate_limit_search_per_minute,
+            self.rate_limit_checkout_per_minute,
+            self.rate_limit_payment_per_minute,
+            self.rate_limit_return_per_minute,
+            self.rate_limit_support_per_minute,
+            self.rate_limit_webhook_per_minute,
             self.moysklad_sync_limit,
             self.moysklad_sync_interval_minutes,
         ) <= 0:
             raise ValueError("Rate limits and sync limits must be positive")
+        if not 0.1 <= self.rate_limit_redis_connect_timeout_seconds <= 10:
+            raise ValueError("RATE_LIMIT_REDIS_CONNECT_TIMEOUT_SECONDS must be between 0.1 and 10")
+        if not 0.1 <= self.rate_limit_redis_socket_timeout_seconds <= 10:
+            raise ValueError("RATE_LIMIT_REDIS_SOCKET_TIMEOUT_SECONDS must be between 0.1 and 10")
+        rate_limit_backend = self.rate_limit_backend.strip().lower()
+        if rate_limit_backend not in {"memory", "redis"}:
+            raise ValueError("RATE_LIMIT_BACKEND must be memory or redis")
+        self.rate_limit_backend = rate_limit_backend
         if min(
             self.default_delivery_price,
             self.courier_delivery_price,
@@ -138,6 +186,14 @@ class Settings(BaseSettings):
             raise ValueError("Delivery prices cannot be negative")
         if self.media_storage not in {"local", "s3", "r2"}:
             raise ValueError("MEDIA_STORAGE must be local, s3, or r2")
+        payments_mode = self.payments_mode.strip().lower()
+        if payments_mode not in {"disabled", "sandbox", "live"}:
+            raise ValueError("PAYMENTS_MODE must be disabled, sandbox, or live")
+        self.payments_mode = payments_mode
+        moysklad_mode = self.moysklad_mode.strip().lower()
+        if moysklad_mode not in {"disabled", "sandbox", "live"}:
+            raise ValueError("MOYSKLAD_MODE must be disabled, sandbox, or live")
+        self.moysklad_mode = moysklad_mode
         if not self.moysklad_size_attribute_names.strip():
             raise ValueError("MOYSKLAD_SIZE_ATTRIBUTE_NAMES must not be empty")
         if not self.moysklad_color_attribute_names.strip():
@@ -145,7 +201,13 @@ class Settings(BaseSettings):
         if not 1 <= self.pilot_runtime_max_orders <= 20:
             raise ValueError("PILOT_RUNTIME_MAX_ORDERS must be between 1 and 20")
 
-        if self.app_env.strip().lower() != "production":
+        normalized_app_env = self.app_env.strip().lower()
+        if self.pilot_runtime_enforced and normalized_app_env != "production":
+            raise ValueError(
+                "PILOT_RUNTIME_ENFORCED may only be true when APP_ENV=production"
+            )
+
+        if normalized_app_env != "production":
             return self
 
         errors: list[str] = []
@@ -162,8 +224,10 @@ class Settings(BaseSettings):
 
         if len(self.jwt_secret) < 32 or self.jwt_secret.strip().lower() in weak_values:
             errors.append("JWT_SECRET must be a unique secret of at least 32 characters")
-        if len(self.admin_password) < 12 or self.admin_password.strip().lower() in weak_values:
-            errors.append("ADMIN_PASSWORD must be a strong non-default password")
+        if self.admin_password:
+            errors.append(
+                "ADMIN_PASSWORD must not be configured in production; use the interactive first-admin bootstrap"
+            )
         if (
             len(self.admin_totp_encryption_key) < 32
             or self.admin_totp_encryption_key.strip().lower() in weak_values
@@ -175,29 +239,57 @@ class Settings(BaseSettings):
             errors.append("TELEGRAM_BOT_TOKEN is missing or unsafe")
         if len(self.outbox_signing_secret) < 32 or self.outbox_signing_secret.strip().lower() in weak_values:
             errors.append("OUTBOX_SIGNING_SECRET must be at least 32 characters")
-        if (
-            len(self.pilot_evidence_signing_secret) < 32
-            or self.pilot_evidence_signing_secret.strip().lower() in weak_values
-        ):
-            errors.append("PILOT_EVIDENCE_SIGNING_SECRET must be a unique secret of at least 32 characters")
+        if not self.rate_limit_enabled:
+            errors.append("RATE_LIMIT_ENABLED must be true in production")
+        elif self.rate_limit_backend != "redis":
+            errors.append("RATE_LIMIT_BACKEND must be redis in production")
+        elif not self.rate_limit_redis_url.strip().lower().startswith(("redis://", "rediss://")):
+            errors.append("RATE_LIMIT_REDIS_URL must use redis:// or rediss:// in production")
+        if self.commercial_checkout_enabled:
+            if self.payments_mode == "disabled":
+                errors.append("PAYMENTS_MODE must not be disabled when commercial checkout is enabled")
+            if not self.pilot_runtime_enforced:
+                errors.append(
+                    "PILOT_RUNTIME_ENFORCED must be true for production commercial checkout"
+                )
+            if self.pilot_runtime_max_orders != 20:
+                errors.append(
+                    "PILOT_RUNTIME_MAX_ORDERS must equal 20 for production commercial checkout"
+                )
         else:
-            for name, value in (
-                ("JWT_SECRET", self.jwt_secret),
-                ("ADMIN_TOTP_ENCRYPTION_KEY", self.admin_totp_encryption_key),
-                ("OUTBOX_SIGNING_SECRET", self.outbox_signing_secret),
+            if self.payments_mode != "disabled":
+                errors.append(
+                    "PAYMENTS_MODE must be disabled when production commercial checkout is disabled"
+                )
+            if self.pilot_runtime_enforced:
+                errors.append(
+                    "PILOT_RUNTIME_ENFORCED must be false when production commercial checkout is disabled"
+                )
+
+        if self.pilot_runtime_enforced:
+            if (
+                len(self.pilot_evidence_signing_secret) < 32
+                or self.pilot_evidence_signing_secret.strip().lower() in weak_values
             ):
-                if hmac_compare_secret(self.pilot_evidence_signing_secret, value):
-                    errors.append(f"PILOT_EVIDENCE_SIGNING_SECRET must differ from {name}")
-        if not self.pilot_runtime_enforced:
-            errors.append("PILOT_RUNTIME_ENFORCED must be true in production")
-        if self.pilot_runtime_max_orders != 20:
-            errors.append("PILOT_RUNTIME_MAX_ORDERS must equal 20 in production")
-        if self.payment_provider != "yookassa":
-            errors.append("PAYMENT_PROVIDER must be yookassa")
-        if not self.yookassa_shop_id.strip() or not self.yookassa_secret_key.strip():
-            errors.append("YooKassa credentials are required")
-        if not self.yookassa_return_url.startswith("https://"):
-            errors.append("YOOKASSA_RETURN_URL must use HTTPS")
+                errors.append(
+                    "PILOT_EVIDENCE_SIGNING_SECRET must be a unique secret of at least 32 characters"
+                )
+            else:
+                for name, value in (
+                    ("JWT_SECRET", self.jwt_secret),
+                    ("ADMIN_TOTP_ENCRYPTION_KEY", self.admin_totp_encryption_key),
+                    ("OUTBOX_SIGNING_SECRET", self.outbox_signing_secret),
+                ):
+                    if hmac_compare_secret(self.pilot_evidence_signing_secret, value):
+                        errors.append(f"PILOT_EVIDENCE_SIGNING_SECRET must differ from {name}")
+
+        if self.payments_mode != "disabled":
+            if self.payment_provider != "yookassa":
+                errors.append("PAYMENT_PROVIDER must be yookassa when payments are enabled")
+            if not self.yookassa_shop_id.strip() or not self.yookassa_secret_key.strip():
+                errors.append("YooKassa credentials are required when payments are enabled")
+            if not self.yookassa_return_url.startswith("https://"):
+                errors.append("YOOKASSA_RETURN_URL must use HTTPS when payments are enabled")
         if "flashin:flashin@" in self.database_url.lower():
             errors.append("DATABASE_URL still uses the default database password")
         if self.enable_seed or self.use_create_all:
@@ -227,26 +319,45 @@ class Settings(BaseSettings):
         basic_login = bool(self.moysklad_login.strip())
         basic_password = bool(self.moysklad_password)
         basic_auth = basic_login and basic_password
-        moysklad_configured = token_auth or basic_login or basic_password
         if basic_login != basic_password:
             errors.append("MOYSKLAD_LOGIN and MOYSKLAD_PASSWORD must be configured together")
-        if moysklad_configured and not self.moysklad_sale_price_type.strip():
-            errors.append(
-                "MOYSKLAD_SALE_PRICE_TYPE is required when MoySklad synchronization is configured"
-            )
-        if self.moysklad_order_export_enabled:
+        if self.moysklad_mode == "disabled":
+            if self.moysklad_order_export_enabled:
+                errors.append("MOYSKLAD_ORDER_EXPORT_ENABLED must be false when MOYSKLAD_MODE=disabled")
+        else:
             if not (token_auth or basic_auth):
-                errors.append("MoySklad credentials are required when order export is enabled")
+                errors.append("MoySklad credentials are required when MOYSKLAD_MODE is enabled")
+            if not self.moysklad_sale_price_type.strip():
+                errors.append(
+                    "MOYSKLAD_SALE_PRICE_TYPE is required when MOYSKLAD_MODE is enabled"
+                )
+            if not self.moysklad_store_id.strip():
+                errors.append(
+                    "MOYSKLAD_STORE_ID is required when MOYSKLAD_MODE is enabled "
+                    "so inbound stock is scoped to the sellable warehouse"
+                )
             if not self.moysklad_base_url.startswith("https://"):
-                errors.append("MOYSKLAD_BASE_URL must use HTTPS when order export is enabled")
-            for name, value in (
-                ("MOYSKLAD_ORGANIZATION_ID", self.moysklad_organization_id),
-                ("MOYSKLAD_AGENT_ID", self.moysklad_agent_id),
-                ("MOYSKLAD_STORE_ID", self.moysklad_store_id),
-                ("MOYSKLAD_DELIVERY_SERVICE_ID", self.moysklad_delivery_service_id),
-            ):
-                if not value.strip():
-                    errors.append(f"{name} is required when MoySklad order export is enabled")
+                errors.append("MOYSKLAD_BASE_URL must use HTTPS when MOYSKLAD_MODE is enabled")
+            if self.moysklad_order_export_enabled:
+                for name, value in (
+                    ("MOYSKLAD_ORGANIZATION_ID", self.moysklad_organization_id),
+                    ("MOYSKLAD_AGENT_ID", self.moysklad_agent_id),
+                    ("MOYSKLAD_DAMAGED_STORE_ID", self.moysklad_damaged_store_id),
+                    ("MOYSKLAD_QUARANTINE_STORE_ID", self.moysklad_quarantine_store_id),
+                    ("MOYSKLAD_DELIVERY_SERVICE_ID", self.moysklad_delivery_service_id),
+                ):
+                    if not value.strip():
+                        errors.append(f"{name} is required when MoySklad order export is enabled")
+                disposition_store_ids = {
+                    self.moysklad_store_id.strip(),
+                    self.moysklad_damaged_store_id.strip(),
+                    self.moysklad_quarantine_store_id.strip(),
+                }
+                if "" not in disposition_store_ids and len(disposition_store_ids) != 3:
+                    errors.append(
+                        "MOYSKLAD_STORE_ID, MOYSKLAD_DAMAGED_STORE_ID and "
+                        "MOYSKLAD_QUARANTINE_STORE_ID must be three distinct stores"
+                    )
 
         if errors:
             raise ValueError("Unsafe production configuration: " + "; ".join(errors))

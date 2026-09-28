@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from fastapi.routing import APIRoute
+from fastapi.routing import iter_route_contexts
 
 from backend.main import app
 
@@ -13,9 +13,7 @@ TELEGRAM_HOOK = ROOT / "frontend" / "src" / "hooks" / "useTelegram.js"
 
 def _route_signatures() -> list[tuple[str, str]]:
     signatures: list[tuple[str, str]] = []
-    for route in app.routes:
-        if not isinstance(route, APIRoute):
-            continue
+    for route in iter_route_contexts(app.routes):
         for method in route.methods or set():
             if method not in {"HEAD", "OPTIONS"}:
                 signatures.append((method, route.path))
@@ -23,8 +21,8 @@ def _route_signatures() -> list[tuple[str, str]]:
 
 
 def _route_position(method: str, path: str) -> int:
-    for index, route in enumerate(app.routes):
-        if isinstance(route, APIRoute) and route.path == path and method in (route.methods or set()):
+    for index, route in enumerate(iter_route_contexts(app.routes)):
+        if route.path == path and method in (route.methods or set()):
             return index
     raise AssertionError(f"Route not found: {method} {path}")
 

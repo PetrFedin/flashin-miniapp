@@ -1,18 +1,26 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import Order, ReturnRequest
 from ..services.payments import fetch_yookassa_refund
 from ..services.pilot_circuit_breaker import PilotCircuitBreakerError, trip_pilot_circuit_breaker
+from ..services.refund_allocation import REFUND_ALLOCATION_REVIEW_DETAIL
+from ..services.refund_locking import lock_return_request_for_provider_refund
+from ..services.refund_review import mark_refund_review_required
+from ..services.runtime_capabilities import require_payment_execution
 from ..services.refund_state import (
     apply_provider_refund_status,
     provider_refund_amount,
     refund_money,
 )
+from .payments import (
+    _MAX_WEBHOOK_BYTES,
+    _parse_webhook_payload,
+    yookassa_webhook as payment_webhook,
+)
 
-router = APIRouter(prefix="/returns/webhook", tags=["returns-webhook"])
+router = APIRouter(tags=["returns-webhook"])
 
 
 def _trip_after_rollback(order_id: int, reason: str, original: HTTPException) -> None:
@@ -26,8 +34,24 @@ def _trip_after_rollback(order_id: int, reason: str, original: HTTPException) ->
     raise original
 
 
-@router.post("/yookassa")
-async def yookassa_refund_webhook(payload: dict, db: Session = Depends(get_db)):
+def _validate_webhook_request_headers(request: Request) -> None:
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type and content_type != "application/json":
+        raise HTTPException(status_code=415, detail="Webhook content type must be application/json")
+
+    raw_content_length = request.headers.get("content-length", "").strip()
+    if not raw_content_length:
+        return
+    try:
+        content_length = int(raw_content_length)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid Content-Length header") from exc
+    if content_length > _MAX_WEBHOOK_BYTES:
+        raise HTTPException(status_code=413, detail="Webhook payload is too large")
+
+
+async def _process_refund_webhook(payload: dict, db: Session):
+    require_payment_execution()
     event = str(payload.get("event") or "").strip().lower()
     if event != "refund.succeeded":
         return {"ok": True, "ignored": True, "event": event}
@@ -48,15 +72,9 @@ async def yookassa_refund_webhook(payload: dict, db: Session = Depends(get_db)):
         raise HTTPException(status_code=409, detail="Provider refund is not succeeded")
 
     try:
-        ret = (
-            db.query(ReturnRequest)
-            .filter(ReturnRequest.provider_refund_id == refund_id)
-            .with_for_update()
-            .first()
-        )
+        order, ret = lock_return_request_for_provider_refund(db, refund_id)
         if not ret:
             raise HTTPException(status_code=409, detail="Provider refund is not bound to a return request")
-        order = db.query(Order).filter(Order.id == ret.order_id).with_for_update().first()
         if not order:
             raise HTTPException(status_code=409, detail="Refund order is missing")
 
@@ -80,7 +98,27 @@ async def yookassa_refund_webhook(payload: dict, db: Session = Depends(get_db)):
         }
     except HTTPException as exc:
         order_id = locals().get("order_id") or getattr(locals().get("order"), "id", None)
+        return_id = getattr(locals().get("ret"), "id", None)
         db.rollback()
+        if (
+            order_id
+            and return_id
+            and exc.status_code == 409
+            and exc.detail == REFUND_ALLOCATION_REVIEW_DETAIL
+        ):
+            if mark_refund_review_required(
+                db,
+                return_id=int(return_id),
+                order_id=int(order_id),
+            ):
+                return {
+                    "ok": True,
+                    "refund_id": refund_id,
+                    "return_id": int(return_id),
+                    "order_id": int(order_id),
+                    "review_required": True,
+                    "review_code": "financial_allocation_evidence",
+                }
         if order_id and exc.status_code == 409 and "amount" in str(exc.detail).lower():
             _trip_after_rollback(
                 int(order_id),
@@ -101,3 +139,30 @@ async def yookassa_refund_webhook(payload: dict, db: Session = Depends(get_db)):
     except Exception:
         db.rollback()
         raise
+
+
+@router.post("/returns/webhook/yookassa")
+async def yookassa_refund_webhook(payload: dict, db: Session = Depends(get_db)):
+    """Legacy refund-only callback kept during the pilot migration window."""
+    return await _process_refund_webhook(payload, db)
+
+
+@router.post("/webhooks/yookassa")
+async def yookassa_provider_webhook(request: Request, db: Session = Depends(get_db)):
+    """Canonical YooKassa callback for payment and refund events.
+
+    HTTP Basic Auth merchants configure one notification URL in the YooKassa
+    cabinet and select the payment/refund events delivered to that URL. The
+    handler deliberately re-fetches authoritative provider state in the
+    payment/refund processors instead of trusting webhook object fields.
+    """
+    require_payment_execution()
+    _validate_webhook_request_headers(request)
+    raw_body = await request.body()
+    payload, event, _obj, _provider_id = _parse_webhook_payload(raw_body)
+
+    if event.startswith("payment."):
+        return await payment_webhook(request, db)
+    if event.startswith("refund."):
+        return await _process_refund_webhook(payload, db)
+    return {"ok": True, "ignored": True, "event": event}

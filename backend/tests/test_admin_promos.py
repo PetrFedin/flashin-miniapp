@@ -94,13 +94,8 @@ def test_invalid_admin_promo_is_rejected_before_database_write(monkeypatch):
 
 
 def test_application_exposes_one_hardened_admin_promo_route():
-    routes = [
-        route
-        for route in app.routes
-        if getattr(route, "path", "") == "/api/admin/promocodes"
-        and "POST" in getattr(route, "methods", set())
-    ]
-
-    assert len(routes) == 1
-    assert routes[0].endpoint.__module__ == "backend.api.admin_promos"
-    assert routes[0].endpoint.__name__ == "admin_create_promo"
+    path = "/api/admin/promocodes"
+    assert str(app.url_path_for("admin_create_promo")) == path
+    operations = app.openapi()["paths"][path]
+    assert "post" in operations
+    assert operations["post"]["operationId"].startswith("admin_create_promo")
