@@ -20,5 +20,5 @@ def test_production_template_declares_public_bot_username_setting():
 
 def test_production_backend_fails_closed_when_product_deep_link_username_is_missing():
     source = MAIN.read_text(encoding="utf-8")
-    assert "if is_production and not telegram_bot_username():" in source
+    assert "if is_production and not settings.production_admission_mode and not telegram_bot_username():" in source
     assert "TELEGRAM_BOT_USERNAME must be configured in production" in source
