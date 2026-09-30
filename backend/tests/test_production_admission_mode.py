@@ -89,4 +89,7 @@ def test_admission_initialization_has_no_database_side_effects(monkeypatch):
     monkeypatch.setattr(main, "bootstrap_admin", fail_if_called)
     monkeypatch.setattr(main, "seed_products", fail_if_called)
 
-    main.initialize_application()
+    try:
+        main.initialize_application()
+    finally:
+        config.get_settings.cache_clear()
