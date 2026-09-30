@@ -415,7 +415,7 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "rate_limit_backend: str",
             "rate_limit_redis_url: str",
             "RATE_LIMIT_BACKEND must be redis in production",
-            "RATE_LIMIT_REDIS_URL must use redis:// or rediss:// in production",
+            "RATE_LIMIT_REDIS_URL must use redis://, rediss://, valkey://, or valkeys:// in production",
         ),
     ),
     (
@@ -566,7 +566,7 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "scripts/validate_env.py",
         (
             "RATE_LIMIT_BACKEND must be redis in production",
-            "RATE_LIMIT_REDIS_URL must use redis:// or rediss:// in production",
+            "RATE_LIMIT_REDIS_URL must use redis://, rediss://, valkey://, or valkeys:// in production",
             "RATE_LIMIT_WEBHOOK_PER_MINUTE",
         ),
     ),
@@ -575,7 +575,7 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             "RATE_LIMIT_ENABLED must be true for pilot runtime arm",
             "RATE_LIMIT_BACKEND must be redis for pilot runtime arm",
-            "RATE_LIMIT_REDIS_URL must configure shared Redis for pilot runtime arm",
+            "RATE_LIMIT_REDIS_URL must configure shared Redis/Valkey for pilot runtime arm",
         ),
     ),
     (

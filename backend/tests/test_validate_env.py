@@ -166,7 +166,7 @@ def test_invalid_production_rate_limit_redis_url_is_rejected(tmp_path):
     result = _run_validator(tmp_path, values)
 
     assert result.returncode == 1
-    assert "RATE_LIMIT_REDIS_URL must use redis:// or rediss://" in result.stdout
+    assert "RATE_LIMIT_REDIS_URL must use redis://" in result.stdout
 
 
 def test_disabled_production_rate_limiter_is_rejected(tmp_path):
@@ -257,3 +257,29 @@ def test_pilot_runtime_limit_must_equal_twenty(tmp_path):
 
     assert result.returncode == 1
     assert "PILOT_RUNTIME_MAX_ORDERS must equal 20 for production commercial checkout" in result.stdout
+
+
+def test_external_postgres_url_does_not_require_bundled_compose_credentials(tmp_path):
+    values = _valid_production_env()
+    values["DATABASE_URL"] = (
+        "postgresql+psycopg2://external_user:external-password-2026"
+        "@pg.example.test:5432/flashin?sslmode=require"
+    )
+    values.pop("POSTGRES_DB", None)
+    values.pop("POSTGRES_USER", None)
+    values.pop("POSTGRES_PASSWORD", None)
+
+    result = _run_validator(tmp_path, values)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Environment OK" in result.stdout
+
+
+def test_tls_valkey_rate_limit_url_is_accepted(tmp_path):
+    values = _valid_production_env()
+    values["RATE_LIMIT_REDIS_URL"] = "valkeys://cache.example.test:6380/0"
+
+    result = _run_validator(tmp_path, values)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Environment OK" in result.stdout

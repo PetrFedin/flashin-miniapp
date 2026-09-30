@@ -255,8 +255,12 @@ class Settings(BaseSettings):
             errors.append("RATE_LIMIT_ENABLED must be true in production")
         elif self.rate_limit_backend != "redis":
             errors.append("RATE_LIMIT_BACKEND must be redis in production")
-        elif not self.rate_limit_redis_url.strip().lower().startswith(("redis://", "rediss://")):
-            errors.append("RATE_LIMIT_REDIS_URL must use redis:// or rediss:// in production")
+        elif not self.rate_limit_redis_url.strip().lower().startswith(
+            ("redis://", "rediss://", "valkey://", "valkeys://")
+        ):
+            errors.append(
+                "RATE_LIMIT_REDIS_URL must use redis://, rediss://, valkey://, or valkeys:// in production"
+            )
         if self.commercial_checkout_enabled:
             if self.payments_mode == "disabled":
                 errors.append("PAYMENTS_MODE must not be disabled when commercial checkout is enabled")

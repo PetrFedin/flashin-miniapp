@@ -4,6 +4,8 @@ from types import SimpleNamespace
 
 from starlette.responses import JSONResponse
 
+from backend.services.distributed_rate_limit import normalize_redis_url
+
 from backend.middleware.rate_limit import (
     RateLimitMiddleware,
     RateLimitBackendUnavailable,
@@ -244,3 +246,9 @@ def test_availability_route_fails_open_with_explicit_degraded_header(monkeypatch
     assert response.headers["x-ratelimit-degraded"] == "open"
     assert downstream_called is True
 
+
+
+def test_valkey_uri_schemes_normalize_to_redis_equivalents():
+    assert normalize_redis_url("valkey://example:6379/0") == "redis://example:6379/0"
+    assert normalize_redis_url("valkeys://user:secret@example:6380/0") == "rediss://user:secret@example:6380/0"
+    assert normalize_redis_url("rediss://example:6380/0") == "rediss://example:6380/0"

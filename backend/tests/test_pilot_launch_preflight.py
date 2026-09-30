@@ -247,3 +247,10 @@ def test_process_github_token_is_redacted_from_errors(monkeypatch, tmp_path):
     assert report["go"] is False
     assert secret not in rendered
     assert "[redacted]" in rendered
+
+
+def test_runtime_configuration_accepts_tls_valkey_url():
+    env = dict(RUNTIME_ENV)
+    env["RATE_LIMIT_REDIS_URL"] = "valkeys://cache.example.test:6380/0"
+
+    assert preflight._runtime_configuration_errors(env) == []
