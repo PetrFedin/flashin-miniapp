@@ -66,6 +66,17 @@ class RateLimitBackendUnavailable(RuntimeError):
     pass
 
 
+def normalize_redis_url(redis_url: str) -> str:
+    """Accept Redis and Valkey URI schemes while using redis-py's TLS semantics."""
+    value = str(redis_url or "").strip()
+    lowered = value.lower()
+    if lowered.startswith("valkeys://"):
+        return "rediss://" + value[len("valkeys://"):]
+    if lowered.startswith("valkey://"):
+        return "redis://" + value[len("valkey://"):]
+    return value
+
+
 class DistributedRateLimiter:
     """Atomic multi-key sliding-window authority backed by one Redis dataset."""
 
@@ -78,7 +89,7 @@ class DistributedRateLimiter:
         client: Redis | None = None,
     ):
         self._client = client or Redis.from_url(
-            redis_url,
+            normalize_redis_url(redis_url),
             decode_responses=False,
             socket_connect_timeout=connect_timeout_seconds,
             socket_timeout=socket_timeout_seconds,
