@@ -81,8 +81,8 @@ def _runtime_configuration_errors(env: Mapping[str, str]) -> list[str]:
     if str(env.get("RATE_LIMIT_BACKEND") or "").strip().lower() != "redis":
         errors.append("RATE_LIMIT_BACKEND must be redis for pilot runtime arm")
     rate_limit_url = str(env.get("RATE_LIMIT_REDIS_URL") or "").strip().lower()
-    if not rate_limit_url.startswith(("redis://", "rediss://")):
-        errors.append("RATE_LIMIT_REDIS_URL must configure shared Redis for pilot runtime arm")
+    if not rate_limit_url.startswith(("redis://", "rediss://", "valkey://", "valkeys://")):
+        errors.append("RATE_LIMIT_REDIS_URL must configure shared Redis/Valkey for pilot runtime arm")
     if not _true(env.get("PILOT_RUNTIME_ENFORCED")):
         errors.append("PILOT_RUNTIME_ENFORCED must be true")
     try:
