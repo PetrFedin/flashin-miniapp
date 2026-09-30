@@ -257,8 +257,10 @@ if is_production:
     if rate_limit_backend != "redis":
         invalid.append("RATE_LIMIT_BACKEND must be redis in production")
     rate_limit_url = urlparse(env.get("RATE_LIMIT_REDIS_URL", ""))
-    if rate_limit_url.scheme not in {"redis", "rediss"} or not rate_limit_url.hostname:
-        invalid.append("RATE_LIMIT_REDIS_URL must use redis:// or rediss:// in production")
+    if rate_limit_url.scheme not in {"redis", "rediss", "valkey", "valkeys"} or not rate_limit_url.hostname:
+        invalid.append(
+            "RATE_LIMIT_REDIS_URL must use redis://, rediss://, valkey://, or valkeys:// in production"
+        )
     validate_float(
         env,
         "RATE_LIMIT_REDIS_CONNECT_TIMEOUT_SECONDS",
