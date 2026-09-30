@@ -67,3 +67,29 @@ def test_admission_mode_fails_closed_if_commerce_or_provider_execution_is_enable
 def test_normal_production_still_requires_telegram_token(monkeypatch):
     with pytest.raises(ValidationError):
         _settings(monkeypatch, PRODUCTION_ADMISSION_MODE=False)
+
+
+def test_admission_initialization_has_no_database_side_effects(monkeypatch):
+    _base_env(monkeypatch)
+
+    import backend.config as config
+    config.get_settings.cache_clear()
+
+    import backend.main as main
+
+    admission_settings = config.get_settings()
+    assert admission_settings.production_admission_mode is True
+    monkeypatch.setattr(main, "settings", admission_settings)
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("database startup side effect must not run in admission mode")
+
+    monkeypatch.setattr(main.Base.metadata, "create_all", fail_if_called)
+    monkeypatch.setattr(main, "SessionLocal", fail_if_called)
+    monkeypatch.setattr(main, "bootstrap_admin", fail_if_called)
+    monkeypatch.setattr(main, "seed_products", fail_if_called)
+
+    try:
+        main.initialize_application()
+    finally:
+        config.get_settings.cache_clear()

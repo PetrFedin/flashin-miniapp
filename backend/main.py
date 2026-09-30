@@ -99,6 +99,8 @@ if settings.sentry_dsn:
 def initialize_application() -> None:
     if is_production and not settings.production_admission_mode and not telegram_bot_username():
         raise RuntimeError("TELEGRAM_BOT_USERNAME must be configured in production")
+    if getattr(settings, "production_admission_mode", False):
+        return
     if settings.use_create_all:
         Base.metadata.create_all(bind=engine)
     db = SessionLocal()
