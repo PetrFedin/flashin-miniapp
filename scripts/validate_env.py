@@ -89,14 +89,22 @@ def validate_database_credentials(env: dict[str, str], invalid: list[str]) -> No
     url_database = unquote(parsed.path.lstrip("/"))
     url_host = parsed.hostname or ""
 
-    if url_host != "db":
-        invalid.append("DATABASE_URL host must be db for the bundled production Compose deployment")
-    if url_user != env.get("POSTGRES_USER", ""):
-        invalid.append("DATABASE_URL user does not match POSTGRES_USER")
-    if url_password != env.get("POSTGRES_PASSWORD", ""):
-        invalid.append("DATABASE_URL password does not match POSTGRES_PASSWORD")
-    if url_database != env.get("POSTGRES_DB", ""):
-        invalid.append("DATABASE_URL database does not match POSTGRES_DB")
+    if not url_host:
+        invalid.append("DATABASE_URL must include a database host")
+    if not url_user:
+        invalid.append("DATABASE_URL must include a database user")
+    if not url_password:
+        invalid.append("DATABASE_URL must include a database password")
+    if not url_database:
+        invalid.append("DATABASE_URL must include a database name")
+
+    if url_host == "db":
+        if url_user != env.get("POSTGRES_USER", ""):
+            invalid.append("DATABASE_URL user does not match POSTGRES_USER")
+        if url_password != env.get("POSTGRES_PASSWORD", ""):
+            invalid.append("DATABASE_URL password does not match POSTGRES_PASSWORD")
+        if url_database != env.get("POSTGRES_DB", ""):
+            invalid.append("DATABASE_URL database does not match POSTGRES_DB")
 
 
 def distinct_secret(
@@ -134,9 +142,6 @@ if not is_production:
 if is_production:
     required.extend(
         [
-            "POSTGRES_DB",
-            "POSTGRES_USER",
-            "POSTGRES_PASSWORD",
             "CORS_ORIGINS",
             "ADMIN_URL",
             "COMMERCIAL_CHECKOUT_ENABLED",
@@ -172,6 +177,9 @@ if is_production:
             "NOTIFICATION_MAX_BACKOFF_SECONDS",
         ]
     )
+    database_host = urlparse(env.get("DATABASE_URL", "")).hostname or ""
+    if database_host == "db":
+        required.extend(["POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD"])
 
 commercial_checkout_enabled = is_true(env.get("COMMERCIAL_CHECKOUT_ENABLED"))
 payments_mode = env.get("PAYMENTS_MODE", "live").strip().lower()
