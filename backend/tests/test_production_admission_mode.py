@@ -77,7 +77,9 @@ def test_admission_initialization_has_no_database_side_effects(monkeypatch):
 
     import backend.main as main
 
-    assert main.settings.production_admission_mode is True
+    admission_settings = config.get_settings()
+    assert admission_settings.production_admission_mode is True
+    monkeypatch.setattr(main, "settings", admission_settings)
 
     def fail_if_called(*_args, **_kwargs):
         raise AssertionError("database startup side effect must not run in admission mode")
