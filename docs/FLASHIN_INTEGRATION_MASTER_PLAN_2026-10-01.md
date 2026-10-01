@@ -217,3 +217,71 @@ Do not:
 11. FLASH-INT-10 Controlled experiments.
 
 **Implementation instruction:** after infrastructure admission, prioritize commerce conversion and post-purchase quality rather than further generic platform hardening.
+
+## Additional wave — admin passkeys, release signing and cross-stack tracing
+
+### Admin passkeys / step-up authentication — ADOPT
+
+Server reference: https://github.com/duo-labs/py_webauthn
+
+Add WebAuthn/passkeys to the high-risk admin contour first.
+
+Roles/actions:
+
+- administrator;
+- catalogue/content publisher;
+- refund/return operator;
+- inventory/provider configuration;
+- remote-config/feature-flag changes;
+- export of customer/order data.
+
+A passkey is attached to the existing FLASHIN admin identity.
+
+Require recent/step-up authentication for high-impact actions such as:
+
+- refund/manual payment intervention;
+- provider secret/configuration change;
+- mass catalogue publish;
+- export of personal/order data;
+- role/permission changes.
+
+Recovery and credential removal require audit evidence.
+
+### Cross-stack OpenTelemetry — ADOPT
+
+References:
+
+- https://github.com/open-telemetry/opentelemetry-python
+- https://github.com/open-telemetry/opentelemetry-js
+- https://github.com/open-telemetry/opentelemetry-collector-contrib
+
+Use OpenTelemetry for distributed trace context across:
+
+`Mini App/Admin -> API -> PostgreSQL/Redis -> background job -> YooKassa/MoySklad/search/storage provider -> webhook/reconciliation`
+
+Keep current Sentry for errors and Prometheus/Grafana for metrics; OpenTelemetry closes the missing trace-correlation layer rather than replacing them.
+
+Record release SHA, correlation ID, order/job/provider reference and status class. Do not trace card/payment secrets, Telegram auth payloads, addresses or message bodies.
+
+### Sigstore Cosign production artefact signing — ADOPT/CI
+
+Reference: https://github.com/sigstore/cosign
+
+After current exact-head production admission is stable, sign production container/image artefacts and attest the exact source SHA.
+
+Recommended release chain:
+
+`exact source SHA -> tests -> dependency/security scans -> image -> SBOM/provenance -> Cosign signature -> deploy exact digest -> post-deploy proof`
+
+Render/runtime evidence should record the deployed image/build digest where the deployment model exposes it.
+
+### Acceptance extension
+
+- admin account takeover of a long-lived session cannot silently perform critical operations without step-up where configured;
+- trace correlation joins frontend/admin/API/provider/reconciliation failures;
+- current Sentry/Prometheus dashboards continue to work;
+- production artefact provenance is cryptographically verifiable;
+- none of these additions weaken the dedicated DB/Valkey prerequisite.
+
+**Sequencing:** dedicated production state first; OpenTelemetry can be introduced during production hardening; passkeys after stable admin authentication; Cosign after build artefacts/SBOM are deterministic.
+
