@@ -835,7 +835,7 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "scripts/reverse_logistics_downgrade_guard_smoke.py",
         (
-            "0046_moysklad_return_disposition",
+            "0047_postgres_rate_limit_authority",
             "uq_products_moysklad_id_nonempty",
             "uq_product_variants_moysklad_id_nonempty",
             "uq_media_assets_upload_key_nonempty",
@@ -1586,7 +1586,7 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "scripts/reverse_logistics_downgrade_guard_smoke.py",
         (
             "downgrade",
-            "0046_moysklad_return_disposition",
+            "0047_postgres_rate_limit_authority",
             "quarantine reclassification evidence exists",
             "uq_moysklad_conflict_open_stale_physical_return",
             "uq_stock_reconciliation_open_blocked_physical_return",
