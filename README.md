@@ -227,3 +227,11 @@ The current launch path is fail-closed:
 ## v53 — executable pilot readiness layer
 
 Readiness переведён из проверки наличия файлов в исполняемый fail-closed процесс. Добавлены строгие predeploy/live gates, контроль финальности юридических страниц, migration-aware `/ready`, безопасный production launcher, расширенный Compose gate и единый pilot launch runbook.
+
+## Planned integration roadmap
+
+Canonical implementation plan:
+
+- [docs/FLASHIN_INTEGRATION_MASTER_PLAN_2026-10-01.md](./docs/FLASHIN_INTEGRATION_MASTER_PLAN_2026-10-01.md)
+
+This file is a **planned implementation source**, not evidence that all listed capabilities are already live. Future full-roadmap implementation should cite this filename explicitly and follow its phases, authority boundaries, dependencies and acceptance gates.
