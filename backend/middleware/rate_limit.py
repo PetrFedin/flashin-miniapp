@@ -169,6 +169,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             self._redis_distributed_url = url
         return self._redis_distributed
 
+    def _distributed_limiter(self, settings) -> DistributedRateLimiter:
+        """Compatibility alias for the Redis authority used by existing tests."""
+        return self._redis_limiter(settings)
+
     def _postgres_limiter(self) -> PostgresDistributedRateLimiter:
         if self._postgres_distributed is None:
             self._postgres_distributed = PostgresDistributedRateLimiter()
@@ -195,7 +199,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if backend in {"redis", "postgres"}:
             try:
                 limiter = (
-                    self._redis_limiter(settings)
+                    self._distributed_limiter(settings)
                     if backend == "redis"
                     else self._postgres_limiter()
                 )
