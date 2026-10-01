@@ -1,0 +1,119 @@
+name: Production Admission HTTP
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/production-admission-http.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/production-admission-http.yml"
+  workflow_dispatch:
+    inputs:
+      expect_ready:
+        description: Expected readiness state
+        required: true
+        default: not_ready
+        type: choice
+        options:
+          - not_ready
+          - ready
+
+permissions:
+  contents: read
+
+jobs:
+  external-admission-http:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      API_BASE_URL: https://flashin-production-api.onrender.com
+      EXPECT_READY: ${{ inputs.expect_ready || 'not_ready' }}
+      ADMISSION_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Probe production admission endpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          health_status="$(
+            curl \
+              --silent \
+              --show-error \
+              --location \
+              --retry 12 \
+              --retry-delay 5 \
+              --retry-all-errors \
+              --connect-timeout 10 \
+              --max-time 15 \
+              --output /tmp/flashin-health.json \
+              --write-out '%{http_code}' \
+              "${API_BASE_URL}/health"
+          )"
+
+          ready_status="$(
+            curl \
+              --silent \
+              --show-error \
+              --location \
+              --connect-timeout 10 \
+              --max-time 15 \
+              --output /tmp/flashin-ready.json \
+              --write-out '%{http_code}' \
+              "${API_BASE_URL}/ready"
+          )"
+
+          python3 - "$health_status" "$ready_status" "$EXPECT_READY" <<'PY'
+          import json
+          import os
+          import sys
+
+          health_status, ready_status, expected_ready = sys.argv[1:4]
+
+          with open("/tmp/flashin-health.json", encoding="utf-8") as handle:
+              health = json.load(handle)
+
+          health_ok = health_status == "200" and health == {"status": "ok"}
+
+          if expected_ready == "ready":
+              with open("/tmp/flashin-ready.json", encoding="utf-8") as handle:
+                  ready = json.load(handle)
+              ready_ok = (
+                  ready_status == "200"
+                  and ready.get("status") == "ready"
+                  and ready.get("database") == "ok"
+                  and ready.get("migrations") == "current"
+              )
+          else:
+              ready_ok = ready_status == "503"
+
+          report = {
+              "schema_version": 1,
+              "kind": "flashin_production_admission_http",
+              "git_sha": os.getenv("ADMISSION_SOURCE_SHA", ""),
+              "expected_ready": expected_ready,
+              "health_status": int(health_status),
+              "health_ok": health_ok,
+              "ready_status": int(ready_status),
+              "ready_ok": ready_ok,
+              "pass": health_ok and ready_ok,
+          }
+
+          with open("production-admission-http-proof.json", "w", encoding="utf-8") as handle:
+              json.dump(report, handle, sort_keys=True)
+              handle.write("\n")
+
+          print(json.dumps(report, sort_keys=True))
+          if not report["pass"]:
+              raise SystemExit(1)
+          PY
+
+      - name: Upload sanitized admission proof
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: production-admission-http-${{ github.sha }}
+          path: production-admission-http-proof.json
+          if-no-files-found: error
+          retention-days: 30
