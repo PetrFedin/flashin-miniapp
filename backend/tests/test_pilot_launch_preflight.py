@@ -134,8 +134,7 @@ def test_runtime_configuration_is_fail_closed(monkeypatch, tmp_path):
     assert any("PAYMENTS_MODE must be sandbox or live" in item for item in stage["errors"])
     assert any("MOYSKLAD_MODE must be sandbox or live" in item for item in stage["errors"])
     assert any("RATE_LIMIT_ENABLED must be true" in item for item in stage["errors"])
-    assert any("RATE_LIMIT_BACKEND must be redis" in item for item in stage["errors"])
-    assert any("RATE_LIMIT_REDIS_URL" in item for item in stage["errors"])
+    assert any("RATE_LIMIT_BACKEND must be redis or postgres" in item for item in stage["errors"])
     assert any("PILOT_RUNTIME_ENFORCED must be true" in item for item in stage["errors"])
     assert any("exactly 20" in item for item in stage["errors"])
 
@@ -252,5 +251,13 @@ def test_process_github_token_is_redacted_from_errors(monkeypatch, tmp_path):
 def test_runtime_configuration_accepts_tls_valkey_url():
     env = dict(RUNTIME_ENV)
     env["RATE_LIMIT_REDIS_URL"] = "valkeys://cache.example.test:6380/0"
+
+    assert preflight._runtime_configuration_errors(env) == []
+
+
+def test_runtime_configuration_accepts_postgres_shared_rate_limit():
+    env = dict(RUNTIME_ENV)
+    env["RATE_LIMIT_BACKEND"] = "postgres"
+    env.pop("RATE_LIMIT_REDIS_URL", None)
 
     assert preflight._runtime_configuration_errors(env) == []
