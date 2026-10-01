@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from backend.api import health
 
 
-CURRENT_HEAD = "0046_moysklad_return_disposition"
+CURRENT_HEAD = "0047_postgres_rate_limit_authority"
 
 
 class ScalarResult:

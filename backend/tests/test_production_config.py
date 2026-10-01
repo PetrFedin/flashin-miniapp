@@ -167,7 +167,13 @@ def test_production_requires_shared_rate_limit_backend():
 
     with pytest.raises(ValidationError) as local:
         _safe_production_settings(rate_limit_backend="memory")
-    assert "RATE_LIMIT_BACKEND must be redis in production" in str(local.value)
+    assert "RATE_LIMIT_BACKEND must be redis or postgres in production" in str(local.value)
+
+    postgres = _safe_production_settings(
+        rate_limit_backend="postgres",
+        rate_limit_redis_url="",
+    )
+    assert postgres.rate_limit_backend == "postgres"
 
     with pytest.raises(ValidationError) as invalid_url:
         _safe_production_settings(rate_limit_redis_url="http://redis:6379/0")

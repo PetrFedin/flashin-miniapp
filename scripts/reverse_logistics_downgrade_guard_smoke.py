@@ -16,7 +16,7 @@ if str(ROOT) not in sys.path:
 
 from backend.database import engine
 
-EXPECTED_HEAD = "0046_moysklad_return_disposition"
+EXPECTED_HEAD = "0047_postgres_rate_limit_authority"
 TARGET = "0040_delivery_authority"
 ERROR_FRAGMENT = "0046 downgrade blocked: quarantine reclassification evidence exists"
 
@@ -112,9 +112,9 @@ def main() -> int:
             ).scalar_one()
         )
 
-    # 0046 must reject before destructive downgrade starts whenever quarantine
-    # reclassification evidence exists. The complete authority stack therefore
-    # remains at the exact current head.
+    # 0047 is independently reversible, but the following 0046 downgrade must
+    # reject before any destructive reverse-logistics downgrade is committed.
+    # Transactional Alembic execution therefore preserves the exact current head.
     assert revision == EXPECTED_HEAD, revision
     assert {
         "return_logistics_cases",

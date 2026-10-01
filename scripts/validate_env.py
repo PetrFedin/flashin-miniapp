@@ -154,9 +154,6 @@ if is_production:
             "SCHEDULER_ENABLED",
             "RATE_LIMIT_ENABLED",
             "RATE_LIMIT_BACKEND",
-            "RATE_LIMIT_REDIS_URL",
-            "RATE_LIMIT_REDIS_CONNECT_TIMEOUT_SECONDS",
-            "RATE_LIMIT_REDIS_SOCKET_TIMEOUT_SECONDS",
             "RATE_LIMIT_PER_MINUTE",
             "RATE_LIMIT_AUTH_PER_MINUTE",
             "RATE_LIMIT_ADMIN_LOGIN_PER_MINUTE",
@@ -185,6 +182,16 @@ commercial_checkout_enabled = is_true(env.get("COMMERCIAL_CHECKOUT_ENABLED"))
 payments_mode = env.get("PAYMENTS_MODE", "live").strip().lower()
 moysklad_mode = env.get("MOYSKLAD_MODE", "live").strip().lower()
 pilot_runtime_enforced = is_true(env.get("PILOT_RUNTIME_ENFORCED"))
+rate_limit_backend = env.get("RATE_LIMIT_BACKEND", "").strip().lower()
+
+if is_production and rate_limit_backend == "redis":
+    required.extend(
+        [
+            "RATE_LIMIT_REDIS_URL",
+            "RATE_LIMIT_REDIS_CONNECT_TIMEOUT_SECONDS",
+            "RATE_LIMIT_REDIS_SOCKET_TIMEOUT_SECONDS",
+        ]
+    )
 
 if is_production and payments_mode != "disabled":
     required.extend(["YOOKASSA_SHOP_ID", "YOOKASSA_SECRET_KEY", "YOOKASSA_RETURN_URL"])
@@ -261,28 +268,28 @@ if is_production:
         invalid.append("SCHEDULER_ENABLED must be true in production")
     if not is_true(env.get("RATE_LIMIT_ENABLED")):
         invalid.append("RATE_LIMIT_ENABLED must be true in production")
-    rate_limit_backend = env.get("RATE_LIMIT_BACKEND", "").strip().lower()
-    if rate_limit_backend != "redis":
-        invalid.append("RATE_LIMIT_BACKEND must be redis in production")
-    rate_limit_url = urlparse(env.get("RATE_LIMIT_REDIS_URL", ""))
-    if rate_limit_url.scheme not in {"redis", "rediss", "valkey", "valkeys"} or not rate_limit_url.hostname:
-        invalid.append(
-            "RATE_LIMIT_REDIS_URL must use redis://, rediss://, valkey://, or valkeys:// in production"
+    if rate_limit_backend not in {"redis", "postgres"}:
+        invalid.append("RATE_LIMIT_BACKEND must be redis or postgres in production")
+    if rate_limit_backend == "redis":
+        rate_limit_url = urlparse(env.get("RATE_LIMIT_REDIS_URL", ""))
+        if rate_limit_url.scheme not in {"redis", "rediss", "valkey", "valkeys"} or not rate_limit_url.hostname:
+            invalid.append(
+                "RATE_LIMIT_REDIS_URL must use redis://, rediss://, valkey://, or valkeys:// in production"
+            )
+        validate_float(
+            env,
+            "RATE_LIMIT_REDIS_CONNECT_TIMEOUT_SECONDS",
+            0.1,
+            10,
+            invalid,
         )
-    validate_float(
-        env,
-        "RATE_LIMIT_REDIS_CONNECT_TIMEOUT_SECONDS",
-        0.1,
-        10,
-        invalid,
-    )
-    validate_float(
-        env,
-        "RATE_LIMIT_REDIS_SOCKET_TIMEOUT_SECONDS",
-        0.1,
-        10,
-        invalid,
-    )
+        validate_float(
+            env,
+            "RATE_LIMIT_REDIS_SOCKET_TIMEOUT_SECONDS",
+            0.1,
+            10,
+            invalid,
+        )
     for key in (
         "RATE_LIMIT_PER_MINUTE",
         "RATE_LIMIT_AUTH_PER_MINUTE",
