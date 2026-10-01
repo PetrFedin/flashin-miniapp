@@ -119,7 +119,7 @@ jobs:
               ready_ok = ready_status == "503"
 
           report = {
-              "schema_version": 1,
+              "schema_version": 2,
               "kind": "flashin_production_admission_http",
               "expected_git_sha": expected_sha,
               "release_status": int(release_status),
