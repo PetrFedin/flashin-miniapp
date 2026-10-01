@@ -5,9 +5,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 import uuid
+from pathlib import Path
 
 from sqlalchemy import text
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from backend.database import SessionLocal
 from backend.services.distributed_rate_limit import PostgresDistributedRateLimiter
