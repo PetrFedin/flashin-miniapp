@@ -312,6 +312,7 @@ RATE_LIMIT_AUTHORITY_REQUIRED_FILES = {
     ".env.production.example",
     ".github/workflows/ci.yml",
     ".github/workflows/distributed-rate-limit-state.yml",
+    "backend/alembic/versions/0047_postgres_rate_limit_authority.py",
     "backend/config.py",
     "backend/main.py",
     "backend/middleware/metrics.py",
@@ -332,6 +333,7 @@ RATE_LIMIT_AUTHORITY_REQUIRED_FILES = {
     "scripts/pilot_evidence.py",
     "scripts/pilot_launch_preflight.py",
     "scripts/rate_limit_persistence_smoke.sh",
+    "scripts/rate_limit_postgres_smoke.py",
     "scripts/rate_limit_redis_smoke.py",
     "scripts/validate_env.py",
 }
@@ -356,7 +358,7 @@ REQUIRED_FILES |= CONTAINER_LEAST_PRIVILEGE_REQUIRED_FILES
 # binds one packaged runtime/test surface to concrete behavior, not just presence.
 MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("backend/api/orders.py", ("acquire_pilot_checkout(", "record_pilot_order(")),
-    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 33",)),
+    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 34",)),
     (
         "scripts/pilot_release_capability.py",
         (
@@ -414,7 +416,7 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "PILOT_RUNTIME_ENFORCED must be false when production commercial checkout is disabled",
             "rate_limit_backend: str",
             "rate_limit_redis_url: str",
-            "RATE_LIMIT_BACKEND must be redis in production",
+            "RATE_LIMIT_BACKEND must be redis or postgres in production",
             "RATE_LIMIT_REDIS_URL must use redis://, rediss://, valkey://, or valkeys:// in production",
         ),
     ),
@@ -435,6 +437,8 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "_ATOMIC_SLIDING_WINDOW",
             "Redis.from_url",
             "redis.call('TIME')",
+            "class PostgresDistributedRateLimiter",
+            "pg_advisory_xact_lock",
             "class RateLimitBackendUnavailable",
             "async def hit(",
         ),
@@ -503,6 +507,7 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             "Distributed Rate Limit State",
             "rate_limit_redis_smoke.py",
+            "rate_limit_postgres_smoke.py",
         ),
     ),
     (
@@ -510,6 +515,8 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             "Prove Redis rate-limit persistence across restart",
             "scripts/rate_limit_persistence_smoke.sh",
+            "Prove PostgreSQL rate-limit authority",
+            "scripts/rate_limit_postgres_smoke.py",
             "Prove least-privilege application runtimes",
             "scripts/container_least_privilege_smoke.sh",
         ),
@@ -541,6 +548,22 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     (
+        "scripts/rate_limit_postgres_smoke.py",
+        (
+            "multi_key_atomic",
+            "concurrent_single_winner",
+            "PostgresDistributedRateLimiter",
+        ),
+    ),
+    (
+        "backend/alembic/versions/0047_postgres_rate_limit_authority.py",
+        (
+            'revision = "0047_postgres_rate_limit_authority"',
+            '"rate_limit_hits"',
+            '"ix_rate_limit_hits_bucket_time"',
+        ),
+    ),
+    (
         "scripts/rate_limit_persistence_smoke.sh",
         (
             "budget_survived_restart",
@@ -565,7 +588,7 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "scripts/validate_env.py",
         (
-            "RATE_LIMIT_BACKEND must be redis in production",
+            "RATE_LIMIT_BACKEND must be redis or postgres in production",
             "RATE_LIMIT_REDIS_URL must use redis://, rediss://, valkey://, or valkeys:// in production",
             "RATE_LIMIT_WEBHOOK_PER_MINUTE",
         ),
@@ -574,7 +597,7 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "scripts/pilot_launch_preflight.py",
         (
             "RATE_LIMIT_ENABLED must be true for pilot runtime arm",
-            "RATE_LIMIT_BACKEND must be redis for pilot runtime arm",
+            "RATE_LIMIT_BACKEND must be redis or postgres for pilot runtime arm",
             "RATE_LIMIT_REDIS_URL must configure shared Redis/Valkey for pilot runtime arm",
         ),
     ),
