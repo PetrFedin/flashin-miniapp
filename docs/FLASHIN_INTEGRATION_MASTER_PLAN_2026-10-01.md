@@ -285,3 +285,129 @@ Render/runtime evidence should record the deployed image/build digest where the 
 
 **Sequencing:** dedicated production state first; OpenTelemetry can be introduced during production hardening; passkeys after stable admin authentication; Cosign after build artefacts/SBOM are deterministic.
 
+## Additional wave — customer service, promotion authority, store credit and verified UGC
+
+This wave starts only after the dedicated production-state gate and builds on the existing order/refund/delivery/catalog authorities.
+
+### Customer Service Case Desk — ADOPT/ADAPT
+
+Optional support sidecar reference: https://github.com/chatwoot/chatwoot
+
+Create a native FLASHIN support case linked to authoritative commerce entities:
+
+- customer/user;
+- order;
+- delivery;
+- return/refund;
+- payment/provider incident;
+- issue category;
+- priority/status;
+- assigned operator;
+- message/provider references;
+- SLA timestamps;
+- resolution code.
+
+If Chatwoot is adopted, use it as an agent-inbox/channel sidecar:
+
+Telegram/web/support message -> Chatwoot conversation -> FLASHIN support-case link -> domain action through FLASHIN API
+
+Chatwoot must not directly refund, change stock, cancel orders or mutate customer/order truth.
+
+### Promotion / Discount Authority — ADOPT
+
+Introduce versioned promotion rules rather than scattered coupon conditionals.
+
+Promotion types may include:
+
+- code-based discount;
+- automatic basket promotion;
+- product/category/collection campaign;
+- fixed/percent discount;
+- threshold;
+- bundle;
+- first-order;
+- limited audience;
+- limited redemptions.
+
+Each promotion has:
+
+- ID/version;
+- eligibility;
+- effective window;
+- priority/stacking policy;
+- funding/owner;
+- redemption limits;
+- exclusions;
+- reason/audit.
+
+Pricing must show:
+
+base/current price -> eligible promotions -> selected/stacked rule -> final payable amount
+
+Server recomputes the final price at checkout; client display is never price authority.
+
+### Store Credit / Gift Balance Ledger — ADOPT
+
+Create a liability-style ledger, not a mutable balance field.
+
+Entries:
+
+- issuance;
+- promotional credit;
+- refund-to-credit;
+- redemption;
+- reversal;
+- expiry where legally/business permitted;
+- manual adjustment with authorised reason.
+
+Every balance equals the sum of immutable ledger entries.
+
+Store credit redemption participates in the existing payment/order transaction and cannot make order totals negative.
+
+If gift certificates are later exposed, issuance/redemption still uses this ledger and unique secure tokens.
+
+### Verified Purchase Reviews / UGC — ADOPT
+
+Create moderated review records:
+
+- product;
+- user/order line;
+- verified-purchase flag;
+- rating;
+- text/media;
+- fit/size feedback where appropriate;
+- moderation status/reason;
+- published version;
+- abuse/report state.
+
+Only an actual completed order line can receive verified_purchase=true.
+
+Reviews must never become stock/product-master authority, and moderation must distinguish removal for policy violation from negative sentiment.
+
+UGC media uses the existing secure media-admission pipeline.
+
+### Support-to-product feedback projection — ADOPT
+
+Derive aggregated, privacy-safe issue signals from support/returns/reviews:
+
+- sizing issue frequency;
+- defect/damage reason;
+- delivery complaint;
+- description mismatch;
+- repeat support driver.
+
+These are analytical projections with minimum-count/privacy thresholds. They may inform merchandising/QC but never silently rewrite product data.
+
+### Additional acceptance
+
+- support agents can execute sensitive actions only through existing authorised domain commands;
+- promotion price is deterministic and reproducible from rule/version;
+- store-credit balance reconciles exactly to immutable ledger entries;
+- verified-purchase status is backed by authoritative order history;
+- moderation/analytics do not suppress negative but valid customer feedback;
+- analytics cannot expose individual support content.
+
+**Sequencing:** production admission -> support-case links can start early; promotion authority before expanding coupons/campaigns; store-credit only after payment/refund reconciliation is stable; reviews/UGC after secure media moderation exists.
+
+**Dependency hygiene:** review Chatwoot's current license/deployment/security requirements before any runtime adoption; keep the sidecar replaceable.
+
