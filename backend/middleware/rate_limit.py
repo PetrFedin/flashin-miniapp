@@ -14,6 +14,7 @@ from starlette.responses import JSONResponse
 from ..config import get_settings
 from ..services.distributed_rate_limit import (
     DistributedRateLimiter,
+    PostgresDistributedRateLimiter,
     RateLimitBackendUnavailable,
     RateLimitDecision,
 )
@@ -153,19 +154,25 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self.hits: dict[str, deque[float]] = defaultdict(deque)
         self.request_count = 0
-        self._distributed: DistributedRateLimiter | None = None
-        self._distributed_url = ""
+        self._redis_distributed: DistributedRateLimiter | None = None
+        self._redis_distributed_url = ""
+        self._postgres_distributed: PostgresDistributedRateLimiter | None = None
 
-    def _distributed_limiter(self, settings) -> DistributedRateLimiter:
+    def _redis_limiter(self, settings) -> DistributedRateLimiter:
         url = str(settings.rate_limit_redis_url or "").strip()
-        if self._distributed is None or self._distributed_url != url:
-            self._distributed = DistributedRateLimiter(
+        if self._redis_distributed is None or self._redis_distributed_url != url:
+            self._redis_distributed = DistributedRateLimiter(
                 url,
                 connect_timeout_seconds=float(settings.rate_limit_redis_connect_timeout_seconds),
                 socket_timeout_seconds=float(settings.rate_limit_redis_socket_timeout_seconds),
             )
-            self._distributed_url = url
-        return self._distributed
+            self._redis_distributed_url = url
+        return self._redis_distributed
+
+    def _postgres_limiter(self) -> PostgresDistributedRateLimiter:
+        if self._postgres_distributed is None:
+            self._postgres_distributed = PostgresDistributedRateLimiter()
+        return self._postgres_distributed
 
     async def dispatch(self, request, call_next):
         settings = get_settings()
@@ -185,9 +192,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         backend = str(settings.rate_limit_backend or "").strip().lower()
         degraded_open = False
-        if backend == "redis":
+        if backend in {"redis", "postgres"}:
             try:
-                decision = await self._distributed_limiter(settings).hit(keys, limit)
+                limiter = (
+                    self._redis_limiter(settings)
+                    if backend == "redis"
+                    else self._postgres_limiter()
+                )
+                decision = await limiter.hit(keys, limit)
                 set_rate_limit_backend_available(True)
             except RateLimitBackendUnavailable:
                 set_rate_limit_backend_available(False)
@@ -288,5 +300,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
 
 # Import compatibility for older internal tests and release archives. Production
-# behavior is selected by RATE_LIMIT_BACKEND and is forced to Redis by config.
+# behavior is selected by RATE_LIMIT_BACKEND and production requires a shared
+# Redis/Valkey or PostgreSQL authority.
 InMemoryRateLimitMiddleware = RateLimitMiddleware
