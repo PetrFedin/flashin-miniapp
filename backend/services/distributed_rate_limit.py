@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import math
 import uuid
 from dataclasses import dataclass
@@ -7,6 +8,10 @@ from typing import Iterable
 
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
+
+from backend.database import SessionLocal
 
 
 _WINDOW_MS = 60_000
@@ -136,3 +141,110 @@ class DistributedRateLimiter:
 
     async def close(self) -> None:
         await self._client.aclose()
+
+
+
+class PostgresDistributedRateLimiter:
+    """Atomic multi-key sliding-window authority backed by PostgreSQL."""
+
+    def __init__(self, *, session_factory=SessionLocal):
+        self._session_factory = session_factory
+
+    async def hit(self, keys: Iterable[str], limit: int) -> RateLimitDecision:
+        unique_keys = tuple(dict.fromkeys(str(key) for key in keys if str(key)))
+        if not unique_keys:
+            raise ValueError("At least one rate-limit key is required")
+        if limit <= 0:
+            raise ValueError("Rate-limit budget must be positive")
+
+        try:
+            return await asyncio.to_thread(self._hit_sync, unique_keys, int(limit))
+        except (SQLAlchemyError, OSError, TimeoutError) as exc:
+            raise RateLimitBackendUnavailable("shared rate-limit backend unavailable") from exc
+
+    def _hit_sync(self, keys: tuple[str, ...], limit: int) -> RateLimitDecision:
+        remaining = limit
+        retry_after_seconds = 0
+
+        with self._session_factory() as db:
+            with db.begin():
+                for key in sorted(keys):
+                    db.execute(
+                        text(
+                            "SELECT pg_advisory_xact_lock("
+                            "hashtextextended(CAST(:bucket_key AS text), 0)"
+                            ")"
+                        ),
+                        {"bucket_key": key},
+                    )
+
+                db.execute(
+                    text(
+                        "DELETE FROM rate_limit_hits "
+                        "WHERE occurred_at <= clock_timestamp() - interval '61 seconds'"
+                    )
+                )
+
+                for key in keys:
+                    row = (
+                        db.execute(
+                            text(
+                                "SELECT "
+                                "count(*)::int AS hit_count, "
+                                "min(occurred_at) AS oldest, "
+                                "GREATEST("
+                                "EXTRACT(EPOCH FROM ("
+                                "min(occurred_at) + interval '60 seconds' - clock_timestamp()"
+                                ")), 0"
+                                ") AS retry_seconds "
+                                "FROM rate_limit_hits "
+                                "WHERE bucket_key = :bucket_key "
+                                "AND occurred_at > clock_timestamp() - interval '60 seconds'"
+                            ),
+                            {"bucket_key": key},
+                        )
+                        .mappings()
+                        .one()
+                    )
+                    hit_count = int(row["hit_count"] or 0)
+                    remaining = min(remaining, max(limit - hit_count, 0))
+                    if hit_count >= limit:
+                        retry_after_seconds = max(
+                            retry_after_seconds,
+                            max(math.ceil(float(row["retry_seconds"] or 60.0)), 1),
+                        )
+
+                if retry_after_seconds:
+                    return RateLimitDecision(
+                        allowed=False,
+                        remaining=0,
+                        retry_after_seconds=retry_after_seconds,
+                    )
+
+                for key in keys:
+                    db.execute(
+                        text(
+                            "INSERT INTO rate_limit_hits (bucket_key, occurred_at) "
+                            "VALUES (:bucket_key, clock_timestamp())"
+                        ),
+                        {"bucket_key": key},
+                    )
+
+        return RateLimitDecision(
+            allowed=True,
+            remaining=max(remaining - 1, 0),
+            retry_after_seconds=0,
+        )
+
+    async def ping(self) -> bool:
+        try:
+            return bool(await asyncio.to_thread(self._ping_sync))
+        except (SQLAlchemyError, OSError, TimeoutError):
+            return False
+
+    def _ping_sync(self) -> bool:
+        with self._session_factory() as db:
+            return int(db.execute(text("SELECT 1")).scalar_one()) == 1
+
+    async def close(self) -> None:
+        return None
