@@ -19,6 +19,11 @@ on:
         options:
           - not_ready
           - ready
+      expected_sha:
+        description: Exact deployed Git SHA to prove (defaults to workflow SHA)
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -30,7 +35,7 @@ jobs:
     env:
       API_BASE_URL: https://flashin-production-api.onrender.com
       EXPECT_READY: ${{ inputs.expect_ready || 'not_ready' }}
-      ADMISSION_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      EXPECTED_SOURCE_SHA: ${{ inputs.expected_sha || github.event.pull_request.head.sha || github.sha }}
     steps:
       - name: Probe production admission endpoints
         shell: bash
@@ -64,17 +69,37 @@ jobs:
               "${API_BASE_URL}/ready"
           )"
 
-          python3 - "$health_status" "$ready_status" "$EXPECT_READY" <<'PY'
+          release_status="$(
+            curl \
+              --silent \
+              --show-error \
+              --location \
+              --connect-timeout 10 \
+              --max-time 15 \
+              --output /tmp/flashin-release.json \
+              --write-out '%{http_code}' \
+              "${API_BASE_URL}/release"
+          )"
+
+          python3 - "$health_status" "$ready_status" "$release_status" "$EXPECT_READY" <<'PY'
           import json
           import os
           import sys
 
-          health_status, ready_status, expected_ready = sys.argv[1:4]
+          health_status, ready_status, release_status, expected_ready = sys.argv[1:5]
+          expected_sha = os.getenv("EXPECTED_SOURCE_SHA", "").strip()
 
           with open("/tmp/flashin-health.json", encoding="utf-8") as handle:
               health = json.load(handle)
 
           health_ok = health_status == "200" and health == {"status": "ok"}
+
+          release_git_sha = ""
+          release_ok = None
+          if release_status == "200":
+              with open("/tmp/flashin-release.json", encoding="utf-8") as handle:
+                  release = json.load(handle)
+              release_git_sha = str(release.get("git_sha", "")).strip()
 
           if expected_ready == "ready":
               with open("/tmp/flashin-ready.json", encoding="utf-8") as handle:
@@ -85,19 +110,27 @@ jobs:
                   and ready.get("database") == "ok"
                   and ready.get("migrations") == "current"
               )
+              release_ok = (
+                  release_status == "200"
+                  and len(expected_sha) == 40
+                  and release_git_sha == expected_sha
+              )
           else:
               ready_ok = ready_status == "503"
 
           report = {
-              "schema_version": 1,
+              "schema_version": 2,
               "kind": "flashin_production_admission_http",
-              "git_sha": os.getenv("ADMISSION_SOURCE_SHA", ""),
+              "expected_git_sha": expected_sha,
+              "release_status": int(release_status),
+              "release_git_sha": release_git_sha,
+              "release_ok": release_ok,
               "expected_ready": expected_ready,
               "health_status": int(health_status),
               "health_ok": health_ok,
               "ready_status": int(ready_status),
               "ready_ok": ready_ok,
-              "pass": health_ok and ready_ok,
+              "pass": health_ok and ready_ok and (release_ok is not False),
           }
 
           with open("production-admission-http-proof.json", "w", encoding="utf-8") as handle:

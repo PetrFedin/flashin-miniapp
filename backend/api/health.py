@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -24,6 +25,22 @@ def _expected_migration_heads() -> frozenset[str]:
 @router.get("/health", include_in_schema=False)
 def health():
     return {"status": "ok"}
+
+
+def _runtime_git_sha() -> str:
+    """Return the immutable source revision injected by the deployment platform."""
+    return (
+        os.getenv("RENDER_GIT_COMMIT", "").strip()
+        or os.getenv("APP_GIT_SHA", "").strip()
+    )
+
+
+@router.get("/release", include_in_schema=False)
+def release():
+    git_sha = _runtime_git_sha()
+    if not git_sha:
+        raise HTTPException(status_code=503, detail="Release identity unavailable")
+    return {"git_sha": git_sha}
 
 
 @router.get("/ready", include_in_schema=False)
