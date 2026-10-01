@@ -319,7 +319,7 @@ def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(
         (
             "scripts/reverse_logistics_downgrade_guard_smoke.py",
             "def main(): return 0\n",
-            "0046_moysklad_return_disposition",
+            "0047_postgres_rate_limit_authority",
         ),
         (
             "backend/tests/test_pilot_database_evidence.py",
