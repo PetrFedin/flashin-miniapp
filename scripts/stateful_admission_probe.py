@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Sanitized PostgreSQL + Redis/Valkey admission probe.
+"""Sanitized PostgreSQL + shared rate-limit admission probe.
 
-Reads DATABASE_URL and RATE_LIMIT_REDIS_URL from the environment. The probe
-never prints connection strings, credentials, hostnames, or raw exception text.
+Reads DATABASE_URL and RATE_LIMIT_BACKEND from the environment. Redis/Valkey
+backends additionally use RATE_LIMIT_REDIS_URL. The probe never prints
+connection strings, credentials, hostnames, or raw exception text.
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ def _database_report(database_url: str) -> dict[str, Any]:
         "current_heads": [],
         "expected_heads": sorted(expected_migration_heads()),
         "scheme": _scheme(database_url),
+        "rate_limit_table_ready": False,
     }
     engine = None
     try:
@@ -53,6 +55,11 @@ def _database_report(database_url: str) -> dict[str, Any]:
             current = sorted(current_migration_heads(db))
             report["current_heads"] = current
             report["migrations_current"] = set(current) == set(report["expected_heads"])
+            report["rate_limit_table_ready"] = bool(
+                db.execute(
+                    text("SELECT to_regclass('public.rate_limit_hits') IS NOT NULL")
+                ).scalar_one()
+            )
     except (SQLAlchemyError, RuntimeError, OSError, ValueError):
         report["error_code"] = "database_probe_failed"
     finally:
@@ -89,12 +96,15 @@ async def _redis_report(redis_url: str) -> dict[str, Any]:
 
 async def run_probe(*, connectivity_only: bool = False) -> dict[str, Any]:
     database_url = os.getenv("DATABASE_URL", "").strip()
+    rate_limit_backend = os.getenv("RATE_LIMIT_BACKEND", "redis").strip().lower()
     redis_url = os.getenv("RATE_LIMIT_REDIS_URL", "").strip()
 
     errors: list[str] = []
     if not database_url:
         errors.append("DATABASE_URL_missing")
-    if not redis_url:
+    if rate_limit_backend not in {"redis", "postgres"}:
+        errors.append("RATE_LIMIT_BACKEND_invalid")
+    if rate_limit_backend == "redis" and not redis_url:
         errors.append("RATE_LIMIT_REDIS_URL_missing")
 
     if errors:
@@ -106,13 +116,26 @@ async def run_probe(*, connectivity_only: bool = False) -> dict[str, Any]:
         }
 
     database = _database_report(database_url)
-    rate_limit_store = await _redis_report(redis_url)
+    if rate_limit_backend == "redis":
+        rate_limit_store = await _redis_report(redis_url)
+        rate_limit_ok = bool(rate_limit_store.get("reachable"))
+    else:
+        rate_limit_store = {
+            "backend": "postgres",
+            "reachable": bool(database.get("reachable")),
+            "authority_table_ready": bool(database.get("rate_limit_table_ready")),
+        }
+        rate_limit_ok = bool(rate_limit_store.get("reachable"))
+        if not connectivity_only:
+            rate_limit_ok = rate_limit_ok and bool(
+                rate_limit_store.get("authority_table_ready")
+            )
 
     database_ok = bool(database.get("reachable"))
     if not connectivity_only:
         database_ok = database_ok and bool(database.get("migrations_current"))
 
-    ok = database_ok and bool(rate_limit_store.get("reachable"))
+    ok = database_ok and rate_limit_ok
     return {
         "schema_version": 1,
         "kind": "flashin_stateful_admission_probe",
@@ -128,7 +151,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--connectivity-only",
         action="store_true",
-        help="Require PostgreSQL and Redis/Valkey reachability but not current migrations.",
+        help="Require stateful connectivity but not current migrations/authority table.",
     )
     return parser
 
