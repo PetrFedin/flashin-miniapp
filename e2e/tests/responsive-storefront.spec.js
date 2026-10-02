@@ -98,7 +98,7 @@ async function expectPrimaryControlsReadable(page) {
     const box = await controls.nth(index).boundingBox();
     expect(box).not.toBeNull();
     expect(box.width).toBeGreaterThanOrEqual(44);
-    expect(box.height).toBeGreaterThanOrEqual(36);
+    expect(box.height).toBeGreaterThanOrEqual(44);
   }
 }
 
