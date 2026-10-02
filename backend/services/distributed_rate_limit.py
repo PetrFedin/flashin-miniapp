@@ -106,7 +106,11 @@ class DistributedRateLimiter:
             raise ValueError("Rate-limit budget must be positive")
 
         member = uuid.uuid4().hex
-        with _TRACER.start_as_current_span("flashin.rate_limit.hit") as span:
+        with _TRACER.start_as_current_span(
+            "flashin.rate_limit.hit",
+            record_exception=False,
+            set_status_on_exception=False,
+        ) as span:
             span.set_attribute("flashin.rate_limit.key_count", len(unique_keys))
             span.set_attribute("flashin.rate_limit.limit", int(limit))
             try:
