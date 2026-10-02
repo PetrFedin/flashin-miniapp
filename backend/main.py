@@ -83,6 +83,7 @@ from .middleware.request_id import RequestIdMiddleware
 from .middleware.security_headers import SecurityHeadersMiddleware
 from .seed import bootstrap_admin, seed_products
 from .services.telegram_product_links import telegram_bot_username
+from .telemetry import configure_tracing
 
 settings = get_settings()
 is_production = settings.app_env.strip().lower() == "production"
@@ -137,9 +138,10 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-Request-ID", "Content-Disposition"],
+    expose_headers=["X-Request-ID", "X-Trace-ID", "Content-Disposition"],
 )
 app.add_middleware(RequestIdMiddleware)
+configure_tracing(app, engine, settings)
 
 Path(settings.media_local_dir).mkdir(parents=True, exist_ok=True)
 app.mount("/media", StaticFiles(directory=settings.media_local_dir), name="media")
