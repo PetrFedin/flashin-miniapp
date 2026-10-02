@@ -95,7 +95,11 @@ async def _request_yookassa(
             response: httpx.Response | None = None
             resource = path.strip("/").split("/", 1)[0] or "root"
             try:
-                with _TRACER.start_as_current_span("flashin.provider.http") as span:
+                with _TRACER.start_as_current_span(
+                    "flashin.provider.http",
+                    record_exception=False,
+                    set_status_on_exception=False,
+                ) as span:
                     span.set_attribute("flashin.provider", "yookassa")
                     span.set_attribute("flashin.provider.method", method.upper())
                     span.set_attribute("flashin.provider.resource", resource)
