@@ -62,7 +62,7 @@ export default defineConfig({
       use: {
         browserName: "chromium",
         baseURL: "http://127.0.0.1:5174",
-        viewport: { width: 1024, height: 1366 },
+        viewport: { width: 834, height: 1194 },
         hasTouch: true,
         isMobile: true,
       },
