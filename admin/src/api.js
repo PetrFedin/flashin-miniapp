@@ -15,6 +15,11 @@ const PUBLIC_REQUEST_SCOPE = Symbol("public-admin-request-scope");
 const MEDIA_UPLOAD_KEY_PREFIX = "flashin_media_upload_key:";
 const uploadKeyFallback = new Map();
 
+function createRequestId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `admin-${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+}
+
 function createUploadKey() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
   return `media-${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
@@ -52,11 +57,20 @@ function clearStoredUploadKey(storageName) {
   }
 }
 
+function responseCorrelation(response) {
+  return {
+    requestId: response.headers.get("x-request-id") || "",
+    traceId: response.headers.get("x-trace-id") || "",
+  };
+}
+
 export class AdminApiError extends Error {
   constructor(message, status = 0, options = {}) {
     super(message, options);
     this.name = "AdminApiError";
     this.status = status;
+    this.requestId = String(options.requestId || "");
+    this.traceId = String(options.traceId || "");
   }
 }
 
@@ -143,7 +157,7 @@ async function fetchWithTimeout(url, options = {}) {
 }
 
 function authHeaders(auth, customHeaders = {}, token = getAdminToken()) {
-  const result = { ...customHeaders };
+  const result = { "X-Request-ID": createRequestId(), ...customHeaders };
   if (auth && token) result.Authorization = `Bearer ${token}`;
   return result;
 }
@@ -168,7 +182,11 @@ export async function adminRequest(path, options = {}) {
       const detail = await errorDetail(response);
       if (response.status === 401 && auth) clearAdminTokenIfCurrent(tokenAtStart);
       else assertAdminSessionUnchanged(auth, tokenAtStart);
-      throw new AdminApiError(detail || `HTTP ${response.status}`, response.status);
+      throw new AdminApiError(
+        detail || `HTTP ${response.status}`,
+        response.status,
+        responseCorrelation(response),
+      );
     }
 
     assertAdminSessionUnchanged(auth, tokenAtStart);
@@ -245,7 +263,11 @@ export async function downloadAdminFile(path, fallbackFilename) {
     const detail = await errorDetail(response);
     if (response.status === 401) clearAdminTokenIfCurrent(tokenAtStart);
     else assertAdminSessionUnchanged(true, tokenAtStart);
-    throw new AdminApiError(detail || "Не удалось скачать файл", response.status);
+    throw new AdminApiError(
+      detail || "Не удалось скачать файл",
+      response.status,
+      responseCorrelation(response),
+    );
   }
   assertAdminSessionUnchanged(true, tokenAtStart);
   const disposition = response.headers.get("content-disposition") || "";
