@@ -740,28 +740,34 @@ export default function App() {
         )}
 
         {!loading && view === "product" && selected && (
-          <main>
+          <main className="product-view">
             <button className="link" onClick={() => setView("catalog")}>← Каталог</button>
-            <img className="hero" src={productImage(selected)} alt={selected.title} />
-            <div className="product-heading"><div><div className="meta">{selected.brand} · {selected.category}</div><h1>{selected.title}</h1></div><div className="price">{money(selected.price, selected.currency)}</div></div>
-            {selected.description && <p>{selected.description}</p>}
-            <h3>Выберите размер</h3>
-            <div className="sizes">{selected.variants?.map((variant) => <button key={variant.id} className={`${selectedVariantId === variant.id ? "size active" : "size"} ${variant.available_qty <= 0 ? "unavailable" : ""}`} onClick={() => setSelectedVariantId(variant.id)}>{variant.size}<small>{variant.available_qty > 0 ? `${variant.available_qty} шт.` : "нет в наличии"}</small></button>)}</div>
-            {!selected.variants?.length && <div className="empty-inline">У товара нет размерных вариантов.</div>}
-            <div className="panel">
-              <h3>Ориентир по размеру</h3>
-              <div className="form-grid">
-                <input inputMode="numeric" placeholder="Рост, см" value={sizeForm.height_cm} onChange={(event) => setSizeForm({ ...sizeForm, height_cm: event.target.value })} disabled={isBusy("size")} />
-                <input inputMode="numeric" placeholder="Вес, кг" value={sizeForm.weight_kg} onChange={(event) => setSizeForm({ ...sizeForm, weight_kg: event.target.value })} disabled={isBusy("size")} />
-                <input placeholder="Обычный размер" value={sizeForm.usual_size} onChange={(event) => setSizeForm({ ...sizeForm, usual_size: event.target.value })} disabled={isBusy("size")} />
-                <select value={sizeForm.fit_preference} onChange={(event) => setSizeForm({ ...sizeForm, fit_preference: event.target.value })} disabled={isBusy("size")}><option value="slim">По фигуре</option><option value="regular">Обычная посадка</option><option value="oversize">Свободная посадка</option></select>
+            <div className="product-layout">
+              <div className="product-media">
+                <img className="hero" src={productImage(selected)} alt={selected.title} />
               </div>
-              <button className="secondary" onClick={handleSizeHelper} disabled={isBusy("size")}>Получить рекомендацию</button>
-              {sizeResult && <div className="result-card"><span>Рекомендуемый размер</span><b>{sizeResult.suggested_size}</b><p>{sizeResult.note || "Сверьте результат с замерами конкретного изделия."}</p></div>}
-            </div>
-            <div className="actions">
-              {selectedVariant?.available_qty > 0 ? <button className="primary" onClick={handleAddSelected} disabled={addToCartBusy}>Добавить размер {selectedVariant.size} в корзину</button> : selectedVariant ? <button className="primary" onClick={handleRestock} disabled={isBusy(`restock-${selectedVariant.id}`)}>Сообщить о поступлении размера {selectedVariant.size}</button> : null}
-              <button className="secondary" onClick={handleFavorite} disabled={isBusy(`wishlist-${selected.id}`)}>{isFavorite ? "Удалить из избранного" : "Сохранить в избранное"}</button>
+              <div className="product-content">
+                <div className="product-heading"><div><div className="meta">{selected.brand} · {selected.category}</div><h1>{selected.title}</h1></div><div className="price">{money(selected.price, selected.currency)}</div></div>
+                {selected.description && <p>{selected.description}</p>}
+                <h3>Выберите размер</h3>
+                <div className="sizes">{selected.variants?.map((variant) => <button key={variant.id} className={`${selectedVariantId === variant.id ? "size active" : "size"} ${variant.available_qty <= 0 ? "unavailable" : ""}`} onClick={() => setSelectedVariantId(variant.id)}>{variant.size}<small>{variant.available_qty > 0 ? `${variant.available_qty} шт.` : "нет в наличии"}</small></button>)}</div>
+                {!selected.variants?.length && <div className="empty-inline">У товара нет размерных вариантов.</div>}
+                <div className="panel">
+                  <h3>Ориентир по размеру</h3>
+                  <div className="form-grid">
+                    <input inputMode="numeric" placeholder="Рост, см" value={sizeForm.height_cm} onChange={(event) => setSizeForm({ ...sizeForm, height_cm: event.target.value })} disabled={isBusy("size")} />
+                    <input inputMode="numeric" placeholder="Вес, кг" value={sizeForm.weight_kg} onChange={(event) => setSizeForm({ ...sizeForm, weight_kg: event.target.value })} disabled={isBusy("size")} />
+                    <input placeholder="Обычный размер" value={sizeForm.usual_size} onChange={(event) => setSizeForm({ ...sizeForm, usual_size: event.target.value })} disabled={isBusy("size")} />
+                    <select value={sizeForm.fit_preference} onChange={(event) => setSizeForm({ ...sizeForm, fit_preference: event.target.value })} disabled={isBusy("size")}><option value="slim">По фигуре</option><option value="regular">Обычная посадка</option><option value="oversize">Свободная посадка</option></select>
+                  </div>
+                  <button className="secondary" onClick={handleSizeHelper} disabled={isBusy("size")}>Получить рекомендацию</button>
+                  {sizeResult && <div className="result-card"><span>Рекомендуемый размер</span><b>{sizeResult.suggested_size}</b><p>{sizeResult.note || "Сверьте результат с замерами конкретного изделия."}</p></div>}
+                </div>
+                <div className="actions">
+                  {selectedVariant?.available_qty > 0 ? <button className="primary" onClick={handleAddSelected} disabled={addToCartBusy}>Добавить размер {selectedVariant.size} в корзину</button> : selectedVariant ? <button className="primary" onClick={handleRestock} disabled={isBusy(`restock-${selectedVariant.id}`)}>Сообщить о поступлении размера {selectedVariant.size}</button> : null}
+                  <button className="secondary" onClick={handleFavorite} disabled={isBusy(`wishlist-${selected.id}`)}>{isFavorite ? "Удалить из избранного" : "Сохранить в избранное"}</button>
+                </div>
+              </div>
             </div>
           </main>
         )}
