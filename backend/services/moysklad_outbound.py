@@ -137,10 +137,10 @@ async def _request_json(
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             with _TRACER.start_as_current_span(
-                    "flashin.provider.http",
-                    record_exception=False,
-                    set_status_on_exception=False,
-                ) as span:
+                "flashin.provider.http",
+                record_exception=False,
+                set_status_on_exception=False,
+            ) as span:
                 span.set_attribute("flashin.provider", "moysklad")
                 span.set_attribute("flashin.provider.method", method.upper())
                 span.set_attribute("flashin.provider.resource", "outbound_document")
