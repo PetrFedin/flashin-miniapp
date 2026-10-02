@@ -44,3 +44,6 @@ def test_stateful_admission_uses_repository_module_import_path():
     )
 
     assert "python -m scripts.stateful_admission_probe" in source
+    assert "group: flashin-production-stateful-admission" in source
+    assert "cancel-in-progress: false" in source
+    assert "stateful_probe_output_unavailable" in source
