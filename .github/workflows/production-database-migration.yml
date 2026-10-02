@@ -59,13 +59,13 @@ jobs:
         run: python -m pip install --disable-pip-version-check --timeout 60 --retries 8 -r backend/requirements.txt
 
       - name: Probe database before migration
-        run: python scripts/database_migration_probe.py > /tmp/database-before.json
+        run: python -m scripts.database_migration_probe > /tmp/database-before.json
 
       - name: Apply Alembic migrations through repository head
         run: alembic -c backend/alembic.ini upgrade head
 
       - name: Require current Alembic heads after migration
-        run: python scripts/database_migration_probe.py --require-current > /tmp/database-after.json
+        run: python -m scripts.database_migration_probe --require-current > /tmp/database-after.json
 
       - name: Build sanitized migration evidence
         shell: bash
