@@ -916,7 +916,9 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "backend/services/payments.py",
         (
             'trace.get_tracer("flashin.providers.yookassa")',
-            'start_as_current_span("flashin.provider.http")',
+            '"flashin.provider.http"',
+            "record_exception=False",
+            "set_status_on_exception=False",
             '"flashin.provider.status_class"',
         ),
     ),
@@ -924,7 +926,9 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "backend/services/moysklad.py",
         (
             'trace.get_tracer("flashin.providers.moysklad")',
-            'start_as_current_span("flashin.provider.http")',
+            '"flashin.provider.http"',
+            "record_exception=False",
+            "set_status_on_exception=False",
             '"flashin.provider.resource", "assortment"',
             '"flashin.provider.resource", "stock_by_store"',
         ),
@@ -933,7 +937,9 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "backend/services/moysklad_outbound.py",
         (
             'trace.get_tracer("flashin.providers.moysklad")',
-            'start_as_current_span("flashin.provider.http")',
+            '"flashin.provider.http"',
+            "record_exception=False",
+            "set_status_on_exception=False",
             '"flashin.provider.resource", "outbound_document"',
         ),
     ),
@@ -950,7 +956,9 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "backend/jobs/provider_command_jobs.py",
         (
             'trace.get_tracer("flashin.jobs.provider_commands")',
-            'start_as_current_span("flashin.provider_command")',
+            '"flashin.provider_command"',
+            "record_exception=False",
+            "set_status_on_exception=False",
             '"flashin.provider_command.status"',
         ),
     ),
