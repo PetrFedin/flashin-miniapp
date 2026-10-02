@@ -112,6 +112,17 @@ test("storefront remains readable without horizontal overflow across responsive 
   await expectNoHorizontalOverflow(page);
   await expectPrimaryControlsReadable(page);
 
+  const appBox = await page.locator(".app").boundingBox();
+  expect(appBox).not.toBeNull();
+  if (test.info().project.name === "storefront-tablet") {
+    expect(appBox.width).toBeGreaterThanOrEqual(780);
+    expect(await page.locator(".grid").evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(" ").length)).toBe(3);
+  }
+  if (test.info().project.name === "storefront-wide") {
+    expect(appBox.width).toBeGreaterThanOrEqual(1080);
+    expect(await page.locator(".grid").evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(" ").length)).toBe(4);
+  }
+
   const productCard = page.locator(".product-card").first();
   const box = await productCard.boundingBox();
   expect(box).not.toBeNull();
@@ -122,4 +133,7 @@ test("storefront remains readable without horizontal overflow across responsive 
   await expect(page.getByRole("heading", { name: "Responsive Jacket" })).toBeVisible();
   await expect(page.getByText("Outerwear")).toBeVisible();
   await expectNoHorizontalOverflow(page);
+  const layout = page.locator(".product-layout");
+  const layoutDisplay = await layout.evaluate((element) => getComputedStyle(element).display);
+  expect(layoutDisplay).toBe("grid");
 });
