@@ -70,7 +70,7 @@ def _release(repo: Path, tmp_path: Path, release_id: str, created_at: str) -> Pa
 
 
 def test_signed_release_capability_is_bound_to_exact_release():
-    assert CAPABILITY_VERSION == 35
+    assert CAPABILITY_VERSION == 36
     secret = "s" * 48
     state = _release_state()
     state["capabilities"] = {
@@ -165,7 +165,12 @@ def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(
         ("scripts/restore_postgres.sh", "#!/usr/bin/env bash\nexit 0\n", "verify-live"),
         ("scripts/deploy_release_gate.py", "#!/usr/bin/env python3\n", "retained under deploy/release/builds"),
         ("scripts/deploy_production.sh", "#!/usr/bin/env bash\n", "deploy_release_gate.py"),
-        ("scripts/pilot_release_contract.py", "CAPABILITY_VERSION = 34\n", "CAPABILITY_VERSION = 35"),
+        ("scripts/pilot_release_contract.py", "CAPABILITY_VERSION = 35\n", "CAPABILITY_VERSION = 36"),
+        (
+            "scripts/stateful_admission_probe.py",
+            "async def run_probe(*, connectivity_only=False): return {'status': 'pass'}\n",
+            "_REDIS_COMPATIBILITY_SCRIPT",
+        ),
         (
             "frontend/src/queryClient.js",
             "export function createFlashinQueryClient() { return {}; }\n",
