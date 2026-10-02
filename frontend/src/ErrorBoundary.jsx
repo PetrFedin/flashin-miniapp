@@ -1,23 +1,23 @@
-import React from 'react';
+import React from "react";
+import { captureUiError } from "./observability.js";
 
-// Simple error boundary component
 class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
     this.state = { hasError: false };
   }
 
-  static getDerivedStateFromError(error) {
+  static getDerivedStateFromError() {
     return { hasError: true };
   }
 
-  componentDidCatch(error, errorInfo) {
-    console.error('Error boundary caught an error:', error, errorInfo);
+  componentDidCatch(error) {
+    captureUiError(error, "storefront-root");
   }
 
   render() {
     if (this.state.hasError) {
-      return <h2>Something went wrong. Please try again later.</h2>;
+      return <h2>Что-то пошло не так. Обновите приложение и повторите попытку.</h2>;
     }
     return this.props.children;
   }

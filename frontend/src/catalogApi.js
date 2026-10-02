@@ -2,10 +2,26 @@ import { clearCustomerToken, getCustomerToken } from "./authSession.js";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
+function createRequestId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `catalog-${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+}
+
+export class CatalogApiError extends Error {
+  constructor(message, status = 0, correlation = {}) {
+    super(message);
+    this.name = "CatalogApiError";
+    this.status = Number(status || 0);
+    this.requestId = String(correlation.requestId || "");
+    this.traceId = String(correlation.traceId || "");
+  }
+}
+
 function authHeaders() {
   const token = getCustomerToken();
   return {
     "Content-Type": "application/json",
+    "X-Request-ID": createRequestId(),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
 }
@@ -25,7 +41,14 @@ async function catalogRequest(path, options = {}) {
       // Keep the bounded raw response as diagnostic text.
     }
     if (response.status === 401) clearCustomerToken();
-    throw new Error(detail || `Catalog request failed: ${response.status}`);
+    throw new CatalogApiError(
+      detail || `Catalog request failed: ${response.status}`,
+      response.status,
+      {
+        requestId: response.headers.get("x-request-id") || "",
+        traceId: response.headers.get("x-trace-id") || "",
+      },
+    );
   }
   if (response.status === 204) return null;
   return response.json();

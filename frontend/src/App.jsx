@@ -36,6 +36,7 @@ import {
   trackEvent,
   updateCartItem,
 } from "./api";
+import { useQueryClient } from "@tanstack/react-query";
 import ErrorBoundary from "./ErrorBoundary";
 import DeliveryQuoteFields from "./components/DeliveryQuoteFields";
 import SkeletonCard from "./components/SkeletonCard";
@@ -51,6 +52,13 @@ import {
   paymentReturnMessage,
 } from "./orderRules.js";
 import { loadProfileSections, loadStorefrontBootstrap } from "./storefrontLoaders.js";
+import { captureApiError } from "./observability.js";
+import {
+  clearCustomerServerState,
+  commitAuthoritativeResult,
+  queryKeys,
+} from "./queryClient.js";
+import { storefrontQueries } from "./serverState.js";
 import { useActionLocks } from "./useActionLocks.js";
 
 const SAFE_RUNTIME_CAPABILITIES = {
@@ -127,6 +135,7 @@ function cartItemActionKey(itemId) {
 export default function App() {
   const { tg, initData, user, initialized } = useTelegram();
   const { runAction, isBusy } = useActionLocks();
+  const queryClient = useQueryClient();
   const [view, setView] = useState("catalog");
   const [products, setProducts] = useState([]);
   const [looks, setLooks] = useState([]);
@@ -185,6 +194,31 @@ export default function App() {
     setNotice("");
   }
 
+  function commitServerState(setter, queryKey, valueOrUpdater) {
+    if (typeof valueOrUpdater === "function") {
+      setter((current) => {
+        const next = valueOrUpdater(current);
+        commitAuthoritativeResult(queryClient, queryKey, next);
+        return next;
+      });
+      return;
+    }
+    setter(valueOrUpdater);
+    commitAuthoritativeResult(queryClient, queryKey, valueOrUpdater);
+  }
+
+  function commitCart(valueOrUpdater) {
+    commitServerState(setCart, queryKeys.cart(), valueOrUpdater);
+  }
+
+  function commitOrders(valueOrUpdater) {
+    commitServerState(setOrders, queryKeys.orders(), valueOrUpdater);
+  }
+
+  function commitWishlist(valueOrUpdater) {
+    commitServerState(setWishlist, queryKeys.wishlist(), valueOrUpdater);
+  }
+
   async function act(key, operation, successMessage = "") {
     return runAction(key, async () => {
       clearMessages();
@@ -194,6 +228,7 @@ export default function App() {
         tg?.HapticFeedback?.notificationOccurred?.("success");
         return result;
       } catch (operationError) {
+        captureApiError(operationError, { action: key });
         setError(operationError.message || "Операция не выполнена");
         tg?.HapticFeedback?.notificationOccurred?.("error");
         return null;
@@ -202,8 +237,8 @@ export default function App() {
   }
 
   async function refreshOrders() {
-    const nextOrders = await listOrders();
-    setOrders(nextOrders);
+    const nextOrders = await queryClient.fetchQuery(storefrontQueries.orders());
+    commitOrders(nextOrders);
     return nextOrders;
   }
 
@@ -212,7 +247,7 @@ export default function App() {
     let lastError = null;
     for (let attempt = 0; attempt < 5; attempt += 1) {
       try {
-        current = await getOrder(orderId);
+        current = await queryClient.fetchQuery(storefrontQueries.order(orderId));
         lastError = null;
       } catch (pollError) {
         lastError = pollError;
@@ -225,7 +260,7 @@ export default function App() {
     try {
       await refreshOrders();
     } catch {
-      if (current) setOrders((items) => items.some((item) => item.id === current.id)
+      if (current) commitOrders((items) => items.some((item) => item.id === current.id)
         ? items.map((item) => item.id === current.id ? current : item)
         : [current, ...items]);
     }
@@ -248,18 +283,19 @@ export default function App() {
       clearMessages();
       try {
         await telegramAuth(initData);
+        clearCustomerServerState(queryClient);
         const bootstrap = await loadStorefrontBootstrap({
-          listProducts,
-          getCart,
-          getPlatformCapabilities,
-          listLooks,
-          listWishlist,
+          listProducts: () => queryClient.fetchQuery(storefrontQueries.products()),
+          getCart: () => queryClient.fetchQuery(storefrontQueries.cart()),
+          getPlatformCapabilities: () => queryClient.fetchQuery(storefrontQueries.capabilities()),
+          listLooks: () => queryClient.fetchQuery(storefrontQueries.looks()),
+          listWishlist: () => queryClient.fetchQuery(storefrontQueries.wishlist()),
         });
         setProducts(bootstrap.products);
-        setCart(bootstrap.cart);
+        commitCart(bootstrap.cart);
         setCapabilities(bootstrap.capabilities || SAFE_RUNTIME_CAPABILITIES);
         setLooks(bootstrap.looks);
-        setWishlist(bootstrap.wishlist);
+        commitWishlist(bootstrap.wishlist);
         if (bootstrap.warnings.length) {
           setNotice(warningText("Основные данные загружены, но часть разделов временно недоступна", bootstrap.warnings));
         }
@@ -268,7 +304,7 @@ export default function App() {
         const productId = Number(params.get("product"));
         const orderId = Number(params.get("order_id"));
         if (productId > 0) {
-          const fullProduct = await getProduct(productId);
+          const fullProduct = await queryClient.fetchQuery(storefrontQueries.product(productId));
           setSelected(fullProduct);
           setSelectedVariantId(fullProduct.variants?.find((variant) => variant.available_qty > 0)?.id || fullProduct.variants?.[0]?.id || null);
           setView("product");
@@ -276,13 +312,14 @@ export default function App() {
           await resolvePaymentReturn(orderId);
         }
       } catch (bootError) {
+        captureApiError(bootError, { action: "bootstrap" });
         setError(bootError.message || "Не удалось загрузить приложение");
       } finally {
         setLoading(false);
       }
     }
     boot();
-  }, [initialized, tg, initData]);
+  }, [initialized, tg, initData, queryClient]);
 
   useEffect(() => {
     if (!tg?.BackButton) return undefined;
@@ -318,14 +355,14 @@ export default function App() {
 
   async function loadProfileData() {
     const { data, warnings } = await loadProfileSections({
-      getProfile,
-      myLoyalty,
-      myReferralCode,
-      getTimeline,
-      listSupportTickets,
-      listPrivacyRequests,
-      listWishlist,
-      listOrders,
+      getProfile: () => queryClient.fetchQuery(storefrontQueries.profile()),
+      myLoyalty: () => queryClient.fetchQuery(storefrontQueries.loyalty()),
+      myReferralCode: () => queryClient.fetchQuery(storefrontQueries.referral()),
+      getTimeline: () => queryClient.fetchQuery(storefrontQueries.timeline()),
+      listSupportTickets: () => queryClient.fetchQuery(storefrontQueries.support()),
+      listPrivacyRequests: () => queryClient.fetchQuery(storefrontQueries.privacy()),
+      listWishlist: () => queryClient.fetchQuery(storefrontQueries.wishlist()),
+      listOrders: () => queryClient.fetchQuery(storefrontQueries.orders()),
     });
     setProfile(data.profile);
     setLoyaltyRows(data.loyalty);
@@ -333,8 +370,8 @@ export default function App() {
     setTimeline(data.timeline);
     setSupportTickets(data.tickets);
     setPrivacyRequests(data.privacy);
-    setWishlist(data.wishlist);
-    setOrders(data.orders);
+    commitWishlist(data.wishlist);
+    commitOrders(data.orders);
     if (warnings.length) {
       setNotice(warningText("Профиль открыт, но не все данные обновились", warnings));
     }
@@ -343,7 +380,9 @@ export default function App() {
 
   async function openProduct(product) {
     return act(`open-product-${product.id}`, async () => {
-      const fullProduct = product?.variants ? product : await getProduct(product.id);
+      const fullProduct = product?.variants
+        ? product
+        : await queryClient.fetchQuery(storefrontQueries.product(product.id));
       setSelected(fullProduct);
       setSelectedVariantId(fullProduct.variants?.find((variant) => variant.available_qty > 0)?.id || fullProduct.variants?.[0]?.id || null);
       setSizeResult(null);
@@ -357,7 +396,11 @@ export default function App() {
     await act("search", async () => {
       const query = String(queryOverride || "").trim();
       setSearchQuery(query);
-      setProducts(query ? await searchProducts(query) : await listProducts());
+      setProducts(
+        query
+          ? await queryClient.fetchQuery(storefrontQueries.search(query))
+          : await queryClient.fetchQuery(storefrontQueries.products()),
+      );
     });
   }
 
@@ -368,7 +411,7 @@ export default function App() {
       () => addToCart(selected.id, selectedVariant.id, 1),
       `${selected.title}, размер ${selectedVariant.size}, добавлен в корзину.`,
     );
-    if (nextCart) setCart(nextCart);
+    if (nextCart) commitCart(nextCart);
   }
 
   async function handleFavorite() {
@@ -376,10 +419,10 @@ export default function App() {
     const key = `wishlist-${selected.id}`;
     if (isFavorite) {
       const result = await act(key, () => removeWishlist(selected.id), `${selected.title} удалён из избранного.`);
-      if (result) setWishlist((current) => current.filter((product) => product.id !== selected.id));
+      if (result) commitWishlist((current) => current.filter((product) => product.id !== selected.id));
     } else {
       const saved = await act(key, () => addWishlist(selected.id), `${selected.title} сохранён в избранном.`);
-      if (saved) setWishlist((current) => current.some((product) => product.id === saved.id) ? current : [...current, saved]);
+      if (saved) commitWishlist((current) => current.some((product) => product.id === saved.id) ? current : [...current, saved]);
     }
   }
 
@@ -400,7 +443,7 @@ export default function App() {
       () => updateCartItem(item.id, quantity),
       `Количество ${item.title} обновлено.`,
     );
-    if (nextCart) setCart(nextCart);
+    if (nextCart) commitCart(nextCart);
   }
 
   async function handleCartRemove(item) {
@@ -409,7 +452,7 @@ export default function App() {
       () => removeCartItem(item.id),
       `${item.title} удалён из корзины.`,
     );
-    if (nextCart) setCart(nextCart);
+    if (nextCart) commitCart(nextCart);
   }
 
   async function handleApplyPromo() {
@@ -420,7 +463,7 @@ export default function App() {
     }
     const nextCart = await act("promo", () => applyPromo(code), "Промокод применён.");
     if (nextCart) {
-      setCart(nextCart);
+      commitCart(nextCart);
       setPromo("");
     }
   }
@@ -433,7 +476,7 @@ export default function App() {
     }
     const nextCart = await act("loyalty", () => applyLoyalty(parsed.value), "Баллы зарезервированы.");
     if (nextCart) {
-      setCart(nextCart);
+      commitCart(nextCart);
       setLoyaltyPoints("");
     }
   }
@@ -446,7 +489,7 @@ export default function App() {
     }
     const nextCart = await act("referral", () => applyReferral(code), "Реферальный код связан с заказом.");
     if (nextCart) {
-      setCart(nextCart);
+      commitCart(nextCart);
       setReferralInput("");
     }
   }
@@ -530,9 +573,9 @@ export default function App() {
         throw checkoutError;
       }
       try {
-        setCart(await getCart());
+        commitCart(await queryClient.fetchQuery(storefrontQueries.cart()));
       } catch {
-        setCart(null);
+        commitCart(null);
       }
       try {
         const payment = await createPayment(order.id);
@@ -542,7 +585,7 @@ export default function App() {
         try {
           await refreshOrders();
         } catch {
-          setOrders((current) => current.some((item) => item.id === order.id) ? current : [order, ...current]);
+          commitOrders((current) => current.some((item) => item.id === order.id) ? current : [order, ...current]);
         }
         setView("orders");
         throw new Error(`Заказ #${order.id} создан и товар зарезервирован. Продолжите оплату в разделе заказов. ${paymentError.message}`);
@@ -580,9 +623,9 @@ export default function App() {
     if (!window.confirm(`Отменить заказ #${order.id}? Резерв товара будет освобождён.`)) return;
     await act(`cancel-${order.id}`, async () => {
       const updated = await cancelOrder(order.id);
-      setOrders((current) => current.map((item) => item.id === updated.id ? updated : item));
+      commitOrders((current) => current.map((item) => item.id === updated.id ? updated : item));
       try {
-        setCart(await getCart());
+        commitCart(await queryClient.fetchQuery(storefrontQueries.cart()));
       } catch {
         // Cancellation succeeded; a cart refresh failure must not report it as failed.
       }
@@ -602,7 +645,7 @@ export default function App() {
       try {
         await refreshOrders();
       } catch {
-        setOrders((current) => current.map((item) => item.id === order.id
+        commitOrders((current) => current.map((item) => item.id === order.id
           ? { ...item, status: "refund_requested" }
           : item));
       }
@@ -781,7 +824,7 @@ export default function App() {
           <main aria-busy={isBusy("profile")}>
             <h1>Профиль и сервис</h1>
             {profile && <div className="panel profile-card"><div><b>{profile.customer.first_name || profile.customer.username || "Клиент FLASHIN"}</b><p>{profile.customer.phone || "Телефон добавится при оформлении заказа"}</p></div><div><span>Баллы</span><b>{profile.loyalty_points}</b></div><div><span>Реферальный код</span><code>{profile.referral_code || referral?.code || "Формируется"}</code></div></div>}
-            <section><h2>Избранное</h2>{!wishlist.length ? <p className="muted">Сохранённых товаров нет.</p> : <div className="grid">{wishlist.map((product) => { const wishlistBusy = isBusy(`wishlist-${product.id}`); return <ProductCard key={product.id} product={product} onOpen={openProduct} disabled={isBusy(`open-product-${product.id}`)} action={<button className="danger-link card-action" disabled={wishlistBusy} onClick={async () => { const result = await act(`wishlist-${product.id}`, () => removeWishlist(product.id), `${product.title} удалён из избранного.`); if (result) setWishlist((current) => current.filter((item) => item.id !== product.id)); }}>Удалить</button>} />; })}</div>}</section>
+            <section><h2>Избранное</h2>{!wishlist.length ? <p className="muted">Сохранённых товаров нет.</p> : <div className="grid">{wishlist.map((product) => { const wishlistBusy = isBusy(`wishlist-${product.id}`); return <ProductCard key={product.id} product={product} onOpen={openProduct} disabled={isBusy(`open-product-${product.id}`)} action={<button className="danger-link card-action" disabled={wishlistBusy} onClick={async () => { const result = await act(`wishlist-${product.id}`, () => removeWishlist(product.id), `${product.title} удалён из избранного.`); if (result) commitWishlist((current) => current.filter((item) => item.id !== product.id)); }}>Удалить</button>} />; })}</div>}</section>
             <section><h2>История баллов</h2>{!loyaltyRows.length ? <p className="muted">Операций пока нет.</p> : loyaltyRows.map((row) => <div className="cart-line" key={row.id}><span>{row.reason}</span><b className={row.points_delta >= 0 ? "positive" : "negative"}>{row.points_delta > 0 ? "+" : ""}{row.points_delta}</b></div>)}</section>
             <section><h2>Поддержка</h2><select value={supportForm.order_id} onChange={(event) => setSupportForm({ ...supportForm, order_id: event.target.value })} disabled={isBusy("support")}><option value="">Без привязки к заказу</option>{orders.map((order) => <option key={order.id} value={order.id}>Заказ #{order.id}</option>)}</select><input placeholder="Тема обращения" value={supportForm.subject} onChange={(event) => setSupportForm({ ...supportForm, subject: event.target.value })} disabled={isBusy("support")} /><textarea placeholder="Опишите вопрос и ожидаемый результат" value={supportForm.message} onChange={(event) => setSupportForm({ ...supportForm, message: event.target.value })} disabled={isBusy("support")} /><button className="secondary" onClick={handleSupport} disabled={isBusy("support")}>Отправить обращение</button>{supportTickets.map((ticket) => <div className="ticket" key={ticket.id}><div><b>{ticket.subject}</b><p>{ticket.message}</p></div><span className="status neutral">{ticket.status}</span></div>)}</section>
             <section><h2>Персональные данные</h2><p className="muted">Экспорт скачивается файлом. Запросы имеют отслеживаемый статус.</p><div className="actions"><button className="secondary" onClick={handlePrivacyExport} disabled={isBusy("privacy-export")}>Скачать мои данные</button><button className="secondary" onClick={() => handlePrivacyRequest("consent_withdrawal", "Отозвать необязательные согласия?", "Запрос на отзыв согласий зарегистрирован.")} disabled={isBusy("privacy-consent_withdrawal")}>Отозвать необязательные согласия</button><button className="danger" onClick={() => handlePrivacyRequest("delete", "Запросить обезличивание персональных данных? История финансовых операций сохранится по требованиям учёта.", "Запрос на обезличивание зарегистрирован.")} disabled={isBusy("privacy-delete")}>Запросить удаление данных</button></div>{privacyRequests.map((request) => <div className="cart-line" key={request.id}><span>{request.request_type}</span><b>{request.status}</b></div>)}</section>
