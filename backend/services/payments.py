@@ -4,6 +4,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from urllib.parse import quote
 
 import httpx
+from opentelemetry import trace
 from fastapi import HTTPException
 
 from ..config import get_settings
@@ -13,6 +14,7 @@ from .runtime_capabilities import require_payment_execution
 _YOOKASSA_API = "https://api.yookassa.ru/v3"
 _TRANSIENT_STATUSES = {429, 500, 502, 503, 504}
 _MAX_ATTEMPTS = 3
+_TRACER = trace.get_tracer("flashin.providers.yookassa")
 _MONEY_QUANTUM = Decimal("0.01")
 
 
@@ -91,14 +93,27 @@ async def _request_yookassa(
     async with httpx.AsyncClient(timeout=timeout, limits=limits) as client:
         for attempt in range(_MAX_ATTEMPTS):
             response: httpx.Response | None = None
+            resource = path.strip("/").split("/", 1)[0] or "root"
             try:
-                response = await client.request(
-                    method,
-                    f"{_YOOKASSA_API}{path}",
-                    json=payload,
-                    headers=headers,
-                    auth=(settings.yookassa_shop_id, settings.yookassa_secret_key),
-                )
+                with _TRACER.start_as_current_span("flashin.provider.http") as span:
+                    span.set_attribute("flashin.provider", "yookassa")
+                    span.set_attribute("flashin.provider.method", method.upper())
+                    span.set_attribute("flashin.provider.resource", resource)
+                    try:
+                        response = await client.request(
+                            method,
+                            f"{_YOOKASSA_API}{path}",
+                            json=payload,
+                            headers=headers,
+                            auth=(settings.yookassa_shop_id, settings.yookassa_secret_key),
+                        )
+                    except httpx.RequestError:
+                        span.set_attribute("flashin.provider.status_class", "network_error")
+                        raise
+                    span.set_attribute(
+                        "flashin.provider.status_class",
+                        f"{int(response.status_code) // 100}xx",
+                    )
             except httpx.RequestError as exc:
                 last_error = exc
                 if attempt + 1 < _MAX_ATTEMPTS:
