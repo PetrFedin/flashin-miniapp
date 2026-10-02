@@ -109,8 +109,8 @@ async def process_provider_commands(db: Session, limit: int = 50) -> dict[str, i
             span.set_attribute("flashin.provider_command.type", command_type)
             try:
                 payload = json.loads(str(command["payload_json"]))
-            if not isinstance(payload, dict):
-                raise MoySkladReviewRequired("Provider command payload is not an object")
+                if not isinstance(payload, dict):
+                    raise MoySkladReviewRequired("Provider command payload is not an object")
                 handler = _HANDLERS.get(command_type)
                 if handler is None:
                     raise MoySkladReviewRequired(
