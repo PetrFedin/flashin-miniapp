@@ -4,6 +4,7 @@ import re
 from urllib.parse import urlparse
 
 import httpx
+from opentelemetry import trace
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
@@ -13,6 +14,8 @@ from .inventory import adjust_stock
 from .moysklad_mapping import apply_mapping, log_conflict
 from .moysklad_stock_authority import evaluate_moysklad_stock_snapshot
 from .runtime_capabilities import require_moysklad_execution
+
+_TRACER = trace.get_tracer("flashin.providers.moysklad")
 
 
 def _headers() -> dict:
@@ -37,11 +40,19 @@ async def fetch_assortment(limit: int = 100, offset: int = 0) -> dict:
     safe_offset = max(0, int(offset))
     url = f"{settings.moysklad_base_url}/entity/assortment"
     async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.get(
-            url,
-            headers=_headers(),
-            params={"limit": safe_limit, "offset": safe_offset},
-        )
+        with _TRACER.start_as_current_span("flashin.provider.http") as span:
+            span.set_attribute("flashin.provider", "moysklad")
+            span.set_attribute("flashin.provider.method", "GET")
+            span.set_attribute("flashin.provider.resource", "assortment")
+            response = await client.get(
+                url,
+                headers=_headers(),
+                params={"limit": safe_limit, "offset": safe_offset},
+            )
+            span.set_attribute(
+                "flashin.provider.status_class",
+                f"{int(response.status_code) // 100}xx",
+            )
     response.raise_for_status()
     payload = response.json()
     if not isinstance(payload, dict):
@@ -56,15 +67,23 @@ async def fetch_stock_by_store(limit: int = 1000, offset: int = 0) -> dict:
     safe_offset = max(0, int(offset))
     url = f"{settings.moysklad_base_url}/report/stock/bystore"
     async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.get(
-            url,
-            headers=_headers(),
-            params={
-                "limit": safe_limit,
-                "offset": safe_offset,
-                "groupBy": "variant",
-            },
-        )
+        with _TRACER.start_as_current_span("flashin.provider.http") as span:
+            span.set_attribute("flashin.provider", "moysklad")
+            span.set_attribute("flashin.provider.method", "GET")
+            span.set_attribute("flashin.provider.resource", "stock_by_store")
+            response = await client.get(
+                url,
+                headers=_headers(),
+                params={
+                    "limit": safe_limit,
+                    "offset": safe_offset,
+                    "groupBy": "variant",
+                },
+            )
+            span.set_attribute(
+                "flashin.provider.status_class",
+                f"{int(response.status_code) // 100}xx",
+            )
     response.raise_for_status()
     payload = response.json()
     if not isinstance(payload, dict):
