@@ -69,6 +69,7 @@ def configure_tracing(app: "FastAPI", engine: "Engine", settings: "Settings") ->
         app,
         tracer_provider=provider,
         excluded_urls=settings.otel_excluded_urls,
+        exclude_spans=["receive", "send"],
     )
     SQLAlchemyInstrumentor().instrument(
         engine=engine,
