@@ -3,6 +3,7 @@ main { max-width: 1100px; margin: 0 auto; padding: 24px; }
 .login { max-width: 420px; }
 header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 header > div { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+header button { min-height: 44px; }
 section { background: #fff; border-radius: 18px; padding: 18px; margin: 18px 0; box-shadow: 0 8px 20px rgba(0,0,0,.04); }
 input, select, button { padding: 10px 12px; border-radius: 10px; border: 1px solid #ddd; margin: 4px; }
 button { background: #111; color: #fff; cursor: pointer; }
