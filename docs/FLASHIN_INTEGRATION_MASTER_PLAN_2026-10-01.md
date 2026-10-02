@@ -715,3 +715,108 @@ Keep distinct:
 
 **Sequencing:** stable product media + recommendation + privacy controls -> photo search -> visual-relevance evaluation -> VTO benchmark -> optional controlled VTO pilot.
 
+## Premium commercial wave — Digital Wardrobe and post-purchase styling
+
+This wave extends FLASHIN beyond checkout into an ongoing fashion relationship, increasing retention and giving recommendation/VTO/visual-search systems richer user-approved context.
+
+### Digital Wardrobe Authority — ADOPT
+
+Wardrobe items may come from:
+
+- completed FLASHIN purchase;
+- manually saved owned item;
+- user-uploaded photo;
+- imported item metadata where explicitly supported.
+
+Store:
+
+- owner/user;
+- source;
+- linked FLASHIN product/variant where applicable;
+- category;
+- colour/style descriptors;
+- image;
+- acquisition date;
+- status: owned / archived / donated/sold where user records it;
+- privacy/visibility.
+
+A wardrobe item is not inventory stock.
+
+### Purchased Item Auto-add — ADOPT
+
+After an eligible completed order:
+
+order line -> user confirmation/default policy -> wardrobe item linked to exact product/variant
+
+Returns/refunds update or remove the purchase-derived ownership state according to explicit rules.
+
+### Wardrobe Visual Index — ADAPT
+
+Reuse the Visual Commerce embedding layer:
+
+wardrobe image -> embedding -> user-private vector scope -> outfit/recommendation queries
+
+Never mix private wardrobe images into the public catalog embedding corpus without explicit architectural separation.
+
+### Outfit Planner — ADOPT
+
+Build outfits from:
+
+- owned wardrobe;
+- FLASHIN catalog;
+- saved/wishlist products;
+- occasion/weather inputs only where user supplies them or an approved source exists.
+
+Clearly distinguish:
+
+- already owned;
+- suggested purchase;
+- unavailable;
+- saved only.
+
+### Rewear / Gap Intelligence — ADOPT
+
+Provide non-judgmental insights such as:
+
+- products that combine with many owned pieces;
+- missing complementary category;
+- alternative using already-owned item;
+- capsule/travel selection.
+
+Do not infer body image, wealth or personal worth.
+
+### Care / Service Memory — ADOPT
+
+For FLASHIN items store approved:
+
+- care instructions;
+- material notes;
+- repair/service guidance;
+- product documents.
+
+Future circular services such as repair/trade-in/resale remain conditional modules, not assumed functionality.
+
+### Post-purchase Stylist — ADAPT
+
+Use recommendation/copilot logic to answer:
+
+- how can I wear this item?;
+- what from my wardrobe works with it?;
+- what one item would complete this look?;
+- build a travel/occasion capsule.
+
+All suggestions resolve to actual wardrobe/catalog items.
+
+### Additional acceptance
+
+- purchase-derived wardrobe state reconciles with returns;
+- private wardrobe media is isolated/ACL-protected;
+- wardrobe does not become stock authority;
+- recommendations identify owned vs purchasable items;
+- user can edit/delete manually added wardrobe facts;
+- AI cannot infer sensitive traits from wardrobe contents.
+
+**Sequencing:** orders + product media + visual search/recommendation -> wardrobe -> outfit planner -> post-purchase styling -> optional circular services.
+
+**Commercial framing:** FLASHIN moves from transactional store to persistent digital fashion companion, increasing retention and lifetime value.
+
