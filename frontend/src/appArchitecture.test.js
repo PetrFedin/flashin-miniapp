@@ -34,5 +34,6 @@ test("storefront commerce controls are derived from authoritative runtime capabi
 
 test("successful business mutations are not masked by refresh failures", () => {
   assert.match(source, /Cancellation succeeded; a cart refresh failure must not report it as failed/);
-  assert.match(source, /setOrders\(\(current\) => current\.some/);
+  assert.match(source, /commitOrders\(\(current\) => current\.some/);
+  assert.match(source, /commitAuthoritativeResult\(queryClient, queryKey, next\)/);
 });
