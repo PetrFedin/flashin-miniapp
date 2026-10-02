@@ -21,10 +21,12 @@ def test_provider_spans_use_bounded_metadata_only():
     outbound = _source("backend/services/moysklad_outbound.py")
 
     for source in (payments, moysklad, outbound):
-        assert 'start_as_current_span("flashin.provider.http")' in source
+        assert '"flashin.provider.http"' in source
         assert '"flashin.provider"' in source
         assert '"flashin.provider.method"' in source
         assert '"flashin.provider.status_class"' in source
+        assert "record_exception=False" in source
+        assert "set_status_on_exception=False" in source
         assert 'span.set_attribute("url' not in source
         assert 'span.set_attribute("http.url' not in source
         assert 'span.set_attribute("payload' not in source
@@ -37,6 +39,8 @@ def test_rate_limit_spans_never_attach_redis_keys_or_urls():
 
     assert '"flashin.rate_limit.key_count"' in source
     assert '"flashin.rate_limit.allowed"' in source
+    assert "record_exception=False" in source
+    assert "set_status_on_exception=False" in source
     assert 'span.set_attribute("flashin.rate_limit.keys"' not in source
     assert 'span.set_attribute("redis_url"' not in source
     assert 'span.set_attribute("rate_limit_redis_url"' not in source
@@ -48,5 +52,7 @@ def test_provider_job_span_never_attaches_command_payload_or_lease_token():
     assert '"flashin.provider_command.id"' in source
     assert '"flashin.provider_command.type"' in source
     assert '"flashin.provider_command.status"' in source
+    assert "record_exception=False" in source
+    assert "set_status_on_exception=False" in source
     assert 'span.set_attribute("payload' not in source
     assert 'span.set_attribute("lease_token' not in source
