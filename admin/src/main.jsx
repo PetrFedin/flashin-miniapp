@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 
 import {
   hasAdminPermission,
@@ -15,11 +16,20 @@ import {
   uploadAdminFile,
 } from "./api.js";
 import BusinessEventsPanel from "./BusinessEventsPanel.jsx";
+import { captureAdminApiError, initAdminObservability } from "./observability.js";
+import {
+  adminQueryKeys,
+  clearAdminServerState,
+  createAdminQueryClient,
+} from "./queryClient.js";
 import {
   ORDER_STATUS_LABELS,
   orderAction,
 } from "./orderTransitions.js";
 import "./style.css";
+
+const adminQueryClient = createAdminQueryClient();
+initAdminObservability();
 
 const EMPTY_PROMO = {
   code: "",
@@ -54,6 +64,7 @@ function downloadBlob(blob, filename) {
 }
 
 function App() {
+  const queryClient = useQueryClient();
   const [token, setToken] = useState(getAdminToken());
   const [session, setSession] = useState(() => normalizeAdminSession(null));
   const [email, setEmail] = useState("");
@@ -107,6 +118,7 @@ function App() {
     setAuditLogs([]);
     setLowStock([]);
     setAbandonedCarts([]);
+    clearAdminServerState(queryClient);
     if (message) setError(message);
   }
 
@@ -121,6 +133,7 @@ function App() {
       if (successMessage) setNotice(successMessage);
       return result;
     } catch (actionError) {
+      captureAdminApiError(actionError, key);
       if (actionError instanceof AdminApiError && actionError.status === 401) {
         logout("Сессия администратора истекла. Войдите снова.");
       } else {
@@ -134,7 +147,11 @@ function App() {
   }
 
   async function loadSession() {
-    const payload = await adminJson("/api/admin/session");
+    const payload = await queryClient.fetchQuery({
+      queryKey: adminQueryKeys.session(),
+      queryFn: () => adminJson("/api/admin/session"),
+      staleTime: 0,
+    });
     const normalized = normalizeAdminSession(payload);
     if (!normalized.valid) {
       throw new Error("Сервер вернул некорректный контракт прав администратора.");
@@ -145,12 +162,20 @@ function App() {
   async function loadCore(activeSession = session) {
     const requests = [];
     if (hasAdminPermission(activeSession, "products.read")) {
-      requests.push(adminJson("/api/admin/products").then((value) => setProducts(Array.isArray(value) ? value : [])));
+      requests.push(queryClient.fetchQuery({
+        queryKey: adminQueryKeys.products(),
+        queryFn: () => adminJson("/api/admin/products"),
+        staleTime: 0,
+      }).then((value) => setProducts(Array.isArray(value) ? value : [])));
     } else {
       setProducts([]);
     }
     if (hasAdminPermission(activeSession, "orders.read")) {
-      requests.push(adminJson("/api/admin/orders").then((value) => setOrders(Array.isArray(value) ? value : [])));
+      requests.push(queryClient.fetchQuery({
+        queryKey: adminQueryKeys.orders(),
+        queryFn: () => adminJson("/api/admin/orders"),
+        staleTime: 0,
+      }).then((value) => setOrders(Array.isArray(value) ? value : [])));
     } else {
       setOrders([]);
     }
@@ -160,23 +185,29 @@ function App() {
   async function loadOperations(activeSession = session) {
     const sections = [];
     if (hasAdminPermission(activeSession, "audit.read")) {
-      sections.push(["audit log", "/api/admin/audit-logs", setAuditLogs]);
+      sections.push(["audit log", "/api/admin/audit-logs", setAuditLogs, adminQueryKeys.audit()]);
     } else {
       setAuditLogs([]);
     }
     if (hasAdminPermission(activeSession, "products.read")) {
-      sections.push(["низкие остатки", "/api/ops/inventory/low-stock", setLowStock]);
+      sections.push(["низкие остатки", "/api/ops/inventory/low-stock", setLowStock, adminQueryKeys.lowStock()]);
     } else {
       setLowStock([]);
     }
     if (hasAdminPermission(activeSession, "customers.read")) {
-      sections.push(["брошенные корзины", "/api/ops/abandoned-carts", setAbandonedCarts]);
+      sections.push(["брошенные корзины", "/api/ops/abandoned-carts", setAbandonedCarts, adminQueryKeys.abandonedCarts()]);
     } else {
       setAbandonedCarts([]);
     }
     if (!sections.length) return;
 
-    const results = await Promise.allSettled(sections.map(([, path]) => adminJson(path)));
+    const results = await Promise.allSettled(sections.map(([, path, , queryKey]) => (
+      queryClient.fetchQuery({
+        queryKey,
+        queryFn: () => adminJson(path),
+        staleTime: 0,
+      })
+    )));
     const failures = [];
     results.forEach((result, index) => {
       if (result.status === "fulfilled") {
@@ -227,6 +258,7 @@ function App() {
       () => loginAdmin(normalizedEmail, password, totpCode),
     );
     if (result) {
+      clearAdminServerState(queryClient);
       setPassword("");
       setTotpCode("");
       setSession(normalizeAdminSession(null));
@@ -701,4 +733,8 @@ function App() {
   );
 }
 
-createRoot(document.getElementById("root")).render(<App />);
+createRoot(document.getElementById("root")).render(
+  <QueryClientProvider client={adminQueryClient}>
+    <App />
+  </QueryClientProvider>,
+);
