@@ -2,7 +2,8 @@
 """Sanitized PostgreSQL + Redis/Valkey admission probe.
 
 Reads DATABASE_URL and RATE_LIMIT_REDIS_URL from the environment. The probe
-never prints connection strings, credentials, hostnames, or raw exception text.
+never prints connection strings, credentials, hostnames, raw exception text or
+the ephemeral Redis/Valkey key used for compatibility verification.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import argparse
 import asyncio
 import json
 import os
+import uuid
 from typing import Any
 
 from redis.asyncio import Redis
@@ -23,6 +25,17 @@ from backend.services.database_readiness import (
     expected_migration_heads,
 )
 from backend.services.distributed_rate_limit import normalize_redis_url
+
+
+_REDIS_COMPATIBILITY_SCRIPT = r"""
+local now = redis.call('TIME')
+redis.call('ZADD', KEYS[1], 1, ARGV[1])
+local count = redis.call('ZCARD', KEYS[1])
+redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[2]))
+local ttl = redis.call('PTTL', KEYS[1])
+return {now[1], now[2], count, ttl}
+"""
+_PROBE_TTL_MS = 10_000
 
 
 def _scheme(value: str) -> str:
@@ -61,29 +74,90 @@ def _database_report(database_url: str) -> dict[str, Any]:
     return report
 
 
-async def _redis_report(redis_url: str) -> dict[str, Any]:
+def _redis_capability_result(raw: Any) -> dict[str, bool]:
+    valid_shape = isinstance(raw, (list, tuple)) and len(raw) == 4
+    if not valid_shape:
+        return {
+            "server_time": False,
+            "lua_eval": False,
+            "sorted_set": False,
+            "ttl": False,
+        }
+
+    try:
+        seconds = int(raw[0])
+        microseconds = int(raw[1])
+        count = int(raw[2])
+        ttl_ms = int(raw[3])
+    except (TypeError, ValueError):
+        return {
+            "server_time": False,
+            "lua_eval": False,
+            "sorted_set": False,
+            "ttl": False,
+        }
+
+    return {
+        "server_time": seconds > 0 and 0 <= microseconds < 1_000_000,
+        "lua_eval": True,
+        "sorted_set": count == 1,
+        "ttl": 0 < ttl_ms <= _PROBE_TTL_MS,
+    }
+
+
+async def _redis_report(redis_url: str, *, client: Any | None = None) -> dict[str, Any]:
     normalized = normalize_redis_url(redis_url)
     report: dict[str, Any] = {
         "reachable": False,
+        "compatible": False,
         "scheme": _scheme(redis_url),
         "transport_scheme": _scheme(normalized),
+        "capabilities": {
+            "server_time": False,
+            "lua_eval": False,
+            "sorted_set": False,
+            "ttl": False,
+        },
     }
-    client = Redis.from_url(
+    redis_client = client or Redis.from_url(
         normalized,
         decode_responses=False,
         socket_connect_timeout=5,
         socket_timeout=5,
         health_check_interval=30,
     )
+    probe_key = f"flashin:admission:{uuid.uuid4().hex}"
+    probe_member = uuid.uuid4().hex
     try:
-        report["reachable"] = bool(await client.ping())
+        report["reachable"] = bool(await redis_client.ping())
+        if not report["reachable"]:
+            report["error_code"] = "rate_limit_store_probe_failed"
+            return report
+
+        raw = await redis_client.eval(
+            _REDIS_COMPATIBILITY_SCRIPT,
+            1,
+            probe_key,
+            probe_member,
+            _PROBE_TTL_MS,
+        )
+        capabilities = _redis_capability_result(raw)
+        report["capabilities"] = capabilities
+        report["compatible"] = all(capabilities.values())
+        if not report["compatible"]:
+            report["error_code"] = "rate_limit_store_incompatible"
     except (OSError, TimeoutError, ValueError):
         report["error_code"] = "rate_limit_store_probe_failed"
     except Exception:
         # Intentionally redact third-party client exception text.
         report["error_code"] = "rate_limit_store_probe_failed"
     finally:
-        await client.aclose()
+        try:
+            await redis_client.delete(probe_key)
+        except Exception:
+            # Cleanup failure cannot expose provider details and the key has a short TTL.
+            pass
+        await redis_client.aclose()
     return report
 
 
@@ -112,7 +186,10 @@ async def run_probe(*, connectivity_only: bool = False) -> dict[str, Any]:
     if not connectivity_only:
         database_ok = database_ok and bool(database.get("migrations_current"))
 
-    ok = database_ok and bool(rate_limit_store.get("reachable"))
+    rate_limit_ok = bool(rate_limit_store.get("reachable")) and bool(
+        rate_limit_store.get("compatible")
+    )
+    ok = database_ok and rate_limit_ok
     return {
         "schema_version": 1,
         "kind": "flashin_stateful_admission_probe",
@@ -128,7 +205,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--connectivity-only",
         action="store_true",
-        help="Require PostgreSQL and Redis/Valkey reachability but not current migrations.",
+        help=(
+            "Require PostgreSQL reachability and full Redis/Valkey algorithm "
+            "compatibility but do not require current Alembic heads."
+        ),
     )
     return parser
 
