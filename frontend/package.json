@@ -10,7 +10,11 @@
     "@vitejs/plugin-react": "^4.3.4",
     "vite": "^6.0.7",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "@tanstack/react-query": "5.104.0",
+    "@sentry/react": "11.2.0"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "msw": "2.15.0"
+  }
 }
