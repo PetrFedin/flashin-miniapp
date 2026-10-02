@@ -40,7 +40,11 @@ async def fetch_assortment(limit: int = 100, offset: int = 0) -> dict:
     safe_offset = max(0, int(offset))
     url = f"{settings.moysklad_base_url}/entity/assortment"
     async with httpx.AsyncClient(timeout=30) as client:
-        with _TRACER.start_as_current_span("flashin.provider.http") as span:
+        with _TRACER.start_as_current_span(
+                    "flashin.provider.http",
+                    record_exception=False,
+                    set_status_on_exception=False,
+                ) as span:
             span.set_attribute("flashin.provider", "moysklad")
             span.set_attribute("flashin.provider.method", "GET")
             span.set_attribute("flashin.provider.resource", "assortment")
@@ -67,7 +71,11 @@ async def fetch_stock_by_store(limit: int = 1000, offset: int = 0) -> dict:
     safe_offset = max(0, int(offset))
     url = f"{settings.moysklad_base_url}/report/stock/bystore"
     async with httpx.AsyncClient(timeout=30) as client:
-        with _TRACER.start_as_current_span("flashin.provider.http") as span:
+        with _TRACER.start_as_current_span(
+                    "flashin.provider.http",
+                    record_exception=False,
+                    set_status_on_exception=False,
+                ) as span:
             span.set_attribute("flashin.provider", "moysklad")
             span.set_attribute("flashin.provider.method", "GET")
             span.set_attribute("flashin.provider.resource", "stock_by_store")
