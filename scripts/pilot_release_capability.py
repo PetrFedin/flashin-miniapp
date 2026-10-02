@@ -343,6 +343,7 @@ REQUIRED_FILES |= RATE_LIMIT_AUTHORITY_REQUIRED_FILES
 TRACE_CORRELATION_REQUIRED_FILES = {
     ".env.production.example",
     "admin/src/api.js",
+    "admin/src/traceCorrelationSource.test.js",
     "backend/config.py",
     "backend/main.py",
     "backend/middleware/request_id.py",
@@ -353,6 +354,7 @@ TRACE_CORRELATION_REQUIRED_FILES = {
     "backend/tests/test_telemetry.py",
     "backend/tests/test_telemetry_config.py",
     "frontend/src/api.js",
+    "frontend/src/traceCorrelationSource.test.js",
 }
 REQUIRED_FILES |= TRACE_CORRELATION_REQUIRED_FILES
 
@@ -879,6 +881,16 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         ('expose_headers=["X-Request-ID", "X-Trace-ID", "Content-Disposition"]', "configure_tracing(app, engine, settings)", "release=runtime_git_sha() or None"),
     ),
     (
+        "backend/requirements.txt",
+        (
+            "opentelemetry-api==1.45.0",
+            "opentelemetry-sdk==1.45.0",
+            "opentelemetry-exporter-otlp-proto-http==1.45.0",
+            "opentelemetry-instrumentation-fastapi==0.66b0",
+            "opentelemetry-instrumentation-sqlalchemy==0.66b0",
+        ),
+    ),
+    (
         "backend/services/release_identity.py",
         ("def runtime_git_sha()", 'os.getenv("RENDER_GIT_COMMIT"', 'os.getenv("APP_GIT_SHA"'),
     ),
@@ -904,6 +916,14 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "admin/src/api.js",
         ('"X-Request-ID": createRequestId()', 'response.headers.get("x-trace-id")'),
+    ),
+    (
+        "frontend/src/traceCorrelationSource.test.js",
+        ("Mini App sends bounded request correlation", "x-trace-id"),
+    ),
+    (
+        "admin/src/traceCorrelationSource.test.js",
+        ("Admin sends request correlation", "x-trace-id"),
     ),
     (
         "backend/tests/test_privacy_export_contract.py",
