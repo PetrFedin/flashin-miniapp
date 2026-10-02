@@ -75,7 +75,7 @@ test("Admin remains readable and bounded on tablet viewport", async ({ page }) =
 
   await expect(page.getByRole("heading", { name: "FLASHIN Admin" })).toBeVisible();
   await expect(page.getByText("responsive@test.local · viewer")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Обновить" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Обновить", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Выйти" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Audit log" })).toBeVisible();
   await expect(page.getByText("responsive.audit.proof")).toBeVisible();
