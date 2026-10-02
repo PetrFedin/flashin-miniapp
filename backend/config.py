@@ -95,6 +95,11 @@ class Settings(BaseSettings):
     cdn_public_base_url: str = "https://cdn.flashin.store"
     loyalty_points_per_ruble: float = 0.01
     sentry_dsn: str = ""
+    otel_tracing_enabled: bool = False
+    otel_service_name: str = "flashin-api"
+    otel_exporter_otlp_endpoint: str = ""
+    otel_trace_sample_ratio: float = 0.1
+    otel_excluded_urls: str = "/health,/ready,/release,/metrics"
     abandoned_cart_minutes: int = 120
     inventory_low_stock_threshold: int = 2
     audit_log_enabled: bool = True
@@ -175,6 +180,16 @@ class Settings(BaseSettings):
             raise ValueError("RATE_LIMIT_REDIS_CONNECT_TIMEOUT_SECONDS must be between 0.1 and 10")
         if not 0.1 <= self.rate_limit_redis_socket_timeout_seconds <= 10:
             raise ValueError("RATE_LIMIT_REDIS_SOCKET_TIMEOUT_SECONDS must be between 0.1 and 10")
+        if not 0 <= self.otel_trace_sample_ratio <= 1:
+            raise ValueError("OTEL_TRACE_SAMPLE_RATIO must be between 0 and 1")
+        if self.otel_tracing_enabled:
+            endpoint = self.otel_exporter_otlp_endpoint.strip().lower()
+            if not endpoint.startswith(("http://", "https://")):
+                raise ValueError(
+                    "OTEL_EXPORTER_OTLP_ENDPOINT must use http:// or https:// when tracing is enabled"
+                )
+        if not self.otel_service_name.strip():
+            raise ValueError("OTEL_SERVICE_NAME must not be empty")
         rate_limit_backend = self.rate_limit_backend.strip().lower()
         if rate_limit_backend not in {"memory", "redis"}:
             raise ValueError("RATE_LIMIT_BACKEND must be memory or redis")
