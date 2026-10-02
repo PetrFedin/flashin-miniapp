@@ -5,12 +5,14 @@ import uuid
 from dataclasses import dataclass
 from typing import Iterable
 
+from opentelemetry import trace
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
 
 _WINDOW_MS = 60_000
 _KEY_TTL_MS = 61_000
+_TRACER = trace.get_tracer("flashin.rate_limit")
 
 _ATOMIC_SLIDING_WINDOW = r"""
 local window_ms = tonumber(ARGV[1])
@@ -104,17 +106,21 @@ class DistributedRateLimiter:
             raise ValueError("Rate-limit budget must be positive")
 
         member = uuid.uuid4().hex
-        try:
-            raw = await self._client.eval(
-                _ATOMIC_SLIDING_WINDOW,
-                len(unique_keys),
-                *unique_keys,
-                _WINDOW_MS,
-                int(limit),
-                member,
-            )
-        except (RedisError, OSError, TimeoutError) as exc:
-            raise RateLimitBackendUnavailable("shared rate-limit backend unavailable") from exc
+        with _TRACER.start_as_current_span("flashin.rate_limit.hit") as span:
+            span.set_attribute("flashin.rate_limit.key_count", len(unique_keys))
+            span.set_attribute("flashin.rate_limit.limit", int(limit))
+            try:
+                raw = await self._client.eval(
+                    _ATOMIC_SLIDING_WINDOW,
+                    len(unique_keys),
+                    *unique_keys,
+                    _WINDOW_MS,
+                    int(limit),
+                    member,
+                )
+            except (RedisError, OSError, TimeoutError) as exc:
+                span.set_attribute("flashin.rate_limit.backend_status", "unavailable")
+                raise RateLimitBackendUnavailable("shared rate-limit backend unavailable") from exc
 
         if not isinstance(raw, (list, tuple)) or len(raw) != 3:
             raise RateLimitBackendUnavailable("shared rate-limit backend returned invalid decision")
@@ -122,6 +128,10 @@ class DistributedRateLimiter:
         allowed = bool(int(raw[0]))
         remaining = max(int(raw[1]), 0)
         retry_ms = max(int(raw[2]), 0)
+        span = trace.get_current_span()
+        if span.is_recording():
+            span.set_attribute("flashin.rate_limit.allowed", allowed)
+            span.set_attribute("flashin.rate_limit.remaining", remaining)
         return RateLimitDecision(
             allowed=allowed,
             remaining=remaining,
