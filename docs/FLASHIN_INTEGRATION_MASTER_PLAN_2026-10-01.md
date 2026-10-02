@@ -614,3 +614,104 @@ Do not display this as exact probability unless a validated statistical model ac
 
 **Dependency note:** ZXing browser library is currently MIT-licensed upstream; pin the version and test Telegram/iPhone camera behavior before production use.
 
+## Premium innovation wave — visual commerce search and virtual try-on lab
+
+This wave creates a premium consumer-facing differentiator after catalog, fit profile, recommendation, media and production commerce authorities are stable.
+
+### Search by Photo — ADOPT
+
+References:
+
+- https://github.com/mlfoundations/open_clip
+- https://github.com/qdrant/qdrant
+
+Flow:
+
+user photo / selected product image -> privacy/admission checks -> visual embedding -> nearest product candidates -> canonical FLASHIN product/variant lookup -> availability/price validation -> ranked results
+
+Use cases:
+
+- find something like this;
+- find visually similar product in FLASHIN;
+- find alternative colour/style/category;
+- bridge social/editorial inspiration to purchasable catalog.
+
+Qdrant/OpenCLIP remain rebuildable retrieval infrastructure. Product, price, stock and publish state stay in FLASHIN.
+
+### Visual Query Privacy — ADOPT
+
+For user-uploaded inspiration photos:
+
+- process ephemerally by default;
+- do not retain image unless user explicitly saves it;
+- strip metadata where appropriate;
+- do not infer identity, health, ethnicity, age or other sensitive traits;
+- do not use background faces/people for identity recognition;
+- log model/version and consent/retention state.
+
+### Visual Commerce Reason Codes — ADOPT
+
+Every result may carry bounded explanations such as:
+
+- similar silhouette;
+- similar colour family;
+- similar category;
+- visually similar product;
+- selected outfit compatibility.
+
+Do not present similarity as stylistic certainty.
+
+### Virtual Try-On Research Gate — EXPERIMENT/DEFER
+
+Research candidates for benchmarking only:
+
+- https://github.com/Zheng-Chong/CatVTON
+- https://github.com/yisol/IDM-VTON
+- https://github.com/levihsu/OOTDiffusion
+
+Do not adopt any candidate into commercial production until both code license and model-weight/data/commercial-use terms are explicitly approved.
+
+Target architecture:
+
+user image + selected garment -> VTO worker -> generated preview -> watermark/disclosure -> ephemeral result -> optional user save
+
+The generated image is a visualization, not a guarantee of actual fit, size, drape or colour.
+
+### VTO Quality Benchmark — ADOPT BEFORE PRODUCTION
+
+Benchmark:
+
+- garment preservation;
+- identity/pose preservation;
+- body/hand artifact rate;
+- logo/print distortion;
+- colour drift;
+- latency;
+- mobile usability;
+- failure rate;
+- user preference.
+
+A model graduates only after rights review + benchmark acceptance.
+
+### Fit Authority Boundary — REQUIRED
+
+VTO never changes Fit Profile or size recommendation.
+
+Keep distinct:
+
+- visual appearance preview;
+- fit/size assistance;
+- canonical product photos/specs.
+
+### Additional acceptance
+
+- photo search never returns unpublished/unavailable products as purchasable;
+- embeddings trace to image checksum + model version;
+- user-upload retention is explicit;
+- VTO is visibly labeled synthetic preview;
+- VTO does not claim size/fit accuracy;
+- model/provider can be replaced without changing order/catalog authority;
+- commercial deployment has explicit rights/license approval.
+
+**Sequencing:** stable product media + recommendation + privacy controls -> photo search -> visual-relevance evaluation -> VTO benchmark -> optional controlled VTO pilot.
+
