@@ -487,6 +487,32 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     (
+        "admin/src/queryClient.js",
+        (
+            "staleTime: 0",
+            "mutations: { retry: false }",
+            "refetchOnMount: \"always\"",
+            "refetchOnReconnect: \"always\"",
+            "clearAdminServerState",
+        ),
+    ),
+    (
+        "frontend/src/main.jsx",
+        (
+            "QueryClientProvider",
+            "createFlashinQueryClient",
+            "await enableMocking()",
+        ),
+    ),
+    (
+        "admin/src/main.jsx",
+        (
+            "QueryClientProvider",
+            "createAdminQueryClient",
+            "clearAdminServerState(queryClient)",
+        ),
+    ),
+    (
         "frontend/src/observability.js",
         (
             "__FLASHIN_RELEASE_SHA__",
