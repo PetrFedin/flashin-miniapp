@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import {
   addToCart,
   addWishlist,
@@ -37,6 +36,7 @@ import {
   trackEvent,
   updateCartItem,
 } from "./api";
+import { useQueryClient } from "@tanstack/react-query";
 import ErrorBoundary from "./ErrorBoundary";
 import DeliveryQuoteFields from "./components/DeliveryQuoteFields";
 import SkeletonCard from "./components/SkeletonCard";
