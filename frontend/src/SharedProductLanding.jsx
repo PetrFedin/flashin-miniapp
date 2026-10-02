@@ -1,8 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { addToCart, addWishlist, telegramAuth } from "./api";
 import { getCatalogProduct } from "./catalogApi.js";
 import { useTelegram } from "./hooks/useTelegram";
+import { captureApiError } from "./observability.js";
+import { commitAuthoritativeResult, queryKeys } from "./queryClient.js";
+import { storefrontQueries } from "./serverState.js";
 
 function money(value, currency = "RUB") {
   return new Intl.NumberFormat("ru-RU", {
@@ -35,6 +39,7 @@ function sharedProductId() {
 }
 
 export default function SharedProductLanding() {
+  const queryClient = useQueryClient();
   const { initData, initialized } = useTelegram();
   const productId = useMemo(() => sharedProductId(), [initialized]);
   const [product, setProduct] = useState(null);
@@ -63,18 +68,19 @@ export default function SharedProductLanding() {
     (async () => {
       try {
         await ensureAuth();
-        const next = await getCatalogProduct(productId);
+        const next = await queryClient.fetchQuery(storefrontQueries.catalogDetail(productId));
         if (cancelled) return;
         setProduct(next);
         setVariantId(next.variants?.find((item) => item.available_qty > 0)?.id || next.variants?.[0]?.id || null);
       } catch (actionError) {
+        captureApiError(actionError, { action: "shared-product-load" });
         if (!cancelled) setError(actionError?.message || "Не удалось открыть отправленную карточку.");
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
     return () => { cancelled = true; };
-  }, [productId, initialized]);
+  }, [productId, initialized, queryClient]);
 
   if (!productId) return null;
 
@@ -93,8 +99,10 @@ export default function SharedProductLanding() {
     try {
       await ensureAuth();
       await addWishlist(product.id);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.wishlist() });
       setNotice("Карточка добавлена в избранное.");
     } catch (actionError) {
+      captureApiError(actionError, { action: "shared-product-wishlist" });
       setError(actionError?.message || "Не удалось добавить в избранное.");
     } finally {
       setBusy("");
@@ -107,9 +115,11 @@ export default function SharedProductLanding() {
     setError("");
     try {
       await ensureAuth();
-      await addToCart(product.id, variant.id, 1);
+      const cart = await addToCart(product.id, variant.id, 1);
+      commitAuthoritativeResult(queryClient, queryKeys.cart(), cart);
       setNotice("Товар добавлен в корзину. Закройте карточку, чтобы перейти к оформлению.");
     } catch (actionError) {
+      captureApiError(actionError, { action: "shared-product-cart" });
       setError(actionError?.message || "Не удалось добавить товар в корзину.");
     } finally {
       setBusy("");
