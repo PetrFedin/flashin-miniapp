@@ -516,3 +516,101 @@ Historical/open-source loyalty engines exist, but current licensing/member-limit
 
 **Sequencing:** payment/refund production proof -> loyalty ledger -> referral qualification -> search merchandising/quality loop.
 
+## Additional wave — barcode receiving, cycle count and inventory confidence
+
+This wave strengthens physical-stock accuracy without turning FLASHIN into a full warehouse management system.
+
+### Browser barcode/QR scanner — ADOPT
+
+Reference:
+
+https://github.com/zxing-js/browser
+
+Use scanning in staff/admin surfaces for:
+
+- receiving supplier/MoySklad-linked inventory;
+- variant lookup;
+- return intake;
+- quarantine placement;
+- stocktake/cycle count;
+- reservation/pick verification.
+
+Scanner output is an identifier candidate only. Server resolves it to the canonical FLASHIN variant/barcode mapping.
+
+### Barcode Mapping Authority — ADOPT
+
+Create native mappings:
+
+- variant ID;
+- code type;
+- barcode/value;
+- source/provider;
+- status;
+- effective dates;
+- created/reviewed by.
+
+Support multiple historical/provider codes if business reality requires it.
+
+Do not replace internal variant IDs with an external barcode string.
+
+### Receiving Verification — ADOPT
+
+Flow:
+
+expected receipt/provider document -> scan item/carton -> resolved variant -> observed quantity -> discrepancy -> accepted/quarantine/review -> authoritative inventory event
+
+Track:
+
+- expected vs observed;
+- operator;
+- timestamp;
+- location;
+- damage/quality flag;
+- provider/MoySklad reference;
+- discrepancy reason.
+
+### Cycle Count — ADOPT
+
+Create bounded stocktake sessions:
+
+- location;
+- expected snapshot/version;
+- counted quantity;
+- scan events;
+- discrepancy;
+- reviewer;
+- reconciliation decision.
+
+A count never directly overwrites stock. It creates an approved inventory adjustment through the existing stock/inventory authority.
+
+### Inventory Confidence Projection — ADOPT
+
+For each variant/location, derive an operational confidence signal from facts such as:
+
+- age since last verified count/receipt;
+- unresolved discrepancy;
+- recent return/quarantine;
+- provider reconciliation status.
+
+Use categories such as:
+
+- verified recently;
+- normal;
+- review recommended;
+- unresolved discrepancy.
+
+Do not display this as exact probability unless a validated statistical model actually exists.
+
+### Additional acceptance
+
+- unknown barcode cannot mutate inventory;
+- duplicate scans are handled deterministically;
+- receiving discrepancy links to source/provider document;
+- cycle-count correction requires authorised reconciliation;
+- stock/order/reservation authority remains unchanged;
+- scanner failure degrades to manual variant lookup.
+
+**Sequencing:** dedicated production state + inventory/provider reconciliation first -> barcode mapping -> receiving scan -> cycle count -> inventory-confidence projection.
+
+**Dependency note:** ZXing browser library is currently MIT-licensed upstream; pin the version and test Telegram/iPhone camera behavior before production use.
+
