@@ -122,21 +122,21 @@ class DistributedRateLimiter:
                 span.set_attribute("flashin.rate_limit.backend_status", "unavailable")
                 raise RateLimitBackendUnavailable("shared rate-limit backend unavailable") from exc
 
-        if not isinstance(raw, (list, tuple)) or len(raw) != 3:
-            raise RateLimitBackendUnavailable("shared rate-limit backend returned invalid decision")
+            if not isinstance(raw, (list, tuple)) or len(raw) != 3:
+                span.set_attribute("flashin.rate_limit.backend_status", "invalid_response")
+                raise RateLimitBackendUnavailable("shared rate-limit backend returned invalid decision")
 
-        allowed = bool(int(raw[0]))
-        remaining = max(int(raw[1]), 0)
-        retry_ms = max(int(raw[2]), 0)
-        span = trace.get_current_span()
-        if span.is_recording():
+            allowed = bool(int(raw[0]))
+            remaining = max(int(raw[1]), 0)
+            retry_ms = max(int(raw[2]), 0)
+            span.set_attribute("flashin.rate_limit.backend_status", "ok")
             span.set_attribute("flashin.rate_limit.allowed", allowed)
             span.set_attribute("flashin.rate_limit.remaining", remaining)
-        return RateLimitDecision(
-            allowed=allowed,
-            remaining=remaining,
-            retry_after_seconds=max(math.ceil(retry_ms / 1000), 1) if retry_ms else 0,
-        )
+            return RateLimitDecision(
+                allowed=allowed,
+                remaining=remaining,
+                retry_after_seconds=max(math.ceil(retry_ms / 1000), 1) if retry_ms else 0,
+            )
 
     async def ping(self) -> bool:
         try:
