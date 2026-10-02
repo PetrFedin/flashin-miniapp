@@ -112,14 +112,14 @@ test("storefront remains readable without horizontal overflow across responsive 
   await expectNoHorizontalOverflow(page);
   await expectPrimaryControlsReadable(page);
 
-  await page.getByText("Responsive Jacket").click();
-  await expect(page.getByRole("heading", { name: "Responsive Jacket" })).toBeVisible();
-  await expect(page.getByText("Outerwear")).toBeVisible();
-  await expectNoHorizontalOverflow(page);
-
   const productCard = page.locator(".product-card").first();
   const box = await productCard.boundingBox();
   expect(box).not.toBeNull();
   expect(box.width).toBeGreaterThan(140);
   expect(box.width).toBeLessThanOrEqual(660);
+
+  await page.getByText("Responsive Jacket").click();
+  await expect(page.getByRole("heading", { name: "Responsive Jacket" })).toBeVisible();
+  await expect(page.getByText("Outerwear")).toBeVisible();
+  await expectNoHorizontalOverflow(page);
 });
