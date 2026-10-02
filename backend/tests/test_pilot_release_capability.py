@@ -167,6 +167,26 @@ def test_immutable_archive_accepts_complete_capability_and_rejects_missing_file(
         ("scripts/deploy_production.sh", "#!/usr/bin/env bash\n", "deploy_release_gate.py"),
         ("scripts/pilot_release_contract.py", "CAPABILITY_VERSION = 34\n", "CAPABILITY_VERSION = 35"),
         (
+            "frontend/src/queryClient.js",
+            "export function createFlashinQueryClient() { return {}; }\n",
+            "commitAuthoritativeResult",
+        ),
+        (
+            "frontend/src/observability.js",
+            "export function initFrontendObservability() { return false; }\n",
+            "sendDefaultPii: false",
+        ),
+        (
+            "frontend/src/mocks/enableMocking.js",
+            "export async function enableMocking() { return true; }\n",
+            "import.meta.env.DEV",
+        ),
+        (
+            "admin/src/queryClient.js",
+            "export function createAdminQueryClient() { return {}; }\n",
+            "clearAdminServerState",
+        ),
+        (
             "backend/middleware/rate_limit.py",
             "class RateLimitMiddleware: pass\n",
             "backend_fail_closed",
