@@ -395,6 +395,16 @@ FRONTEND_RELIABILITY_REQUIRED_FILES = {
 }
 REQUIRED_FILES |= FRONTEND_RELIABILITY_REQUIRED_FILES
 
+# Exact-SHA production stateful admission must prove not only reachability, but
+# Redis/Valkey compatibility with the actual atomic rate-limit primitives.
+STATEFUL_ADMISSION_REQUIRED_FILES = {
+    ".github/workflows/production-stateful-admission.yml",
+    "backend/tests/test_database_migration_probe.py",
+    "backend/tests/test_stateful_admission_probe.py",
+    "scripts/stateful_admission_probe.py",
+}
+REQUIRED_FILES |= STATEFUL_ADMISSION_REQUIRED_FILES
+
 # Python application container least privilege is part of the immutable production
 # runtime and rollback contract.
 CONTAINER_LEAST_PRIVILEGE_REQUIRED_FILES = {
@@ -414,7 +424,7 @@ REQUIRED_FILES |= CONTAINER_LEAST_PRIVILEGE_REQUIRED_FILES
 # binds one packaged runtime/test surface to concrete behavior, not just presence.
 MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("backend/api/orders.py", ("acquire_pilot_checkout(", "record_pilot_order(")),
-    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 35",)),
+    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 36",)),
     (
         "scripts/pilot_release_capability.py",
         (
@@ -443,9 +453,44 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "REQUIRED_FILES |= TRACE_CORRELATION_REQUIRED_FILES",
             "FRONTEND_RELIABILITY_REQUIRED_FILES",
             "REQUIRED_FILES |= FRONTEND_RELIABILITY_REQUIRED_FILES",
+            "STATEFUL_ADMISSION_REQUIRED_FILES",
+            "REQUIRED_FILES |= STATEFUL_ADMISSION_REQUIRED_FILES",
             "CONTAINER_LEAST_PRIVILEGE_REQUIRED_FILES",
             "REQUIRED_FILES |= CONTAINER_LEAST_PRIVILEGE_REQUIRED_FILES",
             "MARKER_REQUIREMENTS",
+        ),
+    ),
+    (
+        "scripts/stateful_admission_probe.py",
+        (
+            "_REDIS_COMPATIBILITY_SCRIPT",
+            "redis.call('TIME')",
+            "redis.call('ZADD'",
+            "redis.call('ZCARD'",
+            "redis.call('PEXPIRE'",
+            "redis.call('PTTL'",
+            "\"compatible\": False",
+            "rate_limit_store_incompatible",
+            "await redis_client.delete(probe_key)",
+        ),
+    ),
+    (
+        ".github/workflows/production-stateful-admission.yml",
+        (
+            "workflow_dispatch:",
+            "FLASHIN_PRODUCTION_DATABASE_URL",
+            "FLASHIN_PRODUCTION_REDIS_URL",
+            "group: flashin-production-stateful-admission",
+            "python -m scripts.stateful_admission_probe",
+            "production-stateful-admission-proof.json",
+        ),
+    ),
+    (
+        "backend/tests/test_stateful_admission_probe.py",
+        (
+            "test_redis_report_proves_algorithm_compatibility_and_redacts_ephemeral_key",
+            "test_redis_report_fails_closed_when_required_primitive_is_missing",
+            "test_redis_report_redacts_transport_exceptions_and_still_cleans_up",
         ),
     ),
     (
