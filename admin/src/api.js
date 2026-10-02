@@ -86,7 +86,10 @@ function revokeAdminSessionBestEffort(token) {
   if (!token) return;
   void fetch(`${API_BASE}/api/admin/logout`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "X-Request-ID": createRequestId(),
+    },
     cache: "no-store",
     keepalive: true,
   }).catch(() => {
