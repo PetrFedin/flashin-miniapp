@@ -62,7 +62,7 @@ jobs:
           fi
 
           set +e
-          python scripts/stateful_admission_probe.py "${probe_args[@]}" > /tmp/stateful-probe.json
+          python -m scripts.stateful_admission_probe "${probe_args[@]}" > /tmp/stateful-probe.json
           probe_status=$?
           set -e
 
