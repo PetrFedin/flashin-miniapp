@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import {
   addToCart,
@@ -18,6 +19,9 @@ import {
   submitProductFeedback,
 } from "./catalogApi.js";
 import { useTelegram } from "./hooks/useTelegram";
+import { captureApiError } from "./observability.js";
+import { commitAuthoritativeResult, queryKeys } from "./queryClient.js";
+import { storefrontQueries } from "./serverState.js";
 
 const DEFAULT_FILTERS = {
   q: "",
@@ -87,6 +91,7 @@ function CatalogCard({ product, onOpen }) {
 }
 
 export default function CatalogExperience() {
+  const queryClient = useQueryClient();
   const { initData, initialized } = useTelegram();
   const [open, setOpen] = useState(false);
   const [products, setProducts] = useState([]);
@@ -119,9 +124,9 @@ export default function CatalogExperience() {
 
   async function refreshSessionState() {
     const [wishlist, cart, nextAppointments] = await Promise.all([
-      listWishlist(),
-      getCart().catch(() => null),
-      listMyShowroomAppointments().catch(() => []),
+      queryClient.fetchQuery(storefrontQueries.wishlist()),
+      queryClient.fetchQuery(storefrontQueries.cart()).catch(() => null),
+      queryClient.fetchQuery(storefrontQueries.appointments()).catch(() => []),
     ]);
     setWishlistIds(new Set((wishlist || []).map((item) => item.id)));
     setCartCount((cart?.items || []).reduce((sum, item) => sum + Number(item.quantity || 0), 0));
@@ -134,11 +139,12 @@ export default function CatalogExperience() {
     try {
       await ensureAuth();
       const [rows] = await Promise.all([
-        listCatalogProducts(nextFilters),
+        queryClient.fetchQuery(storefrontQueries.catalogGrid(nextFilters)),
         refreshSessionState(),
       ]);
       setProducts(rows || []);
     } catch (actionError) {
+      captureApiError(actionError, { action: "catalog-load" });
       setError(actionError?.message || "Каталог временно недоступен.");
     } finally {
       setLoading(false);
@@ -156,8 +162,8 @@ export default function CatalogExperience() {
     try {
       await ensureAuth();
       const [detail, rows, share] = await Promise.all([
-        getCatalogProduct(product.id),
-        listProductFeedback(product.id),
+        queryClient.fetchQuery(storefrontQueries.catalogDetail(product.id)),
+        queryClient.fetchQuery(storefrontQueries.catalogFeedback(product.id)),
         getProductShare(product.id),
       ]);
       setSelected({ ...detail, share });
@@ -166,6 +172,7 @@ export default function CatalogExperience() {
       setFeedbackForm({ rating: 5, comment: "" });
       setAppointmentForm({ starts_at: "", notes: "" });
     } catch (actionError) {
+      captureApiError(actionError, { action: "catalog-product" });
       setError(actionError?.message || "Не удалось открыть карточку.");
     } finally {
       setBusy("");
@@ -180,6 +187,7 @@ export default function CatalogExperience() {
       await ensureAuth();
       if (isFavorite) await removeWishlist(selected.id);
       else await addWishlist(selected.id);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.wishlist() });
       setWishlistIds((current) => {
         const next = new Set(current);
         if (isFavorite) next.delete(selected.id); else next.add(selected.id);
@@ -188,6 +196,7 @@ export default function CatalogExperience() {
       setDirtyLegacyState(true);
       setNotice(isFavorite ? "Удалено из избранного." : "Добавлено в избранное.");
     } catch (actionError) {
+      captureApiError(actionError, { action: "wishlist-toggle" });
       setError(actionError?.message || "Не удалось изменить избранное.");
     } finally {
       setBusy("");
@@ -201,10 +210,12 @@ export default function CatalogExperience() {
     try {
       await ensureAuth();
       const cart = await addToCart(selected.id, selectedVariant.id, 1);
+      commitAuthoritativeResult(queryClient, queryKeys.cart(), cart);
       setCartCount((cart?.items || []).reduce((sum, item) => sum + Number(item.quantity || 0), 0));
       setDirtyLegacyState(true);
       setNotice(`${selected.title}, размер ${selectedVariant.size}, добавлен в корзину.`);
     } catch (actionError) {
+      captureApiError(actionError, { action: "catalog-add-cart" });
       setError(actionError?.message || "Не удалось добавить товар в корзину.");
     } finally {
       setBusy("");
@@ -218,12 +229,17 @@ export default function CatalogExperience() {
     try {
       await ensureAuth();
       await submitProductFeedback(selected.id, feedbackForm.rating, feedbackForm.comment);
-      setFeedback(await listProductFeedback(selected.id));
-      const refreshed = await getCatalogProduct(selected.id);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.catalogFeedback(selected.id) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.catalogDetail(selected.id) }),
+      ]);
+      setFeedback(await queryClient.fetchQuery(storefrontQueries.catalogFeedback(selected.id)));
+      const refreshed = await queryClient.fetchQuery(storefrontQueries.catalogDetail(selected.id));
       setSelected((current) => ({ ...refreshed, share: current?.share || {} }));
       setFeedbackForm({ rating: 5, comment: "" });
       setNotice("Оценка сохранена.");
     } catch (actionError) {
+      captureApiError(actionError, { action: "catalog-feedback" });
       setError(actionError?.message || "Не удалось сохранить оценку.");
     } finally {
       setBusy("");
@@ -240,10 +256,12 @@ export default function CatalogExperience() {
     try {
       await ensureAuth();
       await createShowroomAppointment(selected.id, appointmentForm.starts_at, appointmentForm.notes);
-      setAppointments(await listMyShowroomAppointments());
+      await queryClient.invalidateQueries({ queryKey: queryKeys.appointments() });
+      setAppointments(await queryClient.fetchQuery(storefrontQueries.appointments()));
       setAppointmentForm({ starts_at: "", notes: "" });
       setNotice("Запрос на примерку отправлен. Статус будет доступен в списке записей.");
     } catch (actionError) {
+      captureApiError(actionError, { action: "showroom-appointment" });
       setError(actionError?.message || "Не удалось создать запись на примерку.");
     } finally {
       setBusy("");
