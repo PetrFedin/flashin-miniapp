@@ -103,7 +103,11 @@ async def process_provider_commands(db: Session, limit: int = 50) -> dict[str, i
         command_id = int(command["id"])
         lease_token = str(command["lease_token"])
         command_type = str(command["command_type"])
-        with _TRACER.start_as_current_span("flashin.provider_command") as span:
+        with _TRACER.start_as_current_span(
+            "flashin.provider_command",
+            record_exception=False,
+            set_status_on_exception=False,
+        ) as span:
             span.set_attribute("flashin.provider", "moysklad")
             span.set_attribute("flashin.provider_command.id", command_id)
             span.set_attribute("flashin.provider_command.type", command_type)
