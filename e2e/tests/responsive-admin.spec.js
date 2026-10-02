@@ -63,6 +63,6 @@ test("Admin remains readable and bounded on tablet viewport", async ({ page }) =
     const buttonBox = await buttons.nth(index).boundingBox();
     expect(buttonBox).not.toBeNull();
     expect(buttonBox.width).toBeGreaterThanOrEqual(44);
-    expect(buttonBox.height).toBeGreaterThanOrEqual(34);
+    expect(buttonBox.height).toBeGreaterThanOrEqual(44);
   }
 });
