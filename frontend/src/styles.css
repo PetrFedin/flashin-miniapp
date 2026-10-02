@@ -56,6 +56,7 @@ label { display: block; font-size: 13px; font-weight: 700; margin-bottom: 12px; 
 .lead { margin-bottom: 20px; }
 
 .cart-shortcut {
+  min-height: 44px;
   border: 0;
   border-radius: 999px;
   padding: 9px 12px;
@@ -79,6 +80,7 @@ label { display: block; font-size: 13px; font-weight: 700; margin-bottom: 12px; 
 }
 
 .tabs button {
+  min-height: 44px;
   border: 0;
   border-radius: 12px;
   padding: 10px 4px;
