@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
@@ -75,6 +76,9 @@ def configure_tracing(app: "FastAPI", engine: "Engine", settings: "Settings") ->
         engine=engine,
         tracer_provider=provider,
         enable_commenter=False,
+    )
+    HTTPXClientInstrumentor().instrument(
+        tracer_provider=provider,
     )
 
     app.state.otel_tracing_configured = True
