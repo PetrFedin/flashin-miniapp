@@ -94,6 +94,7 @@ def test_browser_clients_can_read_request_id_through_cors():
                 exposed_headers.add(item.value)
 
     assert "X-Request-ID" in exposed_headers
+    assert "X-Trace-ID" in exposed_headers
     assert "app.add_middleware(RequestIdMiddleware)" in main_source
 
 
