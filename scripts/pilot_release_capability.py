@@ -57,6 +57,7 @@ REQUIRED_FILES = {
     "backend/tests/test_backup_integrity.py",
     "backend/tests/test_deploy_release_gate.py",
     "backend/main.py",
+    "backend/tests/test_telemetry_privacy_contract.py",
     "backend/middleware/metrics.py",
     "deploy/grafana/dashboards/flashin_operations.json",
     "deploy/grafana/provisioning/dashboards/dashboards.yml",
@@ -903,6 +904,56 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "SQLAlchemyInstrumentor().instrument(",
             'exclude_spans=["receive", "send"]',
             "enable_commenter=False",
+        ),
+    ),
+    (
+        "backend/services/payments.py",
+        (
+            'trace.get_tracer("flashin.providers.yookassa")',
+            'start_as_current_span("flashin.provider.http")',
+            '"flashin.provider.status_class"',
+        ),
+    ),
+    (
+        "backend/services/moysklad.py",
+        (
+            'trace.get_tracer("flashin.providers.moysklad")',
+            'start_as_current_span("flashin.provider.http")',
+            '"flashin.provider.resource", "assortment"',
+            '"flashin.provider.resource", "stock_by_store"',
+        ),
+    ),
+    (
+        "backend/services/moysklad_outbound.py",
+        (
+            'trace.get_tracer("flashin.providers.moysklad")',
+            'start_as_current_span("flashin.provider.http")',
+            '"flashin.provider.resource", "outbound_document"',
+        ),
+    ),
+    (
+        "backend/services/distributed_rate_limit.py",
+        (
+            'trace.get_tracer("flashin.rate_limit")',
+            '"flashin.rate_limit.key_count"',
+            '"flashin.rate_limit.allowed"',
+            '"flashin.rate_limit.backend_status"',
+        ),
+    ),
+    (
+        "backend/jobs/provider_command_jobs.py",
+        (
+            'trace.get_tracer("flashin.jobs.provider_commands")',
+            'start_as_current_span("flashin.provider_command")',
+            '"flashin.provider_command.status"',
+        ),
+    ),
+    (
+        "backend/tests/test_telemetry_privacy_contract.py",
+        (
+            "test_provider_spans_use_bounded_metadata_only",
+            "test_rate_limit_spans_never_attach_redis_keys_or_urls",
+            "test_provider_job_span_never_attaches_command_payload_or_lease_token",
         ),
     ),
     (
