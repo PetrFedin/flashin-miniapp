@@ -365,6 +365,36 @@ TRACE_CORRELATION_REQUIRED_FILES = {
 }
 REQUIRED_FILES |= TRACE_CORRELATION_REQUIRED_FILES
 
+# Frontend server-state reliability, deterministic failure simulation and privacy-safe
+# browser error correlation are part of the immutable production client contract.
+FRONTEND_RELIABILITY_REQUIRED_FILES = {
+    "admin/package.json",
+    "admin/src/main.jsx",
+    "admin/src/observability.js",
+    "admin/src/queryClient.js",
+    "admin/src/queryPolicy.test.js",
+    "admin/src/reliabilitySource.test.js",
+    "admin/vite.config.js",
+    "frontend/package.json",
+    "frontend/src/App.jsx",
+    "frontend/src/CatalogExperience.jsx",
+    "frontend/src/ProductIntentExperience.jsx",
+    "frontend/src/SharedProductLanding.jsx",
+    "frontend/src/catalogApi.js",
+    "frontend/src/frontendReliabilitySource.test.js",
+    "frontend/src/main.jsx",
+    "frontend/src/mocks/browser.js",
+    "frontend/src/mocks/enableMocking.js",
+    "frontend/src/mocks/handlers.js",
+    "frontend/src/mswScenarios.test.js",
+    "frontend/src/observability.js",
+    "frontend/src/queryClient.js",
+    "frontend/src/queryPolicy.test.js",
+    "frontend/src/serverState.js",
+    "frontend/vite.config.js",
+}
+REQUIRED_FILES |= FRONTEND_RELIABILITY_REQUIRED_FILES
+
 # Python application container least privilege is part of the immutable production
 # runtime and rollback contract.
 CONTAINER_LEAST_PRIVILEGE_REQUIRED_FILES = {
@@ -384,7 +414,7 @@ REQUIRED_FILES |= CONTAINER_LEAST_PRIVILEGE_REQUIRED_FILES
 # binds one packaged runtime/test surface to concrete behavior, not just presence.
 MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("backend/api/orders.py", ("acquire_pilot_checkout(", "record_pilot_order(")),
-    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 34",)),
+    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 35",)),
     (
         "scripts/pilot_release_capability.py",
         (
@@ -411,9 +441,117 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "REQUIRED_FILES |= RATE_LIMIT_AUTHORITY_REQUIRED_FILES",
             "TRACE_CORRELATION_REQUIRED_FILES",
             "REQUIRED_FILES |= TRACE_CORRELATION_REQUIRED_FILES",
+            "FRONTEND_RELIABILITY_REQUIRED_FILES",
+            "REQUIRED_FILES |= FRONTEND_RELIABILITY_REQUIRED_FILES",
             "CONTAINER_LEAST_PRIVILEGE_REQUIRED_FILES",
             "REQUIRED_FILES |= CONTAINER_LEAST_PRIVILEGE_REQUIRED_FILES",
             "MARKER_REQUIREMENTS",
+        ),
+    ),
+    (
+        "frontend/package.json",
+        (
+            "\"@tanstack/react-query\": \"5.104.0\"",
+            "\"@sentry/react\": \"11.2.0\"",
+            "\"msw\": \"2.15.0\"",
+        ),
+    ),
+    (
+        "admin/package.json",
+        (
+            "\"@tanstack/react-query\": \"5.104.0\"",
+            "\"@sentry/react\": \"11.2.0\"",
+        ),
+    ),
+    (
+        "frontend/src/queryClient.js",
+        (
+            "staleTime: 0",
+            "mutations:",
+            "retry: false",
+            "refetchOnMount: \"always\"",
+            "refetchOnReconnect: \"always\"",
+            "clearCustomerServerState",
+            "commitAuthoritativeResult",
+        ),
+    ),
+    (
+        "frontend/src/serverState.js",
+        (
+            "storefrontQueries",
+            "queryPolicy.businessTruth",
+            "queryPolicy.catalog",
+            "catalogGrid",
+            "catalogDetail",
+            "intentEligible",
+        ),
+    ),
+    (
+        "frontend/src/observability.js",
+        (
+            "__FLASHIN_RELEASE_SHA__",
+            "sendDefaultPii: false",
+            "tracesSampleRate: 0",
+            "replaysSessionSampleRate: 0",
+            "replaysOnErrorSampleRate: 0",
+            "delete next.user",
+            "delete next.request",
+            "request_id",
+            "trace_id",
+        ),
+    ),
+    (
+        "admin/src/observability.js",
+        (
+            "__FLASHIN_RELEASE_SHA__",
+            "sendDefaultPii: false",
+            "tracesSampleRate: 0",
+            "delete next.user",
+            "delete next.request",
+            "request_id",
+            "trace_id",
+        ),
+    ),
+    (
+        "frontend/src/mocks/enableMocking.js",
+        (
+            "import.meta.env.DEV",
+            "VITE_MSW_ENABLED !== \"true\"",
+            "onUnhandledRequest: \"bypass\"",
+        ),
+    ),
+    (
+        "frontend/src/mocks/handlers.js",
+        (
+            "\"stock-race\"",
+            "\"payment-fail\"",
+            "\"payment-pending\"",
+            "\"refund-pending\"",
+            "\"delivery-unavailable\"",
+            "\"provider-timeout\"",
+            "\"reservation-expired\"",
+        ),
+    ),
+    (
+        "frontend/vite.config.js",
+        (
+            "process.env.RENDER_GIT_COMMIT",
+            "__FLASHIN_RELEASE_SHA__",
+        ),
+    ),
+    (
+        "admin/vite.config.js",
+        (
+            "process.env.RENDER_GIT_COMMIT",
+            "__FLASHIN_RELEASE_SHA__",
+        ),
+    ),
+    (
+        "frontend/src/catalogApi.js",
+        (
+            "\"X-Request-ID\": createRequestId()",
+            "response.headers.get(\"x-request-id\")",
+            "response.headers.get(\"x-trace-id\")",
         ),
     ),
     (
