@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import {
   createProductIntent,
@@ -41,6 +42,7 @@ function utcDate(value) {
 }
 
 export default function ProductIntentExperience() {
+  const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [products, setProducts] = useState([]);
   const [requests, setRequests] = useState([]);
@@ -68,7 +70,7 @@ export default function ProductIntentExperience() {
     setLoading(true);
     setError("");
     try {
-      const eligible = await listIntentEligibleProducts();
+      const eligible = await queryClient.fetchQuery(storefrontQueries.intentEligible());
       const nextProducts = Array.isArray(eligible) ? eligible : [];
       setProducts(nextProducts);
       setSelectedProductId((current) => (
@@ -78,12 +80,13 @@ export default function ProductIntentExperience() {
       ));
 
       if (localStorage.getItem("flashin_token")) {
-        const mine = await listMyProductIntents();
+        const mine = await queryClient.fetchQuery(storefrontQueries.intents());
         setRequests(Array.isArray(mine) ? mine : []);
       } else {
         setRequests([]);
       }
     } catch (actionError) {
+      captureApiError(actionError, { action: "product-intents-load" });
       setError(actionError?.message || "Не удалось загрузить заявки на предзаказ.");
     } finally {
       setLoading(false);
@@ -135,9 +138,11 @@ export default function ProductIntentExperience() {
       setNotes("");
       setRequestedSize("");
       setRequestedColor("");
-      const mine = await listMyProductIntents();
+      await queryClient.invalidateQueries({ queryKey: queryKeys.intents() });
+      const mine = await queryClient.fetchQuery(storefrontQueries.intents());
       setRequests(Array.isArray(mine) ? mine : []);
     } catch (actionError) {
+      captureApiError(actionError, { action: "product-intent-create" });
       setError(actionError?.message || "Не удалось создать заявку.");
     } finally {
       setSubmitting(false);
