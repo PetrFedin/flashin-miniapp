@@ -16,6 +16,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: flashin-production-stateful-admission
+  cancel-in-progress: false
+
 jobs:
   stateful-admission:
     runs-on: ubuntu-latest
@@ -62,7 +66,7 @@ jobs:
           fi
 
           set +e
-          python scripts/stateful_admission_probe.py "${probe_args[@]}" > /tmp/stateful-probe.json
+          python -m scripts.stateful_admission_probe "${probe_args[@]}" > /tmp/stateful-probe.json
           probe_status=$?
           set -e
 
@@ -77,8 +81,14 @@ jobs:
               text=True,
           ).strip()
 
-          with open(probe_path, encoding="utf-8") as handle:
-              probe = json.load(handle)
+          try:
+              with open(probe_path, encoding="utf-8") as handle:
+                  probe = json.load(handle)
+          except (FileNotFoundError, json.JSONDecodeError, OSError):
+              probe = {
+                  "status": "fail",
+                  "error_code": "stateful_probe_output_unavailable",
+              }
 
           report = {
               "schema_version": 1,
