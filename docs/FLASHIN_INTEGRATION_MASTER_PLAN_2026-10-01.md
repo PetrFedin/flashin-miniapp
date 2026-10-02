@@ -411,3 +411,108 @@ These are analytical projections with minimum-count/privacy thresholds. They may
 
 **Dependency hygiene:** review Chatwoot's current license/deployment/security requirements before any runtime adoption; keep the sidecar replaceable.
 
+## Additional wave — loyalty, referrals and search merchandising
+
+This wave reuses proven portfolio mechanics where possible instead of introducing another large platform.
+
+### Loyalty Ledger / Tier Authority — ADOPT
+
+Primary portfolio reference:
+
+- `PetrFedin/MFW/mfw-api/brand365-store.js`
+- existing MFW Brand365 offer / continuous-membership / reward / redemption patterns.
+
+Reuse the **patterns**, not the database or event model.
+
+FLASHIN native entities should cover:
+
+- loyalty account;
+- points/benefit ledger entry;
+- tier;
+- qualification rule/version;
+- reward/benefit;
+- redemption;
+- expiry/reversal;
+- campaign/source attribution.
+
+Balance/tier must be reproducible from ledger/rules, not an unexplained mutable field.
+
+Possible earn sources:
+
+- completed order;
+- approved campaign;
+- verified referral;
+- explicit service recovery;
+- manually authorised adjustment.
+
+Returns/refunds must reverse the relevant earned value deterministically.
+
+### Referral Authority — ADOPT
+
+Create explicit referral lifecycle:
+
+referral invite/link -> referred user identified -> eligibility -> qualifying order -> anti-abuse checks -> reward pending -> return-window/confirmation -> reward issued
+
+Store:
+
+- referrer;
+- referred account;
+- referral code/token;
+- campaign/version;
+- attribution timestamp;
+- qualification event;
+- fraud/duplicate status;
+- reward ledger links.
+
+Do not reward merely for a click/registration if the campaign requires a real completed order.
+
+Self-referrals, recycled accounts and duplicate devices/payment identities should enter an explicit review/deny rule rather than ad-hoc manual logic.
+
+### Search Merchandising Layer — ADOPT
+
+FLASHIN already has Meilisearch. Add a governed merchandising projection rather than a second search system.
+
+Support versioned:
+
+- pinned products for a query/category;
+- explicit bury/exclusion;
+- campaign/category boosts;
+- synonym sets;
+- typo/normalisation dictionaries;
+- availability-aware filtering;
+- new-drop/freshness boosts;
+- sponsored/promoted placement with explicit disclosure where applicable.
+
+Search configuration is editorial/commercial policy; product/stock/price facts still come from canonical FLASHIN state.
+
+### Search Quality Feedback — ADOPT
+
+Track:
+
+query -> results shown -> product open -> add-to-cart -> order
+
+And quality signals:
+
+- zero-result queries;
+- reformulation;
+- high-exit query;
+- searched product unavailable;
+- search result rank vs downstream conversion.
+
+Use these to review synonyms/merchandising, not to auto-rewrite product metadata.
+
+### External loyalty-platform note
+
+Historical/open-source loyalty engines exist, but current licensing/member-limit/commercial constraints vary. For FLASHIN, the safer near-term path is a native bounded ledger using the already proven MFW reward/redemption concepts. Re-evaluate a third-party loyalty sidecar only if rule complexity or multi-channel partner programs materially outgrow this model.
+
+### Additional acceptance
+
+- loyalty balance/tier can be recomputed from authoritative entries;
+- refund/reversal cannot leave earned value orphaned;
+- referral reward is idempotent and linked to a qualifying order;
+- merchandising cannot surface unpublished/unavailable items as purchasable;
+- search configuration has version/owner/effective dates;
+- loyalty/referral events remain subordinate to order/payment/refund truth.
+
+**Sequencing:** payment/refund production proof -> loyalty ledger -> referral qualification -> search merchandising/quality loop.
+
