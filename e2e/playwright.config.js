@@ -18,6 +18,7 @@ export default defineConfig({
     {
       name: "storefront-mobile",
       testMatch: /(?:storefront|.*-storefront)\.spec\.js/,
+      testIgnore: /responsive-storefront\.spec\.js/,
       use: {
         ...devices["iPhone 13"],
         browserName: "chromium",
@@ -25,11 +26,45 @@ export default defineConfig({
       },
     },
     {
+      name: "storefront-tablet",
+      testMatch: /responsive-storefront\.spec\.js/,
+      use: {
+        browserName: "chromium",
+        baseURL: "http://127.0.0.1:5173",
+        viewport: { width: 834, height: 1194 },
+        hasTouch: true,
+        isMobile: true,
+      },
+    },
+    {
+      name: "storefront-wide",
+      testMatch: /responsive-storefront\.spec\.js/,
+      use: {
+        browserName: "chromium",
+        baseURL: "http://127.0.0.1:5173",
+        viewport: { width: 1440, height: 900 },
+        hasTouch: false,
+        isMobile: false,
+      },
+    },
+    {
       name: "admin-desktop",
       testMatch: /(?:admin|admin-.*|.*-admin)\.spec\.js/,
+      testIgnore: /responsive-admin\.spec\.js/,
       use: {
         ...devices["Desktop Chrome"],
         baseURL: "http://127.0.0.1:5174",
+      },
+    },
+    {
+      name: "admin-tablet",
+      testMatch: /responsive-admin\.spec\.js/,
+      use: {
+        browserName: "chromium",
+        baseURL: "http://127.0.0.1:5174",
+        viewport: { width: 1024, height: 1366 },
+        hasTouch: true,
+        isMobile: true,
       },
     },
   ],
