@@ -57,6 +57,7 @@ REQUIRED_FILES = {
     "backend/tests/test_backup_integrity.py",
     "backend/tests/test_deploy_release_gate.py",
     "backend/main.py",
+    "backend/tests/test_telemetry_privacy_contract.py",
     "backend/middleware/metrics.py",
     "deploy/grafana/dashboards/flashin_operations.json",
     "deploy/grafana/provisioning/dashboards/dashboards.yml",
@@ -337,6 +338,33 @@ RATE_LIMIT_AUTHORITY_REQUIRED_FILES = {
 }
 REQUIRED_FILES |= RATE_LIMIT_AUTHORITY_REQUIRED_FILES
 
+# Release-bound trace correlation is part of the immutable production observability
+# contract. Tracing stays opt-in, but the runtime wiring and privacy-safe correlation
+# surface must be present in every signed release capability.
+TRACE_CORRELATION_REQUIRED_FILES = {
+    ".env.production.example",
+    "admin/src/api.js",
+    "admin/src/traceCorrelationSource.test.js",
+    "backend/config.py",
+    "backend/jobs/provider_command_jobs.py",
+    "backend/main.py",
+    "backend/middleware/request_id.py",
+    "backend/requirements.txt",
+    "backend/services/distributed_rate_limit.py",
+    "backend/services/moysklad.py",
+    "backend/services/moysklad_outbound.py",
+    "backend/services/payments.py",
+    "backend/services/release_identity.py",
+    "backend/telemetry.py",
+    "backend/tests/test_request_id_middleware.py",
+    "backend/tests/test_telemetry.py",
+    "backend/tests/test_telemetry_config.py",
+    "backend/tests/test_telemetry_privacy_contract.py",
+    "frontend/src/api.js",
+    "frontend/src/traceCorrelationSource.test.js",
+}
+REQUIRED_FILES |= TRACE_CORRELATION_REQUIRED_FILES
+
 # Python application container least privilege is part of the immutable production
 # runtime and rollback contract.
 CONTAINER_LEAST_PRIVILEGE_REQUIRED_FILES = {
@@ -356,7 +384,7 @@ REQUIRED_FILES |= CONTAINER_LEAST_PRIVILEGE_REQUIRED_FILES
 # binds one packaged runtime/test surface to concrete behavior, not just presence.
 MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("backend/api/orders.py", ("acquire_pilot_checkout(", "record_pilot_order(")),
-    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 33",)),
+    ("scripts/pilot_release_contract.py", ("CAPABILITY_VERSION = 34",)),
     (
         "scripts/pilot_release_capability.py",
         (
@@ -381,6 +409,8 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "REQUIRED_FILES |= REFUND_ITEM_ALLOCATION_REQUIRED_FILES",
             "RATE_LIMIT_AUTHORITY_REQUIRED_FILES",
             "REQUIRED_FILES |= RATE_LIMIT_AUTHORITY_REQUIRED_FILES",
+            "TRACE_CORRELATION_REQUIRED_FILES",
+            "REQUIRED_FILES |= TRACE_CORRELATION_REQUIRED_FILES",
             "CONTAINER_LEAST_PRIVILEGE_REQUIRED_FILES",
             "REQUIRED_FILES |= CONTAINER_LEAST_PRIVILEGE_REQUIRED_FILES",
             "MARKER_REQUIREMENTS",
@@ -398,6 +428,9 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "RATE_LIMIT_REDIS_URL=redis://redis:6379/0",
             "RATE_LIMIT_CHECKOUT_PER_MINUTE=12",
             "RATE_LIMIT_WEBHOOK_PER_MINUTE=180",
+            "OTEL_TRACING_ENABLED=false",
+            "OTEL_SERVICE_NAME=flashin-api",
+            "OTEL_TRACE_SAMPLE_RATIO=0.1",
         ),
     ),
     (
@@ -416,6 +449,9 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "rate_limit_redis_url: str",
             "RATE_LIMIT_BACKEND must be redis in production",
             "RATE_LIMIT_REDIS_URL must use redis://, rediss://, valkey://, or valkeys:// in production",
+            "otel_tracing_enabled: bool = False",
+            "otel_service_name: str = \"flashin-api\"",
+            "OTEL_EXPORTER_OTLP_ENDPOINT must use http:// or https:// when tracing is enabled",
         ),
     ),
     (
@@ -849,7 +885,110 @@ MARKER_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
     (
         "backend/main.py",
-        ('expose_headers=["X-Request-ID", "Content-Disposition"]',),
+        ('expose_headers=["X-Request-ID", "X-Trace-ID", "Content-Disposition"]', "configure_tracing(app, engine, settings)", "release=runtime_git_sha() or None"),
+    ),
+    (
+        "backend/requirements.txt",
+        (
+            "opentelemetry-api==1.45.0",
+            "opentelemetry-sdk==1.45.0",
+            "opentelemetry-exporter-otlp-proto-http==1.45.0",
+            "opentelemetry-instrumentation-fastapi==0.66b0",
+            "opentelemetry-instrumentation-sqlalchemy==0.66b0",
+        ),
+    ),
+    (
+        "backend/services/release_identity.py",
+        ("def runtime_git_sha()", 'os.getenv("RENDER_GIT_COMMIT"', 'os.getenv("APP_GIT_SHA"'),
+    ),
+    (
+        "backend/telemetry.py",
+        (
+            "def configure_tracing(",
+            "service.version",
+            "FastAPIInstrumentor.instrument_app(",
+            "SQLAlchemyInstrumentor().instrument(",
+            'exclude_spans=["receive", "send"]',
+            "enable_commenter=False",
+        ),
+    ),
+    (
+        "backend/services/payments.py",
+        (
+            'trace.get_tracer("flashin.providers.yookassa")',
+            '"flashin.provider.http"',
+            "record_exception=False",
+            "set_status_on_exception=False",
+            '"flashin.provider.status_class"',
+        ),
+    ),
+    (
+        "backend/services/moysklad.py",
+        (
+            'trace.get_tracer("flashin.providers.moysklad")',
+            '"flashin.provider.http"',
+            "record_exception=False",
+            "set_status_on_exception=False",
+            '"flashin.provider.resource", "assortment"',
+            '"flashin.provider.resource", "stock_by_store"',
+        ),
+    ),
+    (
+        "backend/services/moysklad_outbound.py",
+        (
+            'trace.get_tracer("flashin.providers.moysklad")',
+            '"flashin.provider.http"',
+            "record_exception=False",
+            "set_status_on_exception=False",
+            '"flashin.provider.resource", "outbound_document"',
+        ),
+    ),
+    (
+        "backend/services/distributed_rate_limit.py",
+        (
+            'trace.get_tracer("flashin.rate_limit")',
+            '"flashin.rate_limit.key_count"',
+            '"flashin.rate_limit.allowed"',
+            '"flashin.rate_limit.backend_status"',
+        ),
+    ),
+    (
+        "backend/jobs/provider_command_jobs.py",
+        (
+            'trace.get_tracer("flashin.jobs.provider_commands")',
+            '"flashin.provider_command"',
+            "record_exception=False",
+            "set_status_on_exception=False",
+            '"flashin.provider_command.status"',
+        ),
+    ),
+    (
+        "backend/tests/test_telemetry_privacy_contract.py",
+        (
+            "test_provider_spans_use_bounded_metadata_only",
+            "test_rate_limit_spans_never_attach_redis_keys_or_urls",
+            "test_provider_job_span_never_attaches_command_payload_or_lease_token",
+        ),
+    ),
+    (
+        "backend/middleware/request_id.py",
+        ("X-Trace-ID", "flashin.request_id", "sentry_sdk.set_tag(\"trace_id\""),
+    ),
+    (
+        "frontend/src/api.js",
+        ('"X-Request-ID": createRequestId()', 'response.headers.get("x-trace-id")'),
+    ),
+    (
+        "admin/src/api.js",
+        ('"X-Request-ID": createRequestId()', 'response.headers.get("x-trace-id")'),
+    ),
+    (
+        "frontend/src/traceCorrelationSource.test.js",
+        ("Mini App sends bounded request correlation", "x-trace-id"),
+    ),
+    (
+        "admin/src/traceCorrelationSource.test.js",
+        ("Admin sends request correlation", "x-trace-id"),
     ),
     (
         "backend/tests/test_privacy_export_contract.py",

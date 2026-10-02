@@ -94,4 +94,35 @@ def test_browser_clients_can_read_request_id_through_cors():
                 exposed_headers.add(item.value)
 
     assert "X-Request-ID" in exposed_headers
+    assert "X-Trace-ID" in exposed_headers
     assert "app.add_middleware(RequestIdMiddleware)" in main_source
+
+
+def test_active_trace_is_exposed_as_safe_correlation_header(monkeypatch):
+    attributes = {}
+
+    class FakeSpanContext:
+        is_valid = True
+        trace_id = int("1234567890abcdef1234567890abcdef", 16)
+
+    class FakeSpan:
+        def get_span_context(self):
+            return FakeSpanContext()
+
+        def is_recording(self):
+            return True
+
+        def set_attribute(self, name, value):
+            attributes[name] = value
+
+    from backend.middleware import request_id as request_id_module
+
+    monkeypatch.setattr(request_id_module.trace, "get_current_span", lambda: FakeSpan())
+
+    state, headers = _run([(b"x-request-id", b"support-case-17")])
+
+    assert state["request_id"] == "support-case-17"
+    assert state["trace_id"] == "1234567890abcdef1234567890abcdef"
+    assert headers[b"x-request-id"] == b"support-case-17"
+    assert headers[b"x-trace-id"] == b"1234567890abcdef1234567890abcdef"
+    assert attributes["flashin.request_id"] == "support-case-17"

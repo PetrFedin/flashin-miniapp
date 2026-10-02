@@ -23,7 +23,8 @@ test("explicit Admin token clearing revokes the exact starting server session be
   assert.equal(source.includes("function revokeAdminSessionBestEffort(token)"), true);
   assert.equal(source.includes('fetch(`${API_BASE}/api/admin/logout`'), true);
   assert.equal(source.includes('method: "POST"'), true);
-  assert.equal(source.includes('headers: { Authorization: `Bearer ${token}` }'), true);
+  assert.equal(source.includes('Authorization: `Bearer ${token}`'), true);
+  assert.equal(source.includes('"X-Request-ID": createRequestId()'), true);
   assert.equal(source.includes('cache: "no-store"'), true);
   assert.equal(source.includes("keepalive: true"), true);
   assert.equal(source.includes("const tokenAtLogout = getAdminToken()"), true);

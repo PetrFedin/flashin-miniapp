@@ -1,4 +1,3 @@
-import os
 from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -11,6 +10,7 @@ from ..services.database_readiness import (
     current_migration_heads,
     expected_migration_heads,
 )
+from ..services.release_identity import runtime_git_sha
 
 router = APIRouter(tags=["health"])
 
@@ -28,11 +28,8 @@ def health():
 
 
 def _runtime_git_sha() -> str:
-    """Return the immutable source revision injected by the deployment platform."""
-    return (
-        os.getenv("RENDER_GIT_COMMIT", "").strip()
-        or os.getenv("APP_GIT_SHA", "").strip()
-    )
+    """Compatibility seam for the public release endpoint."""
+    return runtime_git_sha()
 
 
 @router.get("/release", include_in_schema=False)

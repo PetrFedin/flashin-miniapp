@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Awaitable, Callable
 
+from opentelemetry import trace
 from sqlalchemy.orm import Session
 
 from ..services.moysklad_outbound import (
@@ -26,6 +27,7 @@ from ..services.provider_commands import (
 
 _Handler = Callable[[Session, dict[str, Any]], Awaitable[str]]
 _TERMINAL_FAILURE_STATES = {"failed", "review_required"}
+_TRACER = trace.get_tracer("flashin.jobs.provider_commands")
 
 
 async def _customer_order(db: Session, payload: dict[str, Any]) -> str:
@@ -100,45 +102,58 @@ async def process_provider_commands(db: Session, limit: int = 50) -> dict[str, i
     for command in claimed:
         command_id = int(command["id"])
         lease_token = str(command["lease_token"])
-        try:
-            payload = json.loads(str(command["payload_json"]))
-            if not isinstance(payload, dict):
-                raise MoySkladReviewRequired("Provider command payload is not an object")
-            handler = _HANDLERS.get(str(command["command_type"]))
-            if handler is None:
-                raise MoySkladReviewRequired(
-                    f"Unsupported provider command type: {command['command_type']}"
+        command_type = str(command["command_type"])
+        with _TRACER.start_as_current_span(
+            "flashin.provider_command",
+            record_exception=False,
+            set_status_on_exception=False,
+        ) as span:
+            span.set_attribute("flashin.provider", "moysklad")
+            span.set_attribute("flashin.provider_command.id", command_id)
+            span.set_attribute("flashin.provider_command.type", command_type)
+            try:
+                payload = json.loads(str(command["payload_json"]))
+                if not isinstance(payload, dict):
+                    raise MoySkladReviewRequired("Provider command payload is not an object")
+                handler = _HANDLERS.get(command_type)
+                if handler is None:
+                    raise MoySkladReviewRequired(
+                        f"Unsupported provider command type: {command_type}"
+                    )
+                external_id = await handler(db, payload)
+                if finish_provider_command(
+                    db,
+                    command_id,
+                    lease_token,
+                    external_id=external_id,
+                ):
+                    result["sent"] += 1
+                    span.set_attribute("flashin.provider_command.status", "sent")
+                else:
+                    result["ignored"] += 1
+                    span.set_attribute("flashin.provider_command.status", "ignored")
+            except MoySkladReviewRequired as exc:
+                state = fail_provider_command(
+                    db,
+                    command_id,
+                    lease_token,
+                    exc,
+                    review_required=True,
                 )
-            external_id = await handler(db, payload)
-            if finish_provider_command(
-                db,
-                command_id,
-                lease_token,
-                external_id=external_id,
-            ):
-                result["sent"] += 1
-            else:
-                result["ignored"] += 1
-        except MoySkladReviewRequired as exc:
-            state = fail_provider_command(
-                db,
-                command_id,
-                lease_token,
-                exc,
-                review_required=True,
-            )
-            result[state] = result.get(state, 0) + 1
-            if state in _TERMINAL_FAILURE_STATES:
-                enforce_terminal_provider_command_pilot_stop(db)
-        except Exception as exc:
-            state = fail_provider_command(
-                db,
-                command_id,
-                lease_token,
-                exc,
-            )
-            result[state] = result.get(state, 0) + 1
-            if state in _TERMINAL_FAILURE_STATES:
-                enforce_terminal_provider_command_pilot_stop(db)
+                span.set_attribute("flashin.provider_command.status", state)
+                result[state] = result.get(state, 0) + 1
+                if state in _TERMINAL_FAILURE_STATES:
+                    enforce_terminal_provider_command_pilot_stop(db)
+            except Exception as exc:
+                state = fail_provider_command(
+                    db,
+                    command_id,
+                    lease_token,
+                    exc,
+                )
+                span.set_attribute("flashin.provider_command.status", state)
+                result[state] = result.get(state, 0) + 1
+                if state in _TERMINAL_FAILURE_STATES:
+                    enforce_terminal_provider_command_pilot_stop(db)
 
     return result

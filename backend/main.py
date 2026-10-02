@@ -82,7 +82,9 @@ from .middleware.rate_limit import RateLimitMiddleware
 from .middleware.request_id import RequestIdMiddleware
 from .middleware.security_headers import SecurityHeadersMiddleware
 from .seed import bootstrap_admin, seed_products
+from .services.release_identity import runtime_git_sha
 from .services.telegram_product_links import telegram_bot_username
+from .telemetry import configure_tracing
 
 settings = get_settings()
 is_production = settings.app_env.strip().lower() == "production"
@@ -93,6 +95,7 @@ if settings.sentry_dsn:
         traces_sample_rate=0.1,
         send_default_pii=False,
         environment=settings.app_env,
+        release=runtime_git_sha() or None,
     )
 
 
@@ -137,9 +140,10 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-Request-ID", "Content-Disposition"],
+    expose_headers=["X-Request-ID", "X-Trace-ID", "Content-Disposition"],
 )
 app.add_middleware(RequestIdMiddleware)
+configure_tracing(app, engine, settings)
 
 Path(settings.media_local_dir).mkdir(parents=True, exist_ok=True)
 app.mount("/media", StaticFiles(directory=settings.media_local_dir), name="media")

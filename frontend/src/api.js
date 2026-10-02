@@ -22,7 +22,10 @@ function getToken() {
 }
 
 function headers(auth = true) {
-  const result = { "Content-Type": "application/json" };
+  const result = {
+    "Content-Type": "application/json",
+    "X-Request-ID": createRequestId(),
+  };
   const token = getToken();
   if (auth && token) result.Authorization = `Bearer ${token}`;
   return result;
@@ -65,12 +68,21 @@ async function errorDetail(response) {
   }
 }
 
+function responseCorrelation(response) {
+  return {
+    requestId: response.headers.get("x-request-id") || "",
+    traceId: response.headers.get("x-trace-id") || "",
+  };
+}
+
 class ApiRequestError extends Error {
-  constructor(message, status, code = "") {
+  constructor(message, status, code = "", correlation = {}) {
     super(message);
     this.name = "ApiRequestError";
     this.status = Number(status || 0);
     this.code = String(code || "");
+    this.requestId = String(correlation.requestId || "");
+    this.traceId = String(correlation.traceId || "");
   }
 }
 
@@ -121,6 +133,7 @@ async function request(path, options = {}) {
         detail.message || `Request failed: ${response.status}`,
         response.status,
         detail.code,
+        responseCorrelation(response),
       );
     }
     if (response.status === 204) return null;
@@ -362,7 +375,10 @@ export async function listSupportTickets() {
 
 export async function downloadPrivacyData() {
   const response = await fetchWithTimeout(`${API_BASE}/api/privacy/export`, {
-    headers: { Authorization: `Bearer ${getToken()}` },
+    headers: {
+      Authorization: `Bearer ${getToken()}`,
+      "X-Request-ID": createRequestId(),
+    },
   });
   if (!response.ok) {
     if (response.status === 401) clearCustomerToken();
@@ -371,6 +387,7 @@ export async function downloadPrivacyData() {
       detail.message || "Не удалось экспортировать данные",
       response.status,
       detail.code,
+      responseCorrelation(response),
     );
   }
   const blob = await response.blob();
