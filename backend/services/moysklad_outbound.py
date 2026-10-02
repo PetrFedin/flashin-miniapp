@@ -8,6 +8,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
 import httpx
+from opentelemetry import trace
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
@@ -20,6 +21,8 @@ from .order_money_allocation import (
 )
 from .provider_commands import enqueue_provider_command
 from .runtime_capabilities import moysklad_execution_enabled
+
+_TRACER = trace.get_tracer("flashin.providers.moysklad")
 
 _MONEY = Decimal("0.01")
 _SYNC_NAMESPACE = uuid.UUID("d5288fc4-9e28-4de8-8a0e-cbb8c1cc1a9f")
@@ -133,13 +136,25 @@ async def _request_json(
     url = f"{settings.moysklad_base_url.rstrip('/')}/{path.lstrip('/')}"
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.request(
-                method,
-                url,
-                headers=_headers(),
-                json=json_body,
-                params=params,
-            )
+            with _TRACER.start_as_current_span("flashin.provider.http") as span:
+                span.set_attribute("flashin.provider", "moysklad")
+                span.set_attribute("flashin.provider.method", method.upper())
+                span.set_attribute("flashin.provider.resource", "outbound_document")
+                try:
+                    response = await client.request(
+                        method,
+                        url,
+                        headers=_headers(),
+                        json=json_body,
+                        params=params,
+                    )
+                except httpx.HTTPError:
+                    span.set_attribute("flashin.provider.status_class", "network_error")
+                    raise
+                span.set_attribute(
+                    "flashin.provider.status_class",
+                    f"{int(response.status_code) // 100}xx",
+                )
     except httpx.HTTPError:
         raise
 
