@@ -28,8 +28,13 @@ def test_production_migration_workflow_is_manual_exact_sha_and_secret_bound():
     assert "confirm_migration:" in source
     assert 'test "${{ inputs.confirm_migration }}" = "APPLY"' in source
     assert "FLASHIN_PRODUCTION_DATABASE_URL" in source
+    assert "group: flashin-production-database-migration" in source
+    assert "cancel-in-progress: false" in source
     assert "python -m scripts.database_migration_probe" in source
+    assert "if: steps.before.outcome == 'success'" in source
     assert "alembic -c backend/alembic.ini upgrade head" in source
+    assert "migration_outcome" in source
+    assert "if: always()" in source
 
 
 def test_stateful_admission_uses_repository_module_import_path():
