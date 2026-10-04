@@ -927,3 +927,113 @@ Keep FLASHIN order/payment truth independent.
 
 **Commercial framing:** measurable creator-commerce platform instead of off-platform influencer marketing.
 
+## Moat wave — certified trade-in and resale lifecycle
+
+The existing Digital Wardrobe already mentions future resale/trade-in. This wave promotes it into a governed commercial module with provenance, condition and financial lifecycle.
+
+### Resale Eligibility Authority — ADOPT
+
+Determine eligibility from explicit facts:
+
+- FLASHIN purchase provenance;
+- product/variant;
+- purchase date;
+- return/refund state;
+- category;
+- programme rules;
+- ownership/user assertion for non-FLASHIN items;
+- excluded products;
+- current status.
+
+"Eligible for programme" is not an authenticity guarantee.
+
+### Trade-in Request — ADOPT
+
+User selects wardrobe item and submits:
+
+- item;
+- photos;
+- condition questionnaire;
+- included accessories/packaging;
+- pickup/drop-off preference;
+- requested programme.
+
+Status:
+
+submitted -> preliminary review -> physical inspection -> accepted/rejected -> value offer -> accepted by user -> received -> settlement/credit
+
+### Condition Grading — ADOPT
+
+Create a versioned grading standard:
+
+- new/unused;
+- excellent;
+- good;
+- fair;
+- reject;
+
+with category-specific defects/requirements.
+
+Machine vision may flag candidate wear/stain/damage but human/authorised inspection owns final grade.
+
+### Provenance / Ownership Evidence — ADOPT
+
+For original FLASHIN purchases:
+
+order line -> payment/completion -> wardrobe ownership -> trade-in item
+
+For externally added items, label provenance level clearly.
+
+Never market external-user-uploaded provenance as brand-certified without verification.
+
+### Resale Item Authority — ADOPT
+
+Accepted item receives:
+
+- resale item ID;
+- linked original product where known;
+- condition grade;
+- inspection evidence;
+- provenance class;
+- sale price;
+- payout/credit basis;
+- media;
+- publish state;
+- owner/consignment state.
+
+Resale stock is separate from new-product inventory.
+
+### Settlement / Store Credit Ledger — ADOPT
+
+Track:
+
+- accepted value;
+- payout method/store credit;
+- resale sale;
+- commission/fee;
+- refund/return;
+- final settlement.
+
+Use payment-provider truth where integrated.
+
+### Circular Product Passport — ADAPT
+
+For verified items expose a bounded lifecycle:
+
+original product -> first sale -> ownership -> inspection -> resale -> next ownership
+
+Do not expose personal owner identity publicly.
+
+### Additional acceptance
+
+- resale eligibility reconciles with returns/refunds;
+- condition grade is versioned/reviewed;
+- provenance class is visible and not overstated;
+- new and resale inventory never mix silently;
+- store-credit/payout ledger reconciles to provider/accounting events;
+- personal ownership history is privacy-protected.
+
+**Sequencing:** Digital Wardrobe + Order/Refund + media -> trade-in intake -> inspection/grade -> resale inventory -> settlement -> circular passport.
+
+**Commercial framing:** opens circular-fashion/recommerce revenue and increases retention while creating proprietary product-lifecycle data.
+
