@@ -820,3 +820,110 @@ All suggestions resolve to actual wardrobe/catalog items.
 
 **Commercial framing:** FLASHIN moves from transactional store to persistent digital fashion companion, increasing retention and lifetime value.
 
+## Premium enterprise wave — Creator Commerce and affiliate attribution hub
+
+This wave monetizes FLASHIN UGC, referral, promotion and visual-commerce capabilities as a controlled creator/affiliate channel.
+
+### Creator Profile Authority — ADOPT
+
+Create:
+
+- creator/partner ID;
+- display profile;
+- approved channels;
+- contract/program status;
+- campaign eligibility;
+- payout/settlement configuration reference;
+- UGC/content rights;
+- compliance/moderation state.
+
+### Creator Link / Code Authority — ADOPT
+
+Issue versioned:
+
+- affiliate/referral code;
+- tracked link;
+- campaign;
+- validity window;
+- eligible products/categories;
+- customer eligibility;
+- commission rule/version.
+
+Reuse existing Referral and Promotion authorities.
+
+### Shoppable Look / Creator Edit — ADOPT
+
+Creator can publish an approved selection:
+
+- look/editorial set;
+- canonical products/variants;
+- creator media;
+- disclosure;
+- link/code;
+- publish window.
+
+Price/availability always comes from canonical FLASHIN state.
+
+### Attribution Ledger — ADOPT
+
+Track:
+
+click/open -> product view -> cart -> order -> payment -> return/refund -> eligible commission
+
+Store:
+
+- source;
+- rule/window/version;
+- order line;
+- commission basis;
+- pending/approved/reversed;
+- reason.
+
+### Commission / Payout Statement — ADOPT
+
+Immutable statement:
+
+- creator;
+- period;
+- eligible orders;
+- attributed value;
+- returns/reversals;
+- commission;
+- adjustments;
+- status;
+- payout reference.
+
+### UGC Rights / Disclosure Gate — ADOPT
+
+Record:
+
+- creator;
+- usage permission;
+- channels;
+- territory/time if applicable;
+- required disclosure;
+- moderation status.
+
+Expired/unapproved UGC cannot appear publicly.
+
+### Cross-project analytics pattern — REUSE/ADAPT
+
+Reuse MFW campaign attribution/incrementality concepts where useful:
+
+https://github.com/PetrFedin/MFW
+
+Keep FLASHIN order/payment truth independent.
+
+### Additional acceptance
+
+- creator code resolves to exact rule version;
+- commission reverses with returns/refunds;
+- payout statement reproduces from order ledger;
+- creator cannot publish unavailable/private product;
+- rights/disclosures are enforced;
+- attribution methodology is explicit.
+
+**Sequencing:** Referral + Promotion + UGC + Order/Refund -> creator profiles -> links/codes -> shoppable looks -> attribution ledger -> payout statements.
+
+**Commercial framing:** measurable creator-commerce platform instead of off-platform influencer marketing.
+
