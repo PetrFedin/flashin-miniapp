@@ -1037,3 +1037,96 @@ Do not expose personal owner identity publicly.
 
 **Commercial framing:** opens circular-fashion/recommerce revenue and increases retention while creating proprietary product-lifecycle data.
 
+## Platform economics wave — Creator Storefront SDK and distributed social commerce
+
+This wave extends Creator Commerce beyond links/codes so approved creators, media partners and communities can distribute curated FLASHIN commerce experiences on their own surfaces.
+
+### Storefront Definition Authority — ADOPT
+
+Create a versioned storefront:
+
+- creator/partner;
+- title/theme;
+- curated looks/products;
+- editorial/media;
+- campaign;
+- disclosure;
+- eligibility/visibility;
+- publish window;
+- tracking/attribution rule;
+- status.
+
+All product/price/availability data resolves live from canonical FLASHIN state.
+
+### Embedded Storefront Widget / SDK — ADOPT
+
+Provide a small web/Telegram-compatible embed for:
+
+- product cards;
+- creator look;
+- quick view;
+- add-to-cart/deep-link;
+- disclosure;
+- tracked source.
+
+The widget does not process payment itself; checkout/order authority stays in FLASHIN.
+
+### Creator API — ADOPT
+
+Approved creators/partners may:
+
+- fetch eligible products;
+- create/update draft storefront selections;
+- upload approved media;
+- obtain links/codes;
+- read their own performance/commission statements.
+
+They cannot change canonical price, stock or product data.
+
+### Partner Content Rights Gate — REUSE
+
+Reuse Creator Commerce UGC rights/disclosure authority before any external embed is publishable.
+
+Expired rights remove/replace the corresponding creator media while preserving product availability.
+
+### Distributed Attribution — ADOPT
+
+Track:
+
+external embed impression/open -> product interaction -> FLASHIN session/cart -> order -> return/refund -> creator commission
+
+Cross-domain attribution methodology must be documented and privacy-safe.
+
+### Storefront Templates — ADOPT
+
+Examples:
+
+- creator edit;
+- event/drop;
+- magazine/editorial collection;
+- golf/radio/collaboration capsule;
+- wardrobe/capsule selection.
+
+### Commercial Model — ADOPT
+
+Potential economics:
+
+- creator commission;
+- partner revenue share;
+- sponsored/approved capsule;
+- B2B storefront service;
+- campaign analytics.
+
+### Additional acceptance
+
+- external embed cannot expose unpublished/unavailable product as purchasable;
+- creator cannot set canonical price/stock;
+- rights/disclosures travel with the embed;
+- checkout always returns to authoritative FLASHIN flow;
+- commission reconciles through order/refund ledger;
+- partner only sees its own scoped analytics.
+
+**Sequencing:** Creator Commerce + Attribution + Product API -> storefront definition -> embed/SDK -> creator API -> partner templates -> distributed analytics.
+
+**Commercial framing:** FLASHIN becomes a distributed commerce network where creators/media can run branded storefronts without duplicating commerce infrastructure.
+
