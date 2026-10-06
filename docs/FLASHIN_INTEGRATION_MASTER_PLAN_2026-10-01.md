@@ -1130,3 +1130,97 @@ Potential economics:
 
 **Commercial framing:** FLASHIN becomes a distributed commerce network where creators/media can run branded storefronts without duplicating commerce infrastructure.
 
+## Defensibility wave — Creator Trust Graph and verified commerce credentials
+
+This wave makes creator commerce defensible by turning disclosure, rights, attribution, refunds and payout history into a governed trust network.
+
+### Creator Trust Graph — ADOPT
+
+Graph entities:
+
+- creator/partner;
+- campaign;
+- creator asset/UGC;
+- storefront/look;
+- product;
+- attributed order line;
+- refund/return;
+- commission statement;
+- rights/disclosure record.
+
+Relations come from canonical commerce facts.
+
+### Explainable Trust Dimensions — ADOPT
+
+Possible dimensions:
+
+- identity/program status verified;
+- UGC rights completeness;
+- disclosure compliance;
+- campaign completion;
+- return-adjusted attributed order history;
+- payout/statement reconciliation;
+- moderation/rights incidents;
+- last active/reviewed date.
+
+Do not create a hidden social-influence/wealth score.
+
+### Verified Creator Credential — ADAPT
+
+Reference:
+
+https://github.com/w3c/vc-data-model
+
+Issue scoped credentials such as:
+
+- FLASHIN Creator Programme Verified;
+- UGC Rights Workflow Verified;
+- Creator Storefront Integrated;
+- Affiliate Reconciliation Verified.
+
+These credentials verify programme/process status only, not content quality or celebrity influence.
+
+### Marketplace Reputation Surface — ADOPT
+
+Brands/operators may see:
+
+- applicable credentials;
+- completed campaign count;
+- rights/disclosure status;
+- return-adjusted commerce evidence with sufficient sample;
+- support/moderation status.
+
+Exact customer identities/orders remain private.
+
+### Creator Discovery / Eligibility — ADOPT
+
+Eligibility rules may include:
+
+- valid programme status;
+- required disclosure training/acceptance;
+- no unresolved rights issue;
+- minimum sample requirement only when relevant.
+
+New creators can enter through explicit onboarding rather than historical-score barriers.
+
+### Credential / Status Revocation — ADOPT
+
+Rights violation, expired agreement or unresolved compliance issue may:
+
+- suspend new storefront publication;
+- revoke/suspend scoped credential;
+- preserve prior audit/commission history.
+
+### Additional acceptance
+
+- trust dimension derives from canonical rights/commerce facts;
+- returns/refunds are included in commerce evidence;
+- no personal customer data enters creator reputation;
+- credentials are scoped and revocable;
+- new creators have neutral no-history state;
+- marketplace ordering/ranking methodology is documented.
+
+**Sequencing:** Creator Commerce + Storefront SDK + Attribution/Payout -> trust graph -> credential/status registry -> marketplace reputation/eligibility.
+
+**Moat:** each campaign adds verified rights, attribution and return-adjusted commerce history, improving marketplace trust without relying on vanity follower metrics.
+
